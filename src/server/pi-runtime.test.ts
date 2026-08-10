@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPiRuntimeGateway,
   createWorkspaceResourceLoader,
+  getGlobalDefaultModel,
   resolveTitleGenerationRequest,
   type ModelSummary,
   type PiRuntimeBackend,
@@ -195,5 +196,17 @@ describe("标题生成模型策略", () => {
       modelSource: "system-default",
       thinkingEnabled: false,
     }, undefined, undefined, findModel)).toBeUndefined();
+  });
+});
+
+describe("标题系统默认模型", () => {
+  it("只读取 Pi 全局设置，不继承 Agent 工作目录的项目设置", () => {
+    const settingsManager = {
+      getGlobalSettings: () => ({ defaultProvider: "global-provider", defaultModel: "global-model" }),
+      getDefaultProvider: () => "project-provider",
+      getDefaultModel: () => "project-model",
+    };
+
+    expect(getGlobalDefaultModel(settingsManager)).toEqual({ provider: "global-provider", id: "global-model" });
   });
 });

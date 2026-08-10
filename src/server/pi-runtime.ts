@@ -62,6 +62,18 @@ export interface TitleGenerationRequest {
 }
 
 /**
+ * 读取 Pi 全局范围的默认模型，不采纳 Agent 工作目录的项目设置覆盖。
+ *
+ * @param settingsManager Pi 设置管理器
+ */
+export function getGlobalDefaultModel(settingsManager: { getGlobalSettings(): { defaultProvider?: unknown; defaultModel?: unknown } }): { provider: string; id: string } | undefined {
+  const settings = settingsManager.getGlobalSettings();
+  if (typeof settings.defaultProvider !== "string" || typeof settings.defaultModel !== "string") return undefined;
+  if (!settings.defaultProvider.trim() || !settings.defaultModel.trim()) return undefined;
+  return { provider: settings.defaultProvider, id: settings.defaultModel };
+}
+
+/**
  * 根据 Agent 标题策略解析本次会话应使用的模型和思考等级。
  *
  * @param sessionModel 会话当前实际模型
@@ -891,14 +903,10 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       allowModelNetwork: false,
   });
   const settingsManager = SettingsManager.create(options.cwd, options.agentDir);
-  const systemDefaultProvider = settingsManager.getDefaultProvider();
-  const systemDefaultModelId = settingsManager.getDefaultModel();
-  const systemDefaultModel = systemDefaultProvider && systemDefaultModelId
-    ? { provider: systemDefaultProvider, id: systemDefaultModelId }
-    : undefined;
+  const systemDefaultModel = getGlobalDefaultModel(settingsManager);
   const providerId = options.defaultModel?.provider
-    ?? (options.provider ? configureProvider(modelRuntime, options.provider) : systemDefaultProvider);
-  const defaultModel = options.defaultModel?.id ?? options.provider?.defaultModel ?? systemDefaultModelId;
+    ?? (options.provider ? configureProvider(modelRuntime, options.provider) : settingsManager.getDefaultProvider());
+  const defaultModel = options.defaultModel?.id ?? options.provider?.defaultModel ?? settingsManager.getDefaultModel();
   if (!providerId || !defaultModel) {
     throw new PiRuntimeError("MODEL_NOT_FOUND", "默认 Provider 或模型尚未配置");
   }
