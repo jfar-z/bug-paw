@@ -579,6 +579,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         status = "skipped";
       })
       .catch(() => {
+        if (disposed) {
+          status = "skipped";
+          return;
+        }
         status = "failed";
         options.onBackgroundError?.({ code: "SESSION_TITLE_GENERATION_FAILED", sessionId });
       })

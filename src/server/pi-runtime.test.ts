@@ -14,8 +14,12 @@ import {
 /** 创建受测试控制的异步值。 */
 function createDeferred<T>() {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => { resolve = next; });
-  return { promise, resolve };
+  let reject: (error: Error) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 /** 以最小实现模拟 SDK 会话，记录 reload 调用。 */
@@ -221,6 +225,25 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     await Promise.resolve();
 
     expect(session.setSessionName).not.toHaveBeenCalled();
+    expect(onSessionTitleGenerated).not.toHaveBeenCalled();
+  });
+
+  it("运行时销毁后不记录后台标题失败", async () => {
+    const title = createDeferred<string>();
+    const session = createSession();
+    const onBackgroundError = vi.fn();
+    const onSessionTitleGenerated = vi.fn();
+    const generateSessionTitle = vi.fn(() => title.promise);
+    const gateway = createPiRuntimeGateway(createBackend(session, generateSessionTitle), { onBackgroundError, onSessionTitleGenerated });
+    await gateway.createSession();
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledOnce());
+
+    gateway.dispose();
+    title.reject(new Error("标题服务不可用"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(onBackgroundError).not.toHaveBeenCalled();
     expect(onSessionTitleGenerated).not.toHaveBeenCalled();
   });
 
