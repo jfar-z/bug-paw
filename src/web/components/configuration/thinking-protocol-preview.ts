@@ -53,9 +53,24 @@ function conditionalPreview(note: string): ThinkingProtocolPreview {
   return { enabled: { note }, disabled: { note } };
 }
 
-function mappedThinkingLevel(model: ThinkingProtocolModel, level: "off" | "high", fallback: string): string | null {
-  const mapped = model.thinkingLevelMap[level];
-  return mapped === undefined ? fallback : mapped;
+function enabledThinkingLevel(model: ThinkingProtocolModel): string {
+  return model.thinkingLevelMap.high ?? "high";
+}
+
+function disabledThinkingLevel(model: ThinkingProtocolModel): string | null {
+  if (model.thinkingLevelMap.off === null) return null;
+  return model.thinkingLevelMap.off ?? "none";
+}
+
+function appendReasoningEffort(
+  parameters: Record<string, unknown>,
+  model: ThinkingProtocolModel,
+  nullFallsBackToHigh: boolean,
+): Record<string, unknown> {
+  if (model.compat.supportsReasoningEffort !== true) return parameters;
+  const mapped = model.thinkingLevelMap.high;
+  const effort = mapped === undefined || (nullFallsBackToHigh && mapped === null) ? "high" : mapped;
+  return typeof effort === "string" ? { ...parameters, reasoning_effort: effort } : parameters;
 }
 
 /**
@@ -64,7 +79,10 @@ function mappedThinkingLevel(model: ThinkingProtocolModel, level: "off" | "high"
 export function getThinkingProtocolPreview(protocol: ThinkingProtocol, model: ThinkingProtocolModel): ThinkingProtocolPreview {
   switch (protocol) {
     case "qwen":
-      return { enabled: { json: { enable_thinking: true } }, disabled: { json: { enable_thinking: false } } };
+      return {
+        enabled: { json: appendReasoningEffort({ enable_thinking: true }, model, true) },
+        disabled: { json: { enable_thinking: false } },
+      };
     case "qwen-chat-template":
       return {
         enabled: { json: { chat_template_kwargs: { enable_thinking: true, preserve_thinking: true } } },
@@ -72,37 +90,36 @@ export function getThinkingProtocolPreview(protocol: ThinkingProtocol, model: Th
       };
     case "zai":
       return {
-        enabled: { json: { thinking: { type: "enabled", clear_thinking: false } } },
+        enabled: { json: appendReasoningEffort({ thinking: { type: "enabled", clear_thinking: false } }, model, false) },
         disabled: { json: { thinking: { type: "disabled" } } },
       };
     case "deepseek":
       return {
-        enabled: { json: { thinking: { type: "enabled" } } },
+        enabled: { json: appendReasoningEffort({ thinking: { type: "enabled" } }, model, true) },
         disabled: model.thinkingLevelMap.off === null
           ? { note: "当前“off”映射标记为不支持，Pi 不会追加关闭思考参数。" }
           : { json: { thinking: { type: "disabled" } } },
       };
     case "together":
-      return { enabled: { json: { reasoning: { enabled: true } } }, disabled: { json: { reasoning: { enabled: false } } } };
-    case "openrouter": {
-      const enabled = mappedThinkingLevel(model, "high", "high");
-      const disabled = mappedThinkingLevel(model, "off", "none");
       return {
-        enabled: enabled === null
-          ? { note: "当前“high”映射标记为不支持，Pi 不会追加开启思考参数。" }
-          : { json: { reasoning: { effort: enabled } } },
+        enabled: { json: appendReasoningEffort({ reasoning: { enabled: true } }, model, true) },
+        disabled: { json: { reasoning: { enabled: false } } },
+      };
+    case "openrouter": {
+      const enabled = enabledThinkingLevel(model);
+      const disabled = disabledThinkingLevel(model);
+      return {
+        enabled: { json: { reasoning: { effort: enabled } } },
         disabled: disabled === null
           ? { note: "当前“off”映射标记为不支持，Pi 不会追加关闭思考参数。" }
           : { json: { reasoning: { effort: disabled } } },
       };
     }
     case "string-thinking": {
-      const enabled = mappedThinkingLevel(model, "high", "high");
-      const disabled = mappedThinkingLevel(model, "off", "none");
+      const enabled = enabledThinkingLevel(model);
+      const disabled = disabledThinkingLevel(model);
       return {
-        enabled: enabled === null
-          ? { note: "当前“high”映射标记为不支持，Pi 不会追加开启思考参数。" }
-          : { json: { thinking: enabled } },
+        enabled: { json: { thinking: enabled } },
         disabled: disabled === null
           ? { note: "当前“off”映射标记为不支持，Pi 不会追加关闭思考参数。" }
           : { json: { thinking: disabled } },

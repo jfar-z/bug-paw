@@ -449,4 +449,39 @@ describe("ProvidersPage", () => {
     await waitFor(() => expect(savedBodies).toHaveLength(1));
     expect(savedBodies[0].provider.models[0].compat).toEqual({ customFutureOption: "keep" });
   });
+
+  it("保存思考协议时保留其他兼容字段", async () => {
+    const provider = {
+      name: "Example",
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      models: [{
+        id: "reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        thinkingLevelMap: {},
+        compat: { customFutureOption: "keep" },
+      }],
+    };
+    const savedBodies: Array<{ provider: typeof provider }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/providers/example" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { provider: typeof provider };
+        savedBodies.push(body);
+        return new Response(JSON.stringify({ revision: "r2", diagnostics: [], value: { providers: { example: body.provider } } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersPage />);
+
+    fireEvent.change(await screen.findByLabelText("思考协议"), { target: { value: "qwen-chat-template" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+
+    await waitFor(() => expect(savedBodies).toHaveLength(1));
+    expect(savedBodies[0].provider.models[0].compat).toEqual({
+      customFutureOption: "keep",
+      thinkingFormat: "qwen-chat-template",
+    });
+  });
 });

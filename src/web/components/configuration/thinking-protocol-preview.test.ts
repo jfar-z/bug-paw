@@ -61,6 +61,42 @@ describe("思考协议参数预览", () => {
     });
   });
 
+  it("在明确支持推理强度时预览 Pi 会追加的 reasoning_effort", () => {
+    expect(getThinkingProtocolPreview("qwen", {
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: "intensive" },
+    }).enabled).toEqual({ json: { enable_thinking: true, reasoning_effort: "intensive" } });
+    expect(getThinkingProtocolPreview("zai", {
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: "intensive" },
+    }).enabled).toEqual({ json: { thinking: { type: "enabled", clear_thinking: false }, reasoning_effort: "intensive" } });
+    expect(getThinkingProtocolPreview("deepseek", {
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: "intensive" },
+    }).enabled).toEqual({ json: { thinking: { type: "enabled" }, reasoning_effort: "intensive" } });
+    expect(getThinkingProtocolPreview("together", {
+      compat: { supportsReasoningEffort: true },
+      thinkingLevelMap: { high: "intensive" },
+    }).enabled).toEqual({ json: { reasoning: { enabled: true }, reasoning_effort: "intensive" } });
+  });
+
+  it("按 Pi 的空值回退规则处理开启和关闭映射", () => {
+    expect(getThinkingProtocolPreview("openrouter", {
+      compat: {},
+      thinkingLevelMap: { high: null, off: null },
+    })).toEqual({
+      enabled: { json: { reasoning: { effort: "high" } } },
+      disabled: { note: "当前“off”映射标记为不支持，Pi 不会追加关闭思考参数。" },
+    });
+    expect(getThinkingProtocolPreview("string-thinking", {
+      compat: {},
+      thinkingLevelMap: { high: null, off: null },
+    })).toEqual({
+      enabled: { json: { thinking: "high" } },
+      disabled: { note: "当前“off”映射标记为不支持，Pi 不会追加关闭思考参数。" },
+    });
+  });
+
   it("对依赖其他兼容配置的协议说明预览前提", () => {
     for (const protocol of ["openai", "baseten", "chat-template", "ant-ling"] as const) {
       const preview = getThinkingProtocolPreview(protocol, model);
