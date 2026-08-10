@@ -20,6 +20,8 @@ services:
       - --tokenization-workers
       - "2"
       - --max-concurrent-requests
+      - "32"
+      - --max-client-batch-size
       - "4"
       - --max-batch-tokens
       - "4096"

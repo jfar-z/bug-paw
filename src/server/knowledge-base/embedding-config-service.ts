@@ -15,7 +15,7 @@ export interface EmbeddingConfigServiceOptions {
 const MANAGED_EMBEDDING_CONFIG: StoredEmbeddingConfig = {
   baseUrl: "http://bug-paw-embedding:80/v1",
   model: "BAAI/bge-small-zh-v1.5",
-  batchSize: 8,
+  batchSize: 4,
   apiKey: "",
   isManaged: true,
   enabled: true,
@@ -86,7 +86,7 @@ function normalizeStoredConfig(value: unknown, managedConfig: StoredEmbeddingCon
     || typeof value.batchSize !== "number"
     || typeof value.apiKey !== "string") return undefined;
   const input = { ...(value as unknown as EmbeddingConfigInput), enabled: value.enabled !== false };
-  if (value.isManaged === true && isManagedInput(input, managedConfig)) {
+  if (isManagedStoredConfig(input, managedConfig, value.isManaged)) {
     return { ...managedConfig, enabled: managedConfig.enabled && input.enabled };
   }
   return normalizeInput(input);
@@ -98,6 +98,14 @@ function isManagedInput(input: EmbeddingConfigInput, managedConfig: StoredEmbedd
     && normalizeBaseUrl(input.baseUrl) === normalizeBaseUrl(managedConfig.baseUrl)
     && input.model.trim() === managedConfig.model
     && input.batchSize === managedConfig.batchSize;
+}
+
+/** 兼容旧版受管配置，避免历史批量大小阻断托管服务升级。 */
+function isManagedStoredConfig(input: EmbeddingConfigInput, managedConfig: StoredEmbeddingConfig, isManaged: unknown): boolean {
+  return isManaged === true
+    && input.apiKey.trim() === ""
+    && normalizeBaseUrl(input.baseUrl) === normalizeBaseUrl(managedConfig.baseUrl)
+    && input.model.trim() === managedConfig.model;
 }
 
 /** 校验单一 Embedding 配置的请求字段。 */

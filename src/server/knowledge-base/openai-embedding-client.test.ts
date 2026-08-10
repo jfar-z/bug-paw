@@ -57,6 +57,34 @@ describe("OpenAI 兼容 Embedding 客户端", () => {
     await expect(client.embedDocuments(["第一段", "第二段"])).rejects.toThrow("Embedding 响应无效");
   });
 
+  it("上游因批量过大返回 429 时拆分批次后完成向量生成", async () => {
+    const root = await mkdtemp(join(tmpdir(), "embedding-client-batch-limit-"));
+    roots.push(root);
+    const configs = new EmbeddingConfigService(join(root, "embedding.json"));
+    const initial = await configs.read();
+    await configs.update({
+      baseUrl: "https://embed.example/v1",
+      model: "text-embedding-3-small",
+      batchSize: 8,
+      apiKey: randomUUID(),
+      enabled: true,
+    }, initial.revision);
+    const requestSizes: number[] = [];
+    const client = new OpenAiEmbeddingClient(configs, async (_url, init) => {
+      const input = JSON.parse(String(init?.body)).input as string[];
+      requestSizes.push(input.length);
+      if (input.length > 4) return new Response("批次过大", { status: 429 });
+      return new Response(JSON.stringify({
+        data: input.map((text, index) => ({ index, embedding: [text.codePointAt(0)] })),
+      }), { status: 200 });
+    });
+
+    await expect(client.embedDocuments(["A", "B", "C", "D", "E", "F", "G", "H"])).resolves.toEqual([
+      [65], [66], [67], [68], [69], [70], [71], [72],
+    ]);
+    expect(requestSizes).toEqual([8, 4, 4]);
+  });
+
   it("受管模型保持文档原文并只为查询添加检索前缀", async () => {
     const root = await mkdtemp(join(tmpdir(), "embedding-client-"));
     roots.push(root);

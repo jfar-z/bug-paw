@@ -49,6 +49,12 @@ export class OpenAiEmbeddingClient {
       if (signal?.aborted) throw error;
       throw new Error("Embedding 服务暂时不可用");
     }
+    if (response.status === 429 && input.length > 1) {
+      const splitAt = Math.ceil(input.length / 2);
+      const left = await this.embedBatch(config, input.slice(0, splitAt), signal);
+      const right = await this.embedBatch(config, input.slice(splitAt), signal);
+      return [...left, ...right];
+    }
     if (!response.ok) throw new Error("Embedding 服务暂时不可用");
     let payload: unknown;
     try {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -26,12 +26,32 @@ describe("知识检索 Embedding 配置服务", () => {
       config: {
         baseUrl: "http://bug-paw-embedding:80/v1",
         model: "BAAI/bge-small-zh-v1.5",
-        batchSize: 8,
+        batchSize: 4,
         hasApiKey: false,
         isManaged: true,
         enabled: true,
       },
     });
+  });
+
+  it("将旧版受管配置收敛为服务端支持的批量大小", async () => {
+    const root = await mkdtemp(join(tmpdir(), "embedding-config-legacy-managed-"));
+    roots.push(root);
+    const path = join(root, "embedding.json");
+    await writeFile(path, JSON.stringify({
+      baseUrl: "http://bug-paw-embedding:80/v1",
+      model: "BAAI/bge-small-zh-v1.5",
+      batchSize: 8,
+      apiKey: "",
+      isManaged: true,
+      enabled: true,
+    }), "utf8");
+    const service = new EmbeddingConfigService(path);
+
+    await expect(service.read()).resolves.toMatchObject({
+      config: { batchSize: 4, isManaged: true, hasApiKey: false, enabled: true },
+    });
+    await expect(service.getPrivate()).resolves.toMatchObject({ batchSize: 4, isManaged: true });
   });
 
   it("核心部署首次读取时禁用不可用的托管 Embedding", async () => {
@@ -56,7 +76,7 @@ describe("知识检索 Embedding 配置服务", () => {
     const saved = await service.update({
       baseUrl: "http://bug-paw-embedding:80/v1",
       model: "BAAI/bge-small-zh-v1.5",
-      batchSize: 8,
+      batchSize: 4,
       apiKey: "",
       enabled: false,
     }, initial.revision);
