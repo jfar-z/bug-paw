@@ -268,6 +268,21 @@ describe("AgentStore", () => {
     await expect(store.clone(source.profile.id, { name: "复制克隆", copyWorkspace: true })).rejects.toThrow("符号链接");
   });
 
+  it("更新和克隆时保留标题生成策略，并允许清除", async () => {
+    const { store } = await fixture();
+    const created = await store.create({ name: "标题 Agent", titleGeneration: {
+      modelSource: "custom",
+      model: { provider: "OpenAI", id: "gpt-title" },
+      thinkingEnabled: true,
+    } });
+
+    const cloned = await store.clone(created.profile.id, { name: "标题副本" });
+    expect(cloned.profile.titleGeneration).toEqual(created.profile.titleGeneration);
+
+    const cleared = await store.update(created.profile.id, { titleGeneration: null }, created.revision);
+    expect(cleared.profile.titleGeneration).toBeUndefined();
+  });
+
   it("附件服务通过 AgentStore 使用每个 Agent 的固定 cwd", async () => {
     const { paths, store } = await fixture();
     const created = await store.create({ name: "A" });

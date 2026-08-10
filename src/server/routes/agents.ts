@@ -1,7 +1,7 @@
 import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
-import type { CreateAgentInput, UpdateAgentInput } from "../../shared/agent-contracts";
+import type { CreateAgentInput, TitleGenerationConfig, UpdateAgentInput } from "../../shared/agent-contracts";
 import type { AgentStore } from "../agents/agent-store";
 import { AgentWorkspaceError } from "../agents/agent-workspace";
 import { type AgentPromptFile, AgentPromptStore } from "../agents/agent-prompt-store";
@@ -164,7 +164,7 @@ export function registerAgentRoutes(app: FastifyInstance, dependencies: AgentRou
         const current = await dependencies.store.get(request.params.id);
         if (!current) throw new DomainError("AGENT_NOT_FOUND", "Agent 不存在");
         const input = readUpdateInput(body);
-        await validateModelSelection(input, dependencies, current.profile.defaultModel, current.profile.defaultThinkingLevel);
+        await validateModelSelection(input, dependencies, current.profile.defaultModel, current.profile.defaultThinkingLevel, current.profile.titleGeneration);
         return runRuntimeProfileMutation(
           dependencies,
           request.params.id,
@@ -244,18 +244,25 @@ async function validateModelSelection(
   dependencies: AgentRouteDependencies,
   currentModel?: { provider: string; id: string },
   currentThinking?: ThinkingLevel,
+  currentTitleGeneration?: TitleGenerationConfig,
 ): Promise<void> {
   const selected = input.defaultModel === null ? undefined : input.defaultModel ?? currentModel;
   const requestedThinking = input.defaultThinkingLevel === null ? undefined : input.defaultThinkingLevel ?? currentThinking;
-  if (!selected) return;
+  const titleGeneration = input.titleGeneration === null ? undefined : input.titleGeneration ?? currentTitleGeneration;
   if (!dependencies.resolveAvailableModel) {
-    if (input.defaultModel !== undefined) throw new Error("模型目录尚未就绪");
+    if (input.defaultModel !== undefined || input.titleGeneration !== undefined) throw new Error("模型目录尚未就绪");
     return;
   }
-  const model = await dependencies.resolveAvailableModel(selected.provider, selected.id);
-  if (!model) throw new Error("所选模型当前不可用");
-  if (requestedThinking !== undefined && (input.defaultModel !== undefined || input.defaultThinkingLevel !== undefined)) {
-    input.defaultThinkingLevel = clampThinkingLevel(model, requestedThinking);
+  if (selected) {
+    const model = await dependencies.resolveAvailableModel(selected.provider, selected.id);
+    if (!model) throw new Error("所选模型当前不可用");
+    if (requestedThinking !== undefined && (input.defaultModel !== undefined || input.defaultThinkingLevel !== undefined)) {
+      input.defaultThinkingLevel = clampThinkingLevel(model, requestedThinking);
+    }
+  }
+  if (titleGeneration?.modelSource === "custom") {
+    const titleModel = await dependencies.resolveAvailableModel(titleGeneration.model!.provider, titleGeneration.model!.id);
+    if (!titleModel) throw new Error("所选标题模型当前不可用");
   }
 }
 
@@ -343,6 +350,7 @@ function readCreateInput(body: Record<string, unknown>): CreateAgentInput {
     avatar: readInitialAvatar(body.avatar),
     defaultModel: readModel(body.defaultModel),
     defaultThinkingLevel: readThinkingLevel(body.defaultThinkingLevel),
+    titleGeneration: body.titleGeneration === undefined ? undefined : readTitleGeneration(body.titleGeneration),
     ttsProfileId: typeof body.ttsProfileId === "string" ? body.ttsProfileId : undefined,
     ttsVoice: typeof body.ttsVoice === "string" ? body.ttsVoice : undefined,
     ttsAutoPlay: body.ttsAutoPlay === true,
@@ -361,6 +369,8 @@ function readUpdateInput(body: Record<string, unknown>): UpdateAgentInput {
   else if (body.defaultModel !== undefined) input.defaultModel = readModel(body.defaultModel);
   if (body.defaultThinkingLevel === null) input.defaultThinkingLevel = null;
   else if (body.defaultThinkingLevel !== undefined) input.defaultThinkingLevel = readThinkingLevel(body.defaultThinkingLevel);
+  if (body.titleGeneration === null) input.titleGeneration = null;
+  else if (body.titleGeneration !== undefined) input.titleGeneration = readTitleGeneration(body.titleGeneration);
   if (body.ttsProfileId === null) input.ttsProfileId = null;
   else if (typeof body.ttsProfileId === "string") input.ttsProfileId = body.ttsProfileId;
   if (body.ttsVoice === null) input.ttsVoice = null;
@@ -385,6 +395,24 @@ function readModel(value: unknown): CreateAgentInput["defaultModel"] {
 function readThinkingLevel(value: unknown): CreateAgentInput["defaultThinkingLevel"] {
   const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
   return levels.find((level) => level === value);
+}
+
+/**
+ * 读取并校验 Agent 标题生成策略。
+ *
+ * @param value HTTP 请求中的标题配置
+ */
+function readTitleGeneration(value: unknown): TitleGenerationConfig {
+  if (!isRecord(value) || typeof value.thinkingEnabled !== "boolean") {
+    throw new TypeError("标题生成配置格式无效");
+  }
+  if (value.modelSource !== "session" && value.modelSource !== "system-default" && value.modelSource !== "custom") {
+    throw new TypeError("标题模型来源无效");
+  }
+  if (value.modelSource !== "custom") return { modelSource: value.modelSource, thinkingEnabled: value.thinkingEnabled };
+  const model = readModel(value.model);
+  if (!model) throw new TypeError("单独标题模型不能为空");
+  return { modelSource: "custom", model, thinkingEnabled: value.thinkingEnabled };
 }
 
 function readStringArray(value: unknown): string[] | undefined {
