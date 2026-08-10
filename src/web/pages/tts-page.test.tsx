@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { TtsPage } from "./tts-page";
@@ -24,5 +24,23 @@ describe("TtsPage", () => {
 
     expect(await screen.findByRole("button", { name: "删除" })).toHaveClass("configuration-secondary-action", "configuration-secondary-action--danger");
     expect(screen.getByRole("button", { name: "保存配置" })).toHaveClass("configuration-primary-action");
+  });
+
+  it("显示已保存的 TTS API Key 时仅请求当前 profile", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/v1/capabilities/tts/profile-1/credential") {
+        return new Response(JSON.stringify({ apiKey: "tts-secret" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", profiles: [{ id: "profile-1", name: "默认语音", baseUrl: "https://example.test/v1", model: "speech", voice: "alloy", responseFormat: "mp3", hasApiKey: true }] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TtsPage />);
+
+    await screen.findByLabelText("TTS API Key");
+    fireEvent.click(screen.getByRole("button", { name: "显示TTS API Key" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/capabilities/tts/profile-1/credential", expect.anything()));
+    expect(screen.getByLabelText("TTS API Key")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("TTS API Key")).toHaveValue("tts-secret");
   });
 });

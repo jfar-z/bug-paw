@@ -2,6 +2,7 @@ import { Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { TtsProfileInput, TtsProfileSummary } from "../../shared/tts-contracts";
 import { api } from "../api";
+import { SecretInput } from "../components/secret-input";
 import { useOnlineStatus } from "../use-online-status";
 
 const emptyDraft = (): TtsProfileInput => ({ name: "", baseUrl: "", model: "", voice: "", responseFormat: "mp3", apiKey: "" });
@@ -14,6 +15,7 @@ export function TtsPage() {
   const [revision, setRevision] = useState("");
   const [selected, setSelected] = useState<TtsProfileSummary>();
   const [draft, setDraft] = useState<TtsProfileInput>(emptyDraft);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => {
@@ -24,8 +26,18 @@ export function TtsPage() {
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(document));
     }).catch(() => setMessage(cached ? "正在显示上次缓存的配置；离线时不能保存。" : "无法读取语音配置"));
   }, []);
-  const select = (profile: TtsProfileSummary) => { setSelected(profile); setDraft({ name: profile.name, baseUrl: profile.baseUrl, model: profile.model, voice: profile.voice, responseFormat: profile.responseFormat, apiKey: "" }); };
+  const select = (profile: TtsProfileSummary) => { setSelected(profile); setDraft({ name: profile.name, baseUrl: profile.baseUrl, model: profile.model, voice: profile.voice, responseFormat: profile.responseFormat, apiKey: "" }); setApiKeyVisible(false); };
   const update = <K extends keyof TtsProfileInput>(key: K, value: TtsProfileInput[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const toggleApiKeyVisibility = async () => {
+    if (apiKeyVisible) { setApiKeyVisible(false); return; }
+    try {
+      if (selected?.hasApiKey && !draft.apiKey) {
+        const value = await api.getTtsProfileCredential(selected.id);
+        update("apiKey", value.apiKey);
+      }
+      setApiKeyVisible(true);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 API Key"); }
+  };
   const save = async () => {
     if (!online) return;
     setSaving(true); setMessage("");
@@ -47,7 +59,7 @@ export function TtsPage() {
     catch (error) { setMessage(error instanceof Error ? error.message : "删除失败"); }
     finally { setSaving(false); }
   };
-  return <main className="configuration-page"><header className="configuration-page__heading"><h1>语音合成</h1><p>管理 OpenAI Speech 兼容接口。密钥只保存在服务端，不会再次显示。</p></header>
+  return <main className="configuration-page"><header className="configuration-page__heading"><h1>语音合成</h1><p>管理 OpenAI Speech 兼容接口。密钥默认隐藏，点击小眼睛可按需查看。</p></header>
     {message ? <p className="configuration-help" role="status">{message}</p> : null}
     <section className="configuration-form-card"><div className="configuration-section__heading"><div><span>01</span><h2>语音模型</h2></div><button type="button" onClick={() => { setSelected(undefined); setDraft(emptyDraft()); }} disabled={!online}><Plus size={15} />新增</button></div>
       {profiles.length ? <div className="configuration-button-row">{profiles.map((profile) => <button type="button" key={profile.id} className={selected?.id === profile.id ? "secondary-button" : undefined} onClick={() => select(profile)}>{profile.name}</button>)}</div> : <p className="configuration-help">尚未配置语音模型。</p>}
@@ -57,7 +69,7 @@ export function TtsPage() {
       <label><span>音色</span><input aria-label="音色" value={draft.voice} onChange={(event) => update("voice", event.target.value)} /></label>
       <label><span>音频格式</span><select aria-label="音频格式" value={draft.responseFormat} onChange={(event) => update("responseFormat", event.target.value as TtsProfileInput["responseFormat"])}><option value="mp3">MP3</option><option value="opus">Opus</option><option value="wav">WAV</option><option value="pcm">PCM</option></select></label>
       <p className="configuration-help">OpenAI Speech 可流式传输多种格式；本应用当前仅对 PCM 启用边接收边播放。需要低延时时请选择 PCM，并确认上游接口支持 24 kHz、16 位小端单声道 PCM 的分块流式响应。</p>
-      <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><input aria-label="TTS API Key" type="password" autoComplete="new-password" value={draft.apiKey} onChange={(event) => update("apiKey", event.target.value)} /></label>
+      <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="TTS API Key" autoComplete="new-password" value={draft.apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => update("apiKey", event.target.value)} /></label>
     </section>
     <div className="configuration-save-bar"><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online || saving} onClick={() => void remove()}><Trash2 size={15} />删除</button><button type="button" className="configuration-primary-action" disabled={!online || saving} onClick={() => void save()}><Save size={16} />{saving ? "保存中…" : "保存配置"}</button></div>
   </main>;

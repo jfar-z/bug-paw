@@ -68,6 +68,19 @@ describe("Provider 配置路由", () => {
     await app.close();
   });
 
+  it("认证用户可按需读取指定 Provider 的 API Key，公开列表仍不回显", async () => {
+    const { app, credentials } = await fixture();
+    await credentials.setApiKey("example", "provider-secret", await credentials.getRevision());
+
+    const shown = await app.inject({ method: "GET", url: "/api/providers/example/credential" });
+    const listed = await app.inject({ method: "GET", url: "/api/providers" });
+
+    expect(shown.statusCode).toBe(200);
+    expect(shown.json()).toEqual({ apiKey: "provider-secret" });
+    expect(listed.body).not.toContain("provider-secret");
+    await app.close();
+  });
+
   it("Provider 未知秘密与认证 Header 只返回占位且回写时保留原值", async () => {
     const { app, modelsPath } = await fixture();
     await writeFile(modelsPath, JSON.stringify({ providers: { example: {

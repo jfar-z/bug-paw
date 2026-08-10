@@ -115,6 +115,7 @@ export const ApiErrorCodeSchema = Type.Union([
   Type.Literal("PROVIDER_RENAME_HISTORY_LIMIT"),
   Type.Literal("UNSUPPORTED_PROVIDER_API"),
   Type.Literal("INVALID_CREDENTIAL"),
+  Type.Literal("CREDENTIAL_NOT_FOUND"),
   Type.Literal("INVALID_SETTINGS_REQUEST"),
   Type.Literal("SETTINGS_INVALID"),
   Type.Literal("GLOBAL_ONLY_SETTING"),

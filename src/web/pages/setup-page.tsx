@@ -1,9 +1,10 @@
-import { ArrowRight, Check, Eye, EyeOff, LockKeyhole } from "lucide-react";
+import { ArrowRight, Check, LockKeyhole } from "lucide-react";
 import { useState } from "react";
 import type { SetupRequest } from "../api";
 import type { ThemePreference } from "../theme";
 import { ProductMark } from "../components/product-mark";
 import { ThemeSwitcher } from "../components/theme-switcher";
+import { SecretInput } from "../components/secret-input";
 
 interface SetupPageProps {
   theme: ThemePreference;
@@ -18,6 +19,8 @@ const steps = ["设置密码", "连接模型", "开始使用"];
  */
 export function SetupPage({ theme, onThemeChange, onComplete }: SetupPageProps) {
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [step, setStep] = useState<0 | 1>(0);
   const [credentials, setCredentials] = useState({ password: "", confirmPassword: "" });
   const [error, setError] = useState("");
@@ -124,28 +127,12 @@ export function SetupPage({ theme, onThemeChange, onComplete }: SetupPageProps) 
           <form className="login-form" onSubmit={continueToProvider}>
             <label className="login-field">
               <span>访问密码</span>
-              <span className="password-field">
-                <input
-                  name="password"
-                  type={passwordVisible ? "text" : "password"}
-                  autoComplete="new-password"
-                  placeholder="至少 12 个字符"
-                  minLength={12}
-                  required
-                />
-                <button
-                  type="button"
-                  aria-label={passwordVisible ? "隐藏密码" : "显示密码"}
-                  onClick={() => setPasswordVisible((visible) => !visible)}
-                >
-                  {passwordVisible ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
-                </button>
-              </span>
+              <SecretInput name="password" aria-label="访问密码" visible={passwordVisible} onVisibilityChange={setPasswordVisible} autoComplete="new-password" placeholder="至少 12 个字符" minLength={12} required />
             </label>
 
             <label className="login-field">
               <span>确认密码</span>
-              <input name="passwordConfirm" type="password" autoComplete="new-password" required />
+              <SecretInput name="passwordConfirm" aria-label="确认密码" visible={confirmPasswordVisible} onVisibilityChange={setConfirmPasswordVisible} autoComplete="new-password" required />
             </label>
 
             <button className="login-submit" type="submit">
@@ -170,7 +157,7 @@ export function SetupPage({ theme, onThemeChange, onComplete }: SetupPageProps) 
               </label>
               <label className="login-field">
                 <span>API Key</span>
-                <input name="apiKey" type="password" autoComplete="off" required />
+                <SecretInput name="apiKey" aria-label="API Key" visible={apiKeyVisible} onVisibilityChange={setApiKeyVisible} autoComplete="off" required />
               </label>
               <label className="login-field">
                 <span>服务地址</span>

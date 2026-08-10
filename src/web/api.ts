@@ -241,8 +241,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export const api = {
   getKnowledgeRetrieval: () => request<EmbeddingSettingsDocument>("/api/capabilities/knowledge-retrieval"),
   updateKnowledgeRetrieval: (revision: string, config: EmbeddingConfigInput) => request<EmbeddingSettingsDocument>("/api/capabilities/knowledge-retrieval", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
+  getKnowledgeRetrievalCredential: () => request<{ apiKey: string }>("/api/capabilities/knowledge-retrieval/credential"),
   rebuildKnowledgeRetrieval: () => request<{ totalBases: number; rebuiltBases: number; failedBases: string[] }>("/api/capabilities/knowledge-retrieval/rebuild", { method: "POST" }),
   getTtsProfiles: () => request<TtsSettingsDocument>("/api/capabilities/tts"),
+  getTtsProfileCredential: (profileId: string) => request<{ apiKey: string }>(`/api/capabilities/tts/${encodeURIComponent(profileId)}/credential`),
   createTtsProfile: (input: TtsProfileInput) => request<{ revision: string }>("/api/capabilities/tts", { method: "POST", body: JSON.stringify(input) }),
   updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
@@ -341,6 +343,8 @@ export const api = {
     request<{ credentialRevision: string; status: CredentialStatus }>(`/api/providers/${encodeURIComponent(providerId)}/credential`, {
       method: "PUT", body: JSON.stringify({ revision, apiKey }),
     }),
+  getProviderCredential: (providerId: string) =>
+    request<{ apiKey: string }>(`/api/providers/${encodeURIComponent(providerId)}/credential`),
   removeProviderCredential: (providerId: string, revision: string) =>
     request<{ credentialRevision: string; status: null }>(`/api/providers/${encodeURIComponent(providerId)}/credential`, {
       method: "DELETE", body: JSON.stringify({ revision }),

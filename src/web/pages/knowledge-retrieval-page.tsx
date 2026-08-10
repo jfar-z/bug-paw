@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import type { EmbeddingConfigInput } from "../../shared/knowledge-retrieval-contracts";
 import { api } from "../api";
+import { SecretInput } from "../components/secret-input";
 import { useOnlineStatus } from "../use-online-status";
 
 const CACHE_KEY = "pi-agent:knowledge-retrieval-cache";
@@ -13,6 +14,7 @@ export function KnowledgeRetrievalPage() {
   const online = useOnlineStatus();
   const [revision, setRevision] = useState("");
   const [draft, setDraft] = useState<EmbeddingConfigInput>(emptyDraft);
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(false);
   const [isManaged, setIsManaged] = useState(false);
   const [message, setMessage] = useState("");
@@ -28,6 +30,17 @@ export function KnowledgeRetrievalPage() {
   }, []);
 
   const update = <K extends keyof EmbeddingConfigInput>(key: K, value: EmbeddingConfigInput[K]) => setDraft((current) => ({ ...current, [key]: value }));
+  const toggleApiKeyVisibility = async () => {
+    if (apiKeyVisible) { setApiKeyVisible(false); return; }
+    if (isManaged) return;
+    try {
+      if (hasApiKey && !draft.apiKey) {
+        const value = await api.getKnowledgeRetrievalCredential();
+        update("apiKey", value.apiKey);
+      }
+      setApiKeyVisible(true);
+    } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 API Key"); }
+  };
   const save = async () => {
     if (!online) return;
     setBusy(true); setMessage("");
@@ -50,13 +63,13 @@ export function KnowledgeRetrievalPage() {
     } catch (error) { setMessage(error instanceof Error ? error.message : "重建失败"); }
     finally { setBusy(false); }
   };
-  return <main className="configuration-page"><header className="configuration-page__heading"><h1>Embedding 与语义检索</h1><p>内置中文模型已可用，也可配置 OpenAI Embeddings 兼容接口。密钥仅保存在服务端。</p></header>
+  return <main className="configuration-page"><header className="configuration-page__heading"><h1>Embedding 与语义检索</h1><p>内置中文模型已可用，也可配置 OpenAI Embeddings 兼容接口。密钥默认隐藏，点击小眼睛可按需查看。</p></header>
     {message ? <p className="configuration-help" role="status">{message}</p> : null}
     <section className="configuration-form-card"><div className="configuration-section__heading"><div><span>01</span><h2>Embedding 模型</h2></div></div>
       <label><span>API Base URL</span><input aria-label="Embedding API Base URL" placeholder="https://example.com/v1" value={draft.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} /></label>
       <label><span>模型</span><input aria-label="Embedding 模型" value={draft.model} onChange={(event) => update("model", event.target.value)} /></label>
       <label><span>每批切片数</span><input aria-label="每批切片数" type="number" min="1" max="128" value={draft.batchSize} onChange={(event) => update("batchSize", Number(event.target.value))} /></label>
-      <label><span>API Key<small>{isManaged ? "内置服务无需 API Key；保存可改为外部服务" : hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><input aria-label="Embedding API Key" type="password" autoComplete="new-password" value={draft.apiKey} onChange={(event) => update("apiKey", event.target.value)} /></label>
+      <label><span>API Key<small>{isManaged ? "内置服务无需 API Key；保存可改为外部服务" : hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="Embedding API Key" autoComplete="new-password" value={draft.apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => update("apiKey", event.target.value)} /></label>
       <label><span>启用语义检索<small>{draft.enabled ? "上传资料会自动建立全文和语义索引。更换模型后请手动重建。" : "关闭后资料仅建立全文索引；重新启用后请手动重建语义索引。"}</small></span><input aria-label="启用语义检索" type="checkbox" checked={draft.enabled} onChange={(event) => update("enabled", event.target.checked)} /></label>
     </section>
     <div className="configuration-save-bar"><button type="button" className="configuration-secondary-action" disabled={!online || busy || !draft.enabled || (!hasApiKey && !isManaged)} onClick={() => void rebuild()}><RefreshCw size={16} />{busy ? "处理中…" : "手动重建索引"}</button><button type="button" className="configuration-primary-action" disabled={!online || busy} onClick={() => void save()}><Save size={16} />保存配置</button></div>

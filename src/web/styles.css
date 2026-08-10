@@ -4273,6 +4273,11 @@ img.message-avatar {
   overflow: hidden;
 }
 
+.workbench-content-loading {
+  min-height: 100%;
+  height: 100%;
+}
+
 .workbench-content > .chat-shell {
   height: 100%;
 }

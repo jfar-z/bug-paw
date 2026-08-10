@@ -123,7 +123,7 @@ describe("ProvidersPage", () => {
     expect(screen.getByLabelText("Provider 模板")).toBeInTheDocument();
     expect(screen.getByDisplayValue("X-Test")).toBeInTheDocument();
     expect(screen.getByText("Reasoner")).toBeInTheDocument();
-    expect(screen.getByText("已配置 · 不回显")).toBeInTheDocument();
+    expect(screen.getByText("已配置 · 点击小眼睛查看")).toBeInTheDocument();
     expect(screen.getByLabelText("max 映射")).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "测试当前模型" }));
     expect(await screen.findByText(/Reasoner.*成功.*12 ms/)).toBeInTheDocument();
@@ -228,6 +228,25 @@ describe("ProvidersPage", () => {
     expect(screen.getByText("gpt-new")).toBeInTheDocument();
     expect(screen.getByLabelText("模型 ID")).toHaveValue("gpt-new");
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/v1/providers/example")).toBe(false);
+  });
+
+  it("点击已配置 Provider 的小眼睛后按需读取并显示 API Key", async () => {
+    const provider = { name: "Example", baseUrl: "https://api.example.com/v1", api: "openai-completions", models: [] };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/v1/providers/example/credential") {
+        return new Response(JSON.stringify({ apiKey: "provider-secret" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [{ providerId: "example", type: "api_key", configured: true }], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersPage />);
+
+    await screen.findByLabelText("API Key");
+    fireEvent.click(screen.getByRole("button", { name: "显示API Key" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/providers/example/credential", expect.anything()));
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("API Key")).toHaveValue("provider-secret");
   });
 
   it("Provider 未保存或草稿有修改时禁用模型发现", async () => {

@@ -49,4 +49,22 @@ describe("KnowledgeRetrievalPage", () => {
     const update = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
     expect(JSON.parse(String(update?.[1]?.body))).toMatchObject({ config: { enabled: false } });
   });
+
+  it("显示外部 Embedding API Key 时按需填入输入框", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/v1/capabilities/knowledge-retrieval/credential") {
+        return new Response(JSON.stringify({ apiKey: "embedding-secret" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", config: { baseUrl: "https://example.test/v1", model: "embedding", batchSize: 16, hasApiKey: true, isManaged: false } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<KnowledgeRetrievalPage />);
+
+    await screen.findByLabelText("Embedding API Key");
+    fireEvent.click(screen.getByRole("button", { name: "显示Embedding API Key" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/capabilities/knowledge-retrieval/credential", expect.anything()));
+    expect(screen.getByLabelText("Embedding API Key")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Embedding API Key")).toHaveValue("embedding-secret");
+  });
 });

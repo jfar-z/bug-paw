@@ -1,4 +1,4 @@
-import { CalendarClock, ChevronDown, FolderOpen, LibraryBig, LogOut, Menu, MessageSquare, Settings2, X } from "lucide-react";
+import { CalendarClock, ChevronDown, FolderOpen, GitFork, LibraryBig, LogOut, Menu, MessageSquare, Settings2, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { ProductMark } from "../components/product-mark";
 import { ThemeSwitcher } from "../components/theme-switcher";
@@ -122,6 +122,9 @@ export function WorkbenchShell({
         </nav>
         <div className="workbench-rail__actions">
           <ThemeSwitcher value={theme} onChange={onThemeChange} compact />
+          <a className="icon-button" href="https://github.com/jfar-z/bug-paw" target="_blank" rel="noreferrer" aria-label="打开 BugPaw GitHub 仓库" title="GitHub">
+            <GitFork size={18} aria-hidden="true" />
+          </a>
           <button type="button" className="icon-button" aria-label="退出登录" title="退出登录" onClick={onLogout}>
             <LogOut size={18} aria-hidden="true" />
           </button>

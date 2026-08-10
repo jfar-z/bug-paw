@@ -4,6 +4,7 @@ import type { ProviderEditorModel, ProviderTemplate } from "../../shared/configu
 import { api, type DiscoveredModel, type ModelConnectionTestItem, type ModelConnectionTestRequest, type ProvidersDocument } from "../api";
 import { KeyValueEditor, type KeyValueRow } from "../components/configuration/key-value-editor";
 import { ProviderRenameDialog } from "../components/configuration/provider-rename-dialog";
+import { SecretInput } from "../components/secret-input";
 import { ThinkingLevelMapEditor } from "../components/configuration/thinking-level-map-editor";
 import { useOnlineStatus } from "../use-online-status";
 
@@ -123,6 +124,7 @@ export function ProvidersPage() {
   const [headers, setHeaders] = useState<KeyValueRow[]>([]);
   const [selectedModelIndex, setSelectedModelIndex] = useState(0);
   const [apiKey, setApiKey] = useState("");
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [testResults, setTestResults] = useState<ModelConnectionTestItem[]>([]);
   const [discoveredModels, setDiscoveredModels] = useState<DiscoveredModel[]>([]);
   const [selectedDiscoveredIds, setSelectedDiscoveredIds] = useState<Set<string>>(new Set());
@@ -163,6 +165,8 @@ export function ProvidersPage() {
     setTestResults([]);
     setDiscoveredModels([]);
     setSelectedDiscoveredIds(new Set());
+    setApiKey("");
+    setApiKeyVisible(false);
     setNotice("");
   }
 
@@ -288,7 +292,7 @@ export function ProvidersPage() {
     try {
       const result = await api.saveProviderCredential(selectedId, document.credentialRevision, apiKey);
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: [...document.credentials.filter((item) => item.providerId !== selectedId), result.status] });
-      setApiKey(""); setNotice("凭证已替换，明文未回显");
+      setApiKey(""); setApiKeyVisible(false); setNotice("凭证已替换，可点击小眼睛查看");
     } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "凭证保存失败"); }
     finally { setBusy(false); }
   }
@@ -299,12 +303,32 @@ export function ProvidersPage() {
     try {
       const result = await api.removeProviderCredential(selectedId, document.credentialRevision);
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: document.credentials.filter((item) => item.providerId !== selectedId) });
+      setApiKey("");
+      setApiKeyVisible(false);
       setNotice("凭证已删除");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "凭证删除失败");
     } finally {
       setBusy(false);
     }
+  }
+
+  /** 按需读取已保存凭证，避免在配置摘要与缓存中保留明文。 */
+  async function toggleApiKeyVisibility() {
+    if (apiKeyVisible) {
+      setApiKeyVisible(false);
+      return;
+    }
+    if (credential?.configured && !apiKey) {
+      try {
+        const value = await api.getProviderCredential(selectedId);
+        setApiKey(value.apiKey);
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : "无法读取 API Key");
+        return;
+      }
+    }
+    setApiKeyVisible(true);
   }
 
   async function renameProvider(targetId: string) {
@@ -431,7 +455,7 @@ export function ProvidersPage() {
   return (
     <div className="configuration-page providers-page">
       {renameOpen && selectedId && savedProvider ? <ProviderRenameDialog currentId={selectedId} busy={busy === "saving"} onCancel={() => setRenameOpen(false)} onConfirm={(targetId) => void renameProvider(targetId)} /> : null}
-      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">MODEL RUNTIME</span><h1>模型与凭证</h1><p>整理 Provider、模型与凭证，让 BUG 始终知道该用什么能力；凭证只写，保存后不会再次显示。</p><p className="configuration-help">所有配置仅保存到磁盘。请到系统诊断刷新核心配置后，才会应用到运行中的 Agent。</p></div><button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => { setSelectedId(""); setDraft({ name: "新 Provider", models: [] }); setHeaders([]); setTestResults([]); setDiscoveredModels([]); setSelectedDiscoveredIds(new Set()); setNotice(""); setError(""); }}><Plus size={16} aria-hidden="true" />新建 Provider</button></header>
+      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">MODEL RUNTIME</span><h1>模型与凭证</h1><p>整理 Provider、模型与凭证，让 BUG 始终知道该用什么能力；凭证默认隐藏，点击小眼睛可按需查看。</p><p className="configuration-help">所有配置仅保存到磁盘。请到系统诊断刷新核心配置后，才会应用到运行中的 Agent。</p></div><button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => { setSelectedId(""); setDraft({ name: "新 Provider", models: [] }); setHeaders([]); setTestResults([]); setDiscoveredModels([]); setSelectedDiscoveredIds(new Set()); setNotice(""); setError(""); }}><Plus size={16} aria-hidden="true" />新建 Provider</button></header>
       {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
       {notice ? <p className="configuration-save-notice" role="status"><Check size={14} aria-hidden="true" />{notice}</p> : null}
       <div className="provider-workspace">
@@ -446,8 +470,8 @@ export function ProvidersPage() {
             <label><span>API 协议</span><select value={draft.api ?? "openai-completions"} onChange={(event) => setDraft({ ...draft, api: event.target.value })}><option value="openai-completions">OpenAI Completions</option><option value="openai-responses">OpenAI Responses</option><option value="anthropic-messages">Anthropic Messages</option><option value="google-generative-ai">Google Generative AI</option></select></label>
             <label><span>认证 Header</span><input type="checkbox" checked={draft.authHeader !== false} onChange={(event) => setDraft({ ...draft, authHeader: event.target.checked })} /></label>
             <KeyValueEditor label="Headers" rows={headers} onChange={setHeaders} />
-            <label><span>API Key<small>留空不会修改现有凭证</small></span><input aria-label="API Key" type="password" autoComplete="new-password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={credential ? "输入新 Key 以替换" : "输入 API Key"} /></label>
-            <div className="configuration-button-row"><button type="button" disabled={!savedProvider || !apiKey || busy !== false || !online} onClick={saveCredential}>保存凭证</button>{credential ? <button type="button" className="danger-link" disabled={!online || busy !== false} onClick={() => void removeCredential()}>删除凭证</button> : null}<small>{savedProvider ? (credential ? "已配置 · 不回显" : "未配置") : "请先创建 Provider"}</small></div>
+            <label><span>API Key<small>留空不会修改现有凭证</small></span><SecretInput aria-label="API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => setApiKey(event.target.value)} placeholder={credential ? "输入新 Key 以替换" : "输入 API Key"} /></label>
+            <div className="configuration-button-row"><button type="button" disabled={!savedProvider || !apiKey || busy !== false || !online} onClick={saveCredential}>保存凭证</button>{credential ? <button type="button" className="danger-link" disabled={!online || busy !== false} onClick={() => void removeCredential()}>删除凭证</button> : null}<small>{savedProvider ? (credential ? "已配置 · 点击小眼睛查看" : "未配置") : "请先创建 Provider"}</small></div>
           </div>
 
           <div className="configuration-form-card provider-form">

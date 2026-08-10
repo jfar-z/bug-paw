@@ -34,6 +34,14 @@ export function registerProviderRoutes(app: FastifyInstance, dependencies: Provi
     return reply.send({ ...publicModelDocument(document), credentials, credentialRevision });
   });
 
+  app.get<{ Params: { id: string } }>("/api/providers/:id/credential", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const apiKey = await dependencies.credentials.getApiKey(request.params.id);
+    if (!apiKey) return sendApiError(reply, 404, "CREDENTIAL_NOT_FOUND", "Provider 尚未配置 API Key");
+    reply.header("Cache-Control", "no-store");
+    return reply.send({ apiKey });
+  });
+
   app.post("/api/providers", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const body = record(request.body);

@@ -35,6 +35,19 @@ describe("SetupPage", () => {
     expect(screen.getByRole("button", { name: "继续" })).toBeInTheDocument();
   });
 
+  it("确认密码和初始化 API Key 都可通过小眼睛显示和隐藏", () => {
+    render(<SetupPage theme="light" onThemeChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "显示确认密码" }));
+    expect(screen.getByLabelText("确认密码")).toHaveAttribute("type", "text");
+
+    fireEvent.change(screen.getByLabelText("访问密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.click(screen.getByRole("button", { name: "显示API Key" }));
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "text");
+  });
+
   it("提交初始化时保持按钮禁用直到请求结束", async () => {
     let resolveSetup: (() => void) | undefined;
     const onComplete = vi.fn(() => new Promise<void>((resolve) => { resolveSetup = resolve; }));

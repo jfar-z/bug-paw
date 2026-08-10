@@ -164,10 +164,11 @@ export function App() {
           <LoginPage onLogin={previewPage ? undefined : login} />
         )}
         {page === "workbench" && (
-          <Suspense fallback={<AppLoadingState />}>
-            {previewPage ? (
+          previewPage ? (
+            <Suspense fallback={<AppLoadingState />}>
               <ChatPage theme={theme} onThemeChange={changeTheme} />
-            ) : (
+            </Suspense>
+          ) : (
               <WorkbenchShell
                 route={route}
                 theme={theme}
@@ -175,10 +176,11 @@ export function App() {
                 onNavigate={navigateTo}
                 onLogout={() => void logout()}
               >
-                {renderRoute(route)}
+                <Suspense fallback={<WorkbenchLoadingState />}>
+                  {renderRoute(route)}
+                </Suspense>
               </WorkbenchShell>
-            )}
-          </Suspense>
+          )
         )}
       </div>
       {page === "workbench" && !online ? <div className="offline-banner" role="status">当前处于离线状态。可查看已缓存页面，配置保存和其他写操作已暂停。</div> : null}
@@ -203,6 +205,16 @@ function AppLoadingState() {
     <main className="app-status-page app-status-page--loading" role="status" aria-label="正在准备 BugPaw">
       <img src="/brand/bugpaw/bugpaw-sleeping.png" alt="睡眠中的 BUG 猫咪像素吉祥物" />
       <p>正在准备你的工作台…</p>
+    </main>
+  );
+}
+
+/** 在工作台内仅占据当前内容区，避免覆盖已可用的导航。 */
+function WorkbenchLoadingState() {
+  return (
+    <main className="app-status-page app-status-page--loading workbench-content-loading" role="status" aria-label="正在加载页面内容">
+      <img src="/brand/bugpaw/bugpaw-sleeping.png" alt="睡眠中的 BUG 猫咪像素吉祥物" />
+      <p>正在加载页面内容…</p>
     </main>
   );
 }

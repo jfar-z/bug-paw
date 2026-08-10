@@ -27,6 +27,14 @@ export function registerKnowledgeRetrievalRoutes(app: FastifyInstance, dependenc
     return reply.send(await dependencies.configs.read());
   });
 
+  app.get("/api/capabilities/knowledge-retrieval/credential", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const apiKey = (await dependencies.configs.getPrivate())?.apiKey;
+    if (!apiKey) return sendApiError(reply, 404, "CREDENTIAL_NOT_FOUND", "Embedding 配置尚未配置 API Key");
+    reply.header("Cache-Control", "no-store");
+    return reply.send({ apiKey });
+  });
+
   app.patch("/api/capabilities/knowledge-retrieval", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const body = isRecord(request.body) ? request.body : undefined;

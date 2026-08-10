@@ -121,4 +121,13 @@ describe("WorkbenchShell", () => {
 
     expect(screen.getAllByRole("button", { name: /当前主题/ })).toHaveLength(1);
   });
+
+  it("在主导航底部提供安全打开的 GitHub 仓库链接", () => {
+    renderShell({ page: "chat" });
+
+    const link = screen.getByRole("link", { name: "打开 BugPaw GitHub 仓库" });
+    expect(link).toHaveAttribute("href", "https://github.com/jfar-z/bug-paw");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+  });
 });

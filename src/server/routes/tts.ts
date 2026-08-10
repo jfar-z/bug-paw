@@ -23,6 +23,14 @@ export function registerTtsRoutes(app: FastifyInstance, dependencies: TtsRouteDe
     return reply.send(await dependencies.configs.list());
   });
 
+  app.get<{ Params: { id: string } }>("/api/capabilities/tts/:id/credential", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const apiKey = (await dependencies.configs.getPrivate(request.params.id))?.apiKey;
+    if (!apiKey) return sendApiError(reply, 404, "CREDENTIAL_NOT_FOUND", "语音配置尚未配置 API Key");
+    reply.header("Cache-Control", "no-store");
+    return reply.send({ apiKey });
+  });
+
   app.post("/api/capabilities/tts", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const input = readInput(request.body);

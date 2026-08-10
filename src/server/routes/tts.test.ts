@@ -48,6 +48,34 @@ describe("语音合成配置路由", () => {
     await app.close();
   });
 
+  it("认证用户可按需读取指定 TTS 配置的 API Key", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tts-routes-"));
+    roots.push(root);
+    const app = Fastify();
+    registerApiV1Namespace(app);
+    registerTtsRoutes(app, {
+      authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService,
+      configs: new TtsConfigService(join(root, "tts.json")),
+      synthesize: { synthesize: vi.fn() },
+      isProfileInUse: vi.fn(async () => false),
+      getAgentTtsProfile: vi.fn(async () => undefined),
+    });
+    await app.ready();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/tts",
+      payload: { name: "中文语音", baseUrl: "https://tts.example/v1", model: "tts-1", voice: "alloy", responseFormat: "mp3", apiKey: "tts-secret" },
+    });
+    const shown = await app.inject({ method: "GET", url: `/api/v1/capabilities/tts/${created.json().profile.id}/credential` });
+    const listed = await app.inject({ method: "GET", url: "/api/v1/capabilities/tts" });
+
+    expect(shown.statusCode).toBe(200);
+    expect(shown.json()).toEqual({ apiKey: "tts-secret" });
+    expect(listed.body).not.toContain("tts-secret");
+    await app.close();
+  });
+
   it("合成时把 Agent 音色覆盖传给服务，并流式返回音频", async () => {
     const root = await mkdtemp(join(tmpdir(), "tts-routes-"));
     roots.push(root);
