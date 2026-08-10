@@ -437,9 +437,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       if (run.status === "completed" && run.titleInput && backend.generateSessionTitle) {
         try {
           const title = await backend.generateSessionTitle(session.model, run.titleInput, extractAssistantText(session.messages));
-          if (title && isValidSessionName(title)) {
-            session.setSessionName(title);
-            publishSequenced(run.sessionId, { type: "session_renamed", name: title });
+          const sessionName = normalizeGeneratedSessionName(title);
+          if (sessionName && isValidSessionName(sessionName)) {
+            session.setSessionName(sessionName);
+            publishSequenced(run.sessionId, { type: "session_renamed", name: sessionName });
           }
         } catch {
           // 标题是附属体验，模型或持久化失败不得影响原对话结果。
@@ -932,7 +933,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       try {
         const response = await modelRuntime.completeSimple(model as never, {
           messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
-        }, { reasoning: "off", maxTokens: 15, maxRetries: 0, timeoutMs: 15_000 } as never);
+        }, { reasoning: "off", maxRetries: 0, timeoutMs: 15_000 } as never);
         if (response.stopReason === "error" || response.stopReason === "aborted") return undefined;
         const text = response.content.find((item) => item.type === "text");
         return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
@@ -1156,6 +1157,12 @@ function extractAssistantText(messages: unknown[]): string {
 /** 自动标题与手动会话名称共用相同的持久化长度边界。 */
 function isValidSessionName(name: string): boolean {
   return Boolean(name) && [...name].length <= 120;
+}
+
+/** 自动标题最多保留五十个字符，避免模型忽略格式要求时占满会话列表。 */
+function normalizeGeneratedSessionName(name: string | undefined): string | undefined {
+  const normalized = name?.trim();
+  return normalized ? [...normalized].slice(0, 50).join("") : undefined;
 }
 
 /** 把单个实时事件限制在客户端与 Journal 都能承受的硬上限内。 */
