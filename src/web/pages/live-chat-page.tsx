@@ -688,6 +688,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       applySnapshot(result.snapshot, "once");
       setDraft(result.draft.text);
       setDraftReferences(result.draft.references);
+      setAttachmentItems(result.draft.filePaths.map((path) => {
+        const missing = result.draft.missingFilePaths.includes(path);
+        const name = path.split("/").at(-1) ?? path;
+        return {
+          localId: `history-${path}`,
+          file: new File([], name),
+          status: missing ? "missing" as const : "uploaded" as const,
+          ...(missing ? { error: `已失效：${path}` } : { workspaceFile: { path, name, mediaType: "application/octet-stream", size: 0, modifiedAt: "" } }),
+        };
+      }));
       setError(result.draft.missingFilePaths.length > 0 ? `历史附件已失效：${result.draft.missingFilePaths.join("、")}` : "");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新编辑历史消息。"); }
   };

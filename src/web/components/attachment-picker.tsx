@@ -5,7 +5,7 @@ import type { WorkspaceFileSummary } from "../../shared/contracts";
 export interface AttachmentUploadItem {
   localId: string;
   file: File;
-  status: "uploading" | "uploaded" | "error";
+  status: "uploading" | "uploaded" | "error" | "missing";
   workspaceFile?: WorkspaceFileSummary;
   error?: string;
 }
@@ -97,6 +97,7 @@ function statusText(item: AttachmentUploadItem): string {
   if (item.status === "error") {
     return item.error ?? "上传失败";
   }
+  if (item.status === "missing") return item.error ?? "历史附件已失效";
   return formatFileSize(item.file.size);
 }
 

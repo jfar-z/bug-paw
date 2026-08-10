@@ -1082,10 +1082,16 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
       return session.sessionFile;
     },
     get messages() {
+      const branchNavigation = createBranchNavigation(session.sessionManager.getEntries() as unknown[]);
       return session.sessionManager.getBranch().flatMap((entry) => {
         if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return [];
         // 为 Web 端保留 Pi 节点 ID，历史编辑与重新生成必须以该稳定 ID 定位。
-        return [{ ...(entry.message as unknown as Record<string, unknown>), __piEntryId: entry.id }];
+        const message = entry.message as unknown as Record<string, unknown>;
+        return [{
+          ...message,
+          __piEntryId: entry.id,
+          ...(message.role === "user" && branchNavigation.get(entry.id) ? { __piBranch: branchNavigation.get(entry.id) } : {}),
+        }];
       });
     },
     get streamingMessage() {
@@ -1106,6 +1112,30 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     navigateTree: (entryId) => session.navigateTree(entryId, { summarize: false }),
     dispose: () => session.dispose(),
   };
+}
+
+/**
+ * 根据 Pi 追加式 entry 列表计算同一父节点下用户消息的版本切换信息。
+ */
+function createBranchNavigation(entries: unknown[]): Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string }> {
+  const groups = new Map<string, Array<{ id: string }>>();
+  for (const entry of entries) {
+    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user" || typeof entry.id !== "string") continue;
+    const parentId = typeof entry.parentId === "string" ? entry.parentId : "__root__";
+    const group = groups.get(parentId) ?? [];
+    group.push({ id: entry.id });
+    groups.set(parentId, group);
+  }
+  const result = new Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string }>();
+  for (const group of groups.values()) {
+    group.forEach((entry, index) => result.set(entry.id, {
+      index,
+      count: group.length,
+      ...(group[index - 1] ? { previousEntryId: group[index - 1].id } : {}),
+      ...(group[index + 1] ? { nextEntryId: group[index + 1].id } : {}),
+    }));
+  }
+  return result;
 }
 
 /**

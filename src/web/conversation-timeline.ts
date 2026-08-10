@@ -9,6 +9,7 @@ export interface UserEntry {
   references: AgentReference[];
   source?: "scheduled";
   piEntryId?: string;
+  branch?: { index: number; count: number; previousEntryId?: string; nextEntryId?: string };
 }
 
 export interface MarkdownBlock {
@@ -193,6 +194,7 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
           ...parsed,
           ...(parsed.text.startsWith("这是定时任务发出的消息") ? { source: "scheduled" as const } : {}),
           ...(sourceUserEntryId ? { piEntryId: sourceUserEntryId } : {}),
+          ...(isBranchNavigation(message.__piBranch) ? { branch: message.__piBranch } : {}),
         }];
       }
       return;
@@ -557,6 +559,18 @@ function normalizeToolPayload(payload: unknown): { value: unknown; details?: unk
 function createId(prefix: string, entries: ConversationEntry[]): string {
   const blockCount = entries.reduce((count, entry) => count + (entry.type === "agent" ? entry.blocks.length : 0), 0);
   return `${prefix}-${entries.length}-${blockCount}`;
+}
+
+function isBranchNavigation(value: unknown): value is { index: number; count: number; previousEntryId?: string; nextEntryId?: string } {
+  return isRecord(value)
+    && typeof value.index === "number"
+    && typeof value.count === "number"
+    && Number.isInteger(value.index)
+    && Number.isInteger(value.count)
+    && value.index >= 0
+    && value.count > 0
+    && (value.previousEntryId === undefined || typeof value.previousEntryId === "string")
+    && (value.nextEntryId === undefined || typeof value.nextEntryId === "string");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
