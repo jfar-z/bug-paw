@@ -4,6 +4,30 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.1 - 2026-08-10
+
+### 新增 / Added
+
+- 会话列表支持手动刷新，并在移动端恢复会话时保持正确的界面状态。
+- 空会话提供直接创建入口。
+- 凭证输入支持脱敏展示与按需显示，同时优化配置页的加载体验。
+
+- The conversation list supports manual refresh and preserves the correct UI state when sessions are restored on mobile.
+- Empty conversations provide a direct creation entry point.
+- Credential inputs support masked display and on-demand reveal, with improved loading experiences across configuration pages.
+
+### 修复 / Fixed
+
+- 修复自定义目录名称与 Agent 配置的联动，并调整新建 Agent 面板布局。
+- 统一知识库与联网搜索能力开关的样式。
+- 修正部署脚本的健康检查地址。
+- 修复知识库向量批量上传，并限制内置向量模型的批次范围以保证请求兼容性。
+
+- Restored synchronization between custom directory names and Agent configuration, and corrected the new-Agent panel layout.
+- Unified the capability-toggle styling for knowledge retrieval and web research.
+- Corrected the deployment script health-check address.
+- Fixed batch uploads for knowledge-base embeddings and constrained built-in embedding batch sizes for request compatibility.
+
 ## 0.1.0 - 2026-08-10
 
 首个公开版本。/ First public release.
