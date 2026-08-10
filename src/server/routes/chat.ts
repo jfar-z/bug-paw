@@ -98,6 +98,22 @@ export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRoute
     }
   });
 
+  app.post<{ Params: { id: string; entryId: string } }>("/api/sessions/:id/branches/:entryId/edit", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    try {
+      if (!dependencies.chatService) return sendApiError(reply, 503, "REQUEST_FAILED", "会话树服务尚未就绪");
+      return reply.send(await dependencies.chatService.editHistory(request.params.id, request.params.entryId));
+    } catch (error) { return sendRuntimeError(reply, error); }
+  });
+
+  app.post<{ Params: { id: string; entryId: string } }>("/api/sessions/:id/branches/:entryId/regenerate", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    try {
+      if (!dependencies.chatService) return sendApiError(reply, 503, "REQUEST_FAILED", "会话树服务尚未就绪");
+      return reply.code(202).send(await dependencies.chatService.regenerate(request.params.id, request.params.entryId));
+    } catch (error) { return sendRuntimeError(reply, error); }
+  });
+
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/sessions/:id/events", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;

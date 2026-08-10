@@ -6,6 +6,7 @@ import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
 import type { WorkspaceFileInfo, WorkspaceFileService } from "../attachments";
 import { compileAgentReferences, type AgentReferenceResolver } from "../agent-references";
 import type { AgentReference, AgentReferenceInput } from "../../shared/agent-reference-contracts";
+import { parseSessionReplayContent } from "../../shared/session-message-context";
 
 export interface SessionSubscription {
   events: AsyncIterable<ChatEvent>;
@@ -50,6 +51,38 @@ export class ChatApplicationService {
     } finally {
       lease.release();
     }
+  }
+
+  /** 将会话切换到历史用户消息之前，并返回可安全回填编辑器的草稿。 */
+  async editHistory(sessionId: string, entryId: string) {
+    const { agentId, lease } = await this.acquire(sessionId);
+    try {
+      await lease.runtime.openSession(sessionId);
+      if (!lease.runtime.navigateTree) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持会话树导航");
+      const { snapshot, editorText } = await lease.runtime.navigateTree(sessionId, entryId);
+      if (editorText === undefined) throw new DomainError("INVALID_MESSAGE", "只能重新编辑用户消息");
+      const draft = parseSessionReplayContent(editorText);
+      const missingFilePaths = this.dependencies.workspaceFiles
+        ? (await Promise.all(draft.filePaths.map(async (path) => (await this.dependencies.workspaceFiles!.resolve(agentId, path)) ? undefined : path))).filter((path): path is string => path !== undefined)
+        : draft.filePaths;
+      return { snapshot, draft: { ...draft, missingFilePaths } };
+    } finally { lease.release(); }
+  }
+
+  /** 以 Pi 原始 prompt 重新提交历史用户消息，避免再次拼接附件协议。 */
+  async regenerate(sessionId: string, entryId: string) {
+    const { agentId, lease } = await this.acquire(sessionId);
+    try {
+      await lease.runtime.openSession(sessionId);
+      if (!lease.runtime.navigateTree) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持会话树导航");
+      const navigated = await lease.runtime.navigateTree(sessionId, entryId);
+      if (!navigated.editorText) throw new DomainError("INVALID_MESSAGE", "找不到可重新生成的用户消息");
+      const replay = parseSessionReplayContent(navigated.editorText);
+      const missing = await resolveFiles(this.dependencies.workspaceFiles, agentId, replay.filePaths).catch(() => undefined);
+      if (!missing) throw new DomainError("INVALID_ATTACHMENT", "历史附件已失效，无法重新生成");
+      const run = await lease.runtime.startPrompt(sessionId, navigated.editorText, replay.text);
+      return { snapshot: navigated.snapshot, run };
+    } finally { lease.release(); }
   }
 
   async subscribe(sessionId: string, cursor: number | undefined): Promise<SessionSubscription> {

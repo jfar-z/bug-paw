@@ -1,7 +1,7 @@
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
 import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, WebPiSettings } from "../shared/configuration-contracts";
 import type { ChatRunSummary, ComposerCatalog, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
-import type { AgentReferenceInput } from "../shared/agent-reference-contracts";
+import type { AgentReference, AgentReferenceInput } from "../shared/agent-reference-contracts";
 import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateScheduledTaskInput } from "../shared/scheduled-task-contracts";
 import type { WebResearchConfig, WebResearchSettingsDocument } from "../shared/web-research-contracts";
 import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
@@ -63,6 +63,8 @@ export interface SessionSnapshot {
   run?: ChatRunSummary;
   lastEventId: number;
 }
+
+export interface SessionEditDraft { text: string; filePaths: string[]; references: AgentReference[]; missingFilePaths: string[] }
 
 export interface ProvidersDocument extends ModelConfigDocument {
   credentials: CredentialStatus[];
@@ -393,6 +395,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text, filePaths, references }),
     }),
+  editSessionBranch: (sessionId: string, entryId: string) => request<{ snapshot: SessionSnapshot; draft: SessionEditDraft }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/edit`, { method: "POST" }),
+  regenerateSessionBranch: (sessionId: string, entryId: string) => request<{ snapshot: SessionSnapshot; run: ChatRunSummary }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/regenerate`, { method: "POST" }),
   getComposerCatalog: (agentId: string) => request<ComposerCatalog>(`/api/agents/${encodeURIComponent(agentId)}/composer-catalog`),
   uploadAttachments: (agentId: string, files: File[]) => {
     const form = new FormData();

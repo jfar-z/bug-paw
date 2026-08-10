@@ -1082,7 +1082,11 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
       return session.sessionFile;
     },
     get messages() {
-      return session.messages;
+      return session.sessionManager.getBranch().flatMap((entry) => {
+        if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return [];
+        // 为 Web 端保留 Pi 节点 ID，历史编辑与重新生成必须以该稳定 ID 定位。
+        return [{ ...(entry.message as unknown as Record<string, unknown>), __piEntryId: entry.id }];
+      });
     },
     get streamingMessage() {
       return session.state.streamingMessage;

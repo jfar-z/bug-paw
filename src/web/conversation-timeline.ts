@@ -8,6 +8,7 @@ export interface UserEntry {
   files: WorkspaceFileRef[];
   references: AgentReference[];
   source?: "scheduled";
+  piEntryId?: string;
 }
 
 export interface MarkdownBlock {
@@ -52,6 +53,7 @@ export interface AgentTurn {
   id: string;
   type: "agent";
   blocks: AgentBlock[];
+  sourceUserEntryId?: string;
 }
 
 export type ConversationEntry = UserEntry | AgentTurn;
@@ -176,6 +178,7 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
   let entries: ConversationEntry[] = [];
   const tools = new Map<string, { turnIndex: number; blockIndex: number }>();
 
+  let sourceUserEntryId: string | undefined;
   messages.forEach((message, messageIndex) => {
     if (!isRecord(message) || typeof message.role !== "string") {
       return;
@@ -183,11 +186,13 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
     if (message.role === "user") {
       const parsed = parseUserContext(extractContentText(message.content));
       if (parsed.text || parsed.files.length > 0 || parsed.references.length > 0) {
+        sourceUserEntryId = typeof message.__piEntryId === "string" ? message.__piEntryId : undefined;
         entries = [...entries, {
           id: `history-user-${messageIndex}`,
           type: "user",
           ...parsed,
           ...(parsed.text.startsWith("这是定时任务发出的消息") ? { source: "scheduled" as const } : {}),
+          ...(sourceUserEntryId ? { piEntryId: sourceUserEntryId } : {}),
         }];
       }
       return;
@@ -223,7 +228,7 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
           tools.set(part.id, { turnIndex: ensured.turnIndex, blockIndex });
         }
       });
-      entries = replaceTurn(entries, ensured.turnIndex, { ...turn, blocks });
+      entries = replaceTurn(entries, ensured.turnIndex, { ...turn, blocks, ...(sourceUserEntryId ? { sourceUserEntryId } : {}) });
       return;
     }
     if (message.role === "toolResult" && typeof message.toolCallId === "string") {

@@ -1,4 +1,4 @@
-import { Clock3 } from "lucide-react";
+import { Clock3, Pencil, RefreshCcw } from "lucide-react";
 import type { RefObject } from "react";
 
 import type { AgentProfileDocument } from "../../../../shared/agent-contracts";
@@ -36,6 +36,8 @@ interface ConversationTimelineViewProps {
   onPreview(summary: WorkspaceFileSummary): void;
   onCreateAgent(): void;
   onToggleSpeech(turn: AgentTurn): void;
+  onEditHistory?(entryId: string): void;
+  onRegenerate?(entryId: string): void;
 }
 
 /** 渲染会话时间线，保持既有 DOM 顺序、ARIA 与流式块语义。 */
@@ -59,6 +61,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               {entry.text && <p>{entry.text}</p>}
               <AgentReferenceChips references={entry.references} />
               {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
+              {entry.piEntryId && entry.source !== "scheduled" ? <div className="message-actions user-message-actions" aria-label="用户消息操作"><button type="button" aria-label="重新编辑消息" title="重新编辑消息" disabled={props.streaming || props.opening} onClick={() => props.onEditHistory?.(entry.piEntryId!)}><Pencil size={15} aria-hidden="true" /></button></div> : null}
             </div>
           </article>
         ) : (
@@ -77,6 +80,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               })}
               {props.speechEnabled && agentTurnSpeechText(entry) ? (
                 <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
+                  {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
                   <MessageSpeechButton
                     active={props.activeSpeechMessageId === entry.id}
                     disabled={speechButtonDisabled(entry, props.streaming, props.activeAgentEntryId)}

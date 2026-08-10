@@ -679,6 +679,31 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     controller.update(turn.id, text, true);
   };
 
+  /** 将 Pi 历史用户消息还原到现有编辑器，协议文本由服务端在返回前拆解。 */
+  const editHistory = async (entryId: string) => {
+    if (!session || streaming || isOpeningSession) return;
+    try {
+      stopSpeech();
+      const result = await api.editSessionBranch(session.id, entryId);
+      applySnapshot(result.snapshot, "once");
+      setDraft(result.draft.text);
+      setDraftReferences(result.draft.references);
+      setError(result.draft.missingFilePaths.length > 0 ? `历史附件已失效：${result.draft.missingFilePaths.join("、")}` : "");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新编辑历史消息。"); }
+  };
+
+  /** 重新提交 Pi 保存的原始用户 prompt，创建新的同级分支。 */
+  const regenerate = async (entryId: string) => {
+    if (!session || streaming || isOpeningSession) return;
+    try {
+      stopSpeech();
+      const result = await api.regenerateSessionBranch(session.id, entryId);
+      applySnapshot(result.snapshot, "once");
+      setActiveRun(result.run);
+      setError("");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新生成回答。"); }
+  };
+
   const selectAgent = async (agentId: string) => {
     if (streaming || isOpeningSession) return;
     const generation = ++agentSelectionGenerationRef.current;
@@ -817,6 +842,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           onPreview={openImagePreview}
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
+          onEditHistory={(entryId) => void editHistory(entryId)}
+          onRegenerate={(entryId) => void regenerate(entryId)}
         />
 
         <footer className="composer-dock">
