@@ -12,9 +12,9 @@ import {
 } from "./pi-runtime";
 
 /** 创建受测试控制的异步值。 */
-function createDeferred() {
-  let resolve: () => void = () => undefined;
-  const promise = new Promise<void>((next) => { resolve = next; });
+function createDeferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => { resolve = next; });
   return { promise, resolve };
 }
 
@@ -84,7 +84,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
   });
 
   it("生成中更新提示词，在本轮结束后才 reload 会话", async () => {
-    const deferred = createDeferred();
+    const deferred = createDeferred<void>();
     const session = createSession(() => deferred.promise);
     const gateway = createPiRuntimeGateway(createBackend(session));
     await gateway.createSession();
@@ -93,7 +93,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     await gateway.refreshPromptContext?.();
     expect(session.reload).not.toHaveBeenCalled();
 
-    deferred.resolve();
+    deferred.resolve(undefined);
     await vi.waitFor(() => expect(session.reload).toHaveBeenCalledOnce());
     gateway.dispose();
   });
@@ -119,11 +119,53 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(generateSessionTitle).toHaveBeenCalledWith(model, "请分析这张设计图", "已完成附件分析。");
     expect(session.setSessionName).toHaveBeenCalledWith("分析附件中的设计问题");
     expect(events).toEqual(expect.arrayContaining(["session_renamed", "completed"]));
-    expect(events.indexOf("session_renamed")).toBeLessThan(events.indexOf("completed"));
+    expect(events.indexOf("completed")).toBeLessThan(events.indexOf("session_renamed"));
 
     await gateway.startPrompt("session-1", "第二轮运行时提示词", "第二轮用户原文");
     await vi.waitFor(() => expect(events.filter((type) => type === "completed")).toHaveLength(2));
     expect(generateSessionTitle).toHaveBeenCalledOnce();
+    gateway.dispose();
+  });
+
+  it("首轮完成不等待后台标题，标题完成后再重命名", async () => {
+    const title = createDeferred<string>();
+    const messages: unknown[] = [];
+    const model = { provider: "openai", id: "gpt-5" };
+    const session = createSession(async () => {
+      messages.push({ role: "assistant", content: [{ type: "text", text: "首轮回答" }] });
+    }, messages, model);
+    const gateway = createPiRuntimeGateway(createBackend(session, () => title.promise));
+    const events: string[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event.type));
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(events).toContain("completed"), { timeout: 200 });
+    expect(events).not.toContain("session_renamed");
+
+    title.resolve("后台标题");
+    await vi.waitFor(() => expect(events).toContain("session_renamed"));
+    expect(session.setSessionName).toHaveBeenCalledWith("后台标题");
+    expect(events.indexOf("completed")).toBeLessThan(events.indexOf("session_renamed"));
+    gateway.dispose();
+  });
+
+  it("后台标题返回前被手动命名时不覆盖名称", async () => {
+    const title = createDeferred<string>();
+    const session = createSession();
+    const onSessionTitleGenerated = vi.fn();
+    const gateway = createPiRuntimeGateway(createBackend(session, () => title.promise), { onSessionTitleGenerated });
+    await gateway.createSession();
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(session.isStreaming).toBe(false));
+    await gateway.renameSession("session-1", "人工标题");
+
+    title.resolve("自动标题");
+    await vi.waitFor(() => expect(onSessionTitleGenerated).toHaveBeenCalledOnce());
+    expect(session.setSessionName).toHaveBeenCalledWith("人工标题");
+    expect(session.setSessionName).not.toHaveBeenCalledWith("自动标题");
+    expect(onSessionTitleGenerated).toHaveBeenCalledWith(expect.objectContaining({ status: "skipped" }));
     gateway.dispose();
   });
 

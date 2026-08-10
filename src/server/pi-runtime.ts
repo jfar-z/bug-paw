@@ -283,7 +283,8 @@ interface PiRuntimeGatewayOptions {
   checkpointThrottleMs?: number;
   sessionMetadataStore?: SessionMetadataStore;
   refreshSessionContext?: () => Promise<void>;
-  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED"; sessionId?: string }) => void;
+  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
+  onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
 }
 
 /**
@@ -300,6 +301,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const idleListeners = new Set<() => void>();
   const pendingPromptReloads = new Set<string>();
   const deletingSessions = new Set<string>();
+  const manuallyRenamedSessions = new Set<string>();
+  const backgroundTitleTasks = new Set<Promise<void>>();
+  let disposed = false;
   const sessionMutations = new KeyedMutex();
   const maxEvents = options.maxEvents ?? SYSTEM_LIMITS.eventJournalEntries;
   const maxEventBytes = options.maxEventBytes ?? SYSTEM_LIMITS.eventJournalBytes;
@@ -520,27 +524,53 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     await Promise.all(sessionRegistry.ids().map((sessionId) => reloadPromptContextForSession(sessionId)));
   }
 
+  /**
+   * 在主 Run 已完成后生成首轮标题，避免附属模型请求阻塞对话完成事件。
+   */
+  function scheduleSessionTitle(run: ManagedRun, session: PiSessionAdapter): void {
+    if (!run.titleInput || !backend.generateSessionTitle) return;
+    const sessionId = run.sessionId;
+    const userText = run.titleInput;
+    const assistantText = extractAssistantText(session.messages);
+    const model = session.model;
+    const startedAt = Date.now();
+    let status: "renamed" | "empty" | "skipped" | "failed" = "empty";
+    const task = Promise.resolve()
+      .then(async () => {
+        const title = await backend.generateSessionTitle!(model, userText, assistantText);
+        const sessionName = normalizeGeneratedSessionName(title);
+        if (!sessionName || !isValidSessionName(sessionName)) return;
+        if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) {
+          status = "skipped";
+          return;
+        }
+        session.setSessionName(sessionName);
+        publishSequenced(sessionId, { type: "session_renamed", name: sessionName });
+        status = "renamed";
+      })
+      .catch(() => {
+        status = "failed";
+        options.onBackgroundError?.({ code: "SESSION_TITLE_GENERATION_FAILED", sessionId });
+      })
+      .finally(() => {
+        backgroundTitleTasks.delete(task);
+        options.onSessionTitleGenerated?.({ sessionId, elapsedMs: Date.now() - startedAt, status });
+      });
+    backgroundTitleTasks.add(task);
+  }
+
   async function executeRun(run: ManagedRun, session: PiSessionAdapter, text: string): Promise<void> {
     try {
       await session.prompt(text);
       run.status = abortRequested.has(run.sessionId) ? "aborted" : "completed";
       run.finishedAt = new Date().toISOString();
-      if (run.status === "completed" && run.titleInput && backend.generateSessionTitle) {
-        try {
-          const title = await backend.generateSessionTitle(session.model, run.titleInput, extractAssistantText(session.messages));
-          const sessionName = normalizeGeneratedSessionName(title);
-          if (sessionName && isValidSessionName(sessionName)) {
-            session.setSessionName(sessionName);
-            publishSequenced(run.sessionId, { type: "session_renamed", name: sessionName });
-          }
-        } catch {
-          // 标题是附属体验，模型或持久化失败不得影响原对话结果。
-        }
-      }
       if (run.status === "completed") {
         publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
       }
       publishSequenced(run.sessionId, { type: run.status });
+      if (run.status === "completed") {
+        scheduleSessionTitle(run, session);
+      }
     } catch (error) {
       if (abortRequested.has(run.sessionId)) {
         run.status = "aborted";
@@ -725,6 +755,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           handle.release();
         }
         session.setSessionName(sanitized);
+        manuallyRenamedSessions.add(sessionId);
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) pendingSessionSummaries.set(sessionId, { ...summary, name: sanitized });
       });
@@ -908,6 +939,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     drain: drainCheckpoints,
 
     dispose() {
+      disposed = true;
       sessionRegistry.dispose();
       listeners.clear();
       subscriptionTerminators.clear();
@@ -917,6 +949,8 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       abortRequested.clear();
       pendingPromptReloads.clear();
       deletingSessions.clear();
+      manuallyRenamedSessions.clear();
+      backgroundTitleTasks.clear();
       // 兼容直接调用 dispose 的旧调用方；Supervisor 会先显式 await drain。
       void drainCheckpoints().catch(() => undefined);
       idleListeners.clear();
@@ -939,7 +973,8 @@ interface SdkPiRuntimeOptions {
   sessionDir?: string;
   checkpointStore?: RunCheckpointStore;
   sessionMetadataStore?: SessionMetadataStore;
-  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED"; sessionId?: string }) => void;
+  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
+  onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   stageSessionDeletion?: (sessionId: string, sessionFile: string) => Promise<StagedSessionDeletion>;
 }
 
@@ -1092,6 +1127,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     sessionMetadataStore: options.sessionMetadataStore,
     refreshSessionContext: refreshAppendSystemPrompt,
     onBackgroundError: options.onBackgroundError,
+    onSessionTitleGenerated: options.onSessionTitleGenerated,
   });
 }
 
