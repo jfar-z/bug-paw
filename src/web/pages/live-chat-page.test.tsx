@@ -168,6 +168,19 @@ describe("LiveChatPage 时间线", () => {
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(initialOpenRequests);
   });
 
+  it("收到会话重命名事件后立即更新当前会话列表标题", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit("session_renamed", {
+      type: "session_renamed",
+      name: "分析设计图中的问题",
+    }));
+
+    expect(await screen.findByRole("button", { name: "分析设计图中的问题" })).toBeInTheDocument();
+  });
+
   it("刷新后当前会话不存在时打开最新列表的第一个会话", async () => {
     let sessionListRequestCount = 0;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
