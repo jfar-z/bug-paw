@@ -303,6 +303,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const deletingSessions = new Set<string>();
   const manuallyRenamedSessions = new Set<string>();
   const backgroundTitleTasks = new Set<Promise<void>>();
+  const sessionIdleWaiters = new Map<string, Set<() => void>>();
   let disposed = false;
   const sessionMutations = new KeyedMutex();
   const maxEvents = options.maxEvents ?? SYSTEM_LIMITS.eventJournalEntries;
@@ -339,9 +340,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     return created;
   }
 
-  function publishSequenced(sessionId: string, event: UnsequencedChatEvent): ChatEvent {
+  function publishSequenced(
+    sessionId: string,
+    event: UnsequencedChatEvent,
+    options: { associateCurrentRun?: boolean } = {},
+  ): ChatEvent {
     const journal = eventLog(sessionId);
-    const runId = runs.get(sessionId)?.runId;
+    const runId = options.associateCurrentRun === false ? undefined : runs.get(sessionId)?.runId;
     const fits = (candidate: UnsequencedChatEvent) => serializedBytes({
       ...candidate,
       sessionId,
@@ -524,6 +529,23 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     await Promise.all(sessionRegistry.ids().map((sessionId) => reloadPromptContextForSession(sessionId)));
   }
 
+  /** 在当前会话的活动 Run 结束后唤醒等待中的后台附属任务。 */
+  function notifySessionIdle(sessionId: string): void {
+    const waiters = sessionIdleWaiters.get(sessionId);
+    sessionIdleWaiters.delete(sessionId);
+    waiters?.forEach((resolve) => resolve());
+  }
+
+  /** 等待会话停止流式输出，避免后台任务与新的 Run 并发写入 Pi 会话文件。 */
+  function waitForSessionIdle(sessionId: string, session: PiSessionAdapter): Promise<void> {
+    if (!runs.has(sessionId) && !session.isStreaming) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiters = sessionIdleWaiters.get(sessionId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      sessionIdleWaiters.set(sessionId, waiters);
+    });
+  }
+
   /**
    * 在主 Run 已完成后生成首轮标题，避免附属模型请求阻塞对话完成事件。
    */
@@ -540,13 +562,21 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         const title = await backend.generateSessionTitle!(model, userText, assistantText);
         const sessionName = normalizeGeneratedSessionName(title);
         if (!sessionName || !isValidSessionName(sessionName)) return;
-        if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) {
-          status = "skipped";
-          return;
+        while (!disposed && !deletingSessions.has(sessionId) && !manuallyRenamedSessions.has(sessionId)) {
+          await waitForSessionIdle(sessionId, session);
+          const applied = await sessionMutations.run(sessionId, async () => {
+            if (runs.has(sessionId) || session.isStreaming) return false;
+            if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) return false;
+            session.setSessionName(sessionName);
+            publishSequenced(sessionId, { type: "session_renamed", name: sessionName }, { associateCurrentRun: false });
+            return true;
+          });
+          if (applied) {
+            status = "renamed";
+            return;
+          }
         }
-        session.setSessionName(sessionName);
-        publishSequenced(sessionId, { type: "session_renamed", name: sessionName });
-        status = "renamed";
+        status = "skipped";
       })
       .catch(() => {
         status = "failed";
@@ -554,7 +584,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       })
       .finally(() => {
         backgroundTitleTasks.delete(task);
-        options.onSessionTitleGenerated?.({ sessionId, elapsedMs: Date.now() - startedAt, status });
+        if (!disposed) {
+          options.onSessionTitleGenerated?.({ sessionId, elapsedMs: Date.now() - startedAt, status });
+        }
       });
     backgroundTitleTasks.add(task);
   }
@@ -589,6 +621,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         options.onBackgroundError?.({ code: "CHECKPOINT_WRITE_FAILED", sessionId: run.sessionId });
       });
       runs.delete(run.sessionId);
+      notifySessionIdle(run.sessionId);
       if (pendingPromptReloads.has(run.sessionId)) {
         await reloadPromptContextForSession(run.sessionId).catch(() => undefined);
       }
@@ -951,6 +984,8 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       deletingSessions.clear();
       manuallyRenamedSessions.clear();
       backgroundTitleTasks.clear();
+      sessionIdleWaiters.forEach((waiters) => waiters.forEach((resolve) => resolve()));
+      sessionIdleWaiters.clear();
       // 兼容直接调用 dispose 的旧调用方；Supervisor 会先显式 await drain。
       void drainCheckpoints().catch(() => undefined);
       idleListeners.clear();
@@ -1089,16 +1124,15 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
         (provider, modelId) => modelRuntime.getModel(provider, modelId),
       );
       if (!titleRequest) return undefined;
-      try {
-        const response = await modelRuntime.completeSimple(titleRequest.model as never, {
-          messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
-        }, { reasoning: titleRequest.reasoning, maxRetries: 0, timeoutMs: 15_000 } as never);
-        if (response.stopReason === "error" || response.stopReason === "aborted") return undefined;
-        const text = response.content.find((item) => item.type === "text");
-        return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
-      } catch {
-        return undefined;
+      const response = await modelRuntime.completeSimple(titleRequest.model as never, {
+        messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
+      }, { reasoning: titleRequest.reasoning, maxRetries: 0, timeoutMs: 15_000 } as never);
+      if (response.stopReason === "error" || response.stopReason === "aborted") {
+        // 标题模型失败由网关统一记录，不向客户端暴露上游错误详情。
+        throw new Error("会话标题生成失败");
       }
+      const text = response.content.find((item) => item.type === "text");
+      return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
     },
     async deleteSession(sessionId) {
       const sessionInfo = (await SessionManager.list(options.cwd, sessionDir)).find((session) => session.id === sessionId);
