@@ -1,0 +1,10 @@
+{
+  "profiles": [
+    {
+      "id": "company-proxy",
+      "label": "公司代理",
+      "kind": "http-proxy",
+      "proxyUrl": "http://proxy.example:8080"
+    }
+  ]
+}

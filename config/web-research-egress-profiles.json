@@ -1,0 +1,10 @@
+{
+  "profiles": [
+    {
+      "id": "trusted-fake-ip",
+      "label": "受信任 Fake-IP DNS",
+      "kind": "fake-ip",
+      "fakeIpCidrs": ["198.18.0.0/15"]
+    }
+  ]
+}

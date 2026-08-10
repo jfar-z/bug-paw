@@ -1,0 +1,25 @@
+{
+  "name": "BugPaw Agent 工作台",
+  "short_name": "BugPaw",
+  "description": "私有部署的 BugPaw AI Agent 工作台",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f6f2",
+  "theme_color": "#171c22",
+  "icons": [
+    {
+      "src": "/brand/bugpaw/bugpaw-paw-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/bugpaw/bugpaw-paw-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

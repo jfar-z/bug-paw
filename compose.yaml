@@ -1,0 +1,31 @@
+name: bugpaw
+
+services:
+  bug-paw-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bug-paw-web
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${BUG_PAW_BIND_ADDRESS:-0.0.0.0}:${BUG_PAW_PORT:-7080}:7080"
+    environment:
+      NODE_ENV: production
+      PORT: "7080"
+      TZ: ${BUG_PAW_TIMEZONE:-Asia/Shanghai}
+      PI_AGENT_DATA_ROOT: /data
+    volumes:
+      - ${BUG_PAW_DATA_DIR:-./pi-agent-data}:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:7080/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    # 停止宽限小于 60 秒锁陈旧判定；新实例另有 75 秒有限等待处理异常退出。
+    stop_grace_period: 45s

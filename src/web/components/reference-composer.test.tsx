@@ -1,0 +1,92 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { ReferenceComposer } from "./reference-composer";
+
+const emptyCatalog = {
+  skills: [],
+  commands: [],
+  knowledgeBases: [],
+  workspaceEntries: [],
+};
+
+describe("ReferenceComposer", () => {
+  it("同一个 @ 引用会话只读取一次目录并通过 Tab 选中候选", async () => {
+    const loadCatalog = vi.fn(async () => ({
+      skills: [{ name: "knowledge-base", description: "检索资料" }],
+      commands: [],
+      knowledgeBases: [{ id: "kb-1", name: "产品资料" }],
+      workspaceEntries: [],
+    }));
+    const onReferencesChange = vi.fn();
+    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={onReferencesChange} />);
+
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "@know" } });
+    await screen.findByRole("option", { name: /技能 knowledge-base/i });
+    fireEvent.change(textbox, { target: { value: "@knowl" } });
+    fireEvent.keyDown(textbox, { key: "Tab" });
+
+    expect(loadCatalog).toHaveBeenCalledTimes(1);
+    expect(onReferencesChange).toHaveBeenCalledWith([{ type: "skill", name: "knowledge-base" }]);
+  });
+
+  it("引用与命令候选均最多显示二十项", async () => {
+    const loadCatalog = vi.fn(async () => ({
+      ...emptyCatalog,
+      skills: Array.from({ length: 25 }, (_, index) => ({ name: `skill-${index + 1}`, description: "测试技能" })),
+      commands: Array.from({ length: 25 }, (_, index) => ({ name: `command-${index + 1}`, description: "测试命令", source: "extension" as const })),
+    }));
+    const { rerender } = render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
+
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "@" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(20);
+
+    rerender(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
+    fireEvent.change(textbox, { target: { value: "/" } });
+    expect(await screen.findAllByRole("option")).toHaveLength(20);
+  });
+
+  it("加号菜单可通过页面空白处关闭，且附件控件与加号共用操作轨", async () => {
+    render(
+      <ReferenceComposer
+        value=""
+        references={[]}
+        disabled={false}
+        loadCatalog={async () => emptyCatalog}
+        onChange={vi.fn()}
+        onReferencesChange={vi.fn()}
+        attachmentControl={<button type="button" aria-label="添加附件">附件</button>}
+        bottomControls={<div className="composer-actions"><span /><button type="button" aria-label="发送消息">发送</button></div>}
+      />,
+    );
+
+    const referenceButton = screen.getByRole("button", { name: "添加引用" });
+    const attachmentButton = screen.getByRole("button", { name: "添加附件" });
+    const sendButton = screen.getByRole("button", { name: "发送消息" });
+    expect(referenceButton.closest(".reference-composer__footer")).toBe(attachmentButton.closest(".reference-composer__footer"));
+    expect(referenceButton.closest(".reference-composer__footer")).toBe(sendButton.closest(".reference-composer__footer"));
+
+    fireEvent.click(referenceButton);
+    await screen.findByRole("menu");
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("方向键选择候选时会将活动项滚入可视范围", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    const loadCatalog = vi.fn(async () => ({
+      ...emptyCatalog,
+      skills: [{ name: "first", description: "第一项" }, { name: "second", description: "第二项" }],
+    }));
+    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
+
+    const textbox = screen.getByRole("textbox");
+    fireEvent.change(textbox, { target: { value: "@" } });
+    await screen.findAllByRole("option");
+    fireEvent.keyDown(textbox, { key: "ArrowDown" });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+  });
+});

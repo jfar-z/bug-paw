@@ -1,0 +1,124 @@
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { AgentsPage } from "../pages/agents-page";
+import type { AppRoute } from "../router";
+import { WorkbenchShell } from "./workbench-shell";
+
+function renderShell(route: AppRoute = { page: "agents" }) {
+  const onNavigate = vi.fn();
+  const onLogout = vi.fn();
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    agents: [{
+      profile: {
+        id: "default", name: "默认 Agent", cwd: "/data/workspace", status: "active", description: "历史 Agent",
+      },
+      revision: "r1",
+    }],
+  }), { status: 200 })));
+  render(
+    <WorkbenchShell
+      route={route}
+      theme="light"
+      onThemeChange={vi.fn()}
+      onNavigate={onNavigate}
+      onLogout={onLogout}
+    >
+      <AgentsPage onNavigate={onNavigate} />
+    </WorkbenchShell>,
+  );
+  return { onNavigate, onLogout };
+}
+
+describe("WorkbenchShell", () => {
+  it("配置页同时显示主导航和配置二级导航", () => {
+    renderShell();
+
+    expect(screen.getByRole("navigation", { name: "工作台主导航" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "配置中心导航" })).toBeInTheDocument();
+  });
+
+  it("联网搜索页使用可滚动的配置内容容器", () => {
+    renderShell({ page: "web-research" });
+
+    expect(screen.getByRole("navigation", { name: "配置中心导航" })).toBeInTheDocument();
+    expect(document.querySelector(".configuration-content")).toBeInTheDocument();
+  });
+
+  it.each<AppRoute>([
+    { page: "tts" },
+    { page: "knowledge-retrieval" },
+  ])("语音与语义检索页保留配置二级导航：%o", (route) => {
+    renderShell(route);
+
+    expect(screen.getByRole("navigation", { name: "配置中心导航" })).toBeInTheDocument();
+    expect(document.querySelector(".configuration-content")).toBeInTheDocument();
+  });
+
+  it("以固定顺序展示五个工作台一级菜单", () => {
+    renderShell({ page: "chat" });
+
+    const navigation = screen.getByRole("navigation", { name: "工作台主导航" });
+    expect(within(navigation).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
+      .toEqual(["会话", "资源管理", "知识库", "定时任务", "配置中心"]);
+  });
+
+  it("Agent 列表进入全宽详情，不创建第三层常驻侧栏", async () => {
+    const { onNavigate } = renderShell();
+
+    fireEvent.click(await screen.findByRole("button", { name: /打开默认 Agent/ }));
+    expect(onNavigate).toHaveBeenCalledWith({ page: "agent-detail", agentId: "default" });
+    expect(document.querySelector(".agent-detail-sidebar")).not.toBeInTheDocument();
+  });
+
+  it("移动端分别通过三横和工作台按钮控制二级与一级导航", () => {
+    renderShell();
+
+    const configurationTrigger = screen.getByRole("button", { name: "打开配置导航" });
+    expect(configurationTrigger).toBeEnabled();
+    fireEvent.click(configurationTrigger);
+    expect(configurationTrigger).toHaveAttribute("aria-expanded", "true");
+    expect(document.querySelector(".configuration-sidebar")).toHaveClass("is-open");
+
+    const workspaceTrigger = screen.getByRole("button", { name: "打开工作台导航" });
+    expect(workspaceTrigger).toHaveClass("chat-workbench-switcher");
+    fireEvent.click(workspaceTrigger);
+    expect(workspaceTrigger).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(screen.getByRole("button", { name: "配置中心" }));
+    expect(within(screen.getByRole("navigation", { name: "配置中心导航" })).getAllByText("Agents").at(-1)).toBeVisible();
+  });
+
+  it("资源管理页通过二级菜单按钮打开 Agent 列表", () => {
+    renderShell({ page: "workspace-resources" });
+
+    expect(screen.getByRole("button", { name: "打开 Agent 列表" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "打开工作台导航" })).toBeVisible();
+    expect(document.querySelector(".workbench-shell")).toHaveClass("is-workspace-resources");
+  });
+
+  it("定时任务页复用资源管理的 Agent 二级导航入口", () => {
+    renderShell({ page: "scheduled-tasks" });
+
+    expect(screen.getByRole("button", { name: "打开 Agent 列表" })).not.toBeDisabled();
+    expect(document.querySelector(".workbench-shell")).toHaveClass("is-workspace-resources");
+  });
+
+  it("知识库页提供独立的知识库列表入口", () => {
+    renderShell({ page: "knowledge-base" });
+
+    expect(screen.getByRole("button", { name: "打开知识库列表" })).not.toBeDisabled();
+    expect(document.querySelector(".workbench-shell")).toHaveClass("is-workspace-resources");
+  });
+
+  it("支持从主导航退出登录", () => {
+    const { onLogout } = renderShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  it("只在主导航左下角保留一个主题切换", () => {
+    renderShell({ page: "chat" });
+
+    expect(screen.getAllByRole("button", { name: /当前主题/ })).toHaveLength(1);
+  });
+});

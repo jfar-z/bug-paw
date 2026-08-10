@@ -1,0 +1,54 @@
+const CACHE_NAME = "bugpaw-shell-v8";
+const CORE_ASSETS = [
+  "/",
+  "/knowledge-base",
+  "/settings/capabilities/tts",
+  "/settings/capabilities/knowledge-retrieval",
+  "/manifest.webmanifest",
+  "/brand/bugpaw/bugpaw-paw-favicon.png",
+  "/brand/bugpaw/bugpaw-paw-icon-192.png",
+  "/brand/bugpaw/bugpaw-paw-icon-512.png",
+];
+const STATIC_DESTINATIONS = new Set(["document", "font", "image", "manifest", "script", "style", "worker"]);
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)));
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))),
+  );
+  self.clients.claim();
+});
+
+self.addEventListener("fetch", (event) => {
+  const request = event.request;
+  const url = new URL(request.url);
+  if (url.origin === self.location.origin && (url.pathname.startsWith("/api/") || url.pathname === "/healthz" || request.headers.get("accept")?.includes("text/event-stream"))) {
+    event.respondWith(fetch(request));
+    return;
+  }
+  if (request.method !== "GET" || url.origin !== self.location.origin || !STATIC_DESTINATIONS.has(request.destination)) {
+    return;
+  }
+
+  if (request.mode === "navigate") {
+    event.respondWith(fetch(request).catch(() => caches.match("/").then((response) => response ?? Response.error())));
+    return;
+  }
+
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      const refresh = fetch(request).then((response) => {
+        if (response.ok) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      });
+      return cached ?? refresh;
+    }),
+  );
+});

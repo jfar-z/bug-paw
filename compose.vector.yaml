@@ -1,0 +1,27 @@
+services:
+  bug-paw-web:
+    environment:
+      BUG_PAW_MANAGED_EMBEDDING_AVAILABLE: "true"
+    depends_on:
+      bug-paw-embedding:
+        condition: service_started
+
+  bug-paw-embedding:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    container_name: bug-paw-embedding
+    init: true
+    restart: unless-stopped
+    cpus: ${BUG_PAW_EMBEDDING_CPUS:-2.0}
+    command:
+      - --model-id
+      - BAAI/bge-small-zh-v1.5
+      - --served-model-name
+      - BAAI/bge-small-zh-v1.5
+      - --tokenization-workers
+      - "2"
+      - --max-concurrent-requests
+      - "4"
+      - --max-batch-tokens
+      - "4096"
+    volumes:
+      - ${BUG_PAW_DATA_DIR:-./pi-agent-data}/models/embedding:/data

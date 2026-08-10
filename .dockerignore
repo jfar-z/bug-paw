@@ -1,0 +1,11 @@
+node_modules
+dist
+pi-agent-data
+docs
+.git
+.env
+.env.*
+!.env.example
+AGENTS.md
+CLAUDE.md
+npm-debug.log*

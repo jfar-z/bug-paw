@@ -1,0 +1,1082 @@
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../styles.css";
+import { LiveChatPage } from "./live-chat-page";
+
+type EventListener = (event: MessageEvent) => void;
+const operationLog: string[] = [];
+
+class FakeEventSource {
+  static readonly OPEN = 1;
+  static instances: FakeEventSource[] = [];
+  readonly readyState = FakeEventSource.OPEN;
+  readonly listeners = new Map<string, EventListener[]>();
+  onerror: (() => void) | null = null;
+  private nextEventId = 1;
+
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+    operationLog.push(`sse:${url}`);
+  }
+
+  addEventListener(type: string, listener: EventListener) {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  close() {}
+
+  emit(type: string, payload: unknown) {
+    const sessionId = decodeURIComponent(this.url.match(/\/sessions\/([^/]+)\/events/)?.[1] ?? "");
+    const original = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    const suppliedId = typeof original.id === "number" ? original.id : undefined;
+    const id = suppliedId ?? this.nextEventId;
+    this.nextEventId = Math.max(this.nextEventId, id + 1);
+    const normalized = {
+      id,
+      type,
+      sessionId,
+      ...(type === "snapshot" ? {} : { runId: "run-1" }),
+      ...original,
+      ...(type === "snapshot" && original.lastEventId === undefined ? { lastEventId: id } : {}),
+    };
+    const event = { data: JSON.stringify(normalized) } as MessageEvent;
+    this.listeners.get(type)?.forEach((listener) => listener(event));
+  }
+}
+
+/** 页面级音频桩保留播放状态，便于验证按钮和导航触发的停止行为。 */
+class PageFakeAudio {
+  static instances: PageFakeAudio[] = [];
+  readonly listeners = new Map<"ended" | "error", Array<() => void>>();
+  played = false;
+  paused = false;
+
+  constructor(readonly src: string) {
+    PageFakeAudio.instances.push(this);
+  }
+
+  async play(): Promise<void> {
+    this.played = true;
+  }
+
+  pause(): void {
+    this.paused = true;
+  }
+
+  addEventListener(type: "ended" | "error", listener: () => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  finish(): void {
+    this.listeners.get("ended")?.forEach((listener) => listener());
+  }
+}
+
+const props = {
+  theme: "light" as const,
+  onThemeChange: vi.fn(),
+  userIdentity: { displayName: "管理员", avatarText: "A" },
+  agentIdentity: { displayName: "默认 Agent", avatarText: "π" },
+};
+
+beforeEach(() => {
+  FakeEventSource.instances = [];
+  PageFakeAudio.instances = [];
+  operationLog.length = 0;
+  window.sessionStorage.clear();
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    operationLog.push(`fetch:${init?.method ?? "GET"}:${url}`);
+    if (url === "/api/v1/agents") {
+      return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, description: "用于测试的 Agent", status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+    }
+    if (url === "/api/v1/sessions" && init?.method === "POST") {
+      return new Response(JSON.stringify({ id: "session-new", agentId: "default", messages: [], lastEventId: 0 }));
+    }
+    if (url === "/api/v1/sessions?agentId=default") {
+      return new Response(JSON.stringify({ sessions: [{ id: "session-1", firstMessage: "测试", modified: "", messageCount: 0 }] }));
+    }
+    if (url === "/api/v1/sessions?agentId=default&archived=true") {
+      return new Response(JSON.stringify({ sessions: [{ id: "archived-1", name: "旧会话", firstMessage: "旧问题", modified: "", messageCount: 2 }] }));
+    }
+    if (url === "/api/v1/models") {
+      return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+    }
+    if (url === "/api/v1/sessions/session-1") {
+      return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
+    }
+    if (url.endsWith("/messages")) {
+      const sessionId = url.split("/")[3];
+      return new Response(JSON.stringify({
+        runId: "run-1",
+        sessionId,
+        status: "running",
+        startedAt: "2026-08-05T08:00:00.000Z",
+      }));
+    }
+    if (url === "/api/v1/agents/default/attachments") {
+      return new Response(JSON.stringify({
+        files: [{
+          path: "attachments/图片.png",
+          name: "图片.png",
+          mediaType: "image/png",
+          size: 5,
+          modifiedAt: "2026-08-05T08:00:00.000Z",
+        }],
+      }));
+    }
+    if (url.includes("/api/v1/agents/default/files/")) {
+      return new Response(null, {
+        headers: {
+          "Content-Type": "image/png",
+          "Content-Length": "5",
+          "Last-Modified": "Wed, 05 Aug 2026 08:00:00 GMT",
+        },
+      });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  }));
+});
+
+describe("LiveChatPage 时间线", () => {
+  it("将会话历史与工作台导航拆分为独立入口", async () => {
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("button", { name: "打开会话历史" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开工作台导航" })).toBeInTheDocument();
+  });
+
+  it("将工作台入口渲染为带下拉提示的可点击按钮", async () => {
+    render(<LiveChatPage {...props} />);
+    const trigger = await screen.findByRole("button", { name: "打开工作台导航" });
+
+    expect(trigger).toHaveTextContent("工作台");
+    expect(trigger).not.toHaveTextContent("π");
+    expect(trigger.querySelector("svg.lucide-chevron-down")).not.toBeNull();
+  });
+
+  it("为竖屏工作台和 Agent 选择器提供对等的布局钩子", async () => {
+    render(<LiveChatPage {...props} />);
+
+    const workspaceSwitcher = await screen.findByRole("button", { name: "打开工作台导航" });
+
+    expect(workspaceSwitcher.closest(".chat-header")).toHaveClass("live-chat-header");
+    expect(screen.getByRole("button", { name: "切换 Agent 或模型" })).toHaveClass("agent-model-menu__trigger");
+  });
+
+  it("在 Agent 选择框右侧提供快捷新建会话按钮", async () => {
+    render(<LiveChatPage {...props} />);
+
+    const quickCreate = await screen.findByRole("button", { name: "新建会话" });
+
+    expect(quickCreate).toHaveClass("chat-new-session-button");
+    expect(quickCreate.querySelector("svg.lucide-message-square-plus")).not.toBeNull();
+
+    fireEvent.click(quickCreate);
+    expect(await screen.findByRole("heading", { name: "默认 Agent" })).toBeInTheDocument();
+    expect(screen.getByText("用于测试的 Agent")).toBeInTheDocument();
+    expect(screen.getByLabelText("默认 Agent 头像")).toBeInTheDocument();
+  });
+
+  it("触摸长按会话时展开操作菜单且不打开会话", async () => {
+    render(<LiveChatPage {...props} />);
+    const sessionButton = await screen.findByRole("button", { name: "测试" });
+    operationLog.length = 0;
+    vi.useFakeTimers();
+
+    try {
+      fireEvent.pointerDown(sessionButton, { pointerType: "touch" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+      fireEvent.pointerUp(sessionButton, { pointerType: "touch" });
+      fireEvent.click(sessionButton);
+
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(operationLog).not.toContain("fetch:GET:/api/v1/sessions/session-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("为高密度对话布局保留消息列样式钩子", async () => {
+    render(<LiveChatPage {...props} />);
+
+    const messageColumn = (await screen.findByRole("textbox", { name: "消息内容" }))
+      .closest(".chat-workspace")
+      ?.querySelector(".message-column");
+
+    expect(messageColumn).toHaveClass("message-column--compact-end");
+  });
+
+  it("定时任务消息使用独立且与会话头像一致的标识容器", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    act(() => {
+      FakeEventSource.instances.at(-1)!.emit("snapshot", {
+        id: 1,
+        type: "snapshot",
+        sessionId: "session-1",
+        messages: [{ role: "user", content: "这是定时任务发出的消息\n\n请生成日报。" }],
+        lastEventId: 1,
+      });
+    });
+
+    const avatar = await screen.findByLabelText("定时任务消息");
+    expect(avatar.tagName).toBe("SPAN");
+    expect(avatar).toHaveClass("message-avatar", "is-scheduled-avatar");
+    expect(avatar).not.toHaveClass("is-user-avatar");
+  });
+
+  it("保存显示名后立即在会话页使用新的用户身份", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      if (url === "/api/v1/profile") {
+        if (init?.method === "PATCH") return new Response(JSON.stringify({ revision: "profile-r2", profile: { displayName: "小嘉" } }));
+        return new Response(JSON.stringify({ revision: "profile-r1", profile: { displayName: "管理员" } }));
+      }
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑个人资料" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "显示名" }), { target: { value: "小嘉" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存显示名" }));
+
+    expect(await screen.findByText("小嘉")).toBeInTheDocument();
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/v1/profile", expect.objectContaining({ method: "PATCH" }));
+  });
+
+  it("重新进入会话页时恢复本页缓存的 Agent", async () => {
+    const agents = [
+      { profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" },
+      { profile: { id: "research", name: "研究 Agent", avatar: { kind: "initial", value: "研" }, status: "active", cwd: "/data/workspace/research", instructions: {}, allowedTools: [] }, revision: "r1" },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      if (url === "/api/v1/sessions?agentId=default" || url === "/api/v1/sessions?agentId=research") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    const firstPage = render(<LiveChatPage {...props} />);
+    const trigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: /研究 Agent/ }));
+    await waitFor(() => expect(trigger).toHaveTextContent("研究 Agent"));
+
+    firstPage.unmount();
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("button", { name: "切换 Agent 或模型" })).toHaveTextContent("研究 Agent");
+  });
+
+  it("缓存的 Agent 不存在时回退到第一个可用 Agent", async () => {
+    window.sessionStorage.setItem("pi-agent-web.selected-agent-id", "deleted-agent");
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("button", { name: "切换 Agent 或模型" })).toHaveTextContent("默认 Agent");
+    expect(window.sessionStorage.getItem("pi-agent-web.selected-agent-id")).toBeNull();
+  });
+
+  it("快速切换 Agent 时忽略上一代会话列表的迟到响应", async () => {
+    const agents = [
+      { profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" },
+      { profile: { id: "research", name: "研究 Agent", avatar: { kind: "initial", value: "研" }, status: "active", cwd: "/data/workspace/research", instructions: {}, allowedTools: [] }, revision: "r1" },
+    ];
+    let defaultRequests = 0;
+    let resolveResearch: ((response: Response) => void) | undefined;
+    const researchSessions = new Promise<Response>((resolve) => { resolveResearch = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      if (url === "/api/v1/sessions?agentId=research") return researchSessions;
+      if (url === "/api/v1/sessions?agentId=default") {
+        defaultRequests += 1;
+        return new Response(JSON.stringify({ sessions: defaultRequests === 1 ? [] : [{ id: "default-latest", firstMessage: "默认最新会话", modified: "", messageCount: 1 }] }));
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+    const trigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: /研究 Agent/ }));
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("option", { name: /默认 Agent/ }));
+    expect(await screen.findByRole("button", { name: "默认最新会话" })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveResearch?.(new Response(JSON.stringify({ sessions: [{ id: "research-late", firstMessage: "迟到研究会话", modified: "", messageCount: 1 }] })));
+      await researchSessions;
+    });
+    expect(screen.queryByRole("button", { name: "迟到研究会话" })).not.toBeInTheDocument();
+  });
+
+  it("切换会话时保留当前内容并显示加载反馈", async () => {
+    let resolveSecondSession: ((response: Response) => void) | undefined;
+    const secondSession = new Promise<Response>((resolve) => { resolveSecondSession = resolve; });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "OpenAI", id: "MiniMax-M3", name: "MiniMax-M3" }] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [
+        { id: "session-1", name: "第一个会话", firstMessage: "旧会话内容", modified: "", messageCount: 1 },
+        { id: "session-2", name: "第二个会话", firstMessage: "新会话内容", modified: "", messageCount: 1 },
+      ] }));
+      if (url === "/api/v1/sessions/session-1") return new Response(JSON.stringify({
+        id: "session-1", agentId: "default", messages: [{ role: "assistant", content: [{ type: "text", text: "旧会话内容" }] }], lastEventId: 0,
+      }));
+      if (url === "/api/v1/sessions/session-2") return secondSession;
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("旧会话内容")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "第二个会话" }));
+
+    expect(screen.getByText("旧会话内容")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "正在加载会话" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "第二个会话" })).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(screen.getByRole("button", { name: "第二个会话" }));
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/v1/sessions/session-2")).toHaveLength(1);
+
+    resolveSecondSession!(new Response(JSON.stringify({
+      id: "session-2", agentId: "default", messages: [{ role: "assistant", content: [{ type: "text", text: "新会话内容" }] }], lastEventId: 0,
+    })));
+    expect(await screen.findByText("新会话内容")).toBeInTheDocument();
+  });
+
+  it("会话切换失败时保留当前内容并恢复操作", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "OpenAI", id: "MiniMax-M3", name: "MiniMax-M3" }] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [
+        { id: "session-1", name: "第一个会话", firstMessage: "旧会话内容", modified: "", messageCount: 1 },
+        { id: "session-2", name: "第二个会话", firstMessage: "新会话内容", modified: "", messageCount: 1 },
+      ] }));
+      if (url === "/api/v1/sessions/session-1") return new Response(JSON.stringify({
+        id: "session-1", agentId: "default", messages: [{ role: "assistant", content: [{ type: "text", text: "旧会话内容" }] }], lastEventId: 0,
+      }));
+      if (url === "/api/v1/sessions/session-2") return new Response(JSON.stringify({
+        error: { code: "SESSION_UNAVAILABLE", message: "会话暂不可用" },
+      }), { status: 503 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("旧会话内容")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "第二个会话" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("加载会话失败：会话暂不可用");
+    expect(screen.getByText("旧会话内容")).toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "正在加载会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "第二个会话" })).toBeEnabled();
+  });
+
+  it("忽略切换后与接口快照相同的 SSE 初始快照", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "OpenAI", id: "MiniMax-M3", name: "MiniMax-M3" }] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [
+        { id: "session-1", name: "第一个会话", firstMessage: "旧会话内容", modified: "", messageCount: 1 },
+        { id: "session-2", name: "第二个会话", firstMessage: "接口快照内容", modified: "", messageCount: 1 },
+      ] }));
+      if (url === "/api/v1/sessions/session-1") return new Response(JSON.stringify({
+        id: "session-1", agentId: "default", messages: [{ role: "assistant", content: [{ type: "text", text: "旧会话内容" }] }], lastEventId: 3,
+      }));
+      if (url === "/api/v1/sessions/session-2") return new Response(JSON.stringify({
+        id: "session-2", agentId: "default", messages: [{ role: "assistant", content: [{ type: "text", text: "接口快照内容" }] }], lastEventId: 7,
+      }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("旧会话内容")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "第二个会话" }));
+    expect(await screen.findByText("接口快照内容")).toBeInTheDocument();
+    await waitFor(() => expect(FakeEventSource.instances.some((source) => source.url.endsWith("/session-2/events"))).toBe(true));
+    const source = FakeEventSource.instances.find((item) => item.url.endsWith("/session-2/events"));
+
+    act(() => source!.emit("snapshot", {
+      id: 7,
+      type: "snapshot",
+      sessionId: "session-2",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "重复快照覆盖内容" }] }],
+      lastEventId: 7,
+    }));
+
+    expect(screen.getByText("接口快照内容")).toBeInTheDocument();
+    expect(screen.queryByText("重复快照覆盖内容")).not.toBeInTheDocument();
+
+    act(() => source!.emit("snapshot", {
+      id: 8,
+      type: "snapshot",
+      sessionId: "session-2",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "新快照内容" }] }],
+      lastEventId: 8,
+    }));
+
+    expect(screen.getByText("新快照内容")).toBeInTheDocument();
+  });
+
+  it("继承全局默认模型的新会话不会被模型列表首项覆盖", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [
+        { provider: "OpenAI", id: "gpt-5.6-terra", name: "gpt-5.6-terra" },
+        { provider: "OpenAI", id: "MiniMax-M3", name: "MiniMax-M3" },
+      ] }));
+      if (url === "/api/v1/configuration/global") return new Response(JSON.stringify({
+        revision: "settings-r1",
+        own: { defaultProvider: "OpenAI", defaultModel: "MiniMax-M3" },
+        effective: { defaultProvider: "OpenAI", defaultModel: "MiniMax-M3" },
+        diagnostics: [],
+      }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      if (url === "/api/v1/sessions" && init?.method === "POST") return new Response(JSON.stringify({
+        id: "inherits-global-session", agentId: "default", messages: [],
+        model: { provider: "OpenAI", id: "MiniMax-M3", name: "MiniMax-M3" }, lastEventId: 0,
+      }));
+      if (url.endsWith("/messages")) return new Response(JSON.stringify({ runId: "run-default", sessionId: "inherits-global-session", status: "running", startedAt: "2026-08-06T00:00:00.000Z" }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    await screen.findByText("MiniMax-M3");
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "使用继承模型" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/v1/sessions/inherits-global-session/messages")).toBe(true));
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/v1/sessions/inherits-global-session/model")).toBe(false);
+  });
+
+  it("新会话采用 Agent 默认模型，并在旧快照到达时保留首条用户消息", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "lux", name: "lux-7", avatar: { kind: "initial", value: "L" }, status: "active", cwd: "/data/workspace/agents/lux", defaultModel: { provider: "lux", id: "lux-7" }, instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "system", id: "system-default", name: "系统默认" }, { provider: "lux", id: "lux-7", name: "Lux 7" }] }));
+      if (url === "/api/v1/sessions?agentId=lux") return new Response(JSON.stringify({ sessions: [] }));
+      if (url === "/api/v1/sessions" && init?.method === "POST") return new Response(JSON.stringify({ id: "lux-session", agentId: "lux", messages: [], model: { provider: "lux", id: "lux-7", name: "Lux 7" }, lastEventId: 0 }));
+      if (url.endsWith("/messages")) return new Response(JSON.stringify({ runId: "run-lux", sessionId: "lux-session", status: "running", startedAt: "2026-08-06T00:00:00.000Z" }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("heading", { name: "lux-7" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "第一条 lux 消息" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    await waitFor(() => expect(FakeEventSource.instances.some((source) => source.url.endsWith("lux-session/events"))).toBe(true));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/v1/sessions/lux-session/messages")).toBe(true));
+
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/v1/sessions/lux-session/model")).toBe(false);
+    act(() => {
+      FakeEventSource.instances.at(-1)!.emit("snapshot", {
+        type: "snapshot", sessionId: "lux-session", messages: [{ role: "assistant", content: [{ type: "text", text: "Lux 回复" }] }], lastEventId: 1,
+      });
+    });
+    expect(screen.getAllByText("第一条 lux 消息")).toHaveLength(3);
+  });
+
+  it("没有可用 Agent 时提示先创建，并禁用消息输入", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }));
+      if (String(input) === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("请先在 Agent 管理中创建 Agent，再开始对话。"))
+      .toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "消息内容" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "发送消息" })).toBeDisabled();
+  });
+
+  it("连续点击新对话只进入单一草稿且不创建 session", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    const newChat = screen.getByRole("button", { name: "新对话" });
+    fireEvent.click(newChat);
+    fireEvent.click(newChat);
+    fireEvent.click(newChat);
+
+    const postCalls = vi.mocked(fetch).mock.calls.filter(([input, init]) => String(input) === "/api/v1/sessions" && init?.method === "POST");
+    expect(postCalls).toHaveLength(0);
+    expect(screen.getByRole("heading", { name: "默认 Agent" })).toBeInTheDocument();
+  });
+
+  it("可在侧栏重命名会话并从归档列表恢复会话", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
+    const renameInput = screen.getByRole("textbox", { name: "重命名会话" });
+    fireEvent.change(renameInput, { target: { value: "重命名结果" } });
+    fireEvent.keyDown(renameInput, { key: "Enter" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "重命名结果" })).toBeInTheDocument());
+    expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/session-1" && init?.method === "PATCH")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    expect(await screen.findByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "恢复旧会话" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/archived-1/archive" && init?.method === "DELETE")).toBe(true));
+  });
+
+  it("草稿首次发送只创建一个 session 并先建立其事件流", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "第一条消息" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-new/messages"));
+    expect(operationLog.filter((entry) => entry === "fetch:POST:/api/v1/sessions")).toHaveLength(1);
+    expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events"))
+      .toBeLessThan(operationLog.indexOf("fetch:POST:/api/v1/sessions/session-new/messages"));
+  });
+
+  it("用户发送后在首个增量前显示 Agent 等待气泡和运行状态", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "开始处理" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    expect(await screen.findByLabelText("Agent 正在处理")).toBeInTheDocument();
+    expect(screen.getAllByText("默认 Agent")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeInTheDocument();
+  });
+
+  it("Agent 生成期间保留输入焦点但不重复发送消息", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    const composer = screen.getByRole("textbox", { name: "消息内容" });
+    fireEvent.change(composer, { target: { value: "开始处理" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    await screen.findByRole("button", { name: "停止生成" });
+
+    expect(composer).toBeEnabled();
+    fireEvent.change(composer, { target: { value: "下一条消息" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith("/messages"))).toHaveLength(1);
+    const stopButton = screen.getByRole("button", { name: "停止生成" });
+    expect(stopButton).toBeEnabled();
+    fireEvent.click(stopButton);
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url) === "/api/v1/sessions/session-1/abort")).toBe(true));
+  });
+
+  it("从服务端 snapshot 恢复正在生成的等待状态", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    act(() => {
+      FakeEventSource.instances.at(-1)!.emit("snapshot", {
+        id: 8,
+        type: "snapshot",
+        sessionId: "session-1",
+        messages: [],
+        lastEventId: 8,
+        run: {
+          runId: "run-1",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-05T08:00:00.000Z",
+        },
+      });
+    });
+
+    expect(screen.getByLabelText("Agent 正在处理")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeInTheDocument();
+  });
+
+  it("刷新恢复已有回答后把新 token 连续追加到同一文本块", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("snapshot", {
+        id: 2,
+        type: "snapshot",
+        sessionId: "session-1",
+        messages: [{ role: "assistant", content: [{ type: "text", text: "刷新前" }] }],
+        lastEventId: 2,
+        run: {
+          runId: "run-1",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-05T08:00:00.000Z",
+        },
+      });
+      source.emit("text_delta", {
+        id: 3,
+        type: "text_delta",
+        sessionId: "session-1",
+        runId: "run-1",
+        delta: "刷新后",
+      });
+    });
+
+    const appendedText = await screen.findByText("刷新后");
+    expect(appendedText.closest("p")).toHaveTextContent("刷新前刷新后");
+  });
+
+  it("为长会话预留稳定的消息滚动条槽位", async () => {
+    const { container } = render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    const messageScroll = container.querySelector<HTMLElement>(".message-scroll");
+    expect(messageScroll).not.toBeNull();
+    expect(window.getComputedStyle(messageScroll!).scrollbarGutter).toBe("stable");
+  });
+
+  it("会话列表只在滚动期间显示滚动条", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<LiveChatPage {...props} />);
+      const navigation = container.querySelector<HTMLElement>(".session-nav");
+
+      expect(navigation).not.toBeNull();
+      expect(navigation).not.toHaveClass("is-scrolling");
+      fireEvent.scroll(navigation!);
+      expect(navigation).toHaveClass("is-scrolling");
+      act(() => vi.advanceTimersByTime(700));
+      expect(navigation).not.toHaveClass("is-scrolling");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("为历史中的每条用户消息展示消息导航", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    act(() => {
+      FakeEventSource.instances.at(-1)!.emit("snapshot", {
+        type: "snapshot",
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: "检查当前工作目录" },
+          { role: "assistant", content: [{ type: "text", text: "完成" }] },
+          { role: "user", content: "继续检查附件目录" },
+        ],
+      });
+    });
+
+    const navigation = screen.getByRole("navigation", { name: "用户消息导航" });
+    expect(navigation).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "跳转到用户消息 1：检查当前工作目录" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "跳转到用户消息 2：继续检查附件目录" })).toBeInTheDocument();
+  });
+
+  it("按 SSE 到达顺序在两段文本之间展示工具", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("text_delta", { type: "text_delta", delta: "先说明" });
+      source.emit("tool_started", { type: "tool_started", callId: "tool-1", toolName: "bash", args: { cmd: "pwd" } });
+      source.emit("tool_finished", { type: "tool_finished", callId: "tool-1", toolName: "bash", result: "/data/workspace", isError: false });
+      source.emit("text_delta", { type: "text_delta", delta: "再说明" });
+    });
+
+    const first = await screen.findByText("先说明");
+    const tool = screen.getByText("bash");
+    const second = await screen.findByText("再说明");
+    expect(first.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tool.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "展开 bash 工具详情" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("实时展示思考过程，并在思考段结束时自动折叠", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => source.emit("thinking_delta", {
+      id: 1,
+      type: "thinking_delta",
+      sessionId: "session-1",
+      delta: "先分析上下文",
+    }));
+
+    expect(screen.getByRole("button", { name: "收起Reasoning" })).toBeInTheDocument();
+    expect(await screen.findByText("先分析上下文")).toBeInTheDocument();
+
+    act(() => source.emit("thinking_finished", {
+      id: 2,
+      type: "thinking_finished",
+      sessionId: "session-1",
+    }));
+
+    expect(screen.getByRole("button", { name: "展开Reasoning" })).toBeInTheDocument();
+  });
+
+  it("工具结束后的流式标题与正文保持独立 Markdown 结构", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("tool_started", { type: "tool_started", callId: "tool-1", toolName: "read", args: { path: "attachments/a.md" } });
+      source.emit("tool_finished", { type: "tool_finished", callId: "tool-1", toolName: "read", result: "读取完成", isError: false });
+      source.emit("text_delta", { type: "text_delta", delta: "## 总结\n\n" });
+      source.emit("text_delta", { type: "text_delta", delta: "这是正文。" });
+    });
+
+    expect(await screen.findByRole("heading", { name: "总结", level: 2 })).toBeInTheDocument();
+    const bodyText = await screen.findByText("这是正文。");
+    expect(bodyText.closest("p")).toHaveTextContent("这是正文。");
+  });
+
+  it("从 snapshot 恢复工具入参和结果", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("snapshot", {
+        type: "snapshot",
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: "检查目录" },
+          { role: "assistant", content: [{ type: "toolCall", id: "tool-1", name: "bash", arguments: { cmd: "pwd" } }] },
+          { role: "toolResult", toolCallId: "tool-1", toolName: "bash", content: [{ type: "text", text: "/data/workspace" }], isError: false },
+        ],
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "展开 bash 工具详情" }));
+    expect(screen.getByText(/"cmd": "pwd"/)).toBeInTheDocument();
+    expect(screen.getByText("/data/workspace")).toBeInTheDocument();
+  });
+
+  it("上传附件后携带相对路径发送并在用户消息中展示媒体", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const file = new File(["image"], "图片.png", { type: "image/png" });
+
+    fireEvent.change(screen.getByLabelText("添加附件"), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByText("5 B")).toBeInTheDocument());
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "分析图片" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => {
+      const messageCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/v1/sessions/session-1/messages");
+      expect(messageCall).toBeDefined();
+      expect(JSON.parse(String(messageCall?.[1]?.body))).toMatchObject({
+        text: "分析图片",
+        filePaths: ["attachments/图片.png"],
+      });
+    });
+    expect(screen.getByRole("img", { name: "图片.png" })).toBeInTheDocument();
+  });
+
+  it("按 Agent 文本中的协议位置展示工作目录文件", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("text_delta", { type: "text_delta", delta: "先看结果\n<pi_agent_files version=\"1\">\n{\"files\":[{\"path\":\"attachments/agent-output.png\"}]}\n</pi_agent_files>\n后续说明" });
+    });
+
+    const before = await screen.findByText("先看结果");
+    const image = await screen.findByRole("img", { name: "agent-output.png" });
+    const after = await screen.findByText("后续说明");
+    expect(before.compareDocumentPosition(image) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(image.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("在同一会话中跨消息连续切换图片", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("snapshot", {
+        type: "snapshot",
+        sessionId: "session-1",
+        messages: [
+          { role: "user", content: '第一张\n<pi_agent_files version="1">\n{"files":[{"path":"attachments/first.png"}]}\n</pi_agent_files>' },
+          { role: "assistant", content: [{ type: "text", text: '<pi_agent_files version="1">\n{"files":[{"path":"attachments/second.png"}]}\n</pi_agent_files>' }] },
+        ],
+      });
+    });
+
+    await screen.findByRole("img", { name: "first.png" });
+    await screen.findByRole("img", { name: "second.png" });
+    fireEvent.click(screen.getByRole("button", { name: "全屏预览 first.png" }));
+
+    expect(await screen.findByText("1 / 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "下一张图片" }));
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+  });
+
+  it("文件协议结束标签独立到达时无需刷新立即展示文件", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("text_delta", { type: "text_delta", delta: '<pi_agent_files version="1">\n{"files":[{"path":"attachments/agent-output.png"}]}\n' });
+      source.emit("text_delta", { type: "text_delta", delta: "</pi_agent_files>" });
+    });
+
+    expect(await screen.findByRole("img", { name: "agent-output.png" })).toBeInTheDocument();
+  });
+});
+
+describe("LiveChatPage TTS 自动播放资格", () => {
+  it("首次进入最新 Session 时不自动播放历史回答", async () => {
+    installTtsFetch({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "历史回答不应自动播放。" }] }],
+    });
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("历史回答不应自动播放。")).toBeInTheDocument();
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 20)); });
+
+    expect(ttsRequests()).toHaveLength(0);
+  });
+
+  it("恢复服务端正在运行的回答后完成生成也不自动播放", async () => {
+    installTtsFetch({ messages: [] });
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => source.emit("snapshot", {
+      id: 1,
+      type: "snapshot",
+      sessionId: "session-1",
+      messages: [{ role: "assistant", content: [{ type: "text", text: "恢复中的回答。" }] }],
+      lastEventId: 1,
+      run: {
+        runId: "run-restored",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-09T00:00:00.000Z",
+      },
+    }));
+    expect(await screen.findByText("恢复中的回答。")).toBeInTheDocument();
+
+    act(() => source.emit("completed", {
+      id: 2,
+      type: "completed",
+      sessionId: "session-1",
+      runId: "run-restored",
+    }));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 20)); });
+
+    expect(ttsRequests()).toHaveLength(0);
+  });
+
+  it("仅在当前页面发送后完整回答结束时自动朗读并过滤非正文", async () => {
+    installTtsFetch({ messages: [] });
+    installPageAudio();
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "请回答" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    await waitFor(() => expect(ttsRequests()).toHaveLength(0));
+    const source = FakeEventSource.instances.at(-1)!;
+    act(() => source.emit("text_delta", {
+      type: "text_delta",
+      delta: "可朗读结论。\n\n| 列 | 值 |\n| --- | --- |\n| A | B |\n\n```ts\nconst hidden = true;\n```\n\n公式 $x+y$ 不朗读。",
+    }));
+
+    expect(await screen.findByText("可朗读结论。")).toBeInTheDocument();
+    expect(ttsRequests()).toHaveLength(0);
+    act(() => source.emit("completed", { type: "completed", sessionId: "session-1", runId: "run-1" }));
+
+    await waitFor(() => expect(ttsRequests()).toHaveLength(1));
+    const body = JSON.parse(String(ttsRequests()[0][1]?.body)) as { input: string };
+    expect(body.input).toContain("可朗读结论");
+    expect(body.input).toContain("公式 不朗读");
+    expect(body.input).not.toMatch(/hidden|列|x\+y/);
+    expect(await screen.findByRole("button", { name: "停止朗读" })).toBeInTheDocument();
+  });
+
+  it("流式播报在回答完成前开始且不会因后续增量重播首段", async () => {
+    installTtsFetch({ messages: [], streamPlayback: true });
+    installPageAudio();
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "流式回答" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    const source = FakeEventSource.instances.at(-1)!;
+    const first = `${"这是稳定的流式首段".repeat(8)}。`;
+    act(() => source.emit("text_delta", { type: "text_delta", delta: first }));
+    await waitFor(() => expect(ttsRequests()).toHaveLength(1));
+
+    act(() => source.emit("text_delta", { type: "text_delta", delta: "最后一句。" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(ttsRequests()).toHaveLength(1);
+    act(() => source.emit("completed", { type: "completed", sessionId: "session-1", runId: "run-1" }));
+    await waitFor(() => expect(ttsRequests()).toHaveLength(2));
+
+    const inputs = ttsRequests().map(([, init]) => (JSON.parse(String(init?.body)) as { input: string }).input);
+    expect(inputs.filter((input) => input === first)).toHaveLength(1);
+    expect(inputs[1]).toBe("最后一句。");
+  });
+
+  it("手动朗读按钮可停止，切换 Session 也会立即停止", async () => {
+    installTtsFetch({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "第一会话回答。" }] }],
+      secondSessionMessages: [{ role: "assistant", content: [{ type: "text", text: "第二会话回答。" }] }],
+    });
+    installPageAudio();
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("第一会话回答。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "朗读消息" }));
+    await waitFor(() => expect(PageFakeAudio.instances[0]?.played).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "停止朗读" }));
+    expect(PageFakeAudio.instances[0].paused).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "朗读消息" }));
+    await waitFor(() => expect(PageFakeAudio.instances[1]?.played).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "打开会话历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "第二会话" }));
+
+    await waitFor(() => expect(screen.getByText("第二会话回答。")).toBeInTheDocument());
+    expect(PageFakeAudio.instances[1].paused).toBe(true);
+    expect(ttsRequests()).toHaveLength(2);
+  });
+
+  it("切换到其他 Agent 时立即停止当前朗读", async () => {
+    installTtsFetch({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "切换前回答。" }] }],
+      includeSecondAgent: true,
+    });
+    installPageAudio();
+    render(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("切换前回答。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "朗读消息" }));
+    await waitFor(() => expect(PageFakeAudio.instances[0]?.played).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "切换 Agent 或模型" }));
+    fireEvent.click(screen.getByRole("option", { name: /写作 Agent/ }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "写作 Agent" })).toBeInTheDocument());
+    expect(PageFakeAudio.instances[0].paused).toBe(true);
+    expect(screen.queryByRole("button", { name: "停止朗读" })).not.toBeInTheDocument();
+  });
+});
+
+/** 安装包含 TTS Agent 与可控 Session 快照的接口桩。 */
+function installTtsFetch(options: {
+  messages: unknown[];
+  streamPlayback?: boolean;
+  secondSessionMessages?: unknown[];
+  includeSecondAgent?: boolean;
+}): void {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/agents") {
+      return new Response(JSON.stringify({
+        agents: [{
+          profile: {
+            id: "default",
+            name: "默认 Agent",
+            avatar: { kind: "initial", value: "π" },
+            status: "active",
+            cwd: "/data/workspace",
+            instructions: {},
+            allowedTools: [],
+            ttsProfileId: "voice-1",
+            ttsAutoPlay: true,
+            ttsStreamPlayback: options.streamPlayback === true,
+          },
+          revision: "r1",
+        }, ...(options.includeSecondAgent ? [{
+          profile: {
+            id: "writer",
+            name: "写作 Agent",
+            avatar: { kind: "initial", value: "写" },
+            status: "active",
+            cwd: "/data/workspace/writer",
+            instructions: {},
+            allowedTools: [],
+            ttsProfileId: "voice-1",
+            ttsAutoPlay: true,
+            ttsStreamPlayback: false,
+          },
+          revision: "r2",
+        }] : [])],
+      }));
+    }
+    if (url === "/api/v1/models") {
+      return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+    }
+    if (url === "/api/v1/profile") {
+      return new Response(JSON.stringify({ revision: "profile-r1", profile: { displayName: "管理员" } }));
+    }
+    if (url === "/api/v1/sessions?agentId=default") {
+      return new Response(JSON.stringify({ sessions: [
+        { id: "session-1", firstMessage: "测试", modified: "", messageCount: options.messages.length },
+        ...(options.secondSessionMessages ? [{ id: "session-2", firstMessage: "第二会话", modified: "", messageCount: options.secondSessionMessages.length }] : []),
+      ] }));
+    }
+    if (url === "/api/v1/sessions?agentId=writer") {
+      return new Response(JSON.stringify({ sessions: [] }));
+    }
+    if (url === "/api/v1/sessions/session-1") {
+      return new Response(JSON.stringify({
+        id: "session-1",
+        agentId: "default",
+        messages: options.messages,
+        lastEventId: 0,
+      }));
+    }
+    if (url === "/api/v1/sessions/session-2") {
+      return new Response(JSON.stringify({
+        id: "session-2",
+        agentId: "default",
+        messages: options.secondSessionMessages ?? [],
+        lastEventId: 0,
+      }));
+    }
+    if (url.endsWith("/messages")) {
+      return new Response(JSON.stringify({
+        runId: "run-1",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-09T00:00:00.000Z",
+      }));
+    }
+    if (url === "/api/v1/agents/default/tts") {
+      return new Response(new Blob(["audio"], { type: "audio/mpeg" }), {
+        headers: { "Content-Type": "audio/mpeg" },
+      });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  }));
+}
+
+/** 安装可控音频边界；对象 URL 沿用 Node 24 的原生实现。 */
+function installPageAudio(): void {
+  vi.stubGlobal("Audio", PageFakeAudio);
+}
+
+/** 返回当前测试已发出的语音合成请求。 */
+function ttsRequests(): Array<[input: string | URL | Request, init?: RequestInit]> {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/agents/default/tts");
+}

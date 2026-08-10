@@ -1,0 +1,10 @@
+# 仅信任直接连接，防止内部调用方伪造客户端来源地址。
+[botdetection]
+ipv4_prefix = 32
+ipv6_prefix = 48
+trusted_proxies = []
+
+# 内部 API 调用不依赖页面令牌；其余限流参数沿用 SearXNG 安全默认值。
+[botdetection.ip_limit]
+link_token = false
+filter_link_local = true

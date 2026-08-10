@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.worktrees/
+.superpowers/
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.log
+coverage/
+.vite/
+.DS_Store
+.idea/
+.vscode/
+pi-agent-data/*
+!pi-agent-data/.gitkeep
+
+# 本地协作指令与开发过程文档不属于开源交付物。
+AGENTS.md
+CLAUDE.md
+docs/superpowers/
+docs/01-pi-agent-first-research.md
+docs/02-first-wave-development.md
+docs/architecture/REFACTOR-REVIEW.md

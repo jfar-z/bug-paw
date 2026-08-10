@@ -1,0 +1,17 @@
+use_default_settings: true
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "由 SEARXNG_SECRET 环境变量覆盖"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+
+valkey:
+  url: valkey://bug-paw-cache:6379/0

@@ -1,0 +1,715 @@
+/* BugPaw 现行视觉覆盖层：保留业务结构，只统一主题令牌与品牌表达。 */
+:root {
+  --eye: #7cc26b;
+  --paw: #f5b4b6;
+  --tabby: #7a5a3a;
+  --deep-brown: #2f241b;
+  --bugpaw-danger: #df6b6b;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--text-primary);
+  background: var(--canvas);
+  font-family: "Manrope Variable", Manrope, sans-serif;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #171c22;
+  --panel: #202630;
+  --surface: #252d38;
+  --surface-soft: #283444;
+  --surface-hover: #303a47;
+  --text-primary: #f7f6f2;
+  --text-secondary: #b9c0c7;
+  --text-tertiary: #98a4b2;
+  --border: #35404d;
+  --border-strong: #465363;
+  --accent: #7cc26b;
+  --accent-strong: #96d685;
+  --accent-soft: rgba(124, 194, 107, 0.11);
+  --danger: #df7777;
+  --focus: #7cc26b;
+  --primary-bg: #f7f6f2;
+  --primary-text: #283444;
+  --rail: #1b2129;
+  --backdrop: #11161c;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+  --shadow-soft: 0 18px 50px rgba(4, 8, 13, 0.24);
+  --shadow-float: 0 22px 70px rgba(4, 8, 13, 0.34);
+  --shadow-pixel: none;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #f7f6f2;
+  --panel: #ffffff;
+  --surface: #ffffff;
+  --surface-soft: #efeee9;
+  --surface-hover: #e8e7e1;
+  --text-primary: #283444;
+  --text-secondary: #5b6b7f;
+  --text-tertiary: #596676;
+  --border: #d8d6cf;
+  --border-strong: #c5c2b9;
+  --accent: #4f7f45;
+  --accent-strong: #3f6937;
+  --accent-soft: rgba(94, 154, 80, 0.1);
+  --danger: #b55353;
+  --focus: #5e9a50;
+  --primary-bg: #283444;
+  --primary-text: #f7f6f2;
+  --rail: #f0efea;
+  --backdrop: #e7e5df;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+  --shadow-soft: 0 18px 50px rgba(40, 52, 68, 0.12);
+  --shadow-float: 0 22px 70px rgba(40, 52, 68, 0.18);
+  --shadow-pixel: none;
+}
+
+:root[data-theme="bug"] {
+  color-scheme: light;
+  --eye: #7fae58;
+  --paw: #efa6aa;
+  --canvas: #ded2bf;
+  --panel: #f1e7d8;
+  --surface: #f1e7d8;
+  --surface-soft: #cdba9f;
+  --surface-hover: #bfa98b;
+  --text-primary: #2f241b;
+  --text-secondary: #594634;
+  --text-tertiary: #735f4c;
+  --border: #a98f70;
+  --border-strong: #7a5a3a;
+  --accent: #5d7f3f;
+  --accent-strong: #496532;
+  --accent-soft: rgba(127, 174, 88, 0.18);
+  --danger: #b74d49;
+  --focus: #6c944b;
+  --primary-bg: #2f241b;
+  --primary-text: #fff9ee;
+  --rail: #2f241b;
+  --backdrop: #b49a7a;
+  --scrollbar-track: var(--surface-soft);
+  --scrollbar-thumb: var(--tabby);
+  --scrollbar-thumb-hover: var(--deep-brown);
+  --shadow-soft: 4px 4px 0 #7a5a3a;
+  --shadow-float: 6px 6px 0 #7a5a3a;
+  --shadow-pixel: 4px 4px 0 #7a5a3a;
+}
+
+/* 所有可滚动区域共享主题化细滚动条，避免页面出现浏览器默认外观。 */
+* {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 2px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  background-clip: padding-box;
+}
+
+/* 会话列表仅在滚动期间显示滑块，避免静止侧栏出现视觉噪声。 */
+.session-nav {
+  scrollbar-color: transparent transparent;
+}
+
+.session-nav::-webkit-scrollbar-track,
+.session-nav::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.session-nav.is-scrolling {
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.session-nav.is-scrolling::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+.session-nav.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+.session-nav.is-scrolling::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+body {
+  color: var(--text-primary);
+  background: var(--backdrop);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+a,
+input,
+textarea,
+select {
+  transition-duration: 160ms;
+  transition-timing-function: ease;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* 正式产品标识使用页面猫头，浏览器小图标仍由独立猫爪承担。 */
+.product-mark {
+  gap: 10px;
+  min-width: 0;
+}
+
+.product-mark__image {
+  display: block;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.product-mark__name {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.045em;
+}
+
+.product-mark__name span {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.product-mark.is-compact .product-mark__image {
+  width: 38px;
+  height: 38px;
+  flex-basis: 38px;
+}
+
+.theme-segment {
+  border-color: var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.theme-segment button {
+  min-height: 38px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.theme-segment button.is-active {
+  color: var(--text-primary);
+  background: var(--surface);
+}
+
+.icon-button {
+  border-radius: 9px;
+}
+
+.primary-button,
+.configuration-primary-action,
+.send-button,
+.new-chat-button {
+  color: var(--primary-text);
+  background: var(--primary-bg);
+  border-color: var(--primary-bg);
+}
+
+.primary-button:hover:not(:disabled),
+.configuration-primary-action:hover:not(:disabled),
+.send-button:hover:not(:disabled),
+.new-chat-button:hover:not(:disabled) {
+  filter: brightness(1.07);
+}
+
+/* 登录与初始化是品牌表达最强的场景，但表单层级始终优先。 */
+.auth-shell {
+  background: var(--canvas);
+}
+
+.auth-context {
+  background: var(--panel);
+}
+
+.auth-context::after {
+  display: none;
+}
+
+.auth-panel {
+  background: var(--canvas);
+}
+
+.bugpaw-auth-visual {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 620px);
+  margin: clamp(24px, 4vh, 44px) 0 clamp(18px, 3vh, 32px);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-soft);
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+}
+
+.bugpaw-auth-visual img {
+  display: block;
+  width: 100%;
+  height: clamp(150px, 23vh, 240px);
+  object-fit: contain;
+}
+
+.login-statement,
+.auth-context__body,
+.trust-list,
+.setup-steps,
+.storage-note {
+  position: relative;
+  z-index: 1;
+}
+
+.login-statement h1,
+.auth-context h1 {
+  color: var(--text-primary);
+  letter-spacing: -0.055em;
+}
+
+.form-frame {
+  border-color: var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.field-group input,
+.field-group select,
+.field-group textarea,
+.input-with-action {
+  border-color: var(--border);
+  background: var(--canvas);
+}
+
+/* 工作台延续高密度三层结构，以稳定导航和内容扫描为主。 */
+.workbench-shell,
+.chat-shell,
+.configuration-shell,
+.knowledge-base-page {
+  color: var(--text-primary);
+  background: var(--canvas);
+}
+
+.workbench-rail {
+  border-color: var(--border);
+  background: var(--rail);
+}
+
+.workbench-rail__brand {
+  border-color: var(--border);
+}
+
+.workbench-main-nav button,
+.workbench-rail__actions .icon-button {
+  border-radius: 8px;
+  color: var(--text-secondary);
+}
+
+.workbench-main-nav button:hover,
+.workbench-rail__actions .icon-button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.workbench-main-nav button.is-active {
+  color: var(--text-primary);
+  background: var(--surface-soft);
+  box-shadow: inset 3px 0 0 var(--eye);
+}
+
+.workbench-mobile-header,
+.chat-header {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+}
+
+/* 一级工作区标题统一使用留白充足的轻量面板，避免文字贴近边界。 */
+.workspace-resources-page__heading,
+.knowledge-base-workspace__heading {
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.chat-sidebar,
+.configuration-sidebar,
+.workspace-agent-navigation,
+.knowledge-base-navigation {
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.chat-workspace,
+.configuration-content,
+.workspace-resources-page__main,
+.knowledge-base-workspace {
+  background: var(--canvas);
+}
+
+.session-row,
+.session-nav > button,
+.configuration-nav > button,
+.workspace-agent-navigation nav button,
+.knowledge-base-navigation nav button {
+  border-radius: 7px;
+}
+
+.session-row.is-active,
+.session-nav > button.is-active,
+.configuration-nav > button.is-active,
+.workspace-agent-navigation nav button.is-active,
+.knowledge-base-navigation nav button.is-active {
+  background: var(--surface-soft);
+  box-shadow: inset 3px 0 0 var(--eye);
+}
+
+.composer,
+.configuration-section,
+.settings-section,
+.knowledge-base-overview,
+.knowledge-base-documents,
+.knowledge-base-side-panel,
+.knowledge-base-search-panel,
+.resource-grid article,
+.scheduled-task-card,
+.workspace-file-preview {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.message-row.is-user .message-content,
+.tool-card,
+.thinking-card,
+.media-card,
+.agent-artifact,
+.attachment-upload-item {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.message-row.is-assistant .message-content {
+  background: transparent;
+}
+
+.configuration-overview-page .configuration-page__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.configuration-overview-page .configuration-page__heading > div {
+  min-width: 0;
+}
+
+.configuration-overview-mascot {
+  display: block;
+  width: 108px;
+  height: 108px;
+  flex: 0 0 108px;
+  margin-top: -14px;
+  object-fit: contain;
+}
+
+.knowledge-base-empty-state__image {
+  display: block;
+  width: min(250px, 70vw);
+  height: 150px;
+  object-fit: contain;
+}
+
+.knowledge-base-empty-state {
+  width: min(520px, calc(100% - 32px));
+  gap: 12px;
+}
+
+.mobile-entry-gate__mark {
+  width: 52px;
+  height: 52px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.mobile-entry-gate__mark img {
+  width: 52px;
+  height: 52px;
+}
+
+/* BUG 主题使用更暗奶油色、硬边框和克制的像素按压反馈。 */
+:root[data-theme="bug"] .product-mark__image {
+  border: 2px solid var(--deep-brown);
+  border-radius: 4px;
+}
+
+:root[data-theme="bug"] .workbench-rail,
+:root[data-theme="bug"] .chat-sidebar,
+:root[data-theme="bug"] .configuration-sidebar,
+:root[data-theme="bug"] .workspace-agent-navigation,
+:root[data-theme="bug"] .knowledge-base-navigation {
+  color: #fff9ee;
+  border-color: var(--deep-brown);
+  background: var(--deep-brown);
+}
+
+:root[data-theme="bug"] .workbench-rail .product-mark__image {
+  border-color: #fff9ee;
+}
+
+:root[data-theme="bug"] .workbench-main-nav button,
+:root[data-theme="bug"] .workbench-rail__actions .icon-button,
+:root[data-theme="bug"] .chat-sidebar button,
+:root[data-theme="bug"] .configuration-sidebar button,
+:root[data-theme="bug"] .workspace-agent-navigation button,
+:root[data-theme="bug"] .knowledge-base-navigation button {
+  color: #ded2bf;
+}
+
+:root[data-theme="bug"] .workbench-main-nav button:hover,
+:root[data-theme="bug"] .workbench-main-nav button.is-active,
+:root[data-theme="bug"] .workbench-rail__actions .icon-button:hover,
+:root[data-theme="bug"] .chat-sidebar button:hover,
+:root[data-theme="bug"] .configuration-sidebar button:hover,
+:root[data-theme="bug"] .workspace-agent-navigation button:hover,
+:root[data-theme="bug"] .knowledge-base-navigation button:hover {
+  color: #fff9ee;
+  background: #594634;
+}
+
+/* 会话操作菜单使用浅色面板，必须覆盖深色侧栏的通用按钮前景。 */
+:root[data-theme="bug"] .session-actions__popover > button {
+  color: var(--text-primary);
+}
+
+:root[data-theme="bug"] .session-actions__popover > button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+:root[data-theme="bug"] .session-actions__popover .is-danger {
+  color: color-mix(in srgb, var(--danger) 90%, var(--deep-brown));
+}
+
+:root[data-theme="bug"] .session-actions__popover .is-danger:hover:not(:disabled) {
+  background: var(--primary-text);
+}
+
+/* 账户信息位于深棕侧栏，使用专用浅色文字保持层级清晰。 */
+:root[data-theme="bug"] .chat-sidebar .account-button strong {
+  color: #fff9ee;
+}
+
+:root[data-theme="bug"] .chat-sidebar .account-button small {
+  color: #ded2bf;
+}
+
+/* Session 的悬停底色由整行承担，避免操作按钮区域出现颜色断层。 */
+:root[data-theme="bug"] .session-row:hover {
+  color: #fff9ee;
+  background: #594634;
+}
+
+:root[data-theme="bug"] .session-row:hover .session-row__open {
+  color: inherit;
+  background: transparent;
+}
+
+:root[data-theme="bug"] .workbench-main-nav button.is-active,
+:root[data-theme="bug"] .session-row.is-active,
+:root[data-theme="bug"] .configuration-nav > button.is-active,
+:root[data-theme="bug"] .workspace-agent-navigation nav button.is-active,
+:root[data-theme="bug"] .knowledge-base-navigation nav button.is-active {
+  color: #fff9ee;
+  background: #594634;
+  box-shadow: inset 4px 0 0 var(--paw);
+}
+
+/* 选中会话的标题与操作入口沿用整行前景，避免省略号在深棕底上丢失。 */
+:root[data-theme="bug"] .session-row.is-active .session-row__open,
+:root[data-theme="bug"] .session-row.is-active .session-actions__trigger,
+:root[data-theme="bug"] .configuration-nav > button.is-active small,
+:root[data-theme="bug"] .workspace-agent-navigation nav button.is-active small,
+:root[data-theme="bug"] .knowledge-base-navigation nav button.is-active small {
+  color: inherit;
+}
+
+:root[data-theme="bug"] .session-row.is-active .session-actions__trigger:hover {
+  color: #fff9ee;
+  background: #7a5a3a;
+}
+
+:root[data-theme="bug"] .theme-segment,
+:root[data-theme="bug"] .bugpaw-auth-visual,
+:root[data-theme="bug"] .form-frame,
+:root[data-theme="bug"] .composer,
+:root[data-theme="bug"] .configuration-section,
+:root[data-theme="bug"] .settings-section,
+:root[data-theme="bug"] .knowledge-base-overview,
+:root[data-theme="bug"] .knowledge-base-documents,
+:root[data-theme="bug"] .knowledge-base-side-panel,
+:root[data-theme="bug"] .knowledge-base-search-panel,
+:root[data-theme="bug"] .resource-grid article,
+:root[data-theme="bug"] .scheduled-task-card,
+:root[data-theme="bug"] .workspace-file-preview,
+:root[data-theme="bug"] .workspace-resources-page__heading,
+:root[data-theme="bug"] .knowledge-base-workspace__heading,
+:root[data-theme="bug"] .configuration-dialog {
+  border: 2px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-pixel);
+}
+
+:root[data-theme="bug"] .icon-button,
+:root[data-theme="bug"] .theme-segment button,
+:root[data-theme="bug"] input,
+:root[data-theme="bug"] textarea,
+:root[data-theme="bug"] select,
+:root[data-theme="bug"] .session-row,
+:root[data-theme="bug"] .session-nav > button,
+:root[data-theme="bug"] .configuration-nav > button {
+  border-radius: 4px;
+}
+
+:root[data-theme="bug"] .primary-button,
+:root[data-theme="bug"] .configuration-primary-action,
+:root[data-theme="bug"] .send-button,
+:root[data-theme="bug"] .new-chat-button {
+  border: 2px solid var(--deep-brown);
+  border-radius: 4px;
+  box-shadow: 3px 3px 0 var(--tabby);
+}
+
+:root[data-theme="bug"] .danger-button {
+  border: 2px solid var(--deep-brown);
+  border-radius: 4px;
+}
+
+:root[data-theme="bug"] .primary-button:active:not(:disabled),
+:root[data-theme="bug"] .configuration-primary-action:active:not(:disabled),
+:root[data-theme="bug"] .send-button:active:not(:disabled),
+:root[data-theme="bug"] .new-chat-button:active:not(:disabled) {
+  box-shadow: 1px 1px 0 var(--tabby);
+  transform: translate(2px, 2px);
+}
+
+:root[data-theme="bug"] .configuration-overview-mascot,
+:root[data-theme="bug"] .knowledge-base-empty-state__image {
+  filter: saturate(0.92) contrast(1.04);
+}
+
+/* BUG 主题保留 v0 几何，只替换为 BUG 花色与硬边表达。 */
+:root[data-theme="bug"] .login-page {
+  border: 2px solid var(--deep-brown);
+  border-radius: 6px;
+  box-shadow: 4px 4px 0 var(--tabby);
+}
+
+:root[data-theme="bug"] .login-brand-panel {
+  background: #2f241b;
+}
+
+:root[data-theme="bug"] .hero-art {
+  border: 2px solid #fff9ee;
+  border-radius: 6px;
+  box-shadow: 5px 5px 0 #7a5a3a;
+}
+
+:root[data-theme="bug"] .password-field,
+:root[data-theme="bug"] .login-submit {
+  border: 2px solid var(--deep-brown);
+  border-radius: 4px;
+}
+
+:root[data-theme="bug"] .login-submit {
+  box-shadow: 3px 3px 0 var(--tabby);
+}
+
+:root[data-theme="bug"] .login-submit:active:not(:disabled) {
+  box-shadow: 1px 1px 0 var(--tabby);
+  transform: translate(2px, 2px);
+}
+
+@media (max-width: 760px) {
+  .product-mark__image,
+  .product-mark.is-compact .product-mark__image {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+  }
+
+  .product-mark__name {
+    font-size: 14px;
+  }
+
+  .bugpaw-auth-visual {
+    display: none;
+  }
+
+  .configuration-overview-page .configuration-page__heading {
+    gap: 12px;
+  }
+
+  .workspace-resources-page__heading,
+  .knowledge-base-workspace__heading {
+    padding: 16px;
+  }
+
+  .configuration-overview-mascot {
+    width: 76px;
+    height: 76px;
+    flex-basis: 76px;
+    margin-top: -6px;
+  }
+
+  .knowledge-base-empty-state__image {
+    width: min(210px, 68vw);
+    height: 126px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
