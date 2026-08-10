@@ -39,6 +39,8 @@ interface LiveChatPageProps {
 interface PendingUserMessage {
   sessionId: string;
   entry: UserEntry;
+  /** 快照未写入本次消息时，乐观消息在时间线中的补位方式。 */
+  placement: "before_last_agent" | "after_history";
 }
 
 interface AutoSpeechEligibility {
@@ -148,7 +150,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (timelineIncludesUserMessage(parsedTimeline, pending.entry)) {
         pendingUserMessageRef.current = undefined;
       } else {
-        setTimeline(insertPendingUserMessage(parsedTimeline, pending.entry));
+        setTimeline(insertPendingUserMessage(parsedTimeline, pending.entry, pending.placement));
         return;
       }
     }
@@ -495,9 +497,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if ((!text && files.length === 0 && references.length === 0) || streaming || attachmentBusy || !selectedAgentId || !selectedModel) {
       return;
     }
+    const branchEntryId = editingEntryId;
     const previousAttachmentItems = attachmentItems;
     try {
       stopSpeech();
+      // 分支请求尚未返回前即退出编辑态，避免来源消息持续显示“编辑中”。
+      if (branchEntryId) setEditingEntryId(undefined);
       const wasDraft = !session;
       const activeSession = session ?? await createConversation(selectedAgentId);
       if (wasDraft && !isSameModel(activeSession.model, selectedModel)) {
@@ -532,7 +537,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           previousTurnId: findLastAgentTurnId(timeline),
         }
         : undefined;
-      pendingUserMessageRef.current = { sessionId: activeSession.id, entry: pendingEntry };
+      pendingUserMessageRef.current = {
+        sessionId: activeSession.id,
+        entry: pendingEntry,
+        placement: branchEntryId ? "after_history" : "before_last_agent",
+      };
       setTimeline((current) => reduceTimeline(reduceTimeline(current, {
           type: "user_message",
           id: pendingEntry.id,
@@ -549,15 +558,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           messageCount: 1,
         }, ...current.filter((item) => item.id !== activeSession.id)]);
       }
-      if (editingEntryId) {
-        const result = await api.sendBranchMessage(activeSession.id, editingEntryId, text, files.map((file) => file.path), draftReferences);
+      if (branchEntryId) {
+        const result = await api.sendBranchMessage(activeSession.id, branchEntryId, text, files.map((file) => file.path), draftReferences);
         // 分支发送立刻以服务端导航快照替换旧路径，同时保留本地待发送气泡。
         applySnapshot(result.snapshot, "once");
         setActiveRun(result.run);
       } else {
         setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
       }
-      setEditingEntryId(undefined);
     } catch (reason) {
       autoSpeechEligibilityRef.current = undefined;
       pendingUserMessageRef.current = undefined;
@@ -566,6 +574,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setDraft(text);
       setDraftReferences(draftReferences);
       setAttachmentItems(previousAttachmentItems);
+      if (branchEntryId) setEditingEntryId(branchEntryId);
       setError(reason instanceof Error ? reason.message : "消息发送失败。");
     }
   };
@@ -1064,9 +1073,15 @@ function timelineIncludesUserMessage(entries: ConversationEntry[], pending: User
 }
 
 /**
- * 在快照暂未包含刚发送的消息时，将其置于首个新 Agent 回复之前以保持对话顺序。
+ * 在快照暂未包含刚发送的消息时，按发送类型插入乐观消息。
+ * 分支发送的快照已回到历史节点，须将新消息接在末尾，避免越过旧 Agent 消息。
  */
-function insertPendingUserMessage(entries: ConversationEntry[], pending: UserEntry): ConversationEntry[] {
+function insertPendingUserMessage(
+  entries: ConversationEntry[],
+  pending: UserEntry,
+  placement: PendingUserMessage["placement"],
+): ConversationEntry[] {
+  if (placement === "after_history") return [...entries, pending];
   const lastAgentIndex = entries.findLastIndex((entry) => entry.type === "agent");
   if (lastAgentIndex < 0) {
     return [...entries, pending];

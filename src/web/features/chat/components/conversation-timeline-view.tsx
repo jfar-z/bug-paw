@@ -54,13 +54,13 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
           {props.noAvailableAgent ? <><p>请先在 Agent 管理中创建 Agent，再开始对话。</p><button type="button" className="configuration-primary-action session-intro__create-agent" onClick={props.onCreateAgent}>创建 Agent</button></> : <p>{props.activeAgent?.profile.description?.trim() || `准备好后，向 ${props.activeAgent?.profile.name ?? "你的 Agent"} 发出第一条消息，开始推进你的工作。`}</p>}
         </div>}
         {props.timeline.map((entry) => entry.type === "user" ? (
-          <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}${entry.piEntryId === props.editingEntryId ? " is-editing-source" : ""}`} id={userMessageDomId(entry.id)} key={entry.id}>
+          <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}${props.editingEntryId && entry.piEntryId === props.editingEntryId ? " is-editing-source" : ""}`} id={userMessageDomId(entry.id)} key={entry.id}>
             <div className="message-meta">
               <strong>{entry.source === "scheduled" ? "定时任务" : props.profileIdentity.displayName}</strong>
               {entry.source === "scheduled" ? <span className="message-avatar is-scheduled-avatar" aria-label="定时任务消息"><Clock3 size={15} aria-hidden="true" /></span> : <UserAvatar identity={props.profileIdentity} className="message-avatar is-user-avatar" />}
             </div>
             <div className="user-message-body">
-              {entry.piEntryId === props.editingEntryId ? <span className="user-message-editing-label">编辑中</span> : null}
+              {props.editingEntryId && entry.piEntryId === props.editingEntryId ? <span className="user-message-editing-label">编辑中</span> : null}
               <div className="message-content">
                 {entry.text && <p>{entry.text}</p>}
                 <AgentReferenceChips references={entry.references} />
