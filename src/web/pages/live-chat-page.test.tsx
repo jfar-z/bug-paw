@@ -166,6 +166,7 @@ describe("LiveChatPage 时间线", () => {
     const actions = await screen.findByLabelText("用户消息操作");
     expect(actions).toHaveClass("message-actions--separated", "user-message-actions");
     expect(actions.closest(".message-content")).toBeNull();
+    expect(actions.closest(".user-message-body")).not.toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "切换到上一版本" }));
     await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-1/branches/assistant-old/navigate"));
