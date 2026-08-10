@@ -299,7 +299,7 @@ describe("对话 API", () => {
 
     expect(sent.statusCode).toBe(202);
     expect(deleted.statusCode).toBe(204);
-    expect(runtimeA.startPrompt).toHaveBeenCalledWith("session-a", "归属校验");
+    expect(runtimeA.startPrompt).toHaveBeenCalledWith("session-a", "归属校验", "归属校验");
     expect(runtimeA.deleteSession).toHaveBeenCalledWith("session-a");
     expect(runtimeB.openSession).not.toHaveBeenCalled();
   });

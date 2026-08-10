@@ -66,7 +66,7 @@ export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRoute
         if (!references) {
           return sendApiError(reply, 400, "INVALID_REFERENCE", "引用不存在或不属于当前 Agent");
         }
-        const run = await acquired.runtime.startPrompt(request.params.id, buildPrompt(text, mergeReferences(references, files)));
+        const run = await acquired.runtime.startPrompt(request.params.id, buildPrompt(text, mergeReferences(references, files)), text);
         return reply.code(202).send(run);
       } finally {
         acquired.release();

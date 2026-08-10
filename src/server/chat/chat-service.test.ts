@@ -144,10 +144,12 @@ describe("ChatApplicationService", () => {
     expect(runtime.startPrompt).toHaveBeenCalledWith(
       "s1",
       expect.stringContaining('<agent_references version="1" type="knowledge" id="kb-1" name="真实资料"/>'),
+      "/review 请分析",
     );
     expect(runtime.startPrompt).toHaveBeenCalledWith(
       "s1",
       expect.stringContaining('<agent_references version="1" type="file" path="attachments/design.png" kind="file"/>'),
+      "/review 请分析",
     );
     expect(release).toHaveBeenCalledOnce();
   });
