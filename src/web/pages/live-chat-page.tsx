@@ -39,8 +39,6 @@ interface LiveChatPageProps {
 interface PendingUserMessage {
   sessionId: string;
   entry: UserEntry;
-  /** 快照未写入本次消息时，乐观消息在时间线中的补位方式。 */
-  placement: "before_last_agent" | "after_history";
 }
 
 interface AutoSpeechEligibility {
@@ -150,7 +148,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (timelineIncludesUserMessage(parsedTimeline, pending.entry)) {
         pendingUserMessageRef.current = undefined;
       } else {
-        setTimeline(insertPendingUserMessage(parsedTimeline, pending.entry, pending.placement));
+        setTimeline(insertPendingUserMessage(parsedTimeline, pending.entry));
         return;
       }
     }
@@ -540,7 +538,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       pendingUserMessageRef.current = {
         sessionId: activeSession.id,
         entry: pendingEntry,
-        placement: branchEntryId ? "after_history" : "before_last_agent",
       };
       setTimeline((current) => reduceTimeline(reduceTimeline(current, {
           type: "user_message",
@@ -1073,18 +1070,12 @@ function timelineIncludesUserMessage(entries: ConversationEntry[], pending: User
 }
 
 /**
- * 在快照暂未包含刚发送的消息时，按发送类型插入乐观消息。
- * 分支发送的快照已回到历史节点，须将新消息接在末尾，避免越过旧 Agent 消息。
+ * 快照暂未包含刚发送的消息时，它只代表本轮发送前的历史。
+ * 将乐观用户消息接在末尾，后续 generation_started 才会创建独立的新 Agent 回合。
  */
 function insertPendingUserMessage(
   entries: ConversationEntry[],
   pending: UserEntry,
-  placement: PendingUserMessage["placement"],
 ): ConversationEntry[] {
-  if (placement === "after_history") return [...entries, pending];
-  const lastAgentIndex = entries.findLastIndex((entry) => entry.type === "agent");
-  if (lastAgentIndex < 0) {
-    return [...entries, pending];
-  }
-  return [...entries.slice(0, lastAgentIndex), pending, ...entries.slice(lastAgentIndex)];
+  return [...entries, pending];
 }

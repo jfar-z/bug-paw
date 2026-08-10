@@ -736,6 +736,52 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByRole("button", { name: "停止生成" })).toBeInTheDocument();
   });
 
+  it("运行中快照尚未持久化新用户消息时仍保持当前轮次位于历史末尾", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => source.emit("snapshot", {
+      id: 2,
+      messages: [
+        { role: "user", content: "历史问题", __piEntryId: "history-user" },
+        { role: "assistant", content: [{ type: "text", text: "历史回答" }] },
+      ],
+      lastEventId: 2,
+    }));
+    await screen.findByText("历史回答");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "本轮问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+    await screen.findByRole("button", { name: "停止生成" });
+
+    act(() => {
+      source.emit("snapshot", {
+        id: 3,
+        messages: [
+          { role: "user", content: "历史问题", __piEntryId: "history-user" },
+          { role: "assistant", content: [{ type: "text", text: "历史回答" }] },
+        ],
+        lastEventId: 3,
+        run: {
+          runId: "run-1",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-05T08:00:00.000Z",
+        },
+      });
+      source.emit("text_delta", { id: 4, delta: "本轮回答生成中" });
+    });
+
+    await screen.findByText("本轮回答生成中");
+    const rows = [...document.querySelectorAll<HTMLElement>(".message-row")].map((row) => row.textContent ?? "");
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toContain("历史问题");
+    expect(rows[1]).toContain("历史回答");
+    expect(rows[2]).toContain("本轮问题");
+    expect(rows[3]).toContain("本轮回答生成中");
+  });
+
   it("Agent 生成期间保留输入焦点但不重复发送消息", async () => {
     render(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
