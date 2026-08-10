@@ -16,6 +16,7 @@ import { registerSessionRoutes } from "../../src/server/routes/sessions";
 import { registerSetupRoutes } from "../../src/server/routes/setup";
 import type { WorkspaceFileInfo, WorkspaceFileService } from "../../src/server/attachments";
 import type { RuntimeSupervisor } from "../../src/server/runtime/runtime-supervisor";
+import type { ChatApplicationService } from "../../src/server/chat/chat-service";
 import { createSessionMetadataStore } from "../../src/server/session-metadata";
 import type { AgentReferenceResolver } from "../../src/server/agent-references";
 import { openDatabase } from "../../src/server/database/database";
@@ -96,7 +97,12 @@ class FakeRuntime implements PiRuntimeGateway {
   }
 }
 
-async function createTestApp(runtime = new FakeRuntime(), workspaceFiles?: WorkspaceFileService, referenceResolver?: AgentReferenceResolver) {
+async function createTestApp(
+  runtime = new FakeRuntime(),
+  workspaceFiles?: WorkspaceFileService,
+  referenceResolver?: AgentReferenceResolver,
+  chatService?: Pick<ChatApplicationService, "startBranchTurn">,
+) {
   const root = await mkdtemp(join(tmpdir(), "pi-agent-chat-routes-"));
   temporaryRoots.push(root);
   const paths = await createDataPaths(root);
@@ -108,7 +114,7 @@ async function createTestApp(runtime = new FakeRuntime(), workspaceFiles?: Works
   registerAuthRoutes(app, { authService });
   registerModelRoutes(app, { authService, runtime });
   registerSessionRoutes(app, { authService, runtime, deleteSession: (sessionId) => runtime.deleteSession(sessionId) });
-  registerChatRoutes(app, { authService, runtime, workspaceFiles, referenceResolver, heartbeatMs: 50 });
+  registerChatRoutes(app, { authService, runtime, workspaceFiles, referenceResolver, chatService: chatService as ChatApplicationService | undefined, heartbeatMs: 50 });
   await app.ready();
   return { app, runtime };
 }
@@ -137,6 +143,31 @@ afterEach(async () => {
 });
 
 describe("对话 API", () => {
+  it("编辑后的发送仅在确认提交时调用会话树分支服务", async () => {
+    const startBranchTurn = vi.fn(async () => ({
+      runId: "run-branch",
+      sessionId: "session-1",
+      status: "running" as const,
+      startedAt: "2026-08-10T00:00:00.000Z",
+    }));
+    const { app } = await createTestApp(new FakeRuntime(), undefined, undefined, { startBranchTurn });
+    const authCookie = await initializeAndLogin(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/sessions/session-1/branches/user-old/messages",
+      headers: { cookie: authCookie },
+      payload: { text: "修改后的问题", filePaths: [], references: [] },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(startBranchTurn).toHaveBeenCalledWith("session-1", "user-old", {
+      text: "修改后的问题",
+      filePaths: [],
+      references: [],
+    });
+  });
+
   it("支持会话重命名、归档、恢复、归档列表和删除", async () => {
     const { app, runtime } = await createTestApp();
     const authCookie = await initializeAndLogin(app);

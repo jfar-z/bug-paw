@@ -198,6 +198,8 @@ export interface PiSessionAdapter {
   setSessionName(name: string): void;
   /** 跳转 Pi 会话树中的节点，供历史消息编辑和分支切换使用。 */
   navigateTree?(entryId: string): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
+  /** 只读取得指定用户消息，不能改变当前会话叶子。 */
+  readMessage?(entryId: string): string | undefined;
   dispose(): void;
 }
 
@@ -227,6 +229,7 @@ export interface PiRuntimeGateway {
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
+  readSessionMessage?(sessionId: string, entryId: string): Promise<string | undefined>;
   abort(sessionId: string): Promise<void>;
   abortAll(): Promise<number>;
   setModel(sessionId: string, provider: string, modelId: string): Promise<void>;
@@ -651,6 +654,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
         editorText: result.editorText,
       };
+    },
+    async readSessionMessage(sessionId, entryId) {
+      const session = requireSession(sessionId);
+      return session.readMessage?.(entryId);
     },
 
     abort: (sessionId) => abortSession(sessionId),
@@ -1110,6 +1117,13 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     setModel: (model) => session.setModel(model as Parameters<AgentSession["setModel"]>[0]),
     setSessionName: (name) => session.setSessionName(name),
     navigateTree: (entryId) => session.navigateTree(entryId, { summarize: false }),
+    readMessage: (entryId) => {
+      const entry = session.sessionManager.getEntries().find((candidate) => candidate.id === entryId);
+      if (entry?.type !== "message" || entry.message.role !== "user") return undefined;
+      const content = entry.message.content;
+      if (typeof content === "string") return content;
+      return content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    },
     dispose: () => session.dispose(),
   };
 }

@@ -81,14 +81,14 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
                 if (block.type === "files") return props.activeAgentId ? <MessageAttachments key={block.id} files={block.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} /> : null;
                 return <LiveToolCard key={block.id} tool={block} />;
               })}
-              {props.speechEnabled && agentTurnSpeechText(entry) ? (
+              {(entry.sourceUserEntryId || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
                 <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
                   {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
-                  <MessageSpeechButton
+                  {props.speechEnabled && agentTurnSpeechText(entry) ? <MessageSpeechButton
                     active={props.activeSpeechMessageId === entry.id}
                     disabled={speechButtonDisabled(entry, props.streaming, props.activeAgentEntryId)}
                     onToggle={() => props.onToggleSpeech(entry)}
-                  />
+                  /> : null}
                 </div>
               ) : null}
             </div>

@@ -395,6 +395,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ text, filePaths, references }),
     }),
+  sendBranchMessage: (sessionId: string, entryId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
+    request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text, filePaths, references }),
+    }),
   editSessionBranch: (sessionId: string, entryId: string) => request<{ snapshot: SessionSnapshot; draft: SessionEditDraft }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/edit`, { method: "POST" }),
   regenerateSessionBranch: (sessionId: string, entryId: string) => request<{ snapshot: SessionSnapshot; run: ChatRunSummary }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/regenerate`, { method: "POST" }),
   getComposerCatalog: (agentId: string) => request<ComposerCatalog>(`/api/agents/${encodeURIComponent(agentId)}/composer-catalog`),

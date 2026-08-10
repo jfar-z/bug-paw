@@ -153,6 +153,39 @@ describe("ChatApplicationService", () => {
     );
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("重新编辑只读取历史消息，不切换当前活跃分支", async () => {
+    const runtime = fakeRuntime();
+    const snapshot = { id: "s1", messages: [{ role: "user", content: "当前路径" }], lastEventId: 7 };
+    runtime.openSession = vi.fn(async () => snapshot);
+    runtime.readSessionMessage = vi.fn(async () => "历史问题");
+    runtime.navigateTree = vi.fn(async () => ({ snapshot, editorText: "历史问题" }));
+    const service = new ChatApplicationService({
+      runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
+      sessionAgent: async () => "a1",
+    });
+
+    const result = await service.editHistory("s1", "user-old");
+
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.draft.text).toBe("历史问题");
+    expect(runtime.readSessionMessage).toHaveBeenCalledWith("s1", "user-old");
+    expect(runtime.navigateTree).not.toHaveBeenCalled();
+  });
+
+  it("编辑后的实际发送先回退，再以新内容创建分支", async () => {
+    const runtime = fakeRuntime();
+    runtime.navigateTree = vi.fn(async () => ({ snapshot: { id: "s1", messages: [], lastEventId: 0 }, editorText: "旧问题" }));
+    const service = new ChatApplicationService({
+      runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
+      sessionAgent: async () => "a1",
+    });
+
+    await service.startBranchTurn("s1", "user-old", { text: "修改后的问题" });
+
+    expect(runtime.navigateTree).toHaveBeenCalledWith("s1", "user-old");
+    expect(runtime.startPrompt).toHaveBeenCalledWith("s1", "修改后的问题", "修改后的问题");
+  });
 });
 
 function fakeRuntime(): PiRuntimeGateway {

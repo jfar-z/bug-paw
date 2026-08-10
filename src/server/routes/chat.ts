@@ -106,6 +106,30 @@ export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRoute
     } catch (error) { return sendRuntimeError(reply, error); }
   });
 
+  /**
+   * 在指定历史用户消息下创建新分支。
+   *
+   * 编辑接口本身只读取历史内容，用户确认发送后才通过本接口变更 Pi 活跃分支。
+   */
+  app.post<{ Params: { id: string; entryId: string } }>("/api/sessions/:id/branches/:entryId/messages", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = isRecord(request.body) ? request.body : {};
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const filePaths = readFilePaths(body.filePaths);
+    const referenceInputs = readAgentReferenceInputs(body.references);
+    if (filePaths === "invalid" || referenceInputs === "invalid" || text.length > 100_000 || (!text && filePaths.length === 0 && referenceInputs.length === 0)) {
+      return sendApiError(reply, 400, "INVALID_MESSAGE", "消息或附件无效，文本不能超过 100000 个字符");
+    }
+    try {
+      if (!dependencies.chatService) return sendApiError(reply, 503, "REQUEST_FAILED", "会话树服务尚未就绪");
+      return reply.code(202).send(await dependencies.chatService.startBranchTurn(request.params.id, request.params.entryId, {
+        text,
+        filePaths,
+        references: referenceInputs,
+      }));
+    } catch (error) { return sendRuntimeError(reply, error); }
+  });
+
   app.post<{ Params: { id: string; entryId: string } }>("/api/sessions/:id/branches/:entryId/regenerate", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     try {

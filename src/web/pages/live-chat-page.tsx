@@ -86,6 +86,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [mediaSummaries, setMediaSummaries] = useState<Record<string, WorkspaceFileSummary>>({});
   const [previewImage, setPreviewImage] = useState<WorkspaceFileSummary>();
   const [draft, setDraft] = useState("");
+  /** 正在编辑的历史用户消息；仅在实际发送时用于创建 Pi 分支。 */
+  const [editingEntryId, setEditingEntryId] = useState<string>();
   const [draftReferences, setDraftReferences] = useState<AgentReference[]>([]);
   const [activeRun, setActiveRun] = useState<ChatRunSummary>();
   const [error, setError] = useState("");
@@ -310,6 +312,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     stopSpeech();
     stream.close();
     setSession(undefined);
+    setEditingEntryId(undefined);
     setTimeline([]);
     setMediaSummaries({});
     setPreviewImage(undefined);
@@ -370,6 +373,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if (openingSessionRef.current || session?.id === sessionId) return;
     stopSpeech();
     setError("");
+    setEditingEntryId(undefined);
     setMediaSummaries({});
     setPreviewImage(undefined);
     openingSessionRef.current = sessionId;
@@ -542,7 +546,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           messageCount: 1,
         }, ...current.filter((item) => item.id !== activeSession.id)]);
       }
-      setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
+      const run = editingEntryId
+        ? await api.sendBranchMessage(activeSession.id, editingEntryId, text, files.map((file) => file.path), draftReferences)
+        : await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences);
+      setEditingEntryId(undefined);
+      setActiveRun(run);
     } catch (reason) {
       autoSpeechEligibilityRef.current = undefined;
       pendingUserMessageRef.current = undefined;
@@ -685,7 +693,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       stopSpeech();
       const result = await api.editSessionBranch(session.id, entryId);
-      applySnapshot(result.snapshot, "once");
+      setEditingEntryId(entryId);
       setDraft(result.draft.text);
       setDraftReferences(result.draft.references);
       setAttachmentItems(result.draft.filePaths.map((path) => {
@@ -708,7 +716,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       stopSpeech();
       const result = await api.regenerateSessionBranch(session.id, entryId);
-      applySnapshot(result.snapshot, "once");
       setActiveRun(result.run);
       setError("");
     } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新生成回答。"); }

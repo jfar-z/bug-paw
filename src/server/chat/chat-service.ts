@@ -1,7 +1,7 @@
 import type { ChatPromptInput } from "../../shared/api/chat";
 import { DomainError } from "../core/errors";
 import { SYSTEM_LIMITS } from "../core/limits";
-import type { ChatEvent, ChatRunSummary } from "../pi-runtime";
+import type { ChatEvent, ChatRunSummary, PiRuntimeGateway } from "../pi-runtime";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
 import type { WorkspaceFileInfo, WorkspaceFileService } from "../attachments";
 import { compileAgentReferences, type AgentReferenceResolver } from "../agent-references";
@@ -30,14 +30,32 @@ export class ChatApplicationService {
     const { agentId, lease } = await this.acquire(sessionId);
     try {
       await lease.runtime.openSession(sessionId);
-      const text = input.text.trim();
-      const commandName = readCommandName(text);
-      if (commandName && !(await lease.runtime.listCommands()).some((command) => command.name === commandName)) {
-        throw new DomainError("UNKNOWN_COMMAND", "当前 Agent 不支持该命令");
-      }
-      const files = await resolveFiles(this.dependencies.workspaceFiles, agentId, input.filePaths ?? []);
-      const references = await resolveReferences(this.dependencies.referenceResolver, agentId, input.references ?? []);
-      return await lease.runtime.startPrompt(sessionId, buildPrompt(text, mergeReferences(references, files)), text);
+      const prompt = await this.preparePrompt(lease.runtime, agentId, input);
+      return await lease.runtime.startPrompt(sessionId, prompt.content, prompt.summary);
+    } finally {
+      lease.release();
+    }
+  }
+
+  /**
+   * 在历史用户消息处分叉后发送新消息。
+   *
+   * Pi 的导航会将活跃叶子移动至目标消息的父节点；只有在用户确认发送时调用，
+   * 因而不会因单纯打开编辑器而改变当前会话视图。
+   *
+   * @param sessionId 会话标识
+   * @param entryId 作为新分支父节点的历史用户消息标识
+   * @param input 用户确认发送的消息内容
+   */
+  async startBranchTurn(sessionId: string, entryId: string, input: ChatPromptInput): Promise<ChatRunSummary> {
+    const { agentId, lease } = await this.acquire(sessionId);
+    try {
+      await lease.runtime.openSession(sessionId);
+      const prompt = await this.preparePrompt(lease.runtime, agentId, input);
+      if (!lease.runtime.navigateTree) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持会话树导航");
+      const navigated = await lease.runtime.navigateTree(sessionId, entryId);
+      if (navigated.editorText === undefined) throw new DomainError("INVALID_MESSAGE", "只能从历史用户消息创建分支");
+      return await lease.runtime.startPrompt(sessionId, prompt.content, prompt.summary);
     } finally {
       lease.release();
     }
@@ -53,15 +71,15 @@ export class ChatApplicationService {
     }
   }
 
-  /** 将会话切换到历史用户消息之前，并返回可安全回填编辑器的草稿。 */
+  /** 只读取历史用户消息，并返回可安全回填编辑器的草稿。 */
   async editHistory(sessionId: string, entryId: string) {
     const { agentId, lease } = await this.acquire(sessionId);
     try {
-      await lease.runtime.openSession(sessionId);
-      if (!lease.runtime.navigateTree) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持会话树导航");
-      const { snapshot, editorText } = await lease.runtime.navigateTree(sessionId, entryId);
-      if (editorText === undefined) throw new DomainError("INVALID_MESSAGE", "只能重新编辑用户消息");
-      const draft = parseSessionReplayContent(editorText);
+      const snapshot = await lease.runtime.openSession(sessionId);
+      if (!lease.runtime.readSessionMessage) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持读取历史消息");
+      const rawPrompt = await lease.runtime.readSessionMessage(sessionId, entryId);
+      if (rawPrompt === undefined) throw new DomainError("INVALID_MESSAGE", "只能重新编辑用户消息");
+      const draft = parseSessionReplayContent(rawPrompt);
       const missingFilePaths = this.dependencies.workspaceFiles
         ? (await Promise.all(draft.filePaths.map(async (path) => (await this.dependencies.workspaceFiles!.resolve(agentId, path)) ? undefined : path))).filter((path): path is string => path !== undefined)
         : draft.filePaths;
@@ -130,6 +148,24 @@ export class ChatApplicationService {
     const agentId = await this.dependencies.sessionAgent(sessionId);
     const lease = await this.dependencies.runtimeSupervisor.acquire(agentId);
     return { agentId, lease };
+  }
+
+  /**
+   * 校验发送内容并组装 Pi 原始 prompt。
+   *
+   * @param runtime 当前会话运行时
+   * @param agentId 所属 Agent 标识
+   * @param input 待发送的用户输入
+   */
+  private async preparePrompt(runtime: PiRuntimeGateway, agentId: string, input: ChatPromptInput) {
+    const text = input.text.trim();
+    const commandName = readCommandName(text);
+    if (commandName && !(await runtime.listCommands()).some((command) => command.name === commandName)) {
+      throw new DomainError("UNKNOWN_COMMAND", "当前 Agent 不支持该命令");
+    }
+    const files = await resolveFiles(this.dependencies.workspaceFiles, agentId, input.filePaths ?? []);
+    const references = await resolveReferences(this.dependencies.referenceResolver, agentId, input.references ?? []);
+    return { content: buildPrompt(text, mergeReferences(references, files)), summary: text };
   }
 }
 
