@@ -487,6 +487,7 @@ describe("LiveChatPage 时间线", () => {
   });
 
   it("没有可用 Agent 时提示先创建，并禁用消息输入", async () => {
+    window.history.replaceState({}, "", "/chat");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }));
       if (String(input) === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
@@ -498,6 +499,9 @@ describe("LiveChatPage 时间线", () => {
       .toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "消息内容" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "发送消息" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "创建 Agent" }));
+    expect(window.location.pathname).toBe("/settings/agents");
+    expect(window.location.search).toBe("?onboarding=create");
   });
 
   it("连续点击新对话只进入单一草稿且不创建 session", async () => {

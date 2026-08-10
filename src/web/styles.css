@@ -2599,6 +2599,10 @@ img.message-avatar {
   line-height: 1.7;
 }
 
+.session-intro__create-agent {
+  margin-top: 18px;
+}
+
 .message-row {
   margin: 0 0 38px;
 }

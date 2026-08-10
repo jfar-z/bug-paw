@@ -22,7 +22,7 @@ import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
 import { createSessionListSync, type SessionListSync } from "../session-sync";
-import { WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
+import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
@@ -782,6 +782,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           contentRef={messageContentRef}
           onResolved={registerMediaSummary}
           onPreview={openImagePreview}
+          onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
         />
 

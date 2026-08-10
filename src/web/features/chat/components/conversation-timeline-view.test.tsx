@@ -100,6 +100,7 @@ function baseProps() {
     speechEnabled: true,
     onResolved: vi.fn(),
     onPreview: vi.fn(),
+    onCreateAgent: vi.fn(),
     onToggleSpeech: vi.fn(),
   };
 }

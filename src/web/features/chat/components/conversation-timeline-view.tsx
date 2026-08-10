@@ -34,6 +34,7 @@ interface ConversationTimelineViewProps {
   contentRef: RefObject<HTMLDivElement | null>;
   onResolved(summary: WorkspaceFileSummary): void;
   onPreview(summary: WorkspaceFileSummary): void;
+  onCreateAgent(): void;
   onToggleSpeech(turn: AgentTurn): void;
 }
 
@@ -46,7 +47,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
         {props.timeline.length === 0 && <div className="session-intro">
           {props.activeAgent ? <AgentAvatar agent={props.activeAgent} className="agent-orbit session-intro__agent-avatar" label={`${props.activeAgent.profile.name} 头像`} /> : <span className="agent-orbit">?</span>}
           <h1>{props.activeAgent?.profile.name ?? "从这里开始协作。"}</h1>
-          <p>{props.noAvailableAgent ? "请先在 Agent 管理中创建 Agent，再开始对话。" : props.activeAgent?.profile.description?.trim() || `准备好后，向 ${props.activeAgent?.profile.name ?? "你的 Agent"} 发出第一条消息，开始推进你的工作。`}</p>
+          {props.noAvailableAgent ? <><p>请先在 Agent 管理中创建 Agent，再开始对话。</p><button type="button" className="configuration-primary-action session-intro__create-agent" onClick={props.onCreateAgent}>创建 Agent</button></> : <p>{props.activeAgent?.profile.description?.trim() || `准备好后，向 ${props.activeAgent?.profile.name ?? "你的 Agent"} 发出第一条消息，开始推进你的工作。`}</p>}
         </div>}
         {props.timeline.map((entry) => entry.type === "user" ? (
           <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}`} id={userMessageDomId(entry.id)} key={entry.id}>
