@@ -113,6 +113,13 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".chat-shell", "height")).toBe("100dvh");
   });
 
+  it("用户消息正文不在气泡底部额外留白", async () => {
+    const source = await readFile("src/web/styles.css", "utf8");
+    const rules = parseStyleRules(source);
+
+    expect(declaration(rules, ".is-user .message-content p", "margin-bottom")).toBe("0px");
+  });
+
   it("BUG 主题的会话菜单和账户信息在深色侧栏中保持可读", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8");
     const rules = parseStyleRules(source);
