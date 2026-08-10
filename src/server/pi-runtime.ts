@@ -170,6 +170,7 @@ export type ChatEvent = ChatEventBase & (
 );
 
 type UnsequencedChatEvent =
+  | { type: "snapshot"; messages: unknown[]; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
@@ -420,6 +421,22 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     return liveSessionMessages(session);
   }
 
+  /**
+   * 在生成结束后推送权威快照，使浏览器立即获得 Pi 写入后的稳定节点 ID。
+   *
+   * 快照的游标预先指向即将写入 Journal 的事件 ID，避免客户端重复消费该快照。
+   */
+  function publishSessionSnapshot(sessionId: string, session: PiSessionAdapter, run?: ChatRunSummary): void {
+    const nextEventId = lastEventId(sessionId) + 1;
+    publishSequenced(sessionId, {
+      type: "snapshot",
+      messages: snapshotMessages(sessionId, session),
+      model: toModelSummary(session.model),
+      run,
+      lastEventId: nextEventId,
+    });
+  }
+
   function checkpointProjection(sessionId: string): { sessionId: string; version: number; checkpoint: RunCheckpoint } | undefined {
     if (!options.checkpointStore) {
       return undefined;
@@ -470,6 +487,12 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     recoveredCheckpoints.delete(sessionId);
     publishSequenced(sessionId, { type: "run_started", run: toRunSummary(run) });
     run.completion = executeRun(run, session, text);
+    void Promise.resolve().then(() => {
+      // Pi 已在 prompt 启动阶段写入用户节点后，立即把稳定节点 ID 同步给在线客户端。
+      if (runs.get(sessionId) === run && run.status === "running") {
+        publishSessionSnapshot(sessionId, session, toRunSummary(run));
+      }
+    });
     return run;
   }
 
@@ -513,6 +536,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         } catch {
           // 标题是附属体验，模型或持久化失败不得影响原对话结果。
         }
+      }
+      if (run.status === "completed") {
+        publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
       }
       publishSequenced(run.sessionId, { type: run.status });
     } catch (error) {
@@ -1131,22 +1157,43 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
 /**
  * 根据 Pi 追加式 entry 列表计算同一父节点下用户消息的版本切换信息。
  */
-function createBranchNavigation(entries: unknown[]): Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string }> {
-  const groups = new Map<string, Array<{ id: string }>>();
-  for (const entry of entries) {
-    if (!isRecord(entry) || entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user" || typeof entry.id !== "string") continue;
-    const parentId = typeof entry.parentId === "string" ? entry.parentId : "__root__";
+function createBranchNavigation(entries: unknown[]): Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string }> {
+  const records = entries.flatMap((entry, index) => isRecord(entry) && typeof entry.id === "string"
+    ? [{ id: entry.id, parentId: typeof entry.parentId === "string" ? entry.parentId : undefined, index, entry }]
+    : []);
+  const children = new Map<string, string[]>();
+  const positions = new Map(records.map((record) => [record.id, record.index]));
+  records.forEach((record) => {
+    if (!record.parentId) return;
+    const siblings = children.get(record.parentId) ?? [];
+    siblings.push(record.id);
+    children.set(record.parentId, siblings);
+  });
+  const latestLeaf = (entryId: string): string => {
+    const descendants = children.get(entryId) ?? [];
+    if (descendants.length === 0) return entryId;
+    return descendants
+      .map((childId) => latestLeaf(childId))
+      .reduce((latest, candidate) => (positions.get(candidate)! > positions.get(latest)! ? candidate : latest));
+  };
+  const groups = new Map<string, Array<{ id: string; navigationEntryId: string }>>();
+  for (const record of records) {
+    const entry = record.entry;
+    if (entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user") continue;
+    const parentId = record.parentId ?? "__root__";
     const group = groups.get(parentId) ?? [];
-    group.push({ id: entry.id });
+    group.push({ id: record.id, navigationEntryId: latestLeaf(record.id) });
     groups.set(parentId, group);
   }
-  const result = new Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string }>();
+  const result = new Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string }>();
   for (const group of groups.values()) {
     group.forEach((entry, index) => result.set(entry.id, {
       index,
       count: group.length,
       ...(group[index - 1] ? { previousEntryId: group[index - 1].id } : {}),
       ...(group[index + 1] ? { nextEntryId: group[index + 1].id } : {}),
+      ...(group[index - 1] ? { previousNavigationEntryId: group[index - 1].navigationEntryId } : {}),
+      ...(group[index + 1] ? { nextNavigationEntryId: group[index + 1].navigationEntryId } : {}),
     }));
   }
   return result;

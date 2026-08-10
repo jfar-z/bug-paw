@@ -3323,6 +3323,34 @@ img.message-avatar {
   border-top: 1px solid var(--border);
 }
 
+/* 用户消息操作独立于气泡，沿用 Agent 操作区的轻量分隔与触控尺寸。 */
+.user-message-actions {
+  width: fit-content;
+  justify-self: end;
+  justify-content: flex-end;
+  margin-top: 8px;
+  padding-top: 7px;
+}
+
+.user-message-actions button {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  place-items: center;
+  transition: color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.user-message-actions button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.user-message-actions button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
 .message-actions--speech button {
   position: relative;
   display: inline-grid;

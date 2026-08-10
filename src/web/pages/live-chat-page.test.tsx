@@ -140,6 +140,37 @@ beforeEach(() => {
 });
 
 describe("LiveChatPage 时间线", () => {
+  it("将用户操作区置于气泡外侧，并把版本切换发送到分支导航接口", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [
+        {
+          role: "user",
+          content: "当前版本",
+          __piEntryId: "user-current",
+          __piBranch: {
+            index: 1,
+            count: 2,
+            previousEntryId: "user-old",
+            previousNavigationEntryId: "assistant-old",
+          },
+        },
+        { role: "assistant", content: [{ type: "text", text: "当前回答" }] },
+      ],
+      lastEventId: 2,
+    }));
+
+    const actions = await screen.findByLabelText("用户消息操作");
+    expect(actions).toHaveClass("message-actions--separated", "user-message-actions");
+    expect(actions.closest(".message-content")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "切换到上一版本" }));
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-1/branches/assistant-old/navigate"));
+  });
+
   it("将会话历史与工作台导航拆分为独立入口", async () => {
     render(<LiveChatPage {...props} />);
 

@@ -168,6 +168,22 @@ describe("对话 API", () => {
     });
   });
 
+  it("版本切换调用会话树导航服务并返回目标分支快照", async () => {
+    const navigateHistory = vi.fn(async () => ({ id: "session-1", messages: [], lastEventId: 4 }));
+    const { app } = await createTestApp(new FakeRuntime(), undefined, undefined, { navigateHistory } as never);
+    const authCookie = await initializeAndLogin(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/sessions/session-1/branches/assistant-branch-leaf/navigate",
+      headers: { cookie: authCookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id: "session-1", messages: [], lastEventId: 4 });
+    expect(navigateHistory).toHaveBeenCalledWith("session-1", "assistant-branch-leaf");
+  });
+
   it("支持会话重命名、归档、恢复、归档列表和删除", async () => {
     const { app, runtime } = await createTestApp();
     const authCookie = await initializeAndLogin(app);

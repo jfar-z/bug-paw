@@ -546,11 +546,15 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           messageCount: 1,
         }, ...current.filter((item) => item.id !== activeSession.id)]);
       }
-      const run = editingEntryId
-        ? await api.sendBranchMessage(activeSession.id, editingEntryId, text, files.map((file) => file.path), draftReferences)
-        : await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences);
+      if (editingEntryId) {
+        const result = await api.sendBranchMessage(activeSession.id, editingEntryId, text, files.map((file) => file.path), draftReferences);
+        // 分支发送立刻以服务端导航快照替换旧路径，同时保留本地待发送气泡。
+        applySnapshot(result.snapshot, "once");
+        setActiveRun(result.run);
+      } else {
+        setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
+      }
       setEditingEntryId(undefined);
-      setActiveRun(run);
     } catch (reason) {
       autoSpeechEligibilityRef.current = undefined;
       pendingUserMessageRef.current = undefined;
@@ -721,6 +725,21 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新生成回答。"); }
   };
 
+  /** 切换到历史分支的可渲染叶节点，不触发编辑草稿回填。 */
+  const navigateHistory = async (entryId: string) => {
+    if (!session || streaming || isOpeningSession) return;
+    try {
+      stopSpeech();
+      const snapshot = await api.navigateSessionBranch(session.id, entryId);
+      setEditingEntryId(undefined);
+      setDraft("");
+      setDraftReferences([]);
+      setAttachmentItems([]);
+      setError("");
+      applySnapshot(snapshot, "once");
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法切换会话分支。"); }
+  };
+
   const selectAgent = async (agentId: string) => {
     if (streaming || isOpeningSession) return;
     const generation = ++agentSelectionGenerationRef.current;
@@ -860,6 +879,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
           onEditHistory={(entryId) => void editHistory(entryId)}
+          onNavigateHistory={(entryId) => void navigateHistory(entryId)}
           onRegenerate={(entryId) => void regenerate(entryId)}
         />
 

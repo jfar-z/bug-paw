@@ -106,6 +106,15 @@ export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRoute
     } catch (error) { return sendRuntimeError(reply, error); }
   });
 
+  /** 切换到由分支叶节点标识的历史路径，编辑器状态不会参与本操作。 */
+  app.post<{ Params: { id: string; entryId: string } }>("/api/sessions/:id/branches/:entryId/navigate", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    try {
+      if (!dependencies.chatService) return sendApiError(reply, 503, "REQUEST_FAILED", "会话树服务尚未就绪");
+      return reply.send(await dependencies.chatService.navigateHistory(request.params.id, request.params.entryId));
+    } catch (error) { return sendRuntimeError(reply, error); }
+  });
+
   /**
    * 在指定历史用户消息下创建新分支。
    *

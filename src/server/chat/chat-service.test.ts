@@ -175,16 +175,32 @@ describe("ChatApplicationService", () => {
 
   it("编辑后的实际发送先回退，再以新内容创建分支", async () => {
     const runtime = fakeRuntime();
-    runtime.navigateTree = vi.fn(async () => ({ snapshot: { id: "s1", messages: [], lastEventId: 0 }, editorText: "旧问题" }));
+    const snapshot = { id: "s1", messages: [{ role: "user", content: "分支之前的消息" }], lastEventId: 3 };
+    runtime.navigateTree = vi.fn(async () => ({ snapshot, editorText: "旧问题" }));
     const service = new ChatApplicationService({
       runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
       sessionAgent: async () => "a1",
     });
 
-    await service.startBranchTurn("s1", "user-old", { text: "修改后的问题" });
+    const result = await service.startBranchTurn("s1", "user-old", { text: "修改后的问题" });
 
     expect(runtime.navigateTree).toHaveBeenCalledWith("s1", "user-old");
     expect(runtime.startPrompt).toHaveBeenCalledWith("s1", "修改后的问题", "修改后的问题");
+    expect(result.snapshot).toBe(snapshot);
+    expect(result.run).toMatchObject({ runId: "r1", sessionId: "s1" });
+  });
+
+  it("切换版本时导航到分支叶节点并返回该分支快照", async () => {
+    const runtime = fakeRuntime();
+    const snapshot = { id: "s1", messages: [{ role: "user", content: "另一个版本" }], lastEventId: 9 };
+    runtime.navigateTree = vi.fn(async () => ({ snapshot }));
+    const service = new ChatApplicationService({
+      runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
+      sessionAgent: async () => "a1",
+    });
+
+    await expect(service.navigateHistory("s1", "assistant-branch-leaf")).resolves.toBe(snapshot);
+    expect(runtime.navigateTree).toHaveBeenCalledWith("s1", "assistant-branch-leaf");
   });
 });
 

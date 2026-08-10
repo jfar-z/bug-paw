@@ -37,6 +37,7 @@ interface ConversationTimelineViewProps {
   onCreateAgent(): void;
   onToggleSpeech(turn: AgentTurn): void;
   onEditHistory?(entryId: string): void;
+  onNavigateHistory?(entryId: string): void;
   onRegenerate?(entryId: string): void;
 }
 
@@ -61,11 +62,11 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               {entry.text && <p>{entry.text}</p>}
               <AgentReferenceChips references={entry.references} />
               {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
-              {entry.piEntryId && entry.source !== "scheduled" ? <div className="message-actions user-message-actions" aria-label="用户消息操作">
-                {entry.branch?.count && entry.branch.count > 1 ? <><button type="button" aria-label="切换到上一版本" title="切换到上一版本" disabled={props.streaming || props.opening || !entry.branch.previousEntryId} onClick={() => entry.branch?.previousEntryId && props.onEditHistory?.(entry.branch.previousEntryId)}><ChevronLeft size={15} aria-hidden="true" /></button><button type="button" aria-label="切换到下一版本" title="切换到下一版本" disabled={props.streaming || props.opening || !entry.branch.nextEntryId} onClick={() => entry.branch?.nextEntryId && props.onEditHistory?.(entry.branch.nextEntryId)}><ChevronRight size={15} aria-hidden="true" /></button></> : null}
-                <button type="button" aria-label="重新编辑消息" title="重新编辑消息" disabled={props.streaming || props.opening} onClick={() => props.onEditHistory?.(entry.piEntryId!)}><Pencil size={15} aria-hidden="true" /></button>
-              </div> : null}
             </div>
+            {entry.piEntryId && entry.source !== "scheduled" ? <div className="message-actions message-actions--separated user-message-actions" aria-label="用户消息操作">
+              {entry.branch?.count && entry.branch.count > 1 ? <><button type="button" aria-label="切换到上一版本" title="切换到上一版本" disabled={props.streaming || props.opening || !entry.branch.previousNavigationEntryId} onClick={() => entry.branch?.previousNavigationEntryId && props.onNavigateHistory?.(entry.branch.previousNavigationEntryId)}><ChevronLeft size={15} aria-hidden="true" /></button><button type="button" aria-label="切换到下一版本" title="切换到下一版本" disabled={props.streaming || props.opening || !entry.branch.nextNavigationEntryId} onClick={() => entry.branch?.nextNavigationEntryId && props.onNavigateHistory?.(entry.branch.nextNavigationEntryId)}><ChevronRight size={15} aria-hidden="true" /></button></> : null}
+              <button type="button" aria-label="重新编辑消息" title="重新编辑消息" disabled={props.streaming || props.opening} onClick={() => props.onEditHistory?.(entry.piEntryId!)}><Pencil size={15} aria-hidden="true" /></button>
+            </div> : null}
           </article>
         ) : (
           <article className="message-row is-assistant" key={entry.id}>

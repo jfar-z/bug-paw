@@ -47,7 +47,7 @@ export class ChatApplicationService {
    * @param entryId 作为新分支父节点的历史用户消息标识
    * @param input 用户确认发送的消息内容
    */
-  async startBranchTurn(sessionId: string, entryId: string, input: ChatPromptInput): Promise<ChatRunSummary> {
+  async startBranchTurn(sessionId: string, entryId: string, input: ChatPromptInput) {
     const { agentId, lease } = await this.acquire(sessionId);
     try {
       await lease.runtime.openSession(sessionId);
@@ -55,7 +55,26 @@ export class ChatApplicationService {
       if (!lease.runtime.navigateTree) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持会话树导航");
       const navigated = await lease.runtime.navigateTree(sessionId, entryId);
       if (navigated.editorText === undefined) throw new DomainError("INVALID_MESSAGE", "只能从历史用户消息创建分支");
-      return await lease.runtime.startPrompt(sessionId, prompt.content, prompt.summary);
+      const run = await lease.runtime.startPrompt(sessionId, prompt.content, prompt.summary);
+      return { snapshot: navigated.snapshot, run };
+    } finally {
+      lease.release();
+    }
+  }
+
+  /**
+   * 切换到指定分支的叶节点并返回其可渲染快照。
+   *
+   * @param sessionId 会话标识
+   * @param entryId 目标分支的非用户叶节点标识
+   */
+  async navigateHistory(sessionId: string, entryId: string) {
+    const { lease } = await this.acquire(sessionId);
+    try {
+      await lease.runtime.openSession(sessionId);
+      if (!lease.runtime.navigateTree) throw new DomainError("SESSION_NOT_FOUND", "当前运行时不支持会话树导航");
+      const navigated = await lease.runtime.navigateTree(sessionId, entryId);
+      return navigated.snapshot;
     } finally {
       lease.release();
     }

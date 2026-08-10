@@ -9,7 +9,7 @@ export interface UserEntry {
   references: AgentReference[];
   source?: "scheduled";
   piEntryId?: string;
-  branch?: { index: number; count: number; previousEntryId?: string; nextEntryId?: string };
+  branch?: { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string };
 }
 
 export interface MarkdownBlock {
@@ -561,7 +561,7 @@ function createId(prefix: string, entries: ConversationEntry[]): string {
   return `${prefix}-${entries.length}-${blockCount}`;
 }
 
-function isBranchNavigation(value: unknown): value is { index: number; count: number; previousEntryId?: string; nextEntryId?: string } {
+function isBranchNavigation(value: unknown): value is { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string } {
   return isRecord(value)
     && typeof value.index === "number"
     && typeof value.count === "number"
@@ -570,7 +570,9 @@ function isBranchNavigation(value: unknown): value is { index: number; count: nu
     && value.index >= 0
     && value.count > 0
     && (value.previousEntryId === undefined || typeof value.previousEntryId === "string")
-    && (value.nextEntryId === undefined || typeof value.nextEntryId === "string");
+    && (value.nextEntryId === undefined || typeof value.nextEntryId === "string")
+    && (value.previousNavigationEntryId === undefined || typeof value.previousNavigationEntryId === "string")
+    && (value.nextNavigationEntryId === undefined || typeof value.nextNavigationEntryId === "string");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
