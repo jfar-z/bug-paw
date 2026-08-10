@@ -196,6 +196,8 @@ export interface PiSessionAdapter {
   abort(): Promise<void>;
   setModel(model: unknown): Promise<void>;
   setSessionName(name: string): void;
+  /** 跳转 Pi 会话树中的节点，供历史消息编辑和分支切换使用。 */
+  navigateTree?(entryId: string): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
   dispose(): void;
 }
 
@@ -224,6 +226,7 @@ export interface PiRuntimeGateway {
   openSession(sessionId: string): Promise<SessionSnapshot>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
+  navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
   abort(sessionId: string): Promise<void>;
   abortAll(): Promise<number>;
   setModel(sessionId: string, provider: string, modelId: string): Promise<void>;
@@ -633,6 +636,21 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         return beginRun(sessionId, text);
       });
       await run.completion;
+    },
+    async navigateTree(sessionId, entryId) {
+      const session = requireSession(sessionId);
+      requireIdleSession(sessionId);
+      if (!session.navigateTree) {
+        throw new PiRuntimeError("SESSION_NOT_FOUND", "当前 Pi 会话不支持分支导航");
+      }
+      const result = await session.navigateTree(entryId);
+      if (result.cancelled || result.aborted) {
+        throw new PiRuntimeError("SESSION_NOT_FOUND", "会话分支切换失败");
+      }
+      return {
+        snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
+        editorText: result.editorText,
+      };
     },
 
     abort: (sessionId) => abortSession(sessionId),
@@ -1081,6 +1099,7 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     abort: () => session.abort(),
     setModel: (model) => session.setModel(model as Parameters<AgentSession["setModel"]>[0]),
     setSessionName: (name) => session.setSessionName(name),
+    navigateTree: (entryId) => session.navigateTree(entryId, { summarize: false }),
     dispose: () => session.dispose(),
   };
 }
