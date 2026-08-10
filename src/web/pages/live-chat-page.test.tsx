@@ -107,7 +107,25 @@ beforeEach(() => {
       return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
     }
     if (url.endsWith("/edit")) {
-      return new Response(JSON.stringify({ snapshot: { id: "session-1", messages: [], lastEventId: 0 }, draft: { text: "当前版本", filePaths: [], missingFilePaths: [], references: [] } }));
+      return new Response(JSON.stringify({ snapshot: { id: "session-1", messages: [], lastEventId: 0 }, draft: { text: "编辑后的版本", filePaths: [], missingFilePaths: [], references: [] } }));
+    }
+    if (url.includes("/branches/") && url.endsWith("/messages")) {
+      return new Response(JSON.stringify({
+        snapshot: {
+          id: "session-1",
+          messages: [
+            { role: "user", content: "上一条" },
+            { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
+          ],
+          lastEventId: 2,
+        },
+        run: {
+          runId: "run-branch",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-05T08:00:00.000Z",
+        },
+      }));
     }
     if (url.endsWith("/messages")) {
       const sessionId = url.split("/")[3];
@@ -196,6 +214,39 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByRole("button", { name: "创建分支并发送" })).toBeInTheDocument();
     expect(screen.queryByText("创建分支并发送")).toBeNull();
     expect(document.querySelector(".message-row.is-editing-source")).not.toBeNull();
+  });
+
+  it("编辑历史消息发送后将新消息接在分支快照末尾并退出编辑态", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [
+        { role: "user", content: "上一条", __piEntryId: "user-previous" },
+        { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
+        { role: "user", content: "当前版本", __piEntryId: "user-current" },
+        { role: "assistant", content: [{ type: "text", text: "当前回答" }] },
+      ],
+      lastEventId: 4,
+    }));
+
+    const editButtons = await screen.findAllByRole("button", { name: "重新编辑消息" });
+    fireEvent.click(editButtons.at(-1)!);
+    await screen.findByText("正在编辑历史消息");
+
+    fireEvent.click(screen.getByRole("button", { name: "创建分支并发送" }));
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-1/branches/user-current/messages"));
+
+    await waitFor(() => {
+      const rows = [...document.querySelectorAll<HTMLElement>(".message-row")].map((row) => row.textContent ?? "");
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toContain("上一条");
+      expect(rows[1]).toContain("旧回答");
+      expect(rows[2]).toContain("编辑后的版本");
+    });
+    expect(screen.queryByText("正在编辑历史消息")).toBeNull();
+    expect(document.querySelector(".message-row.is-editing-source")).toBeNull();
   });
 
   it("将会话历史与工作台导航拆分为独立入口", async () => {
