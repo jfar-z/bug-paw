@@ -3323,10 +3323,17 @@ img.message-avatar {
   border-top: 1px solid var(--border);
 }
 
+/* 用户气泡和操作区共用内在宽度，确保分隔线不少于气泡或按钮区。 */
+.user-message-body {
+  display: grid;
+  width: fit-content;
+  max-width: 100%;
+  justify-items: end;
+}
+
 /* 用户消息操作独立于气泡，沿用 Agent 操作区的轻量分隔与触控尺寸。 */
 .user-message-actions {
-  width: fit-content;
-  justify-self: end;
+  width: 100%;
   justify-content: flex-end;
   margin-top: 8px;
   padding-top: 7px;
