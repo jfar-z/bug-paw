@@ -96,6 +96,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [profileDisplayName, setProfileDisplayName] = useState(userIdentity.displayName);
   const [profileSaving, setProfileSaving] = useState(false);
   const [sessionNavScrolling, setSessionNavScrolling] = useState(false);
+  const [refreshingSessions, setRefreshingSessions] = useState(false);
   const sessionSyncRef = useRef<SessionListSync | undefined>(undefined);
   const openingSessionRef = useRef<string | undefined>(undefined);
   const sessionLongPressTimerRef = useRef<number | undefined>(undefined);
@@ -377,6 +378,32 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     } finally {
       openingSessionRef.current = undefined;
       setOpeningSessionId(undefined);
+    }
+  };
+
+  /**
+   * 刷新当前 Agent 的会话摘要；仅在当前会话被移除时切换右侧聊天内容。
+   */
+  const refreshSessions = async () => {
+    const agentId = selectedAgentIdRef.current;
+    if (!agentId || refreshingSessions || openingSessionRef.current) return;
+    setRefreshingSessions(true);
+    try {
+      const result = await api.listSessions(agentId);
+      if (selectedAgentIdRef.current !== agentId) return;
+      setSessions(result.sessions);
+      const activeSessionId = sessionIdRef.current;
+      if (activeSessionId && !result.sessions.some((item) => item.id === activeSessionId)) {
+        if (result.sessions[0]) {
+          await openConversation(result.sessions[0].id);
+        } else {
+          enterDraft();
+        }
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "刷新会话列表失败。");
+    } finally {
+      setRefreshingSessions(false);
     }
   };
 
@@ -712,10 +739,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         scrolling={sessionNavScrolling}
         noAvailableAgent={noAvailableAgent}
         streaming={streaming}
+        refreshing={refreshingSessions}
         profileIdentity={profileIdentity}
         actionsOpenRequest={sessionActionsOpenRequest}
         onClose={() => setSidebarOpen(false)}
         onEnterDraft={enterDraft}
+        onRefresh={() => void refreshSessions()}
         onScroll={showSessionNavScrollbar}
         onPointerDown={startSessionLongPress}
         onPointerEnd={clearSessionLongPress}

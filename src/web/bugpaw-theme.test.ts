@@ -106,6 +106,13 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover .session-row__open', "background")).toBe("transparent");
   });
 
+  it("聊天容器使用动态视口高度，避免移动端输入区越过可视底部", async () => {
+    const source = await readFile("src/web/styles.css", "utf8");
+    const rules = parseStyleRules(source);
+
+    expect(declaration(rules, ".chat-shell", "height")).toBe("100dvh");
+  });
+
   it("BUG 主题的会话菜单和账户信息在深色侧栏中保持可读", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8");
     const rules = parseStyleRules(source);

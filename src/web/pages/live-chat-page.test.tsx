@@ -147,6 +147,58 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByRole("button", { name: "打开工作台导航" })).toBeInTheDocument();
   });
 
+  it("刷新会话列表时保留当前聊天且支持移动端下拉触发", async () => {
+    render(<LiveChatPage {...props} />);
+
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const initialOpenRequests = vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1").length;
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新会话列表" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions?agentId=default")).toHaveLength(2));
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(initialOpenRequests);
+
+    const navigation = screen.getAllByRole("navigation", { name: "会话历史" }).at(-1)!;
+    Object.defineProperty(navigation, "scrollTop", { configurable: true, value: 0 });
+    fireEvent.touchStart(navigation, { touches: [{ clientY: 12 }] });
+    fireEvent.touchMove(navigation, { touches: [{ clientY: 96 }] });
+    fireEvent.touchEnd(navigation);
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions?agentId=default")).toHaveLength(3));
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(initialOpenRequests);
+  });
+
+  it("刷新后当前会话不存在时打开最新列表的第一个会话", async () => {
+    let sessionListRequestCount = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") {
+        return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, description: "用于测试的 Agent", status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      }
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      if (url === "/api/v1/sessions?agentId=default") {
+        sessionListRequestCount += 1;
+        return new Response(JSON.stringify({ sessions: sessionListRequestCount === 1
+          ? [{ id: "session-1", firstMessage: "旧会话", modified: "", messageCount: 0 }]
+          : [{ id: "session-2", firstMessage: "刷新后的会话", modified: "", messageCount: 0 }] }));
+      }
+      if (url === "/api/v1/sessions/session-1" || url === "/api/v1/sessions/session-2") {
+        return new Response(JSON.stringify({ id: url.endsWith("session-2") ? "session-2" : "session-1", messages: [], lastEventId: 0 }));
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "旧会话" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新会话列表" }));
+
+    expect(await screen.findByRole("button", { name: "刷新后的会话" })).toBeInTheDocument();
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input) === "/api/v1/sessions/session-2")).toBe(true));
+    expect(FakeEventSource.instances.at(-1)?.url).toContain("/api/v1/sessions/session-2/events");
+  });
+
   it("将工作台入口渲染为带下拉提示的可点击按钮", async () => {
     render(<LiveChatPage {...props} />);
     const trigger = await screen.findByRole("button", { name: "打开工作台导航" });

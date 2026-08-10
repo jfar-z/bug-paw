@@ -1844,6 +1844,7 @@ p {
 .chat-shell {
   display: grid;
   height: 100vh;
+  height: 100dvh;
   grid-template-columns: 272px minmax(0, 1fr);
   background: var(--surface);
   overflow: hidden;
@@ -1923,7 +1924,23 @@ p {
   min-height: 0;
   flex: 1;
   margin-top: 24px;
+  overscroll-behavior-y: contain;
   overflow-y: auto;
+}
+
+.session-refresh-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  transition: height 120ms ease;
+}
+
+.session-refresh-hint .is-ready {
+  color: var(--accent);
 }
 
 .session-nav > p {
@@ -6530,22 +6547,52 @@ img.message-avatar {
 }
 
 .live-session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.live-session-header > div {
   display: grid;
-  align-content: center;
-  justify-content: start;
   gap: 2px;
 }
 
-.live-session-header > span {
+.live-session-header > div > span {
   font-size: 13px;
   font-weight: 650;
 }
 
-.live-session-header > small {
+.live-session-header > div > small {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.08em;
+}
+
+.session-refresh-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.session-refresh-button:hover:not(:disabled) {
+  border-color: var(--border);
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.session-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.session-refresh-button .is-spinning {
+  animation: session-loading-spin 720ms linear infinite;
 }
 
 @media (max-width: 900px) {

@@ -43,4 +43,12 @@ describe("PWA 应用壳", () => {
     expect(source).toContain('"/brand/bugpaw/bugpaw-paw-icon-512.png"');
     expect(source).not.toContain("/icons/icon.svg");
   });
+
+  it("部署后优先获取最新脚本和样式，离线时才回退缓存", async () => {
+    const source = await readFile("public/sw.js", "utf8");
+
+    expect(source).toContain('const NETWORK_FIRST_DESTINATIONS = new Set(["script", "style"])');
+    expect(source).toContain("NETWORK_FIRST_DESTINATIONS.has(request.destination)");
+    expect(source).toContain("fetch(request).then(cacheResponse).catch(() => caches.match(request)");
+  });
 });

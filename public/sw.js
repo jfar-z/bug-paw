@@ -1,4 +1,4 @@
-const CACHE_NAME = "bugpaw-shell-v8";
+const CACHE_NAME = "bugpaw-shell-v9";
 const CORE_ASSETS = [
   "/",
   "/knowledge-base",
@@ -10,6 +10,7 @@ const CORE_ASSETS = [
   "/brand/bugpaw/bugpaw-paw-icon-512.png",
 ];
 const STATIC_DESTINATIONS = new Set(["document", "font", "image", "manifest", "script", "style", "worker"]);
+const NETWORK_FIRST_DESTINATIONS = new Set(["script", "style"]);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)));
@@ -39,15 +40,25 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  /** 部署后的模块资源必须优先使用网络版本，避免旧入口引用已替换的分包。 */
+  const cacheResponse = (response) => {
+    if (response.ok) {
+      const copy = response.clone();
+      void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+    }
+    return response;
+  };
+
+  if (NETWORK_FIRST_DESTINATIONS.has(request.destination)) {
+    event.respondWith(
+      fetch(request).then(cacheResponse).catch(() => caches.match(request).then((response) => response ?? Response.error())),
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(request).then((cached) => {
-      const refresh = fetch(request).then((response) => {
-        if (response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-        }
-        return response;
-      });
+      const refresh = fetch(request).then(cacheResponse);
       return cached ?? refresh;
     }),
   );

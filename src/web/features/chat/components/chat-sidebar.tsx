@@ -1,5 +1,6 @@
-import { Archive, Clock3, MessageSquare, MessageSquarePlus } from "lucide-react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { Archive, Clock3, MessageSquare, MessageSquarePlus, RefreshCw } from "lucide-react";
+import { useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
 
 import type { SessionSummary } from "../../../api";
 import type { IdentityPreview } from "../../../pages/chat-page";
@@ -14,10 +15,12 @@ interface ChatSidebarProps {
   scrolling: boolean;
   noAvailableAgent: boolean;
   streaming: boolean;
+  refreshing: boolean;
   profileIdentity: IdentityPreview;
   actionsOpenRequest?: { sessionId: string; requestId: number };
   onClose(): void;
   onEnterDraft(): void;
+  onRefresh(): void;
   onScroll(): void;
   onPointerDown(sessionId: string, event: ReactPointerEvent<HTMLButtonElement>): void;
   onPointerEnd(): void;
@@ -33,14 +36,39 @@ interface ChatSidebarProps {
 /** 会话侧栏仅负责展示与手势转发，不持有请求或领域状态。 */
 export function ChatSidebar(props: ChatSidebarProps) {
   const isOpeningSession = props.openingSessionId !== undefined;
+  const pullStartYRef = useRef<number | undefined>(undefined);
+  const [pullDistance, setPullDistance] = useState(0);
+  const refreshReady = pullDistance >= 64;
+
+  /** 仅在列表滚动到顶部时记录移动端下拉手势。 */
+  function startPullToRefresh(event: ReactTouchEvent<HTMLElement>) {
+    if (props.refreshing || event.currentTarget.scrollTop > 0) return;
+    pullStartYRef.current = event.touches[0]?.clientY;
+  }
+
+  /** 记录下拉距离，为释放刷新提供轻量视觉反馈。 */
+  function trackPullToRefresh(event: ReactTouchEvent<HTMLElement>) {
+    if (pullStartYRef.current === undefined) return;
+    const distance = Math.max(0, (event.touches[0]?.clientY ?? pullStartYRef.current) - pullStartYRef.current);
+    setPullDistance(Math.min(distance, 88));
+  }
+
+  /** 下拉达到阈值后刷新，普通滚动不会触发列表请求。 */
+  function finishPullToRefresh() {
+    if (refreshReady && !props.refreshing) props.onRefresh();
+    pullStartYRef.current = undefined;
+    setPullDistance(0);
+  }
+
   return <>
     {props.open && <button type="button" className="sidebar-scrim" aria-label="关闭会话侧栏" onClick={props.onClose} />}
     <aside aria-label="会话历史" className={props.open ? "chat-sidebar is-open" : "chat-sidebar"}>
-      <div className="sidebar-header live-session-header"><span>会话</span><small>SESSIONS</small></div>
+      <div className="sidebar-header live-session-header"><div><span>会话</span><small>SESSIONS</small></div><button type="button" className="session-refresh-button" aria-label="刷新会话列表" title="刷新会话列表" disabled={props.refreshing || isOpeningSession} onClick={props.onRefresh}><RefreshCw size={15} aria-hidden="true" className={props.refreshing ? "is-spinning" : undefined} /></button></div>
       <button type="button" className="new-chat-button" onClick={props.onEnterDraft} disabled={props.noAvailableAgent || isOpeningSession}>
         <MessageSquarePlus size={18} aria-hidden="true" /><span>新对话</span>
       </button>
-      <nav className={`session-nav${props.scrolling ? " is-scrolling" : ""}`} aria-label="会话历史" onScroll={props.onScroll}>
+      <nav className={`session-nav${props.scrolling ? " is-scrolling" : ""}${pullDistance > 0 ? " is-pulling" : ""}`} aria-label="会话历史" onScroll={props.onScroll} onTouchStart={startPullToRefresh} onTouchMove={trackPullToRefresh} onTouchEnd={finishPullToRefresh} onTouchCancel={finishPullToRefresh}>
+        {pullDistance > 0 ? <div className="session-refresh-hint" aria-live="polite" style={{ height: pullDistance }}><RefreshCw size={14} aria-hidden="true" className={refreshReady ? "is-ready" : undefined} /><span>{refreshReady ? "松开刷新" : "下拉刷新"}</span></div> : null}
         <p>最近</p>
         {props.sessions.map((item) => (
           <div className={`session-row${item.id === props.activeSessionId ? " is-active" : ""}${item.id === props.openingSessionId ? " is-opening" : ""}`} key={item.id}>
