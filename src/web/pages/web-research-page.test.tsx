@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG } from "../../shared/web-research-contracts";
@@ -26,6 +26,12 @@ describe("WebResearchPage", () => {
     expect(screen.getByRole("button", { name: "保存更改" })).toHaveClass("configuration-primary-action");
     expect(screen.getByRole("spinbutton", { name: "最大重定向次数" })).toHaveValue(3);
     expect(screen.getByRole("spinbutton", { name: "最大响应大小" })).toHaveValue(2);
+    const connectionCard = screen.getByRole("heading", { name: "连接设置" }).closest("section");
+    expect(connectionCard).not.toBeNull();
+    const enableToggle = connectionCard!.querySelector<HTMLLabelElement>(":scope > label");
+    expect(enableToggle).not.toBeNull();
+    expect(enableToggle).toHaveClass("configuration-capability-toggle");
+    expect(within(enableToggle!).getByRole("checkbox")).toHaveAccessibleName("启用联网搜索");
     fireEvent.change(screen.getByRole("spinbutton", { name: "正文最大字符数" }), { target: { value: "30000" } });
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
 

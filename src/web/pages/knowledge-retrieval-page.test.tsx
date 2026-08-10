@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { KnowledgeRetrievalPage } from "./knowledge-retrieval-page";
@@ -39,6 +39,12 @@ describe("KnowledgeRetrievalPage", () => {
 
     render(<KnowledgeRetrievalPage />);
 
+    const embeddingCard = screen.getByRole("heading", { name: "Embedding 模型" }).closest("section");
+    expect(embeddingCard).not.toBeNull();
+    const enableToggle = embeddingCard!.querySelector<HTMLLabelElement>(":scope > label");
+    expect(enableToggle).not.toBeNull();
+    expect(enableToggle).toHaveClass("configuration-capability-toggle");
+    expect(within(enableToggle!).getByRole("checkbox")).toHaveAccessibleName("启用语义检索");
     const toggle = await screen.findByRole("checkbox", { name: "启用语义检索" });
     expect(toggle).toBeChecked();
     expect(screen.getByText("上传资料会自动建立全文和语义索引。更换模型后请手动重建。")).toBeInTheDocument();

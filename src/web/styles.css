@@ -5032,6 +5032,47 @@ img.message-avatar {
   resize: vertical;
 }
 
+/* 统一能力开关的视觉尺寸，同时保留原生复选框的无障碍语义。 */
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"] {
+  appearance: none;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface-soft);
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease;
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]::after {
+  width: 7px;
+  height: 4px;
+  border: solid var(--surface);
+  border-width: 0 0 2px 2px;
+  content: "";
+  transform: rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform .14s ease;
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]:checked::after {
+  transform: rotate(-45deg) scale(1);
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
 .agent-path-preview {
   display: flex;
   min-height: 52px;
