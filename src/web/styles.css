@@ -2708,7 +2708,7 @@ img.message-avatar {
 }
 
 .is-user .message-content p {
-  margin-bottom: 7px;
+  margin-bottom: 0;
 }
 
 .is-user .message-content {
