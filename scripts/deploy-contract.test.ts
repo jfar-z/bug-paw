@@ -1,8 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 const script = resolve("scripts/deploy.sh");
+const roots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 describe("部署脚本模式选择", () => {
   it.each([
@@ -28,4 +35,53 @@ describe("部署脚本模式选择", () => {
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("core|search|vector|full");
   });
+
+  it.each([
+    ["192.168.100.5", "7080", "http://192.168.100.5:7080/healthz"],
+    ["0.0.0.0", "7081", "http://127.0.0.1:7081/healthz"],
+  ])("从 .env 读取 %s 的健康检查地址", async (bindAddress, port, expectedUrl) => {
+    const url = await runDeploy(bindAddress, port);
+
+    expect(url).toContain(expectedUrl);
+  });
 });
+
+/** 在隔离目录中运行脚本，并记录模拟 curl 收到的健康检查地址。 */
+async function runDeploy(bindAddress: string, port: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "bugpaw-deploy-"));
+  roots.push(root);
+  const bin = join(root, "bin");
+  const log = join(root, "health-url.log");
+  await mkdir(join(root, "scripts"), { recursive: true });
+  await mkdir(bin, { recursive: true });
+  await copyFile(script, join(root, "scripts", "deploy.sh"));
+  await writeFile(join(root, ".env"), `BUG_PAW_BIND_ADDRESS=${bindAddress}\nBUG_PAW_PORT=${port}\n`, "utf8");
+  await writeFile(join(bin, "docker"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = "info" ]; then exit 0; fi
+if [ "$1" = "inspect" ]; then printf 'healthy\\n'; exit 0; fi
+if [ "$1" = "compose" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "ps" ]; then printf 'test-web\\n'; exit 0; fi
+  done
+  exit 0
+fi
+exit 1
+`, "utf8");
+  await writeFile(join(bin, "curl"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$HEALTH_URL_LOG"
+`, "utf8");
+  await chmod(join(root, "scripts", "deploy.sh"), 0o755);
+  await chmod(join(bin, "docker"), 0o755);
+  await chmod(join(bin, "curl"), 0o755);
+
+  const result = spawnSync("bash", [join(root, "scripts", "deploy.sh"), "core"], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, HEALTH_URL_LOG: log },
+  });
+
+  expect(result.status).toBe(0);
+  return readFile(log, "utf8");
+}

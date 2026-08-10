@@ -58,6 +58,23 @@ if [ ! -f .env ]; then
   printf '已从 .env.example 创建 .env。\n'
 fi
 
+# 从部署环境读取单个非敏感字段，避免健康检查依赖 Compose 端口推断。
+read_env_value() {
+  local key="$1"
+  local fallback="$2"
+  local value
+  value=$(awk -v key="$key" '
+    index($0, key "=") == 1 { value = substr($0, length(key) + 2) }
+    END { print value }
+  ' .env)
+  value=${value%$'\r'}
+  value=${value#\"}
+  value=${value%\"}
+  value=${value#\'}
+  value=${value%\'}
+  printf '%s' "${value:-$fallback}"
+}
+
 if [ "$deployment_mode" = "search" ] || [ "$deployment_mode" = "full" ]; then
   searxng_secret=$(sed -n 's/^SEARXNG_SECRET=//p' .env | tail -n 1)
   if [ -z "$searxng_secret" ]; then
@@ -92,9 +109,18 @@ fi
 for health_attempt in $(seq 1 45); do
   web_health=$(docker inspect --format '{{.State.Health.Status}}' "$web_container_id" 2>/dev/null || true)
   if [ "$web_health" = "healthy" ]; then
-    published_endpoint=$(docker compose "${compose_args[@]}" port bug-paw-web 7080)
-    published_port=${published_endpoint##*:}
-    curl --fail --silent --show-error "http://127.0.0.1:${published_port}/healthz" >/dev/null
+    health_host=$(read_env_value "BUG_PAW_BIND_ADDRESS" "0.0.0.0")
+    health_port=$(read_env_value "BUG_PAW_PORT" "7080")
+    case "$health_host" in
+      0.0.0.0) health_host="127.0.0.1" ;;
+      ::) health_host="::1" ;;
+    esac
+    if [[ "$health_host" == *:* ]]; then
+      health_endpoint="http://[${health_host}]:${health_port}/healthz"
+    else
+      health_endpoint="http://${health_host}:${health_port}/healthz"
+    fi
+    curl --fail --silent --show-error "$health_endpoint" >/dev/null
     printf 'BugPaw %s 部署已通过健康检查。\n' "$deployment_mode"
     exit 0
   fi
