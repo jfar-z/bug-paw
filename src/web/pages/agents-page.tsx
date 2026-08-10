@@ -136,7 +136,7 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
 
       {createOpen ? (
         <form className="configuration-create-panel" onSubmit={createAgent}>
-          {openCreateOnEmpty && agents.length === 0 ? <p className="configuration-help">请先创建 Agent 后再开始对话。</p> : null}
+          {openCreateOnEmpty && agents.length === 0 ? <p className="configuration-help configuration-create-panel__onboarding">请先创建 Agent 后再开始对话。</p> : null}
           <div className="configuration-create-panel__fields">
             <div>
               <label htmlFor="new-agent-name">Agent 名称</label>

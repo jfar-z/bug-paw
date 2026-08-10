@@ -34,7 +34,7 @@ describe("AgentsPage", () => {
 
     render(<AgentsPage onNavigate={vi.fn()} openCreateOnEmpty />);
 
-    expect(await screen.findByText("请先创建 Agent 后再开始对话。")).toBeInTheDocument();
+    expect(await screen.findByText("请先创建 Agent 后再开始对话。")).toHaveClass("configuration-create-panel__onboarding");
     expect(screen.getByLabelText("Agent 名称")).toHaveFocus();
   });
 

@@ -4617,6 +4617,11 @@ img.message-avatar {
   gap: 14px;
 }
 
+.configuration-create-panel__onboarding {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .configuration-create-panel__fields > div {
   display: grid;
   gap: 7px;
