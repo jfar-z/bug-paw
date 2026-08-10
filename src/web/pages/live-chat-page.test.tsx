@@ -194,6 +194,7 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByText("发送后将创建新分支，原消息不会改动。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "取消编辑" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "创建分支并发送" })).toBeInTheDocument();
+    expect(screen.queryByText("创建分支并发送")).toBeNull();
     expect(document.querySelector(".message-row.is-editing-source")).not.toBeNull();
   });
 

@@ -3941,12 +3941,6 @@ img.message-avatar {
   gap: 2px;
 }
 
-.composer-actions__branch-label {
-  color: var(--accent);
-  font-family: var(--font-mono);
-  font-size: 10px;
-}
-
 .tool-mode-button {
   display: inline-flex;
   min-height: 36px;
