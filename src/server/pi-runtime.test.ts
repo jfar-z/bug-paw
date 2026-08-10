@@ -140,4 +140,17 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(events).not.toContain("session_renamed");
     gateway.dispose();
   });
+
+  it("自动标题超过五十个字符时只保存前五十个字符", async () => {
+    const session = createSession();
+    const generatedTitle = "会话标题".repeat(20);
+    const gateway = createPiRuntimeGateway(createBackend(session, async () => generatedTitle));
+    await gateway.createSession();
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(session.setSessionName).toHaveBeenCalledOnce());
+
+    expect(session.setSessionName).toHaveBeenCalledWith([...generatedTitle].slice(0, 50).join(""));
+    gateway.dispose();
+  });
 });
