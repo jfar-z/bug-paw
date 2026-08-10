@@ -159,6 +159,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setSession((current) => current ? { ...current, model } : current);
       setSelectedModel(model);
     },
+    onSessionRenamed: (sessionId, name) => {
+      setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
+      sessionSyncRef.current?.notify();
+    },
     onError: setError,
   });
 

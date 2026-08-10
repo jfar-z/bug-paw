@@ -88,6 +88,7 @@ export const SessionEventSchema = Type.Union([
   StrictObject({ ...EventIdentity, type: Type.Literal("text_delta"), delta: Type.String() }),
   StrictObject({ ...EventIdentity, type: Type.Literal("thinking_delta"), delta: Type.String() }),
   StrictObject({ ...EventIdentity, type: Type.Literal("thinking_finished") }),
+  StrictObject({ ...EventIdentity, type: Type.Literal("session_renamed"), name: Type.String({ minLength: 1, maxLength: 120 }) }),
   StrictObject({
     ...EventIdentity,
     type: Type.Literal("tool_started"),

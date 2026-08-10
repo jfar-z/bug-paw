@@ -4,6 +4,16 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.2 - 2026-08-10
+
+### 新增 / Added
+
+- 会话首轮完成后，使用当前 Agent 的已选模型自动生成并保存会话标题。
+- 会话标题变更通过实时事件同步到当前页面与其他已打开标签页的会话列表。
+
+- After the first turn completes, the selected model of the current Agent automatically generates and saves a session title.
+- Session-title changes are synchronized through realtime events to the current page and other open tabs.
+
 ## 0.1.1 - 2026-08-10
 
 ### 新增 / Added
