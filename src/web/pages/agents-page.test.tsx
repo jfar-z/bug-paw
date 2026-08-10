@@ -6,7 +6,7 @@ describe("AgentsPage", () => {
   it("读取真实 Agent 数据并创建新 Agent", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "POST") {
-        return new Response(JSON.stringify({ profile: { id: "new-id", name: "新助手", cwd: "/data/workspace/agents/new-id", status: "active", description: "", defaultModel: undefined }, revision: "r2" }), { status: 201 });
+        return new Response(JSON.stringify({ profile: { id: "new-id", name: "新助手三号", cwd: "/data/workspace/agents/new-id", status: "active", description: "", defaultModel: undefined }, revision: "r2" }), { status: 201 });
       }
       return new Response(JSON.stringify({ agents: [{ profile: { id: "real", name: "真实 Agent", cwd: "/data/workspace/agents/real", status: "active", description: "真实数据" }, revision: "r1" }] }), { status: 200 });
     });
@@ -19,13 +19,17 @@ describe("AgentsPage", () => {
     fireEvent.change(screen.getByLabelText("Agent 名称"), { target: { value: "新助手" } });
     fireEvent.click(screen.getByRole("button", { name: "使用自定义目录" }));
     expect(screen.getByLabelText("工作目录")).toHaveValue("workspace/agents/新助手");
+    fireEvent.change(screen.getByLabelText("Agent 名称"), { target: { value: "新助手二号" } });
+    expect(screen.getByLabelText("工作目录")).toHaveValue("workspace/agents/新助手二号");
     fireEvent.change(screen.getByLabelText("工作目录"), { target: { value: "projects/research" } });
+    fireEvent.change(screen.getByLabelText("Agent 名称"), { target: { value: "新助手三号" } });
+    expect(screen.getByLabelText("工作目录")).toHaveValue("projects/research");
     fireEvent.click(screen.getByRole("button", { name: "创建 Agent" }));
 
-    expect(await screen.findByText("新助手")).toBeInTheDocument();
+    expect(await screen.findByText("新助手三号")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/v1/agents", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ name: "新助手", cwd: "/data/projects/research" }),
+      body: JSON.stringify({ name: "新助手三号", cwd: "/data/projects/research" }),
     }));
   });
 
