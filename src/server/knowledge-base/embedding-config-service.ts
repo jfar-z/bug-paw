@@ -20,6 +20,7 @@ const MANAGED_EMBEDDING_CONFIG: StoredEmbeddingConfig = {
   isManaged: true,
   enabled: true,
 };
+const MANAGED_EMBEDDING_MAX_BATCH_SIZE = 4;
 
 /** 管理单一 Embedding 配置，并隔离仅服务端可读的密钥。 */
 export class EmbeddingConfigService {
@@ -59,7 +60,11 @@ export class EmbeddingConfigService {
     const loaded = await this.store.read();
     const previous = loaded.value === undefined ? this.managedConfig : normalizeStoredConfig(loaded.value, this.managedConfig);
     const config = isManagedInput(input, this.managedConfig) && previous?.isManaged
-      ? { ...this.managedConfig, enabled: this.managedConfig.enabled && input.enabled !== false }
+      ? {
+        ...this.managedConfig,
+        batchSize: validateManagedBatchSize(input.batchSize),
+        enabled: this.managedConfig.enabled && input.enabled !== false,
+      }
       : normalizeInput({ ...input, apiKey: input.apiKey || previous?.apiKey || "" });
     const written = await this.store.write(config, revision);
     return { revision: written.revision, config: toSummary(config) };
@@ -87,7 +92,11 @@ function normalizeStoredConfig(value: unknown, managedConfig: StoredEmbeddingCon
     || typeof value.apiKey !== "string") return undefined;
   const input = { ...(value as unknown as EmbeddingConfigInput), enabled: value.enabled !== false };
   if (isManagedStoredConfig(input, managedConfig, value.isManaged)) {
-    return { ...managedConfig, enabled: managedConfig.enabled && input.enabled };
+    return {
+      ...managedConfig,
+      batchSize: normalizeStoredManagedBatchSize(input.batchSize),
+      enabled: managedConfig.enabled && input.enabled,
+    };
   }
   return normalizeInput(input);
 }
@@ -96,8 +105,7 @@ function normalizeStoredConfig(value: unknown, managedConfig: StoredEmbeddingCon
 function isManagedInput(input: EmbeddingConfigInput, managedConfig: StoredEmbeddingConfig): boolean {
   return input.apiKey.trim() === ""
     && normalizeBaseUrl(input.baseUrl) === normalizeBaseUrl(managedConfig.baseUrl)
-    && input.model.trim() === managedConfig.model
-    && input.batchSize === managedConfig.batchSize;
+    && input.model.trim() === managedConfig.model;
 }
 
 /** 兼容旧版受管配置，避免历史批量大小阻断托管服务升级。 */
@@ -106,6 +114,21 @@ function isManagedStoredConfig(input: EmbeddingConfigInput, managedConfig: Store
     && input.apiKey.trim() === ""
     && normalizeBaseUrl(input.baseUrl) === normalizeBaseUrl(managedConfig.baseUrl)
     && input.model.trim() === managedConfig.model;
+}
+
+/** 校验内置 CPU 服务可安全处理的单次批量范围。 */
+function validateManagedBatchSize(batchSize: number): number {
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MANAGED_EMBEDDING_MAX_BATCH_SIZE) {
+    throw new TypeError(`内置 Embedding 服务每批切片数必须在 1 到 ${MANAGED_EMBEDDING_MAX_BATCH_SIZE} 之间`);
+  }
+  return batchSize;
+}
+
+/** 迁移旧版受管配置，超出当前服务上限时回退到默认批次。 */
+function normalizeStoredManagedBatchSize(batchSize: number): number {
+  return Number.isInteger(batchSize) && batchSize >= 1 && batchSize <= MANAGED_EMBEDDING_MAX_BATCH_SIZE
+    ? batchSize
+    : MANAGED_EMBEDDING_CONFIG.batchSize;
 }
 
 /** 校验单一 Embedding 配置的请求字段。 */

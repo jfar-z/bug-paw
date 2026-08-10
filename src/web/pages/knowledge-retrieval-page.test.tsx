@@ -30,6 +30,18 @@ describe("KnowledgeRetrievalPage", () => {
     expect(screen.getByText("内置服务无需 API Key；保存可改为外部服务")).toBeInTheDocument();
   });
 
+  it("受管内置模型将每批切片数限制为 4", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      revision: "r1",
+      config: { baseUrl: "http://bug-paw-embedding:80/v1", model: "BAAI/bge-small-zh-v1.5", batchSize: 4, hasApiKey: false, isManaged: true },
+    }), { status: 200 })));
+
+    render(<KnowledgeRetrievalPage />);
+
+    expect(await screen.findByLabelText("每批切片数")).toHaveAttribute("max", "4");
+    expect(screen.getByText("内置服务单次最多处理 4 个切片。" )).toBeInTheDocument();
+  });
+
   it("展示语义检索开关并保存关闭状态", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
       revision: "r1",

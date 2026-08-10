@@ -85,6 +85,22 @@ describe("知识检索 Embedding 配置服务", () => {
     await expect(service.getPrivate()).resolves.toMatchObject({ isManaged: true, enabled: false });
   });
 
+  it("受管配置允许保存服务端支持范围内的批量大小", async () => {
+    const service = await fixture();
+    const initial = await service.read();
+
+    const saved = await service.update({
+      baseUrl: "http://bug-paw-embedding:80/v1",
+      model: "BAAI/bge-small-zh-v1.5",
+      batchSize: 3,
+      apiKey: "",
+      enabled: true,
+    }, initial.revision);
+
+    expect(saved.config).toMatchObject({ batchSize: 3, isManaged: true, hasApiKey: false });
+    await expect(service.getPrivate()).resolves.toMatchObject({ batchSize: 3, isManaged: true });
+  });
+
   it("保存单一配置后读取脱敏摘要", async () => {
     const service = await fixture();
     const initial = await service.read();
