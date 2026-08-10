@@ -251,6 +251,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           agentDir: paths.piDir,
           modelRuntime,
           defaultModel: profile.profile.defaultModel,
+          defaultThinkingLevel: profile.profile.defaultThinkingLevel,
+          titleGeneration: profile.profile.titleGeneration,
           allowedTools: profile.profile.allowedTools,
           customTools: [
             createSearchKnowledgeTool(agentId, knowledgeBases),

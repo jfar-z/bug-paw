@@ -9,6 +9,15 @@ export interface AgentInstructions {
 }
 
 /**
+ * 自动生成会话标题时使用的模型与思考策略。
+ */
+export interface TitleGenerationConfig {
+  modelSource: "session" | "system-default" | "custom";
+  model?: { provider: string; id: string };
+  thinkingEnabled: boolean;
+}
+
+/**
  * 持久化 Agent Profile v1。
  */
 export interface AgentProfile {
@@ -25,6 +34,7 @@ export interface AgentProfile {
   cwd: string;
   defaultModel?: { provider: string; id: string };
   defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  titleGeneration?: TitleGenerationConfig;
   ttsProfileId?: string;
   /** 覆盖所选 TTS 配置默认音色的 Agent 级音色。 */
   ttsVoice?: string;
@@ -54,6 +64,7 @@ export interface CreateAgentInput {
   avatar?: { kind: "initial"; value: string };
   defaultModel?: { provider: string; id: string };
   defaultThinkingLevel?: AgentProfile["defaultThinkingLevel"];
+  titleGeneration?: TitleGenerationConfig;
   ttsProfileId?: string;
   ttsVoice?: string;
   ttsAutoPlay?: boolean;
@@ -64,11 +75,12 @@ export interface CreateAgentInput {
 /**
  * 更新 Agent 时允许修改的字段。
  */
-export type UpdateAgentInput = Partial<Omit<CreateAgentInput, "name" | "avatar" | "defaultModel" | "defaultThinkingLevel" | "ttsProfileId" | "ttsVoice">> & {
+export type UpdateAgentInput = Partial<Omit<CreateAgentInput, "name" | "avatar" | "defaultModel" | "defaultThinkingLevel" | "titleGeneration" | "ttsProfileId" | "ttsVoice">> & {
   name?: string;
   avatar?: AgentProfile["avatar"];
   defaultModel?: AgentProfile["defaultModel"] | null;
   defaultThinkingLevel?: AgentProfile["defaultThinkingLevel"] | null;
+  titleGeneration?: AgentProfile["titleGeneration"] | null;
   ttsProfileId?: string | null;
   ttsVoice?: string | null;
 };

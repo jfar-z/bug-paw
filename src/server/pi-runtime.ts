@@ -21,6 +21,7 @@ import { CheckpointWriter } from "./runtime/checkpoint-writer";
 import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
+import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
 
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
@@ -48,6 +49,67 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+}
+
+type ThinkingLevel = NonNullable<AgentProfile["defaultThinkingLevel"]>;
+
+/**
+ * 标题请求使用的已解析模型与统一思考参数。
+ */
+export interface TitleGenerationRequest {
+  model: unknown;
+  reasoning: ThinkingLevel;
+}
+
+/**
+ * 读取 Pi 全局范围的默认模型，不采纳 Agent 工作目录的项目设置覆盖。
+ *
+ * @param settingsManager Pi 设置管理器
+ */
+export function getGlobalDefaultModel(settingsManager: { getGlobalSettings(): { defaultProvider?: unknown; defaultModel?: unknown } }): { provider: string; id: string } | undefined {
+  const settings = settingsManager.getGlobalSettings();
+  if (typeof settings.defaultProvider !== "string" || typeof settings.defaultModel !== "string") return undefined;
+  if (!settings.defaultProvider.trim() || !settings.defaultModel.trim()) return undefined;
+  return { provider: settings.defaultProvider, id: settings.defaultModel };
+}
+
+/**
+ * 根据 Agent 标题策略解析本次会话应使用的模型和思考等级。
+ *
+ * @param sessionModel 会话当前实际模型
+ * @param titleGeneration Agent 标题生成策略
+ * @param defaultThinkingLevel Agent 思考级别
+ * @param systemDefaultModel Pi 全局默认模型
+ * @param findModel 从当前运行时获取可用模型
+ */
+export function resolveTitleGenerationRequest(
+  sessionModel: unknown,
+  titleGeneration: TitleGenerationConfig | undefined,
+  defaultThinkingLevel: AgentProfile["defaultThinkingLevel"] | undefined,
+  systemDefaultModel: { provider: string; id: string } | undefined,
+  findModel: (provider: string, modelId: string) => unknown,
+): TitleGenerationRequest | undefined {
+  const modelSource = titleGeneration?.modelSource ?? "session";
+  const selection = modelSource === "custom"
+    ? titleGeneration?.model
+    : modelSource === "system-default"
+      ? systemDefaultModel
+      : undefined;
+  const model = modelSource === "session"
+    ? sessionModel
+    : selection ? findModel(selection.provider, selection.id) : undefined;
+  if (!model) return undefined;
+  const requestedThinking = titleGeneration?.thinkingEnabled ? defaultThinkingLevel ?? "medium" : "off";
+  return { model, reasoning: supportsReasoning(model) ? requestedThinking : "off" };
+}
+
+/**
+ * 判断 Pi 模型是否声明支持统一思考参数。
+ *
+ * @param model Pi 运行时模型
+ */
+function supportsReasoning(model: unknown): boolean {
+  return typeof model === "object" && model !== null && (model as { reasoning?: unknown }).reasoning === true;
 }
 
 /** SDK 在当前 Agent 上实际可执行的斜杠命令安全摘要。 */
@@ -817,6 +879,8 @@ interface SdkPiRuntimeOptions {
   provider?: StoredProviderConfig;
   modelRuntime?: ModelRuntime;
   defaultModel?: { provider: string; id: string };
+  defaultThinkingLevel?: AgentProfile["defaultThinkingLevel"];
+  titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
   appendSystemPrompt?: string[];
@@ -837,8 +901,9 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       authPath: join(options.agentDir, "auth.json"),
       modelsPath: join(options.agentDir, "models.json"),
       allowModelNetwork: false,
-    });
+  });
   const settingsManager = SettingsManager.create(options.cwd, options.agentDir);
+  const systemDefaultModel = getGlobalDefaultModel(settingsManager);
   const providerId = options.defaultModel?.provider
     ?? (options.provider ? configureProvider(modelRuntime, options.provider) : settingsManager.getDefaultProvider());
   const defaultModel = options.defaultModel?.id ?? options.provider?.defaultModel ?? settingsManager.getDefaultModel();
@@ -930,10 +995,18 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     findModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
     async generateSessionTitle(model, userText, assistantText) {
       if (!assistantText.trim()) return undefined;
+      const titleRequest = resolveTitleGenerationRequest(
+        model,
+        options.titleGeneration,
+        options.defaultThinkingLevel,
+        systemDefaultModel,
+        (provider, modelId) => modelRuntime.getModel(provider, modelId),
+      );
+      if (!titleRequest) return undefined;
       try {
-        const response = await modelRuntime.completeSimple(model as never, {
+        const response = await modelRuntime.completeSimple(titleRequest.model as never, {
           messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
-        }, { reasoning: "off", maxRetries: 0, timeoutMs: 15_000 } as never);
+        }, { reasoning: titleRequest.reasoning, maxRetries: 0, timeoutMs: 15_000 } as never);
         if (response.stopReason === "error" || response.stopReason === "aborted") return undefined;
         const text = response.content.find((item) => item.type === "text");
         return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;

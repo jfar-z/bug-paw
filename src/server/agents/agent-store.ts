@@ -13,7 +13,7 @@ import { DomainError } from "../core/errors";
 import { KeyedMutex } from "../core/keyed-mutex";
 import { openDatabase } from "../database/database";
 import { runMigrations } from "../database/migrator";
-import { createAgentProfile, normalizeTtsVoice } from "./agent-profile";
+import { createAgentProfile, normalizeTitleGeneration, normalizeTtsVoice } from "./agent-profile";
 import {
   createAgentRepository,
   type AgentRepository,
@@ -245,7 +245,7 @@ export class AgentStore {
     const migration = requestedCwd === current.profile.cwd
       ? undefined
       : await preparePiMigration(current.profile.cwd, requestedCwd);
-    const { cwd: _cwd, defaultModel, defaultThinkingLevel, ttsProfileId, ttsVoice, ttsAutoPlay, ttsStreamPlayback, ...safePatch } = patch;
+    const { cwd: _cwd, defaultModel, defaultThinkingLevel, titleGeneration, ttsProfileId, ttsVoice, ttsAutoPlay, ttsStreamPlayback, ...safePatch } = patch;
     const next: AgentProfile = {
       ...current.profile,
       ...safePatch,
@@ -262,6 +262,8 @@ export class AgentStore {
     else if (defaultModel !== undefined) next.defaultModel = defaultModel;
     if (defaultThinkingLevel === null) delete next.defaultThinkingLevel;
     else if (defaultThinkingLevel !== undefined) next.defaultThinkingLevel = defaultThinkingLevel;
+    if (titleGeneration === null) delete next.titleGeneration;
+    else if (titleGeneration !== undefined) next.titleGeneration = normalizeTitleGeneration(titleGeneration);
     if (ttsProfileId === null) {
       delete next.ttsProfileId;
       delete next.ttsVoice;
@@ -389,6 +391,7 @@ export class AgentStore {
         : { kind: "initial", value: source.profile.name.slice(0, 1).toUpperCase() },
       defaultModel: source.profile.defaultModel,
       defaultThinkingLevel: source.profile.defaultThinkingLevel,
+      titleGeneration: source.profile.titleGeneration,
       allowedTools: source.profile.allowedTools,
     });
     if (!options.copyWorkspace) {

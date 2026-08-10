@@ -29,7 +29,15 @@ describe("ProviderRenameService", () => {
     await writeFile(modelsPath, '{"providers":{"old":{"name":"旧 Provider","baseUrl":"http://localhost:11434","api":"openai-completions","models":[{"id":"m1","name":"M1"}]},"other":{"name":"保留","baseUrl":"http://localhost:11434","api":"openai-completions","models":[]}}}\n', "utf8");
     await writeFile(authPath, '{"old":{"type":"api_key","key":"secret"}}\n', "utf8");
     const agents = new AgentStore(paths);
-    const agent = await agents.create({ name: "引用者", defaultModel: { provider: "old", id: "m1" } });
+    const agent = await agents.create({
+      name: "引用者",
+      defaultModel: { provider: "old", id: "m1" },
+      titleGeneration: {
+        modelSource: "custom",
+        model: { provider: "old", id: "title-m1" },
+        thinkingEnabled: false,
+      },
+    });
     const sessionDir = join(paths.piDir, "sessions", agent.profile.id);
     const sessionPath = join(sessionDir, "session.jsonl");
     await mkdir(sessionDir, { recursive: true });
@@ -55,6 +63,7 @@ describe("ProviderRenameService", () => {
     expect(await new CredentialService(authPath).getApiKey("new")).toBe("secret");
     expect(await new CredentialService(authPath).getApiKey("old")).toBeUndefined();
     expect((await agents.get(agent.profile.id))?.profile.defaultModel).toEqual({ provider: "new", id: "m1" });
+    expect((await agents.get(agent.profile.id))?.profile.titleGeneration?.model).toEqual({ provider: "new", id: "title-m1" });
     expect(await readFile(sessionPath, "utf8")).toContain('"provider":"new"');
     expect(await readFile(sessionPath, "utf8")).not.toContain('"provider":"old"');
   });
@@ -67,7 +76,15 @@ describe("ProviderRenameService", () => {
     const authPath = join(paths.piDir, "auth.json");
     await writeFile(modelsPath, '{"providers":{"new":{"name":"新 Provider","baseUrl":"http://localhost:11434","api":"openai-completions","models":[]}}}\n', "utf8");
     const agents = new AgentStore(paths);
-    const agent = await agents.create({ name: "待恢复", defaultModel: { provider: "old", id: "m1" } });
+    const agent = await agents.create({
+      name: "待恢复",
+      defaultModel: { provider: "old", id: "m1" },
+      titleGeneration: {
+        modelSource: "custom",
+        model: { provider: "old", id: "title-m1" },
+        thinkingEnabled: true,
+      },
+    });
     const manifestPath = join(paths.transactionDir, "provider-renames", "rename-1.json");
     await writeJsonAtomic(manifestPath, {
       version: 1,
@@ -81,6 +98,7 @@ describe("ProviderRenameService", () => {
     await recoverPendingProviderRenames(paths, new ModelConfigService({ modelsPath, authPath }), agents);
 
     expect((await agents.get(agent.profile.id))?.profile.defaultModel?.provider).toBe("new");
+    expect((await agents.get(agent.profile.id))?.profile.titleGeneration?.model?.provider).toBe("new");
     await expect(access(manifestPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createPiRuntimeGateway,
   createWorkspaceResourceLoader,
+  getGlobalDefaultModel,
+  resolveTitleGenerationRequest,
   type ModelSummary,
   type PiRuntimeBackend,
   type PiSessionAdapter,
@@ -152,5 +154,59 @@ describe("PiRuntimeGateway 提示词刷新", () => {
 
     expect(session.setSessionName).toHaveBeenCalledWith([...generatedTitle].slice(0, 50).join(""));
     gateway.dispose();
+  });
+});
+
+describe("标题生成模型策略", () => {
+  const sessionModel = { provider: "OpenAI", id: "chat", reasoning: true };
+  const systemModel = { provider: "OpenAI", id: "system", reasoning: true };
+  const customModel = { provider: "OpenAI", id: "title", reasoning: true };
+  const modelsById: Record<string, unknown> = {
+    "OpenAI:system": systemModel,
+    "OpenAI:title": customModel,
+  };
+  const findModel = vi.fn((provider: string, id: string) => modelsById[`${provider}:${id}`]);
+
+  it("未配置时使用会话实际模型并关闭思考", () => {
+    expect(resolveTitleGenerationRequest(sessionModel, undefined, undefined, { provider: "OpenAI", id: "system" }, findModel))
+      .toEqual({ model: sessionModel, reasoning: "off" });
+  });
+
+  it("使用系统默认或单独模型，并按 Agent 思考级别生成参数", () => {
+    expect(resolveTitleGenerationRequest(sessionModel, {
+      modelSource: "system-default",
+      thinkingEnabled: true,
+    }, undefined, { provider: "OpenAI", id: "system" }, findModel))
+      .toEqual({ model: systemModel, reasoning: "medium" });
+    expect(resolveTitleGenerationRequest(sessionModel, {
+      modelSource: "custom",
+      model: { provider: "OpenAI", id: "title" },
+      thinkingEnabled: true,
+    }, "high", { provider: "OpenAI", id: "system" }, findModel))
+      .toEqual({ model: customModel, reasoning: "high" });
+  });
+
+  it("目标模型不支持思考或不存在时安全降级", () => {
+    expect(resolveTitleGenerationRequest({ provider: "OpenAI", id: "plain", reasoning: false }, {
+      modelSource: "session",
+      thinkingEnabled: true,
+    }, "high", undefined, findModel))
+      .toEqual({ model: { provider: "OpenAI", id: "plain", reasoning: false }, reasoning: "off" });
+    expect(resolveTitleGenerationRequest(sessionModel, {
+      modelSource: "system-default",
+      thinkingEnabled: false,
+    }, undefined, undefined, findModel)).toBeUndefined();
+  });
+});
+
+describe("标题系统默认模型", () => {
+  it("只读取 Pi 全局设置，不继承 Agent 工作目录的项目设置", () => {
+    const settingsManager = {
+      getGlobalSettings: () => ({ defaultProvider: "global-provider", defaultModel: "global-model" }),
+      getDefaultProvider: () => "project-provider",
+      getDefaultModel: () => "project-model",
+    };
+
+    expect(getGlobalDefaultModel(settingsManager)).toEqual({ provider: "global-provider", id: "global-model" });
   });
 });
