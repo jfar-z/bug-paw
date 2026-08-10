@@ -173,6 +173,51 @@ describe("AgentDetailPage v0 身份结构", () => {
     expect(screen.getByText("当前继承：OpenAI / MiniMax-M3")).toBeInTheDocument();
   });
 
+  it("保存单独标题模型和思考开关", async () => {
+    const profile = {
+      version: 1 as const,
+      id: "title-agent",
+      name: "标题 Agent",
+      avatar: { kind: "initial" as const, value: "标" },
+      description: "",
+      status: "active" as const,
+      cwd: "/data/workspace/agents/title-agent",
+      instructions: { role: "", behavior: "", rules: "", user: "" },
+      allowedTools: ["read"],
+      createdAt: "2026-08-10T00:00:00.000Z",
+      updatedAt: "2026-08-10T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [
+        { provider: "OpenAI", id: "gpt-chat", name: "gpt-chat" },
+        { provider: "OpenAI", id: "gpt-title", name: "gpt-title" },
+      ] }));
+      if (url === "/api/v1/configuration/global") return new Response(JSON.stringify({ effective: { defaultProvider: "OpenAI", defaultModel: "gpt-chat" } }));
+      if (url === "/api/v1/capabilities/tts") return new Response(JSON.stringify({ profiles: [] }));
+      if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
+      const patch = init?.method === "PATCH" ? JSON.parse(String(init.body)) as { titleGeneration?: unknown } : undefined;
+      return new Response(JSON.stringify({ profile: patch ? { ...profile, titleGeneration: patch.titleGeneration } : profile, revision: patch ? "r2" : "r1" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<AgentDetailPage agentId="title-agent" onNavigate={vi.fn()} />);
+
+    await screen.findByText("标题 Agent");
+    fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
+    expect(await screen.findByRole("combobox", { name: "标题模型来源" })).toHaveValue("session");
+    expect(screen.getByRole("checkbox", { name: "标题生成启用思考" })).not.toBeChecked();
+    fireEvent.change(screen.getByRole("combobox", { name: "标题模型来源" }), { target: { value: "custom" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "标题单独模型" }), { target: { value: "OpenAI:gpt-title" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "标题生成启用思考" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await screen.findByText("已保存");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/agents/title-agent", expect.objectContaining({
+      method: "PATCH",
+      body: expect.stringContaining('"titleGeneration":{"modelSource":"custom","model":{"provider":"OpenAI","id":"gpt-title"},"thinkingEnabled":true}'),
+    }));
+  });
+
   it("读取 Profile 并保存合并后的四段角色指令", async () => {
     const profile = {
       version: 1 as const,

@@ -1,6 +1,6 @@
 import { ArrowLeft, Check, Copy, Folder, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { AgentInstructions, AgentProfile, AgentProfileDocument } from "../../shared/agent-contracts";
+import type { AgentInstructions, AgentProfile, AgentProfileDocument, TitleGenerationConfig } from "../../shared/agent-contracts";
 import { BUILTIN_TOOL_CATALOG, CAPABILITY_TOOL_CATALOG, DEFAULT_AGENT_TOOL_NAMES, SYSTEM_TOOL_CATALOG } from "../../shared/tool-catalog";
 import { api, type ModelSummary, type ResourceCatalog } from "../api";
 import { DangerDialog } from "../components/configuration/danger-dialog";
@@ -80,7 +80,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     api.getAgent(agentId)
       .then((loaded) => { if (active) setDocument(loaded); })
       .catch(() => { if (active && agentId !== "default") setNotFound(true); });
-    api.listModels().then(({ models: loaded }) => { if (active) setModels(loaded); }).catch(() => undefined);
+    api.listModels().then(({ models: loaded }) => { if (active) setModels(loaded ?? []); }).catch(() => undefined);
     api.getTtsProfiles().then((loaded) => { if (active) setTtsProfiles(loaded.profiles ?? []); }).catch(() => undefined);
     api.getGlobalSettings().then(({ effective }) => {
       if (!active) return;
@@ -107,6 +107,8 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     return [...known, ...retained];
   }, [agent?.allowedTools, resources]);
   const inheritedModelLabel = globalDefaultModel ? `${globalDefaultModel.provider} / ${globalDefaultModel.id}` : "全局默认模型";
+  const titleGeneration = agent?.titleGeneration ?? { modelSource: "session" as const, thinkingEnabled: false };
+  const suggestedTitleModel = globalDefaultModel ?? models[0];
   const selectedTtsProfile = ttsProfiles.find((profile) => profile.id === agent?.ttsProfileId);
   const promptPreview = useMemo(() => agent ? instructionFields
     .filter(({ key }) => agent.instructions[key].trim())
@@ -141,6 +143,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
         avatar: document.profile.avatar.kind === "initial" ? document.profile.avatar : undefined,
         defaultModel: document.profile.defaultModel ?? null,
         defaultThinkingLevel: document.profile.defaultThinkingLevel ?? null,
+        titleGeneration: document.profile.titleGeneration ?? null,
         allowedTools: document.profile.allowedTools,
         ttsProfileId: document.profile.ttsProfileId ?? null,
         ttsVoice: document.profile.ttsVoice?.trim() || null,
@@ -301,6 +304,27 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
               {thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}
             </select>
           </InheritedField>
+          <section className="configuration-form-card configuration-single-column">
+            <h2>标题生成</h2>
+            <p className="configuration-help">同 Agent 会跟随会话实际模型；系统默认使用 Pi 全局默认模型。启用思考后，标题会继承此 Agent 的思考级别。</p>
+            <label><span>标题模型来源</span><select aria-label="标题模型来源" value={titleGeneration.modelSource} onChange={(event) => {
+              const modelSource = event.target.value as TitleGenerationConfig["modelSource"];
+              updateProfile({ titleGeneration: {
+                modelSource,
+                ...(modelSource === "custom" && suggestedTitleModel ? { model: { provider: suggestedTitleModel.provider, id: suggestedTitleModel.id } } : {}),
+                thinkingEnabled: titleGeneration.thinkingEnabled,
+              } });
+            }}>
+              <option value="session">同 Agent</option>
+              <option value="system-default">使用系统默认</option>
+              <option value="custom">单独选择模型</option>
+            </select></label>
+            {titleGeneration.modelSource === "custom" ? <label><span>标题单独模型</span><select aria-label="标题单独模型" value={titleGeneration.model ? `${titleGeneration.model.provider}:${titleGeneration.model.id}` : ""} onChange={(event) => { const [provider, ...id] = event.target.value.split(":"); updateProfile({ titleGeneration: { ...titleGeneration, model: { provider, id: id.join(":") } } }); }}>
+              <option value="" disabled>请选择标题模型</option>
+              {models.map((model) => <option key={`${model.provider}:${model.id}`} value={`${model.provider}:${model.id}`}>{model.provider} / {model.name}</option>)}
+            </select></label> : null}
+            <label><input aria-label="标题生成启用思考" type="checkbox" checked={titleGeneration.thinkingEnabled} onChange={(event) => updateProfile({ titleGeneration: { ...titleGeneration, thinkingEnabled: event.target.checked } })} />启用思考</label>
+          </section>
           <section className="configuration-form-card configuration-single-column"><h2>语音回答</h2><p className="configuration-help">选择已配置的语音模型后，可让 Agent 回答自动播放。</p><label><span>语音模型</span><select aria-label="Agent 语音模型" value={agent.ttsProfileId ?? ""} onChange={(event) => updateProfile(event.target.value ? { ttsProfileId: event.target.value } : { ttsProfileId: undefined, ttsVoice: undefined, ttsAutoPlay: false, ttsStreamPlayback: false })}><option value="">不使用语音</option>{ttsProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.voice}</option>)}</select></label><label><span>Agent 音色<small>留空则继承所选语音模型；填写后仅在此 Agent 运行时覆盖</small></span><input aria-label="Agent 音色" disabled={!agent.ttsProfileId} maxLength={160} placeholder={selectedTtsProfile ? `继承模型音色：${selectedTtsProfile.voice}` : "请先选择语音模型"} value={agent.ttsVoice ?? ""} onChange={(event) => updateProfile({ ttsVoice: event.target.value || undefined })} /></label><label><input aria-label="自动播放语音" type="checkbox" disabled={!agent.ttsProfileId} checked={agent.ttsAutoPlay === true} onChange={(event) => updateProfile({ ttsAutoPlay: event.target.checked, ttsStreamPlayback: event.target.checked ? agent.ttsStreamPlayback : false })} />自动播放语音</label><label><input aria-label="流式播放语音" type="checkbox" disabled={!agent.ttsProfileId || !agent.ttsAutoPlay} checked={agent.ttsStreamPlayback === true} onChange={(event) => updateProfile({ ttsStreamPlayback: event.target.checked })} />流式播放语音</label></section>
         </section>
       ) : null}
