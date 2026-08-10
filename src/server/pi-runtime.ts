@@ -98,6 +98,7 @@ export type ChatEvent = ChatEventBase & (
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
+  | { type: "session_renamed"; name: string }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
@@ -112,6 +113,7 @@ type UnsequencedChatEvent =
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
+  | { type: "session_renamed"; name: string }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
