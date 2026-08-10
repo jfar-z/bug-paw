@@ -5795,6 +5795,52 @@ img.message-avatar {
   line-height: 1.5;
 }
 
+.thinking-protocol {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.thinking-protocol-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.thinking-protocol-preview__item {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.thinking-protocol-preview__item > strong {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.thinking-protocol-preview__item > p,
+.thinking-protocol-preview__item pre {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.thinking-protocol-preview__item pre {
+  overflow: auto;
+  font-family: var(--font-mono);
+}
+
+@media (max-width: 620px) {
+  .thinking-protocol-preview {
+    grid-template-columns: 1fr;
+  }
+}
+
 .thinking-map > div {
   display: grid;
   grid-template-columns: 68px minmax(0, 1fr) 86px;
