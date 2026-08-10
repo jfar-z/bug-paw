@@ -144,6 +144,7 @@ export interface PiRuntimeBackend {
   createSession(): Promise<PiSessionAdapter>;
   openSession(sessionId: string): Promise<PiSessionAdapter>;
   findModel(provider: string, modelId: string): unknown;
+  generateSessionTitle?(model: unknown, userText: string, assistantText: string): Promise<string | undefined>;
   deleteSession(sessionId: string): Promise<void>;
   stageDeleteSession?(sessionId: string): Promise<StagedSessionDeletion>;
 }
@@ -159,7 +160,7 @@ export interface PiRuntimeGateway {
   listSessions(options?: { archived?: boolean }): Promise<SessionSummary[]>;
   createSession(): Promise<SessionSnapshot>;
   openSession(sessionId: string): Promise<SessionSnapshot>;
-  startPrompt(sessionId: string, text: string): Promise<ChatRunSummary>;
+  startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   abort(sessionId: string): Promise<void>;
   abortAll(): Promise<number>;
@@ -203,6 +204,7 @@ interface ManagedSession {
 interface ManagedRun extends ChatRunSummary {
   completion: Promise<void>;
   releaseTurn: () => void;
+  titleInput?: string;
 }
 
 interface PiRuntimeGatewayOptions {
@@ -381,7 +383,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     if (projection) checkpointWriter.schedule(projection);
   }
 
-  function beginRun(sessionId: string, text: string): ManagedRun {
+  function beginRun(sessionId: string, text: string, titleInput?: string): ManagedRun {
     const session = requireSession(sessionId);
     if (runs.has(sessionId) || session.isStreaming) {
       throw new PiRuntimeError("SESSION_BUSY", "会话正在生成中");
@@ -394,6 +396,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       startedAt: new Date().toISOString(),
       completion: Promise.resolve(),
       releaseTurn,
+      ...(session.messages.length === 0 && titleInput?.trim() ? { titleInput: titleInput.trim() } : {}),
     };
     runs.set(sessionId, run);
     recoveredCheckpoints.delete(sessionId);
@@ -431,6 +434,17 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       await session.prompt(text);
       run.status = abortRequested.has(run.sessionId) ? "aborted" : "completed";
       run.finishedAt = new Date().toISOString();
+      if (run.status === "completed" && run.titleInput && backend.generateSessionTitle) {
+        try {
+          const title = await backend.generateSessionTitle(session.model, run.titleInput, extractAssistantText(session.messages));
+          if (title && isValidSessionName(title)) {
+            session.setSessionName(title);
+            publishSequenced(run.sessionId, { type: "session_renamed", name: title });
+          }
+        } catch {
+          // 标题是附属体验，模型或持久化失败不得影响原对话结果。
+        }
+      }
       publishSequenced(run.sessionId, { type: run.status });
     } catch (error) {
       if (abortRequested.has(run.sessionId)) {
@@ -531,7 +545,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       }
     },
 
-    async startPrompt(sessionId, text) {
+    async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
         const pendingReload = reloadPendingPromptContext(sessionId);
         if (pendingReload) await pendingReload;
@@ -544,7 +558,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             firstMessage: summary.messageCount === 0 ? summarizePendingPrompt(text) : summary.firstMessage,
           });
         }
-        return beginRun(sessionId, text);
+        return beginRun(sessionId, text, userText);
       });
       return toRunSummary(run);
     },
@@ -913,6 +927,19 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       return createWithManager(SessionManager.open(sessionInfo.path, sessionDir, options.cwd));
     },
     findModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
+    async generateSessionTitle(model, userText, assistantText) {
+      if (!assistantText.trim()) return undefined;
+      try {
+        const response = await modelRuntime.completeSimple(model as never, {
+          messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
+        }, { reasoning: "off", maxTokens: 15, maxRetries: 0, timeoutMs: 15_000 } as never);
+        if (response.stopReason === "error" || response.stopReason === "aborted") return undefined;
+        const text = response.content.find((item) => item.type === "text");
+        return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
+      } catch {
+        return undefined;
+      }
+    },
     async deleteSession(sessionId) {
       const sessionInfo = (await SessionManager.list(options.cwd, sessionDir)).find((session) => session.id === sessionId);
       if (!sessionInfo) {
@@ -1113,6 +1140,22 @@ function summarizePendingPrompt(text: string): string {
   const fileBlockStart = text.indexOf("<pi_agent_files");
   const visibleText = (fileBlockStart >= 0 ? text.slice(0, fileBlockStart) : text).trim();
   return visibleText || "附件";
+}
+
+/** 仅提取最终 Assistant 可见文本，避免把思考、工具调用和附件传给标题模型。 */
+function extractAssistantText(messages: unknown[]): string {
+  const message = [...messages].reverse().find((item) => isRecord(item) && item.role === "assistant");
+  const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
+  return content
+    .filter((item): item is { type: "text"; text: string } => isRecord(item) && item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
+}
+
+/** 自动标题与手动会话名称共用相同的持久化长度边界。 */
+function isValidSessionName(name: string): boolean {
+  return Boolean(name) && [...name].length <= 120;
 }
 
 /** 把单个实时事件限制在客户端与 Journal 都能承受的硬上限内。 */

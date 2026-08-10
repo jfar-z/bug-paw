@@ -10,6 +10,7 @@ interface SessionStreamOptions {
   onTimelineEvent: (event: TimelineEvent) => void;
   onRunChange: (run: ChatRunSummary | undefined) => void;
   onModelChange?: (model: ModelSummary) => void;
+  onSessionRenamed?: (sessionId: string, name: string) => void;
   onError: (message: string) => void;
 }
 
@@ -205,6 +206,11 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (!accept(payload)) return;
       callbacksRef.current.onModelChange?.(payload.model);
+    });
+    source.addEventListener("session_renamed", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload || !isSessionEvent(payload) || payload.type !== "session_renamed" || !accept(payload)) return;
+      callbacksRef.current.onSessionRenamed?.(payload.sessionId, payload.name);
     });
     source.addEventListener("text_delta", (rawEvent) => {
       const payload = parse(rawEvent as MessageEvent);

@@ -36,7 +36,7 @@ export class ChatApplicationService {
       }
       const files = await resolveFiles(this.dependencies.workspaceFiles, agentId, input.filePaths ?? []);
       const references = await resolveReferences(this.dependencies.referenceResolver, agentId, input.references ?? []);
-      return await lease.runtime.startPrompt(sessionId, buildPrompt(text, mergeReferences(references, files)));
+      return await lease.runtime.startPrompt(sessionId, buildPrompt(text, mergeReferences(references, files)), text);
     } finally {
       lease.release();
     }
