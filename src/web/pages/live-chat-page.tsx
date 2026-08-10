@@ -1,4 +1,4 @@
-import { ChevronDown, CircleStop, Menu, MessageSquarePlus, Send } from "lucide-react";
+import { ChevronDown, CircleStop, Menu, MessageSquarePlus, PencilLine, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
@@ -92,6 +92,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [activeRun, setActiveRun] = useState<ChatRunSummary>();
   const [error, setError] = useState("");
   const [attachmentItems, setAttachmentItems] = useState<AttachmentUploadItem[]>([]);
+  const editingEntry = editingEntryId
+    ? timeline.find((entry): entry is UserEntry => entry.type === "user" && entry.piEntryId === editingEntryId)
+    : undefined;
   const [profileIdentity, setProfileIdentity] = useState<IdentityPreview>(userIdentity);
   const [profileRevision, setProfileRevision] = useState<string>();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -714,6 +717,15 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新编辑历史消息。"); }
   };
 
+  /** 退出历史消息编辑态，避免回填草稿被误认为一条普通新消息。 */
+  const cancelEditing = () => {
+    setEditingEntryId(undefined);
+    setDraft("");
+    setDraftReferences([]);
+    setAttachmentItems([]);
+    setError("");
+  };
+
   /** 重新提交 Pi 保存的原始用户 prompt，创建新的同级分支。 */
   const regenerate = async (entryId: string) => {
     if (!session || streaming || isOpeningSession) return;
@@ -878,6 +890,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           onPreview={openImagePreview}
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
+          editingEntryId={editingEntryId}
           onEditHistory={(entryId) => void editHistory(entryId)}
           onNavigateHistory={(entryId) => void navigateHistory(entryId)}
           onRegenerate={(entryId) => void regenerate(entryId)}
@@ -895,9 +908,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               onReferencesChange={setDraftReferences}
               onSubmit={() => void send()}
               onCatalogError={setError}
+              editingContext={editingEntryId ? <div className="composer-editing-context" role="status">
+                <div className="composer-editing-context__heading"><PencilLine size={15} aria-hidden="true" /><span><strong>正在编辑历史消息</strong><small>发送后将创建新分支，原消息不会改动。</small></span></div>
+                <p title={editingEntry?.text || draft}>{editingEntry?.text || draft || "历史消息"}</p>
+                <button type="button" onClick={cancelEditing}>取消编辑</button>
+              </div> : undefined}
               attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={(files) => void uploadFiles(files)} onError={setError} />}
               attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={(files) => void uploadFiles(files)} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
-              bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
+              bottomControls={<div className="composer-actions"><span>{editingEntryId && !streaming ? <small className="composer-actions__branch-label">创建分支并发送</small> : null}</span><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
             />
           </div>
           <p>Agent 可以在容器权限范围内读取、修改文件和执行命令。</p>

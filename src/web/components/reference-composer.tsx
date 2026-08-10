@@ -13,6 +13,7 @@ interface ReferenceComposerProps {
   onReferencesChange(references: AgentReference[]): void;
   onSubmit?: () => void;
   onCatalogError?: (message: string) => void;
+  editingContext?: ReactNode;
   attachmentControl?: ReactNode;
   attachmentContent?: ReactNode;
   bottomControls?: ReactNode;
@@ -27,7 +28,7 @@ type Candidate =
 /**
  * 支持 @ 资源引用、/ 安全命令补全与加号快捷选择的对话输入组件。
  */
-export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
+export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, editingContext, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
   const [text, setText] = useState(value);
   const [catalog, setCatalog] = useState<ComposerCatalog>();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -122,6 +123,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
   const menuEntries = catalog?.workspaceEntries.filter((entry) => parentDirectory(entry.path) === menuDirectory) ?? [];
   return (
     <div className="reference-composer" ref={composerRef}>
+      {editingContext}
       <AgentReferenceChips references={references} removable onRemove={(reference) => onReferencesChange(references.filter((item) => referenceKey(item) !== referenceKey(reference)))} />
       <div className="reference-composer__input-row">
         <textarea

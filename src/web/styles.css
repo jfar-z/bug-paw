@@ -2719,6 +2719,23 @@ img.message-avatar {
   background: var(--surface-soft);
 }
 
+/* 编辑历史消息时保留原气泡，只用轻量描边标识即将创建分支的来源。 */
+.message-row.is-editing-source .message-content {
+  outline: 1px solid color-mix(in srgb, var(--accent) 62%, var(--border));
+  outline-offset: 2px;
+}
+
+.user-message-editing-label {
+  margin-bottom: 6px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
 .message-attachments {
   display: grid;
   width: min(100%, 560px);
@@ -3673,6 +3690,66 @@ img.message-avatar {
   position: relative;
 }
 
+/* 历史编辑态固定提示分支语义，避免回填文本与普通新消息混淆。 */
+.composer-editing-context {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  margin: 0 0 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+}
+
+.composer-editing-context__heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 7px;
+  color: var(--accent);
+}
+
+.composer-editing-context__heading > span {
+  display: grid;
+  gap: 2px;
+}
+
+.composer-editing-context__heading strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.composer-editing-context__heading small {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.composer-editing-context > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-editing-context > button {
+  align-self: start;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 11px;
+}
+
+.composer-editing-context > button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
 .reference-composer__input-row {
   position: relative;
 }
@@ -3862,6 +3939,12 @@ img.message-avatar {
 
 .composer-actions > div {
   gap: 2px;
+}
+
+.composer-actions__branch-label {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .tool-mode-button {
