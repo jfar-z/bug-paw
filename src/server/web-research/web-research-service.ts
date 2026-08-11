@@ -4,6 +4,8 @@ import type { WebResearchConfigDocument } from "../../shared/web-research-contra
 import { SafeWebClient } from "./safe-web-client";
 import { WebResearchConfigService } from "./web-research-config-service";
 import { EgressProfileRegistry } from "./egress-profile-registry";
+import type { SearchProvider, SearchProviderHealth, SearchProviderItem } from "./search-provider";
+import { SearxngSearchProvider } from "./searxng-search-provider";
 import type { ToolWarning } from "../retrieval/tool-response";
 
 /** 规范化后的联网搜索服务结果。 */
@@ -20,7 +22,14 @@ export interface WebSearchServiceResult {
       publishedAt: string | null;
     }>;
   };
-  metadata: { resultCount: number; duplicatesRemoved: number; truncated: boolean };
+  metadata: {
+    resultCount: number;
+    duplicatesRemoved: number;
+    truncated: boolean;
+    providerHealth: SearchProviderHealth;
+    failedProviderCount: number;
+    providerRetryable: boolean;
+  };
   warnings: ToolWarning[];
 }
 
@@ -43,7 +52,7 @@ export interface WebReadServiceResult {
 
 interface WebResearchServiceDependencies {
   readConfig(): Promise<WebResearchConfigDocument>;
-  searchSearxng(baseUrl: string, input: { query: string; count: number; site?: string; language?: string; timeRange?: string }, timeoutMs: number): Promise<unknown>;
+  createSearchProvider(config: WebResearchConfigDocument["config"]): SearchProvider;
   fetchText(url: string, config: WebResearchConfigDocument["config"]): ReturnType<SafeWebClient["fetchText"]>;
   extract(html: string, url: string): Promise<{ title?: string | null; content?: string | null; published?: string | null } | null>;
 }
@@ -66,8 +75,12 @@ export class WebResearchService {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const count = Math.min(Math.max(input.count ?? config.maxResults, 1), config.maxResults);
-    const raw = await this.dependencies.searchSearxng(config.searxngBaseUrl, { ...input, count }, config.timeoutMs);
-    const rawResults = readSearchResults(raw);
+    const providerResult = await this.dependencies.createSearchProvider(config).search({ ...input, count });
+    const rawResults = readSearchResults(providerResult.results);
+    // URL 安全过滤后重新归一化健康状态，避免把仅含非法地址的故障响应误报为空结果。
+    const providerHealth: SearchProviderHealth = providerResult.failures.length === 0
+      ? providerResult.health
+      : rawResults.length > 0 ? "degraded" : "unavailable";
     const deduplicated = new Map<string, Omit<WebSearchServiceResult["data"]["results"][number], "rank">>();
     for (const result of rawResults) {
       const existing = deduplicated.get(result.url);
@@ -88,8 +101,13 @@ export class WebResearchService {
         resultCount: results.length,
         duplicatesRemoved: rawResults.length - unique.length,
         truncated: unique.length > results.length,
+        providerHealth,
+        failedProviderCount: providerResult.failures.length,
+        providerRetryable: providerResult.failures.some((failure) => failure.retryable),
       },
-      warnings: [],
+      warnings: providerHealth === "degraded"
+        ? [{ code: "SEARCH_PROVIDERS_DEGRADED", message: "部分搜索供应商暂不可用，结果可能不完整" }]
+        : [],
     };
   }
 
@@ -142,7 +160,10 @@ export class WebResearchService {
   /** 验证受管 SearXNG 是否可返回 JSON 搜索结果。 */
   async testConnection(): Promise<void> {
     const { config } = await this.dependencies.readConfig();
-    await this.dependencies.searchSearxng(config.searxngBaseUrl, { query: "BugPaw", count: 1 }, config.timeoutMs);
+    const result = await this.dependencies.createSearchProvider(config).search({ query: "BugPaw", count: 1 });
+    if (result.health === "unavailable") {
+      throw new Error("搜索供应商当前不可用");
+    }
   }
 }
 
@@ -150,18 +171,9 @@ export class WebResearchService {
 export function createWebResearchService(configs: WebResearchConfigService, egressProfiles = new EgressProfileRegistry(), client = new SafeWebClient()): WebResearchService {
   return new WebResearchService({
     readConfig: () => configs.read(),
+    createSearchProvider: (config) => new SearxngSearchProvider(config.searxngBaseUrl, config.timeoutMs),
     fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.egressProfileId)),
     extract: (html, url) => extractFromHtml(html, url),
-    async searchSearxng(baseUrl, input, timeoutMs) {
-      const url = new URL("search", `${baseUrl}/`);
-      url.searchParams.set("format", "json");
-      url.searchParams.set("q", input.site ? `${input.query} site:${input.site}` : input.query);
-      url.searchParams.set("language", input.language ?? "auto");
-      if (input.timeRange) url.searchParams.set("time_range", input.timeRange);
-      const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
-      if (!response.ok) throw new Error("搜索服务暂不可用");
-      return response.json();
-    },
   });
 }
 
@@ -170,22 +182,20 @@ function assertEnabled(enabled: boolean): asserts enabled {
   if (!enabled) throw new Error("联网搜索尚未启用，请先在能力扩展中启用");
 }
 
-/** 对 SearXNG 非法或不完整响应进行保守过滤。 */
-function readSearchResults(value: unknown): Array<Omit<WebSearchServiceResult["data"]["results"][number], "rank">> {
-  if (!isRecord(value) || !Array.isArray(value.results)) return [];
-  return value.results.flatMap((item) => {
-    if (!isRecord(item) || typeof item.url !== "string") return [];
+/** 对供应商结果中的非法或不完整地址进行保守过滤。 */
+function readSearchResults(value: SearchProviderItem[]): Array<Omit<WebSearchServiceResult["data"]["results"][number], "rank">> {
+  return value.flatMap((item) => {
     const url = canonicalizeHttpUrl(item.url);
     if (!url) return [];
     const hostname = new URL(url).hostname.toLowerCase();
-    const engine = typeof item.engine === "string" && item.engine.trim() ? item.engine.trim() : hostname;
+    const engine = item.source.trim() || hostname;
     return [{
-      title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : url,
+      title: item.title.trim() || url,
       url,
       hostname,
-      snippet: typeof item.content === "string" ? item.content.trim() : "",
+      snippet: item.snippet.trim(),
       sourceEngines: [engine],
-      publishedAt: normalizePublishedDate(item.publishedDate),
+      publishedAt: normalizePublishedDate(item.publishedAt),
     }];
   });
 }
@@ -216,9 +226,4 @@ function normalizePublishedDate(value: unknown): string | null {
   if (!Number.isFinite(timestamp)) return null;
   if (/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return normalized;
   return new Date(timestamp).toISOString();
-}
-
-/** 判断未知值是否为对象。 */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

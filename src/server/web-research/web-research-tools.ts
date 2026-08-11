@@ -36,6 +36,13 @@ export function createWebSearchTool(service: WebSearchToolService) {
       try {
         const result = await service.search(params);
         const metadata = { ...result.metadata, untrustedContent: true as const };
+        if (result.metadata.providerHealth === "unavailable") {
+          return toPiToolResult(errorResponse(
+            "SEARCH_PROVIDERS_UNAVAILABLE",
+            "搜索供应商当前不可用",
+            result.metadata.providerRetryable,
+          ));
+        }
         if (result.data.results.length === 0) {
           return toPiToolResult(emptyResponse(result.data, metadata));
         }

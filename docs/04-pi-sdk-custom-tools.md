@@ -56,6 +56,7 @@ const tool = defineTool({
 - Pi SDK 的 `tool_call` 扩展钩子发生在参数 Schema 校验之后，不能用来拦截 `{}` 等校验失败调用。断路必须接在 BugPaw Runtime 的 `tool_execution_start` 事件层；该事件发生在 Schema 校验之前，且 SDK 会等待内部事件链完成。
 - 对 Schema 声明了必填字段的自定义工具，同一 Run 内连续收到缺失、空对象或畸形参数时，前两次保留 SDK 正常校验错误；第三次由 Runtime 同步请求 `abort`，在业务 `execute` 前终止当前 Agent Run。断路不得关闭 Session，用户下一条消息开始新 Run 后重新计数。不得通过默认参数猜测意图，或回退到更高权限工具绕过原工具的业务边界。
 - 断路诊断只记录 `sessionId`、`provider`、`model`、工具名、参数状态、连续计数和 `allowed/terminated` 动作，不记录参数正文。工具返回内容不包含 `nextAction`，也不能改变用户目标或扩大检索范围。
+- 上游服务不可用与空参数属于两类断路：前者可在合法工具结果返回稳定错误码后，通过 `tool_result` 记录状态，并在 `tool_call` 阻止同一 Run 的后续同名调用。此类断路只阻止工具重试，不设置 `terminate`、不请求 `abort`，也不关闭 Session；下一 Run 必须重置。断路只识别项目统一错误码，不依赖具体上游供应商的原始错误正文。
 
 ## 测试要求
 

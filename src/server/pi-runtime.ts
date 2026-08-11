@@ -21,6 +21,7 @@ import { CheckpointWriter } from "./runtime/checkpoint-writer";
 import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
+import { createSearchRunCircuitExtension } from "./web-research/search-run-circuit-extension";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import {
   createToolCallCircuitBreaker,
@@ -49,6 +50,7 @@ export function createWorkspaceResourceLoader(
     agentDir,
     extensionFactories: [
       createAgentSystemPromptInjectionExtension(retrievalCapabilities),
+      ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension()] : []),
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,

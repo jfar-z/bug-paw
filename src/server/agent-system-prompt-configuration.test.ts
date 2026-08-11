@@ -80,6 +80,11 @@ describe("AgentSystemPromptConfiguration", () => {
     });
 
     expect(prefix).toContain("Search results and snippets are discovery aids");
+    expect(prefix).toContain("SEARCH_PROVIDERS_UNAVAILABLE");
+    expect(prefix).toMatch(/do not retry web_search or\s+rewrite the query in the same run/u);
+    expect(prefix).toMatch(/Other\s+authorized tools remain available within the user's original scope/u);
+    expect(prefix).not.toContain("continue only with evidence already available");
+    expect(prefix).not.toContain("temporary limitation");
     expect(prefix).not.toContain("read at least one relevant source");
   });
 
