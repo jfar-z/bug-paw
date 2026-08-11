@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { SessionHistoryPageSchema } from "../session-history-contracts";
 
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -48,6 +49,7 @@ export const SessionProjectionSchema = StrictObject({
   projectionVersion: Type.Integer({ minimum: 0 }),
   lastEventId: Type.Integer({ minimum: 0 }),
   messages: Type.Array(Type.Unknown()),
+  history: SessionHistoryPageSchema,
   model: Type.Optional(ModelSummarySchema),
   run: Type.Optional(ChatRunSummarySchema),
 });
@@ -64,6 +66,7 @@ export const SessionSnapshotEventSchema = StrictObject({
   sessionId: Type.String({ minLength: 1 }),
   type: Type.Literal("snapshot"),
   messages: Type.Array(Type.Unknown()),
+  history: SessionHistoryPageSchema,
   model: Type.Optional(ModelSummarySchema),
   run: Type.Optional(ChatRunSummarySchema),
   lastEventId: Type.Integer({ minimum: 0 }),

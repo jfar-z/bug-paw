@@ -12,6 +12,7 @@ import type {
 import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
 import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
+import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -65,6 +66,7 @@ export interface SessionSnapshot {
   id: string;
   agentId?: string;
   messages: unknown[];
+  history: SessionHistoryPage;
   model?: ModelSummary;
   run?: ChatRunSummary;
   lastEventId: number;
@@ -409,6 +411,11 @@ export const api = {
     `/api/sessions/${encodeURIComponent(sessionId)}`,
     { signal },
   ),
+  loadSessionHistory: (sessionId: string, before: string, branchToken: string, signal?: AbortSignal) =>
+    request<SessionHistoryResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/history?before=${encodeURIComponent(before)}&branch=${encodeURIComponent(branchToken)}`,
+      { signal },
+    ),
   sendMessage: (sessionId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
     request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
