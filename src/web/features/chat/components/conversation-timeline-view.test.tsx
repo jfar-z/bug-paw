@@ -130,6 +130,25 @@ describe("ConversationTimelineView 消息复制", () => {
   });
 });
 
+describe("ConversationTimelineView 历史加载状态", () => {
+  it("显示克制的加载状态和可触控重试按钮", () => {
+    const onRetryHistory = vi.fn();
+    const { rerender } = render(
+      <ConversationTimelineView {...baseProps()} timeline={[firstTurn]} historyState="loading" />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("正在加载更早消息");
+
+    rerender(<ConversationTimelineView
+      {...baseProps()}
+      timeline={[firstTurn]}
+      historyState="error"
+      onRetryHistory={onRetryHistory}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "加载失败，重试" }));
+    expect(onRetryHistory).toHaveBeenCalledOnce();
+  });
+});
+
 /** 创建不影响朗读行为的最小时间线属性。 */
 function baseProps() {
   return {

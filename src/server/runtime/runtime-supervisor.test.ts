@@ -19,8 +19,8 @@ class FakeRuntime implements PiRuntimeGateway {
   listModels = vi.fn(async () => []);
   listCommands = vi.fn(async () => []);
   listSessions = vi.fn(async () => []);
-  createSession = vi.fn(async () => ({ id: "s1", messages: [], lastEventId: 0 }));
-  openSession = vi.fn(async (id: string) => ({ id, messages: [], lastEventId: 0 }));
+  createSession = vi.fn(async () => ({ id: "s1", messages: [], history: emptyHistory(), lastEventId: 0 }));
+  openSession = vi.fn(async (id: string) => ({ id, messages: [], history: emptyHistory(), lastEventId: 0 }));
   startPrompt = vi.fn(async (sessionId: string) => ({ runId: "r1", sessionId, status: "running" as const, startedAt: new Date().toISOString() }));
   prompt = vi.fn(async () => undefined);
   abort = vi.fn(async () => undefined);
@@ -33,6 +33,10 @@ class FakeRuntime implements PiRuntimeGateway {
   discardUnassignedSession = vi.fn(async () => undefined);
   subscribe(_id: string, _after: number | undefined | ((event: ChatEvent) => void), _listener?: (event: ChatEvent) => void) { return () => undefined; }
   isBusy() { return this.busy; }
+}
+
+function emptyHistory() {
+  return { branchToken: "branch-test", hasMoreBefore: false, turnCount: 0 };
 }
 
 describe("RuntimeSupervisor", () => {

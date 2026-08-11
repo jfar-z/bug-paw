@@ -46,6 +46,7 @@ class FakeEventSource {
       type,
       sessionId,
       ...(isRunScopedEvent ? { runId: "run-1" } : {}),
+      ...(type === "snapshot" ? { history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 1 } } : {}),
       ...original,
       ...(type === "snapshot" && original.lastEventId === undefined ? { lastEventId: id } : {}),
     };
@@ -171,6 +172,14 @@ beforeEach(() => {
     }
     if (url.endsWith("/edit")) {
       return new Response(JSON.stringify({ snapshot: { id: "session-1", messages: [], lastEventId: 0 }, draft: { text: "编辑后的版本", filePaths: [], missingFilePaths: [], references: [] } }));
+    }
+    if (url.endsWith("/navigate")) {
+      return new Response(JSON.stringify({
+        id: "session-1",
+        messages: [{ role: "user", content: "上一版本", __piEntryId: "user-old" }],
+        history: { branchToken: "branch-b", hasMoreBefore: false, turnCount: 1 },
+        lastEventId: 2,
+      }));
     }
     if (url.includes("/branches/") && url.endsWith("/messages")) {
       return new Response(JSON.stringify({

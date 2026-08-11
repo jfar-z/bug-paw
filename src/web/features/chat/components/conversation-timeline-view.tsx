@@ -1,5 +1,5 @@
 import { ChevronLeft, ChevronRight, Clock3, Pencil, RefreshCcw } from "lucide-react";
-import type { RefObject } from "react";
+import type { RefCallback, RefObject } from "react";
 
 import type { AgentProfileDocument } from "../../../../shared/agent-contracts";
 import type { WorkspaceFileSummary } from "../../../../shared/contracts";
@@ -16,6 +16,7 @@ import { MessageSpeechButton } from "./message-speech-button";
 import { MessageCopyButton } from "./message-copy-button";
 import { copyTextForEntry } from "../message-copy";
 import { AgentTurnContent } from "./agent-turn-content";
+import type { SessionHistoryLoadState } from "../../../use-session-history";
 
 interface ConversationTimelineViewProps {
   timeline: ConversationEntry[];
@@ -32,6 +33,9 @@ interface ConversationTimelineViewProps {
   activeSpeechMessageId?: string;
   scrollRef: RefObject<HTMLDivElement | null>;
   contentRef: RefObject<HTMLDivElement | null>;
+  historyState?: SessionHistoryLoadState;
+  historySentinelRef?: RefCallback<HTMLDivElement>;
+  onRetryHistory?(): void;
   onResolved(summary: WorkspaceFileSummary): void;
   onPreview(summary: WorkspaceFileSummary): void;
   onCreateAgent(): void;
@@ -48,6 +52,11 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
     <MessageNavigator items={props.navigationItems} scrollContainerRef={props.scrollRef} />
     <div className="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable" }}>
       <div className="message-column message-column--compact-end" ref={props.contentRef}>
+        {props.timeline.length > 0 ? <div ref={props.historySentinelRef} className="session-history-sentinel" aria-live="polite">
+          {props.historyState === "loading" ? <span role="status">正在加载更早消息…</span> : null}
+          {props.historyState === "error" ? <button type="button" onClick={props.onRetryHistory}>加载失败，重试</button> : null}
+          {props.historyState === "complete" ? <span>已加载全部消息</span> : null}
+        </div> : null}
         {props.timeline.length === 0 && <div className="session-intro">
           {props.activeAgent ? <AgentAvatar agent={props.activeAgent} className="agent-orbit session-intro__agent-avatar" label={`${props.activeAgent.profile.name} 头像`} /> : <span className="agent-orbit">?</span>}
           <h1>{props.activeAgent?.profile.name ?? "从这里开始协作。"}</h1>

@@ -1,4 +1,5 @@
 import type { SessionEvent, SessionProjectionRequiredEvent, SessionSnapshotEvent } from "./chat";
+import { isSessionHistoryPage } from "../session-history-contracts";
 
 /** 轻量校验 SSE 快照，避免浏览器为单条事件加载完整 Schema 执行器。 */
 export function isSessionSnapshotEvent(value: unknown): value is SessionSnapshotEvent {
@@ -7,6 +8,7 @@ export function isSessionSnapshotEvent(value: unknown): value is SessionSnapshot
     && isSafeInteger(value.id, 0)
     && isNonEmptyString(value.sessionId)
     && Array.isArray(value.messages)
+    && isSessionHistoryPage(value.history)
     && isSafeInteger(value.lastEventId, 0)
     && (value.model === undefined || isModel(value.model))
     && (value.run === undefined || isRun(value.run));

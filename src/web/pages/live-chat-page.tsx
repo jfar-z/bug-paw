@@ -23,6 +23,8 @@ import type { ThemePreference } from "../theme";
 import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
+import { useSessionHistory } from "../use-session-history";
+import { mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
@@ -158,15 +160,18 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const selectedAgentIdRef = useRef<string | undefined>(selectedAgentId);
   const sessionIdRef = useRef<string | undefined>(session?.id);
+  const sessionSnapshotRef = useRef<SessionSnapshot | undefined>(session);
   const autoSpeechEligibilityRef = useRef<AutoSpeechEligibility | undefined>(undefined);
   const speechControllerRef = useRef<SpeechControllerEntry | undefined>(undefined);
   const [speechState, setSpeechState] = useState<SpeechPlaybackState>({ phase: "idle" });
   selectedAgentIdRef.current = selectedAgentId;
   sessionIdRef.current = session?.id;
+  sessionSnapshotRef.current = session;
   const {
     scrollContainerRef: messageScrollRef,
     contentRef: messageContentRef,
     resumeFollowing,
+    pauseFollowing,
     alignAfterNextContentCommit,
   } = useMessageAutofollow(timeline);
 
@@ -182,10 +187,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
       resumeFollowing();
     }
-    setSession(next);
+    const reconciled = reconcileSnapshotMessages(sessionSnapshotRef.current, next);
+    const mergedSnapshot = { ...next, messages: reconciled.messages };
+    sessionSnapshotRef.current = mergedSnapshot;
+    setSession(mergedSnapshot);
     if (next.model) setSelectedModel(next.model);
     const running = next.run?.status === "queued" || next.run?.status === "running";
-    const parsedTimeline = parsePiHistory(next.messages, running);
+    const parsedTimeline = parsePiHistory(mergedSnapshot.messages, running);
     const pending = pendingUserMessageRef.current;
     if (pending?.sessionId === next.id) {
       if (timelineIncludesUserMessage(parsedTimeline, pending.entry)) {
@@ -197,6 +205,23 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
     setTimeline(parsedTimeline);
   }, [alignAfterNextContentCommit, resumeFollowing]);
+
+  const historyLoader = useSessionHistory({
+    snapshot: session,
+    scrollRef: messageScrollRef,
+    onBeforePrepend: pauseFollowing,
+    onPrepend: (page) => {
+      setSession((current) => {
+        if (!current || current.id !== page.sessionId || current.history.branchToken !== page.history.branchToken) return current;
+        const messages = mergeOlderHistory(current.messages, page.messages);
+        const merged = { ...current, messages, history: page.history };
+        sessionSnapshotRef.current = merged;
+        setTimeline(parsePiHistory(messages, current.run?.status === "queued" || current.run?.status === "running"));
+        return merged;
+      });
+    },
+    onError: (reason) => { void reportFailure(reason, "加载更早消息"); },
+  });
 
   const stream = useSessionStream({
     sessionId: session?.id,
@@ -1066,6 +1091,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           activeSpeechMessageId={speechState.messageId}
           scrollRef={messageScrollRef}
           contentRef={messageContentRef}
+          historyState={historyLoader.state}
+          historySentinelRef={historyLoader.sentinelRef}
+          onRetryHistory={historyLoader.retry}
           onResolved={registerMediaSummary}
           onPreview={openImagePreview}
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}

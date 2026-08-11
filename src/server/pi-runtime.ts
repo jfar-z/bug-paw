@@ -30,6 +30,9 @@ import {
   type ToolCallCircuitBreakerDiagnostic,
 } from "./retrieval/tool-call-circuit-breaker";
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
+import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
+import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
+import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
 
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
@@ -150,6 +153,7 @@ export interface SessionSummary {
 export interface SessionSnapshot {
   id: string;
   messages: unknown[];
+  history: SessionHistoryPage;
   model?: ModelSummary;
   run?: ChatRunSummary;
   lastEventId: number;
@@ -171,7 +175,7 @@ interface ChatEventBase {
 }
 
 export type ChatEvent = ChatEventBase & (
-  | { type: "snapshot"; messages: unknown[]; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
   | { type: "projection_required"; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "run_started"; run: ChatRunSummary }
@@ -190,7 +194,7 @@ export type ChatEvent = ChatEventBase & (
 );
 
 type UnsequencedChatEvent =
-  | { type: "snapshot"; messages: unknown[]; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
@@ -210,6 +214,7 @@ export interface PiSessionAdapter {
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
   readonly messages: unknown[];
+  readonly branchLeafId?: string;
   readonly streamingMessage?: unknown;
   readonly model: unknown;
   readonly isStreaming: boolean;
@@ -249,6 +254,7 @@ export interface PiRuntimeGateway {
   listSessions(options?: { archived?: boolean }): Promise<SessionSummary[]>;
   createSession(): Promise<SessionSnapshot>;
   openSession(sessionId: string): Promise<SessionSnapshot>;
+  loadHistoryPage?(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
@@ -278,7 +284,7 @@ export interface PiRuntimeGateway {
 
 export class PiRuntimeError extends Error {
   constructor(
-    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME",
+    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID",
     message: string,
   ) {
     super(message);
@@ -288,6 +294,7 @@ export class PiRuntimeError extends Error {
 
 interface ManagedSession {
   session: PiSessionAdapter;
+  branchToken: string;
   toolCallCircuitBreaker: ToolCallCircuitBreaker;
   unsubscribe: () => void;
   dispose(): void;
@@ -427,6 +434,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     });
     return {
       session,
+      branchToken: randomUUID(),
       toolCallCircuitBreaker,
       unsubscribe,
       dispose() {
@@ -470,9 +478,12 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     return run ? toRunSummary(run) : checkpointRun(recoveredCheckpoints.get(sessionId));
   }
 
-  function snapshotMessages(sessionId: string, session: PiSessionAdapter): unknown[] {
+  function snapshotMessages(sessionId: string, session: PiSessionAdapter): SessionHistorySlice {
     // Pi Session JSONL 是消息历史的唯一事实源；检查点只恢复活动 Run 元数据。
-    return liveSessionMessages(session);
+    const managed = sessionRegistry.peek(sessionId);
+    if (!managed || managed.session !== session) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
+    const page = buildLatestHistoryPage(liveSessionMessages(session), managed.branchToken, session.branchLeafId);
+    return { ...page, messages: projectSessionMessages(page.messages) };
   }
 
   /**
@@ -482,9 +493,11 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
    */
   function publishSessionSnapshot(sessionId: string, session: PiSessionAdapter, run?: ChatRunSummary): void {
     const nextEventId = lastEventId(sessionId) + 1;
+    const page = snapshotMessages(sessionId, session);
     publishSequenced(sessionId, {
       type: "snapshot",
-      messages: snapshotMessages(sessionId, session),
+      messages: page.messages,
+      history: page.history,
       model: toModelSummary(session.model),
       run,
       lastEventId: nextEventId,
@@ -754,6 +767,21 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       }
     },
 
+    async loadHistoryPage(sessionId, before, branchToken) {
+      const session = requireSession(sessionId);
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed || managed.branchToken !== branchToken) {
+        throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化，请重新加载");
+      }
+      let page: SessionHistorySlice;
+      try {
+        page = buildHistoryPageBefore(session.messages, branchToken, session.branchLeafId, before);
+      } catch {
+        throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
+      }
+      return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
+    },
+
     async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
         const pendingReload = reloadPendingPromptContext(sessionId);
@@ -790,6 +818,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       if (result.cancelled || result.aborted) {
         throw new PiRuntimeError("SESSION_NOT_FOUND", "会话分支切换失败");
       }
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
+      managed.branchToken = randomUUID();
       return {
         snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
         editorText: result.editorText,
@@ -969,11 +1000,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             lastEventId: replay.latestId,
           });
         } else {
+          const page = snapshotMessages(sessionId, session);
           const snapshot: ChatEvent = {
             type: "snapshot",
             id: lastEventId(sessionId),
             sessionId,
-            messages: snapshotMessages(sessionId, session),
+            messages: page.messages,
+            history: page.history,
             model: toModelSummary(session.model),
             run: currentRunSummary(sessionId),
             lastEventId: lastEventId(sessionId),
@@ -1261,6 +1294,9 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
         }];
       });
     },
+    get branchLeafId() {
+      return session.sessionManager.getLeafId() ?? undefined;
+    },
     get streamingMessage() {
       return session.state.streamingMessage;
     },
@@ -1371,13 +1407,14 @@ function configureProvider(modelRuntime: ModelRuntime, provider: StoredProviderC
 
 function snapshotSession(
   session: PiSessionAdapter,
-  messages: unknown[],
+  page: SessionHistorySlice,
   run: ChatRunSummary | undefined,
   lastEventId: number,
 ): SessionSnapshot {
   return {
     id: session.sessionId,
-    messages,
+    messages: page.messages,
+    history: page.history,
     model: toModelSummary(session.model),
     run,
     lastEventId,
@@ -1457,7 +1494,7 @@ function normalizeSessionEvent(
       type: "tool_updated",
       callId: event.toolCallId,
       toolName: event.toolName,
-      partialResult: event.partialResult,
+      partialResult: projectSessionToolResult(event.partialResult),
     };
   }
   if (event.type === "tool_execution_end") {
@@ -1465,7 +1502,7 @@ function normalizeSessionEvent(
       type: "tool_finished",
       callId: event.toolCallId,
       toolName: event.toolName,
-      result: event.result,
+      result: projectSessionToolResult(event.result),
       isError: event.isError,
     };
   }

@@ -10,6 +10,8 @@ export const ApiErrorCodeSchema = Type.Union([
   Type.Literal("SESSION_BUSY"),
   Type.Literal("SESSION_NOT_FOUND"),
   Type.Literal("SESSION_AGENT_CONFLICT"),
+  Type.Literal("SESSION_HISTORY_CURSOR_INVALID"),
+  Type.Literal("SESSION_HISTORY_STALE"),
   Type.Literal("INSTANCE_ALREADY_RUNNING"),
   Type.Literal("RUNTIME_GENERATION_RETIRED"),
   Type.Literal("CLIENT_TOO_SLOW"),

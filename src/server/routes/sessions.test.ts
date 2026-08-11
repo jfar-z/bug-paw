@@ -2,7 +2,7 @@
 
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
-import type { PiRuntimeGateway } from "../pi-runtime";
+import { PiRuntimeError, type PiRuntimeGateway } from "../pi-runtime";
 import type { SessionMetadataStore } from "../session-metadata";
 import type { SessionBulkService } from "../sessions/session-bulk-service";
 import type { AuthService } from "./auth";
@@ -18,6 +18,48 @@ const authService: AuthService = {
 };
 
 describe("会话路由的定时任务联动", () => {
+  it("按服务端固定游标读取当前分支的上一页历史", async () => {
+    const loadHistoryPage = vi.fn(async () => ({
+      sessionId: "session-1",
+      messages: [],
+      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+    }));
+    const openSession = vi.fn(async () => ({
+      id: "session-1",
+      messages: [],
+      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      lastEventId: 0,
+    }));
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime: { openSession, loadHistoryPage } as unknown as PiRuntimeGateway });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/sessions/session-1/history?before=user-21&branch=branch-a",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(loadHistoryPage).toHaveBeenCalledWith("session-1", "user-21", "branch-a");
+    const invalid = await app.inject({ method: "GET", url: "/api/sessions/session-1/history?before=user-21" });
+    expect(invalid.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("历史分支 token 过期时返回稳定冲突错误", async () => {
+    const runtime = {
+      openSession: vi.fn(async () => ({ id: "session-1", messages: [], history: { branchToken: "new", hasMoreBefore: false, turnCount: 0 }, lastEventId: 0 })),
+      loadHistoryPage: vi.fn(async () => { throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化"); }),
+    } as unknown as PiRuntimeGateway;
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime });
+
+    const response = await app.inject({ method: "GET", url: "/api/sessions/session-1/history?before=user-21&branch=old" });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error: { code: "SESSION_HISTORY_STALE" } });
+    await app.close();
+  });
+
   it("SQLite 归属写入失败时补偿删除刚创建的 Pi Session", async () => {
     const discardUnassignedSession = vi.fn(async () => undefined);
     const runtime = {

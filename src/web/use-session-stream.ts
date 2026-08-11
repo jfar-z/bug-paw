@@ -3,6 +3,7 @@ import type { ChatRunSummary } from "../shared/contracts";
 import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } from "../shared/api/chat-validation";
 import { api, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
+import { isSessionHistoryPage } from "../shared/session-history-contracts";
 
 interface SessionStreamOptions {
   sessionId?: string;
@@ -395,6 +396,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
 function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undefined {
   if (typeof payload.sessionId !== "string"
     || !Array.isArray(payload.messages)
+    || !isSessionHistoryPage(payload.history)
     || typeof payload.lastEventId !== "number"
     || !Number.isSafeInteger(payload.lastEventId)
     || payload.lastEventId < 0) {
@@ -403,6 +405,7 @@ function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undef
   return {
     id: payload.sessionId,
     messages: payload.messages,
+    history: { ...payload.history },
     model: readModel(payload.model),
     run: readRun(payload.run),
     lastEventId: payload.lastEventId,

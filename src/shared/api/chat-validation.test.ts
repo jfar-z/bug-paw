@@ -9,8 +9,16 @@ describe("Chat SSE 轻量校验", () => {
       type: "snapshot",
       sessionId: "s1",
       messages: [],
+      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
       lastEventId: 0,
     })).toBe(true);
+    expect(isSessionSnapshotEvent({
+      id: 0,
+      type: "snapshot",
+      sessionId: "s1",
+      messages: [],
+      lastEventId: 0,
+    })).toBe(false);
     expect(isSessionEvent({ id: 1, type: "text_delta", sessionId: "s1", runId: "r1", delta: "x" })).toBe(true);
     expect(isSessionEvent({ id: 1, type: "text_delta", sessionId: "s1", delta: "x" })).toBe(false);
     expect(isSessionEvent({ id: 2, type: "model_changed", sessionId: "s1", model: { provider: "openai", id: "gpt", name: "GPT" } })).toBe(true);

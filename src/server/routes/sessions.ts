@@ -122,6 +122,35 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
   });
 
+  app.get<{ Params: { id: string }; Querystring: { before?: string; branch?: string } }>(
+    "/api/sessions/:id/history",
+    async (request, reply) => {
+      if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+      if (!request.query.before || !request.query.branch
+        || request.query.before.length > 200 || request.query.branch.length > 200) {
+        return sendApiError(reply, 400, "VALIDATION_FAILED", "历史分页参数不完整");
+      }
+      try {
+        const resolved = await acquireRuntimeForSession(dependencies, request.params.id);
+        try {
+          await resolved.runtime.openSession(request.params.id);
+          if (!resolved.runtime.loadHistoryPage) {
+            return sendApiError(reply, 409, "SESSION_HISTORY_STALE", "当前运行时不支持历史分页");
+          }
+          return reply.send(await resolved.runtime.loadHistoryPage(
+            request.params.id,
+            request.query.before,
+            request.query.branch,
+          ));
+        } finally {
+          resolved.release();
+        }
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      }
+    },
+  );
+
   app.put<{ Params: { id: string } }>("/api/sessions/:id/model", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;

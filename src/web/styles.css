@@ -2550,6 +2550,32 @@ img.message-avatar {
   padding-bottom: 40px;
 }
 
+.session-history-sentinel {
+  display: flex;
+  min-height: 24px;
+  margin: -30px 0 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.session-history-sentinel button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.session-history-sentinel button:hover,
+.session-history-sentinel button:focus-visible {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
 .session-intro {
   max-width: 560px;
   margin: 16px 0 64px;
