@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { ScheduledTasksPage } from "./scheduled-tasks-page";
+
+function renderScheduledTasksPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><ScheduledTasksPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -14,7 +20,7 @@ describe("ScheduledTasksPage", () => {
       return json({});
     }));
 
-    render(<ScheduledTasksPage />);
+    renderScheduledTasksPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "新建任务" }));
 
@@ -40,9 +46,9 @@ describe("ScheduledTasksPage", () => {
       return json({});
     }));
 
-    render(<ScheduledTasksPage />);
+    renderScheduledTasksPage();
 
-    const warning = await screen.findByRole("alert");
+    const warning = (await screen.findByText("原目标会话“已删除的日报会话”已删除")).closest("div")!;
     expect(warning).toHaveClass("scheduled-task-target-missing");
     expect(warning).toHaveTextContent("原目标会话“已删除的日报会话”已删除");
     expect(screen.getByRole("button", { name: "立即执行" })).toBeDisabled();
@@ -60,7 +66,7 @@ describe("ScheduledTasksPage", () => {
       return json({});
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ScheduledTasksPage />);
+    renderScheduledTasksPage();
     fireEvent.click(await screen.findByRole("button", { name: "编辑 日报任务" }));
 
     const enabled = screen.getByRole("checkbox", { name: "启用任务" });

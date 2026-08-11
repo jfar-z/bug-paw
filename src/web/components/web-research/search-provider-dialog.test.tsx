@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG, type SearchProviderConfig, type WebResearchSettingsDocument } from "../../../shared/web-research-contracts";
+import { ApiTaskProvider } from "../../api-task-provider";
+import { ErrorToastProvider } from "../../error-toast-provider";
 import { SearchProviderDialog } from "./search-provider-dialog";
 
 const bochaProvider: SearchProviderConfig = {
@@ -76,7 +78,7 @@ describe("SearchProviderDialog", () => {
       const [open, setOpen] = useState(true);
       return open ? <SearchProviderDialog mode="edit" document={settings} provider={bochaProvider} online onSaved={vi.fn()} onDeleted={vi.fn()} onClose={() => setOpen(false)} /> : null;
     }
-    render(<Harness />);
+    renderWithApiTask(<Harness />);
 
     expect(fetchMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "显示博查 API Key" }));
@@ -102,7 +104,7 @@ describe("SearchProviderDialog", () => {
   it("未保存修改时禁用测试连接，删除使用应用内确认", async () => {
     const fetchMock = installFetch();
     const onDeleted = vi.fn();
-    render(<SearchProviderDialog mode="edit" document={settings} provider={bochaProvider} online onSaved={vi.fn()} onDeleted={onDeleted} onClose={vi.fn()} />);
+    renderWithApiTask(<SearchProviderDialog mode="edit" document={settings} provider={bochaProvider} online onSaved={vi.fn()} onDeleted={onDeleted} onClose={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: "测试连接" })).toBeEnabled();
     fireEvent.change(screen.getByLabelText("实例名称"), { target: { value: "已修改" } });
@@ -118,7 +120,12 @@ describe("SearchProviderDialog", () => {
 });
 
 function renderDialog(mode: "create" | "edit") {
-  return render(<SearchProviderDialog mode={mode} document={settings} provider={mode === "edit" ? bochaProvider : undefined} online onSaved={vi.fn()} onDeleted={vi.fn()} onClose={vi.fn()} />);
+  return renderWithApiTask(<SearchProviderDialog mode={mode} document={settings} provider={mode === "edit" ? bochaProvider : undefined} online onSaved={vi.fn()} onDeleted={vi.fn()} onClose={vi.fn()} />);
+}
+
+/** 使用生产环境一致的错误分发上下文渲染渠道弹窗。 */
+function renderWithApiTask(element: ReactElement) {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}>{element}</ApiTaskProvider></ErrorToastProvider>);
 }
 
 function installFetch() {

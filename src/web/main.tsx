@@ -3,6 +3,7 @@ import "@fontsource/jetbrains-mono/400.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app";
+import { ErrorToastProvider } from "./error-toast-provider";
 import { applyTheme, readThemePreference } from "./theme";
 import "./styles.css";
 import "./bugpaw-theme.css";
@@ -12,7 +13,9 @@ applyTheme(readThemePreference());
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ErrorToastProvider>
+      <App />
+    </ErrorToastProvider>
   </StrictMode>,
 );
 

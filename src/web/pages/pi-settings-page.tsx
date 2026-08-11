@@ -2,7 +2,8 @@ import { Check, Save, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import type { ScopedConfigDocument, WebPiSettings } from "../../shared/configuration-contracts";
-import { api, ApiClientError, type ModelSummary } from "../api";
+import { api, type ModelSummary } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConflictDialog, type ConfigurationDifference } from "../components/configuration/conflict-dialog";
 import { InheritedField } from "../components/configuration/inherited-field";
 import { SettingsSection } from "../components/configuration/settings-section";
@@ -149,10 +150,22 @@ function defaultModelOptions(models: ModelSummary[], current: DefaultModelChoice
   return [{ provider: current.provider, id: current.model, name: `${current.model}（当前配置，未发现）` }, ...models];
 }
 
-/**
- * 复用七组设置表单编辑全局值与 Agent 覆盖，并展示最终有效配置。
- */
+/** 将运行设置的可恢复校验错误保留在当前表单。 */
+function settingsExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_SETTINGS_REQUEST: show,
+    SETTINGS_INVALID: show,
+    GLOBAL_ONLY_SETTING: show,
+    INVALID_SETTING_TYPE: show,
+    SETTING_OUT_OF_RANGE: show,
+    UNKNOWN_SETTING: show,
+  };
+}
+
+/** 复用七组设置表单编辑全局值与 Agent 覆盖，并展示最终有效配置。 */
 export function PiSettingsPage() {
+  const { runApiTask, runOptionalApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [scope, setScope] = useState<"global" | "agent">("global");
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
@@ -166,15 +179,17 @@ export function PiSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<{ latest: ScopedConfigDocument<WebPiSettings>; differences: ConfigurationDifference[] }>();
 
-  useEffect(() => { api.listAgents().then(({ agents: loaded }) => { setAgents(loaded); setAgentId((current) => current || loaded[0]?.profile.id || ""); }).catch(() => undefined); }, []);
-  useEffect(() => { api.listModels().then(({ models: loaded }) => setModels(loaded)).catch(() => undefined); }, []);
+  useEffect(() => { void runOptionalApiTask(api.listAgents, { operation: "加载 Agent 目录", fallbackReason: "Agent 目录不可用", fallback: () => ({ agents: [] }) }).then((result) => { if (result.status === "success" || result.status === "fallback") { setAgents(result.data.agents); setAgentId((current) => current || result.data.agents[0]?.profile.id || ""); } }); }, [runOptionalApiTask]);
+  useEffect(() => { void runOptionalApiTask(api.listModels, { operation: "加载模型目录", fallbackReason: "模型目录不可用", fallback: () => ({ models: [] }) }).then((result) => { if (result.status === "success" || result.status === "fallback") setModels(result.data.models); }); }, [runOptionalApiTask]);
   useEffect(() => {
     let active = true;
     setDocument(undefined); setError(""); setNotice(""); setInherit([]);
     const request = scope === "global" ? api.getGlobalSettings() : agentId ? api.getAgentSettings(agentId) : undefined;
-    request?.then((loaded) => { if (active) { setDocument(loaded); setDraft(structuredClone(loaded.own) as SettingsRecord); } }).catch((requestError) => { if (active) setError(requestError instanceof Error ? requestError.message : "设置加载失败"); });
+    if (request) void runApiTask(() => request, { operation: "加载运行设置" }).then((result) => {
+      if (active && result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); }
+    });
     return () => { active = false; };
-  }, [scope, agentId]);
+  }, [scope, agentId, runApiTask]);
 
   function update(path: string, value: unknown) {
     setDraft((current) => setPath(current, path, value));
@@ -226,16 +241,21 @@ export function PiSettingsPage() {
     if (!document) return;
     setSaving(true); setError(""); setNotice("");
     try {
-      const updated = scope === "global" ? await api.updateGlobalSettings(document.revision, draft, []) : await api.updateAgentSettings(agentId, document.revision, draft, inherit);
-      setDocument(updated); setDraft(structuredClone(updated.own) as SettingsRecord); setInherit([]); setNotice("设置已保存");
-    } catch (requestError) {
-      if (requestError instanceof ApiClientError && requestError.code === "VERSION_CONFLICT") {
-        try {
+      const result = await runApiTask(
+        () => scope === "global" ? api.updateGlobalSettings(document.revision, draft, []) : api.updateAgentSettings(agentId, document.revision, draft, inherit),
+        {
+          operation: "保存运行设置",
+          expected: {
+            ...settingsExpected(setError),
+            VERSION_CONFLICT: async () => {
           const latest = scope === "global" ? await api.getGlobalSettings() : await api.getAgentSettings(agentId);
           setConflict({ latest, differences: collectDifferences(draft, latest.own as SettingsRecord) });
           setError("");
-        } catch (reloadError) { setError(reloadError instanceof Error ? reloadError.message : "冲突配置加载失败"); }
-      } else setError(requestError instanceof Error ? requestError.message : "保存失败");
+            },
+          },
+        },
+      );
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setNotice("设置已保存"); }
     }
     finally { setSaving(false); }
   }
@@ -244,9 +264,13 @@ export function PiSettingsPage() {
     if (!conflict) return;
     setSaving(true);
     try {
-      const updated = scope === "global" ? await api.updateGlobalSettings(conflict.latest.revision, draft, []) : await api.updateAgentSettings(agentId, conflict.latest.revision, draft, inherit);
-      setDocument(updated); setDraft(structuredClone(updated.own) as SettingsRecord); setInherit([]); setConflict(undefined); setNotice("设置已在最新版本上重新应用");
-    } catch (requestError) { setConflict(undefined); setError(requestError instanceof Error ? requestError.message : "重新应用失败，请再次加载"); }
+      const result = await runApiTask(
+        () => scope === "global" ? api.updateGlobalSettings(conflict.latest.revision, draft, []) : api.updateAgentSettings(agentId, conflict.latest.revision, draft, inherit),
+        { operation: "重新应用运行设置", expected: settingsExpected(setError) },
+      );
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setConflict(undefined); setNotice("设置已在最新版本上重新应用"); }
+      else if (result.status !== "handled") setConflict(undefined);
+    }
     finally { setSaving(false); }
   }
 

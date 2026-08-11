@@ -7297,6 +7297,220 @@ a[aria-disabled="true"] {
   }
 }
 
+/* 全局错误提示沿用现有浮层语言，只承接调用点未预期的异常。 */
+.error-toast-viewport {
+  position: fixed;
+  z-index: 105;
+  top: 24px;
+  right: 24px;
+  display: grid;
+  width: min(380px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+}
+
+.error-toast {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  pointer-events: auto;
+  animation: error-toast-enter 180ms cubic-bezier(.22, .8, .28, 1) both;
+}
+
+.error-toast__body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 14px 14px 12px;
+}
+
+.error-toast__icon {
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.error-toast__content {
+  min-width: 0;
+}
+
+.error-toast__content strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.error-toast__content p {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.error-toast__details-toggle,
+.error-toast__close,
+.error-toast__request-id button {
+  border: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.error-toast__details-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin: 7px 0 0;
+  padding: 2px 0;
+  gap: 3px;
+  color: var(--accent-strong);
+  font-size: 11px;
+}
+
+.error-toast__close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin: -5px -5px 0 0;
+  padding: 0;
+  border-radius: 7px;
+  place-items: center;
+}
+
+.error-toast__close:hover,
+.error-toast__close:focus-visible,
+.error-toast__request-id button:hover,
+.error-toast__request-id button:focus-visible {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.error-toast__details {
+  display: grid;
+  margin: 0 14px 13px 42px;
+  padding: 10px 0 0;
+  gap: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.error-toast__details > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.error-toast__details dt {
+  color: var(--text-tertiary);
+}
+
+.error-toast__details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.error-toast__request-id {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.error-toast__request-id code {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.error-toast__request-id button {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 5px;
+  border-radius: 5px;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.error-toast__request-id small {
+  flex-basis: 100%;
+  color: var(--danger);
+}
+
+.error-toast__progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--danger);
+  transform-origin: left;
+  animation-name: error-toast-progress;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+.error-toast.is-paused .error-toast__progress {
+  animation-play-state: paused;
+}
+
+@keyframes error-toast-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes error-toast-progress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@media (max-width: 760px) {
+  .error-toast-viewport {
+    top: calc(12px + env(safe-area-inset-top));
+    right: auto;
+    left: 50%;
+    width: calc(100vw - 24px);
+    transform: translateX(-50%);
+  }
+
+  .error-toast__details {
+    margin-left: 14px;
+  }
+
+  .error-toast__details-toggle,
+  .error-toast__close,
+  .error-toast__request-id button {
+    min-height: 44px;
+  }
+
+  .error-toast__close {
+    width: 44px;
+    margin: -8px -8px 0 0;
+  }
+
+  .error-toast__details-toggle {
+    padding-inline: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .error-toast {
+    animation: none;
+  }
+
+  .error-toast__progress {
+    animation: none;
+  }
+}
+
 .session-row.is-pressing {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--surface-hover) 86%, var(--text-primary));

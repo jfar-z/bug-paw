@@ -8,6 +8,8 @@ import type {
   WebResearchSettingsDocument,
 } from "../../../shared/web-research-contracts";
 import { api } from "../../api";
+import { useApiTask } from "../../api-task-provider";
+import { webResearchExpected } from "../../web-research-error-policy";
 import { ConfirmationDialog } from "../configuration/confirmation-dialog";
 import { SecretInput } from "../secret-input";
 
@@ -23,6 +25,7 @@ interface SearchProviderDialogProps {
 
 /** 在独立事务边界内新增或编辑搜索渠道及其凭证。 */
 export function SearchProviderDialog(props: SearchProviderDialogProps) {
+  const { runApiTask } = useApiTask();
   const templates = useMemo(() => availableTemplates(props.document, props.mode), [props.document, props.mode]);
   const [templateId, setTemplateId] = useState(() => selectedTemplateId(props.mode, templates, props.provider));
   const [draft, setDraft] = useState<SearchProviderConfig>(() => initialProvider(props.mode, props.document, props.provider));
@@ -69,15 +72,16 @@ export function SearchProviderDialog(props: SearchProviderDialogProps) {
       clearSecret();
       return;
     }
-    try {
+    const result = await runApiTask(async () => {
       let value = secretValue;
       if (!value && props.mode === "edit" && configured) {
         value = (await api.getWebResearchProviderCredential(draft.id)).apiKey;
       }
-      setSecretValue(value);
+      return value;
+    }, { operation: `读取 ${draft.name} API Key`, expected: webResearchExpected(setError) });
+    if (result.status === "success") {
+      setSecretValue(result.data);
       setSecretVisible(true);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "无法读取 API Key");
     }
   };
 
@@ -94,23 +98,25 @@ export function SearchProviderDialog(props: SearchProviderDialogProps) {
     if (draft.enabled && !finalCredentialAvailable) return setError("启用直连搜索服务前必须配置 API Key");
     setBusy(true);
     try {
-      const next = props.mode === "create"
-        ? await api.createWebResearchProvider({
+      const result = await runApiTask(
+        () => props.mode === "create"
+          ? api.createWebResearchProvider({
           configRevision: props.document.revision,
           credentialRevision: props.document.credentialRevision,
           provider: { ...draft, name: draft.name.trim(), ...(draft.baseUrl ? { baseUrl: draft.baseUrl.trim() } : {}) },
           ...(secretValue ? { apiKey: secretValue } : {}),
-        })
-        : await api.updateWebResearchProvider(draft.id, {
+          })
+          : api.updateWebResearchProvider(draft.id, {
           configRevision: props.document.revision,
           credentialRevision: props.document.credentialRevision,
           provider: { ...draft, name: draft.name.trim(), ...(draft.baseUrl ? { baseUrl: draft.baseUrl.trim() } : {}) },
           credential,
-        });
+          }),
+        { operation: props.mode === "create" ? "添加搜索渠道" : "保存搜索渠道", expected: webResearchExpected(setError) },
+      );
+      if (result.status !== "success") return;
       clearSecret();
-      props.onSaved(next);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存搜索渠道失败");
+      props.onSaved(result.data);
     } finally {
       setBusy(false);
     }
@@ -120,9 +126,11 @@ export function SearchProviderDialog(props: SearchProviderDialogProps) {
     setBusy(true);
     setError("");
     try {
-      setMessage((await api.testWebResearchProvider(draft.id)).message);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "连接测试失败");
+      const result = await runApiTask(
+        () => api.testWebResearchProvider(draft.id),
+        { operation: `测试搜索渠道 ${draft.name}`, expected: webResearchExpected(setError) },
+      );
+      if (result.status === "success") setMessage(result.data.message);
     } finally {
       setBusy(false);
     }
@@ -132,12 +140,16 @@ export function SearchProviderDialog(props: SearchProviderDialogProps) {
     setBusy(true);
     setError("");
     try {
-      await api.deleteWebResearchProvider(draft.id, props.document.revision, props.document.credentialRevision);
+      const result = await runApiTask(
+        () => api.deleteWebResearchProvider(draft.id, props.document.revision, props.document.credentialRevision),
+        { operation: `删除搜索渠道 ${draft.name}`, expected: webResearchExpected(setError) },
+      );
+      if (result.status !== "success") {
+        setDeleteOpen(false);
+        return;
+      }
       clearSecret();
       props.onDeleted();
-    } catch (reason) {
-      setDeleteOpen(false);
-      setError(reason instanceof Error ? reason.message : "删除搜索渠道失败");
     } finally {
       setBusy(false);
     }

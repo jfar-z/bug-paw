@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { useState, type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG, type WebResearchSettingsDocument } from "../../../shared/web-research-contracts";
+import { ApiTaskProvider } from "../../api-task-provider";
+import { ErrorToastProvider } from "../../error-toast-provider";
 import { SearchProviderList } from "./search-provider-list";
 
 const settings: WebResearchSettingsDocument = {
@@ -25,7 +27,7 @@ describe("SearchProviderList", () => {
 
   it("只展示已配置渠道状态和配置入口", () => {
     vi.stubGlobal("fetch", vi.fn());
-    render(<SearchProviderList document={settings} online onAdd={vi.fn()} onConfigure={vi.fn()} onDocumentChange={vi.fn()} />);
+    renderWithApiTask(<SearchProviderList document={settings} online onAdd={vi.fn()} onConfigure={vi.fn()} onDocumentChange={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "已配置渠道" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "添加渠道" })).toBeInTheDocument();
@@ -37,14 +39,16 @@ describe("SearchProviderList", () => {
   it("排序失败时先乐观变更，再恢复原顺序并显示错误", async () => {
     let rejectRequest: (response: Response) => void = () => undefined;
     vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { rejectRequest = resolve; })));
-    render(<Harness />);
+    renderWithApiTask(<Harness />);
 
     fireEvent.click(screen.getByRole("button", { name: "下移内置 SearXNG" }));
     await waitFor(() => expect(providerNames()).toEqual(["博查", "内置 SearXNG"]));
-    rejectRequest(new Response(JSON.stringify({ error: { code: "ORDER_FAILED", message: "保存排序失败" } }), { status: 500, headers: { "Content-Type": "application/json" } }));
+    rejectRequest(new Response(JSON.stringify({
+      error: { code: "VERSION_CONFLICT", message: "保存排序失败", requestId: "request-provider-order" },
+    }), { status: 409, headers: { "Content-Type": "application/json" } }));
 
     await waitFor(() => expect(providerNames()).toEqual(["内置 SearXNG", "博查"]));
-    expect(screen.getByRole("alert")).toHaveTextContent("保存排序失败");
+    expect(screen.getByText("保存排序失败")).toBeInTheDocument();
   });
 
   it("排序成功时只提交 revision 和完整 ID 列表", async () => {
@@ -55,7 +59,7 @@ describe("SearchProviderList", () => {
     };
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(reordered), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<Harness />);
+    renderWithApiTask(<Harness />);
 
     fireEvent.click(screen.getByRole("button", { name: "下移内置 SearXNG" }));
 
@@ -72,6 +76,11 @@ describe("SearchProviderList", () => {
 function Harness() {
   const [document, setDocument] = useState(settings);
   return <SearchProviderList document={document} online onAdd={vi.fn()} onConfigure={vi.fn()} onDocumentChange={setDocument} />;
+}
+
+/** 使用生产环境一致的错误分发上下文渲染渠道列表。 */
+function renderWithApiTask(element: ReactElement) {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}>{element}</ApiTaskProvider></ErrorToastProvider>);
 }
 
 function providerNames(): string[] {

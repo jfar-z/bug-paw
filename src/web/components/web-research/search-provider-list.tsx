@@ -3,6 +3,8 @@ import { useState } from "react";
 
 import type { SearchProviderConfig, WebResearchSettingsDocument } from "../../../shared/web-research-contracts";
 import { api } from "../../api";
+import { useApiTask } from "../../api-task-provider";
+import { webResearchExpected } from "../../web-research-error-policy";
 
 interface SearchProviderListProps {
   document: WebResearchSettingsDocument;
@@ -20,6 +22,7 @@ type OrderStatus =
 
 /** 展示搜索渠道路由顺序，并在移动后立即持久化完整 ID 排列。 */
 export function SearchProviderList(props: SearchProviderListProps) {
+  const { runApiTask } = useApiTask();
   const [orderStatus, setOrderStatus] = useState<OrderStatus>({ state: "idle" });
 
   const move = async (providerId: string, offset: -1 | 1) => {
@@ -33,13 +36,19 @@ export function SearchProviderList(props: SearchProviderListProps) {
     const optimistic = { ...previousDocument, config: { ...previousDocument.config, searchProviders } };
     props.onDocumentChange(optimistic);
     setOrderStatus({ state: "saving", providerId });
-    try {
-      const next = await api.reorderWebResearchProviders(previousDocument.revision, searchProviders.map(({ id }) => id));
-      props.onDocumentChange(next);
+    const result = await runApiTask(
+      () => api.reorderWebResearchProviders(previousDocument.revision, searchProviders.map(({ id }) => id)),
+      {
+        operation: "调整搜索渠道顺序",
+        expected: webResearchExpected((message) => setOrderStatus({ state: "error", providerId, message })),
+      },
+    );
+    if (result.status === "success") {
+      props.onDocumentChange(result.data);
       setOrderStatus({ state: "saved", providerId });
-    } catch (reason) {
+    } else {
       props.onDocumentChange(previousDocument);
-      setOrderStatus({ state: "error", providerId, message: reason instanceof Error ? reason.message : "保存排序失败" });
+      if (result.status !== "handled") setOrderStatus({ state: "idle" });
     }
   };
 

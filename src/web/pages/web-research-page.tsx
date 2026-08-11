@@ -2,12 +2,14 @@ import { Save } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { SearchProviderConfig, WebResearchConfig, WebResearchGlobalConfig, WebResearchSettingsDocument } from "../../shared/web-research-contracts";
-import { ApiClientError, api } from "../api";
+import { api } from "../api";
+import { useApiTask } from "../api-task-provider";
 import { ConflictDialog, type ConfigurationDifference } from "../components/configuration/conflict-dialog";
 import { GlobalSearchPolicyPanel } from "../components/web-research/global-search-policy-panel";
 import { SearchProviderDialog } from "../components/web-research/search-provider-dialog";
 import { SearchProviderList } from "../components/web-research/search-provider-list";
 import { useOnlineStatus } from "../use-online-status";
+import { webResearchExpected } from "../web-research-error-policy";
 
 type ProviderDialogState =
   | { mode: "create" }
@@ -20,6 +22,7 @@ interface GlobalConflictState {
 
 /** 协调服务状态、渠道事务和全局策略三个互不覆盖的配置作用域。 */
 export function WebResearchPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [document, setDocument] = useState<WebResearchSettingsDocument>();
   const [globalDraft, setGlobalDraft] = useState<WebResearchGlobalConfig>();
@@ -31,15 +34,15 @@ export function WebResearchPage() {
 
   useEffect(() => {
     let active = true;
-    api.getWebResearch().then((next) => {
+    void runApiTask(api.getWebResearch, { operation: "加载联网搜索配置" }).then((result) => {
+      if (result.status !== "success") return;
+      const next = result.data;
       if (!active) return;
       setDocument(next);
       setGlobalDraft(globalConfigOf(next.config));
-    }).catch((reason) => {
-      if (active) setGlobalError(reason instanceof Error ? reason.message : "无法读取联网搜索配置");
     });
     return () => { active = false; };
-  }, []);
+  }, [runApiTask]);
 
   const saveGlobal = async (revision = document?.revision) => {
     if (!document || !globalDraft || !revision) return;
@@ -47,34 +50,36 @@ export function WebResearchPage() {
     setGlobalError("");
     setNotice("");
     try {
-      const next = await api.updateWebResearchGlobal(revision, globalDraft);
+      const result = await runApiTask(
+        () => api.updateWebResearchGlobal(revision, globalDraft),
+        {
+          operation: "保存联网搜索全局设置",
+          expected: {
+            ...webResearchExpected(setGlobalError),
+            VERSION_CONFLICT: async () => {
+              const latest = await api.getWebResearch();
+              setConflict({ latest, differences: collectDifferences(globalDraft, globalConfigOf(latest.config)) });
+            },
+          },
+        },
+      );
+      if (result.status !== "success") return;
+      const next = result.data;
       setDocument(next);
       setGlobalDraft(globalConfigOf(next.config));
       setConflict(undefined);
       setNotice("全局设置已保存");
-    } catch (reason) {
-      if (reason instanceof ApiClientError && reason.code === "VERSION_CONFLICT") {
-        try {
-          const latest = await api.getWebResearch();
-          setConflict({ latest, differences: collectDifferences(globalDraft, globalConfigOf(latest.config)) });
-        } catch (reloadReason) {
-          setGlobalError(reloadReason instanceof Error ? reloadReason.message : "冲突配置加载失败");
-        }
-      } else {
-        setGlobalError(reason instanceof Error ? reason.message : "保存全局设置失败");
-      }
     } finally {
       setSavingGlobal(false);
     }
   };
 
   const reloadAfterDelete = async () => {
-    try {
-      const next = await api.getWebResearch();
+    const result = await runApiTask(api.getWebResearch, { operation: "删除渠道后刷新联网搜索配置" });
+    if (result.status === "success") {
+      const next = result.data;
       setDocument(next);
       setNotice("渠道已删除");
-    } catch (reason) {
-      setGlobalError(reason instanceof Error ? reason.message : "渠道已删除，但刷新配置失败");
     }
   };
 

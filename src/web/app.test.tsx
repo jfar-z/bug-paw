@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "./app";
+import { ErrorToastProvider } from "./error-toast-provider";
+
+function renderApp() {
+  return render(<ErrorToastProvider><App /></ErrorToastProvider>);
+}
 
 describe("App 首次初始化", () => {
   afterEach(() => {
@@ -19,7 +24,7 @@ describe("App 首次初始化", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<App />);
+    renderApp();
     await screen.findByRole("heading", { name: "创建访问密码" });
     fireEvent.change(screen.getByLabelText("访问密码"), { target: { value: "correct horse battery staple" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "correct horse battery staple" } });
@@ -44,7 +49,7 @@ describe("App 首次初始化", () => {
   it("加载工作台前展示 BugPaw 品牌化加载状态", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ initialized: true, authenticated: true }))));
 
-    render(<App />);
+    renderApp();
 
     const loading = screen.getByRole("status", { name: "正在准备 BugPaw" });
     expect(within(loading).getByAltText("睡眠中的 BUG 猫咪像素吉祥物"))
@@ -63,7 +68,7 @@ describe("App 首次初始化", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     }));
 
-    render(<App />);
+    renderApp();
 
     expect(await screen.findByRole("heading", { name: "资源管理" })).toBeInTheDocument();
     expect(screen.getByText("请先在配置中心创建 Agent。")).toBeInTheDocument();
@@ -83,7 +88,7 @@ describe("App 首次初始化", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     }));
 
-    render(<App />);
+    renderApp();
 
     const enterButton = await screen.findByRole("button", { name: "进入工作台" });
     const entryGate = screen.getByRole("dialog", { name: "从这里继续工作" });
@@ -91,5 +96,40 @@ describe("App 首次初始化", () => {
     expect(within(entryGate).getByText("BUGPAW / WORKBENCH")).toBeInTheDocument();
     fireEvent.click(enterButton);
     expect(screen.queryByRole("button", { name: "进入工作台" })).not.toBeInTheDocument();
+  });
+
+  it("启动请求发生意外错误时同时展示状态页和全局 Toast", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "服务启动失败",
+        requestId: "request-app-startup",
+      },
+    }), { status: 500 })));
+
+    renderApp();
+
+    expect(await screen.findByText("无法连接 Agent 服务，请检查容器状态。")).toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+  });
+
+  it("退出登录失败时保留工作台并显示统一错误提示", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/status") return new Response(JSON.stringify({ initialized: true, authenticated: true }));
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }));
+      if (url === "/api/v1/logout") {
+        return new Response(JSON.stringify({
+          error: { code: "INTERNAL_ERROR", message: "退出服务暂不可用", requestId: "request-logout" },
+        }), { status: 500 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "工作台主导航" })).toBeInTheDocument();
   });
 });

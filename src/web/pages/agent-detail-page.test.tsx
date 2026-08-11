@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { AgentDetailPage } from "./agent-detail-page";
+
+function renderAgentDetailPage(agentId: string) {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><AgentDetailPage agentId={agentId} onNavigate={vi.fn()} /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("AgentDetailPage v0 身份结构", () => {
   it("可为所选语音模型设置仅作用于 Agent 的音色覆盖", async () => {
@@ -34,7 +40,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="voice-agent" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("voice-agent");
 
     await screen.findByText("语音 Agent");
     fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
@@ -79,7 +85,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="tool-agent" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("tool-agent");
 
     await screen.findByText("工具 Agent");
     fireEvent.click(screen.getByRole("button", { name: "工具权限" }));
@@ -102,7 +108,7 @@ describe("AgentDetailPage v0 身份结构", () => {
   });
 
   it("角色与行为按四个 Markdown 维度展示", () => {
-    render(<AgentDetailPage agentId="default" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("default");
 
     fireEvent.click(screen.getByRole("button", { name: "角色与行为" }));
 
@@ -118,7 +124,7 @@ describe("AgentDetailPage v0 身份结构", () => {
   });
 
   it("使用规格定义的六个详情页签", () => {
-    render(<AgentDetailPage agentId="default" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("default");
 
     const tabs = screen.getByRole("navigation", { name: "Agent 详情页签" });
     expect(tabs).toHaveTextContent("基本信息");
@@ -130,7 +136,7 @@ describe("AgentDetailPage v0 身份结构", () => {
   });
 
   it("历史默认 Agent 的工作目录可修改", () => {
-    render(<AgentDetailPage agentId="default" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("default");
 
     expect(screen.getByRole("textbox", { name: "工作目录" })).toBeEnabled();
     expect(screen.queryByText("默认 Agent 的工作目录不能修改。")).not.toBeInTheDocument();
@@ -165,7 +171,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
       return new Response(JSON.stringify({ profile, revision: "r1" }));
     }));
-    render(<AgentDetailPage agentId="inherits-global" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("inherits-global");
 
     await screen.findByText("继承全局模型的 Agent");
     fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
@@ -203,7 +209,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       return new Response(JSON.stringify({ profile: patch ? { ...profile, titleGeneration: patch.titleGeneration } : profile, revision: patch ? "r2" : "r1" }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="title-agent" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("title-agent");
 
     await screen.findByText("标题 Agent");
     fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
@@ -240,7 +246,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       { status: 200 },
     ));
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="real" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("real");
 
     expect(await screen.findByText("真实 Agent")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "角色与行为" }));
@@ -271,7 +277,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       return new Response(JSON.stringify({ profile, revision: "r1" }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="boot" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("boot");
 
     await screen.findByText("初始化 Agent");
     fireEvent.click(screen.getByRole("button", { name: "角色与行为" }));
@@ -310,7 +316,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="workspace" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("workspace");
 
     fireEvent.change(await screen.findByRole("textbox", { name: "工作目录" }), {
       target: { value: "/data/projects/new-workspace" },
@@ -337,7 +343,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       revision: String(input).includes("/avatar?") ? "r2" : "r1",
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="avatar" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("avatar");
     await screen.findByText("头像 Agent");
 
     const file = new File([new Uint8Array([137, 80, 78, 71])], "avatar.png", { type: "image/png" });

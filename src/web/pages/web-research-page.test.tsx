@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG, type WebResearchSettingsDocument } from "../../shared/web-research-contracts";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { WebResearchPage } from "./web-research-page";
+
+function renderWebResearchPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><WebResearchPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 const config = {
   ...DEFAULT_WEB_RESEARCH_CONFIG,
@@ -32,7 +38,7 @@ describe("WebResearchPage", () => {
 
   it("明确展示三个作用域且全局保存不包含渠道", async () => {
     const fetchMock = installFetch();
-    render(<WebResearchPage />);
+    renderWebResearchPage();
 
     expect(await screen.findByRole("heading", { name: "服务状态" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "已配置渠道" })).toBeInTheDocument();
@@ -49,7 +55,7 @@ describe("WebResearchPage", () => {
 
   it("从列表分别打开新增与编辑弹窗", async () => {
     installFetch();
-    render(<WebResearchPage />);
+    renderWebResearchPage();
     await screen.findByRole("heading", { name: "已配置渠道" });
 
     fireEvent.click(screen.getByRole("button", { name: "添加渠道" }));
@@ -62,7 +68,7 @@ describe("WebResearchPage", () => {
 
   it("渠道保存返回新文档时保留未提交的全局草稿", async () => {
     const fetchMock = installFetch();
-    render(<WebResearchPage />);
+    renderWebResearchPage();
     await screen.findByRole("heading", { name: "服务状态" });
     fireEvent.click(screen.getByRole("checkbox", { name: "启用联网搜索" }));
 
@@ -83,7 +89,7 @@ describe("WebResearchPage", () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/v1/capabilities/web-research/global" && init?.method === "PATCH") {
         globalWrites += 1;
-        if (globalWrites === 1) return json({ error: { code: "VERSION_CONFLICT", message: "配置文件已被修改" } }, 409);
+        if (globalWrites === 1) return json({ error: { code: "VERSION_CONFLICT", message: "配置文件已被修改", requestId: "request-global-conflict" } }, 409);
         const body = JSON.parse(String(init.body));
         return json({ ...settings, revision: "config-3", config: { ...body.config, searchProviders: config.searchProviders } });
       }
@@ -93,7 +99,7 @@ describe("WebResearchPage", () => {
       return json({ ok: true });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<WebResearchPage />);
+    renderWebResearchPage();
     await screen.findByRole("heading", { name: "全局检索策略" });
     fireEvent.click(screen.getByRole("button", { name: "展开全局检索策略" }));
     fireEvent.change(screen.getByLabelText("最大结果数"), { target: { value: "6" } });
@@ -104,6 +110,14 @@ describe("WebResearchPage", () => {
     await waitFor(() => expect(globalWrites).toBe(2));
     const reapplied = fetchMock.mock.calls.filter(([url]) => url === "/api/v1/capabilities/web-research/global").at(-1);
     expect(JSON.parse(String(reapplied?.[1]?.body))).toMatchObject({ revision: "config-2", config: { maxResults: 6 } });
+  });
+
+  it("加载联网配置发生意外错误时显示全局 Toast", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("private network detail"); }));
+    renderWebResearchPage();
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.queryByText("private network detail")).not.toBeInTheDocument();
   });
 });
 

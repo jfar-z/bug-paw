@@ -2,6 +2,7 @@ import { Check, GripVertical, PencilLine, Plus, Save, TestTube2, Trash2 } from "
 import { useEffect, useMemo, useState } from "react";
 import type { ProviderEditorModel, ProviderTemplate } from "../../shared/configuration-contracts";
 import { api, type DiscoveredModel, type ModelConnectionTestItem, type ModelConnectionTestRequest, type ProvidersDocument } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { KeyValueEditor, type KeyValueRow } from "../components/configuration/key-value-editor";
 import { ProviderRenameDialog } from "../components/configuration/provider-rename-dialog";
 import { SecretInput } from "../components/secret-input";
@@ -96,6 +97,47 @@ function emptyModel(): ProviderEditorModel {
   return { id: "new-model", name: "新模型", reasoning: false, thinkingLevelMap: {}, compat: {}, input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 }
 
+/** 将 Provider 编辑和排序的可恢复业务错误保留在当前表单中。 */
+function providerExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    VERSION_CONFLICT: show,
+    PROVIDER_ID_EXISTS: show,
+    PROVIDER_INVALID: show,
+    PROVIDER_IN_USE: show,
+    PROVIDER_NOT_FOUND: show,
+    PROVIDER_RENAME_CONFIRMATION_REQUIRED: show,
+    PROVIDER_RENAME_HISTORY_LIMIT: show,
+    INVALID_PROVIDER_ID: show,
+    INVALID_PROVIDER_ORDER: show,
+    INVALID_PROVIDER_REQUEST: show,
+    INVALID_PROVIDER_BASE_URL: show,
+    MODEL_IN_USE: show,
+    MODEL_SCHEMA_INVALID: show,
+  };
+}
+
+/** 将 Provider 凭证的并发和校验错误保留在凭证编辑区。 */
+function providerCredentialExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return { VERSION_CONFLICT: show, INVALID_CREDENTIAL: show, CREDENTIAL_NOT_FOUND: show };
+}
+
+/** 将模型发现和连接测试的可恢复状态保留在结果区域。 */
+function providerDiscoveryExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    MODEL_TEST_IN_PROGRESS: show,
+    MODEL_DISCOVERY_IN_PROGRESS: show,
+    MODEL_DISCOVERY_TIMEOUT: show,
+    MODEL_DISCOVERY_FAILED: show,
+    MODEL_RUNTIME_UNAVAILABLE: show,
+    MODEL_NOT_FOUND: show,
+    PROVIDER_NOT_FOUND: show,
+    INVALID_MODEL_TEST_REQUEST: show,
+  };
+}
+
 /**
  * 将来源 ID 插入目标 ID 前方，生成一份不修改原数组的新顺序。
  */
@@ -117,6 +159,7 @@ function modelInput(model: ProviderEditorModel | undefined): Array<"text" | "ima
  * 以普通表单为主编辑 Provider、模型和只写凭证，高级 JSON 仅作为兜底。
  */
 export function ProvidersPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [document, setDocument] = useState<ProvidersDocument>();
   const [selectedId, setSelectedId] = useState("");
@@ -177,15 +220,17 @@ export function ProvidersPage() {
 
   useEffect(() => {
     let active = true;
-    api.listProviders().then((loaded) => {
+    void runApiTask(api.listProviders, { operation: "加载 Provider 配置" }).then((result) => {
+      if (result.status !== "success") return;
+      const loaded = result.data;
       if (!active) return;
       setDocument(loaded);
       const map = providerMap(loaded);
       const first = Object.keys(map)[0];
       if (first) selectProvider(first, map);
-    }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : "Provider 加载失败"));
+    });
     return () => { active = false; };
-  }, []);
+  }, [runApiTask]);
 
   function updateModel(patch: Partial<ProviderEditorModel>) {
     setDraft((current) => ({ ...current, models: (current.models ?? []).map((model, index) => index === selectedModelIndex ? { ...model, ...patch } : model) }));
@@ -250,13 +295,16 @@ export function ProvidersPage() {
     setBusy("saving");
     setError("");
     try {
-      const updated = await api.removeProviderModel(selectedId, selectedModel.id, document.revision);
+      const result = await runApiTask(
+        () => api.removeProviderModel(selectedId, selectedModel.id, document.revision),
+        { operation: "删除 Provider 模型", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       setDocument({ ...document, ...updated });
       const updatedProviders = providerMap({ ...document, ...updated });
       selectProvider(selectedId, updatedProviders);
       setNotice("模型已删除");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "删除模型失败");
     } finally {
       setBusy(false);
     }
@@ -277,17 +325,20 @@ export function ProvidersPage() {
     }
     setBusy("saving"); setError(""); setNotice("");
     try {
-      const updated = savedProvider
-        ? await api.saveProvider(selectedId, document.revision, providerDraft)
-        : await api.createProvider(selectedId, document.revision, providerDraft);
+      const result = await runApiTask(
+        () => savedProvider
+          ? api.saveProvider(selectedId, document.revision, providerDraft)
+          : api.createProvider(selectedId, document.revision, providerDraft),
+        { operation: "保存 Provider", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       setDocument({ ...document, ...updated });
       const updatedProviders = providerMap({ ...document, ...updated });
       selectProvider(selectedId, updatedProviders);
       setDiscoveredModels([]);
       setSelectedDiscoveredIds(new Set());
       setNotice("Provider 已保存；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存失败");
     } finally { setBusy(false); }
   }
 
@@ -295,24 +346,31 @@ export function ProvidersPage() {
     if (!document || !selectedId || !apiKey) return;
     setBusy("saving"); setError("");
     try {
-      const result = await api.saveProviderCredential(selectedId, document.credentialRevision, apiKey);
+      const task = await runApiTask(
+        () => api.saveProviderCredential(selectedId, document.credentialRevision, apiKey),
+        { operation: "保存 Provider 凭证", expected: providerCredentialExpected(setError) },
+      );
+      if (task.status !== "success") return;
+      const result = task.data;
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: [...document.credentials.filter((item) => item.providerId !== selectedId), result.status] });
       setApiKey(""); setApiKeyVisible(false); setNotice("凭证已替换，可点击小眼睛查看");
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "凭证保存失败"); }
-    finally { setBusy(false); }
+    } finally { setBusy(false); }
   }
 
   async function removeCredential() {
     if (!document || !selectedId) return;
     setBusy("saving"); setError("");
     try {
-      const result = await api.removeProviderCredential(selectedId, document.credentialRevision);
+      const task = await runApiTask(
+        () => api.removeProviderCredential(selectedId, document.credentialRevision),
+        { operation: "删除 Provider 凭证", expected: providerCredentialExpected(setError) },
+      );
+      if (task.status !== "success") return;
+      const result = task.data;
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: document.credentials.filter((item) => item.providerId !== selectedId) });
       setApiKey("");
       setApiKeyVisible(false);
       setNotice("凭证已删除");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "凭证删除失败");
     } finally {
       setBusy(false);
     }
@@ -325,13 +383,14 @@ export function ProvidersPage() {
       return;
     }
     if (credential?.configured && !apiKey) {
-      try {
-        const value = await api.getProviderCredential(selectedId);
+      const result = await runApiTask(
+        () => api.getProviderCredential(selectedId),
+        { operation: "读取 Provider API Key", expected: providerCredentialExpected(setError) },
+      );
+      if (result.status === "success") {
+        const value = result.data;
         setApiKey(value.apiKey);
-      } catch (requestError) {
-        setError(requestError instanceof Error ? requestError.message : "无法读取 API Key");
-        return;
-      }
+      } else return;
     }
     setApiKeyVisible(true);
   }
@@ -344,13 +403,16 @@ export function ProvidersPage() {
     }
     setBusy("saving"); setError(""); setNotice("");
     try {
-      const updated = await api.renameProvider(selectedId, targetId, document.revision);
+      const result = await runApiTask(
+        () => api.renameProvider(selectedId, targetId, document.revision),
+        { operation: "重命名 Provider", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       setDocument({ ...document, ...updated });
       selectProvider(targetId, providerMap({ ...document, ...updated }));
       setRenameOpen(false);
       setNotice("Provider 已改名，引用已迁移；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "改名失败");
     } finally {
       setBusy(false);
     }
@@ -361,12 +423,14 @@ export function ProvidersPage() {
     setBusy("discovering"); setError(""); setNotice("");
     setDiscoveredModels([]); setSelectedDiscoveredIds(new Set());
     try {
-      const result = await api.discoverProviderModels(selectedId);
-      setDiscoveredModels(result.models);
-      setSelectedDiscoveredIds(new Set(result.models.filter((model) => !model.exists).map((model) => model.id)));
-      setNotice(`已发现 ${result.models.length} 个模型`);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "模型发现失败");
+      const task = await runApiTask(
+        () => api.discoverProviderModels(selectedId),
+        { operation: "发现 Provider 模型", expected: providerDiscoveryExpected(setError) },
+      );
+      if (task.status !== "success") return;
+      setDiscoveredModels(task.data.models);
+      setSelectedDiscoveredIds(new Set(task.data.models.filter((model) => !model.exists).map((model) => model.id)));
+      setNotice(`已发现 ${task.data.models.length} 个模型`);
     } finally {
       setBusy(false);
     }
@@ -400,9 +464,11 @@ export function ProvidersPage() {
     setError("");
     setTestResults([]);
     try {
-      setTestResults((await api.testProvider(selectedId, request)).results);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "连接测试失败");
+      const result = await runApiTask(
+        () => api.testProvider(selectedId, request),
+        { operation: "测试 Provider 连接", expected: providerDiscoveryExpected(setError) },
+      );
+      if (result.status === "success") setTestResults(result.data.results);
     } finally {
       setBusy(false);
     }
@@ -421,13 +487,18 @@ export function ProvidersPage() {
     setDraggingProviderId(undefined);
     setError("");
     try {
-      const updated = await api.reorderProviders(nextIds, document.revision);
+      const result = await runApiTask(
+        () => api.reorderProviders(nextIds, document.revision),
+        { operation: "保存 Provider 排序", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       const nextDocument = { ...document, ...updated };
       setDocument(nextDocument);
       selectProvider(selectedId, providerMap(nextDocument));
       setNotice("Provider 排序已保存；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存 Provider 排序失败");
+    } finally {
+      setDraggingProviderId(undefined);
     }
   }
 
@@ -445,13 +516,18 @@ export function ProvidersPage() {
     setDraggingModelId(undefined);
     setError("");
     try {
-      const updated = await api.reorderProviderModels(selectedId, nextIds, document.revision);
+      const result = await runApiTask(
+        () => api.reorderProviderModels(selectedId, nextIds, document.revision),
+        { operation: "保存模型排序", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       const nextDocument = { ...document, ...updated };
       setDocument(nextDocument);
       selectProvider(selectedId, providerMap(nextDocument));
       setNotice("模型排序已保存；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存模型排序失败");
+    } finally {
+      setDraggingModelId(undefined);
     }
   }
 

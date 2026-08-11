@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { WorkspaceResourcesPage } from "./workspace-resources-page";
+
+function renderWorkspaceResourcesPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><WorkspaceResourcesPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("WorkspaceResourcesPage", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -14,7 +20,7 @@ describe("WorkspaceResourcesPage", () => {
       return new Response(JSON.stringify({ entries: [directory("docs"), entry("readme.md", "readme.md")] }));
     }));
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
     expect(await screen.findByRole("heading", { name: "资源管理" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "选择 Agent 研究助手" }));
     fireEvent.change(screen.getByLabelText("搜索文件名"), { target: { value: "readme" } });
@@ -35,7 +41,7 @@ describe("WorkspaceResourcesPage", () => {
       ] }));
     }));
 
-    const { container } = render(<WorkspaceResourcesPage />);
+    const { container } = renderWorkspaceResourcesPage();
 
     await screen.findAllByText("cover.JPG");
     expect(container.querySelector(".lucide-file-image")).toBeInTheDocument();
@@ -51,7 +57,7 @@ describe("WorkspaceResourcesPage", () => {
       return new Response(JSON.stringify({ entries: [] }));
     }));
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
 
     const emptyMascot = await screen.findByAltText("BUG 正在等候第一个工作空间");
     expect(emptyMascot).toHaveAttribute("src", "/brand/bugpaw/bugpaw-sleeping.png");
@@ -66,7 +72,7 @@ describe("WorkspaceResourcesPage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
     await screen.findByRole("checkbox", { name: "选择 readme.md" });
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 readme.md" }));
     fireEvent.click(screen.getByRole("button", { name: "删除所选 1 项" }));
@@ -85,7 +91,7 @@ describe("WorkspaceResourcesPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     const promptSpy = vi.spyOn(window, "prompt");
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
     expect(await screen.findByRole("button", { name: "移动 readme.md" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "移动 readme.md" }));
     expect(screen.getByRole("dialog", { name: "移动文件" })).toBeInTheDocument();
@@ -111,7 +117,7 @@ describe("WorkspaceResourcesPage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
     fireEvent.click(await screen.findByRole("button", { name: "移动 readme.md" }));
     fireEvent.change(screen.getByLabelText("目标目录"), { target: { value: "drafts/review" } });
     fireEvent.click(screen.getByRole("button", { name: "确认移动" }));
@@ -136,7 +142,7 @@ describe("WorkspaceResourcesPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     const promptSpy = vi.spyOn(window, "prompt");
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
     expect(await screen.findByRole("button", { name: "重命名 readme.md" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "重命名 readme.md" }));
     expect(screen.getByRole("dialog", { name: "重命名文件" })).toBeInTheDocument();
@@ -159,7 +165,7 @@ describe("WorkspaceResourcesPage", () => {
       return new Response(JSON.stringify({ entries: [entry(longName, longName)] }));
     }));
 
-    render(<WorkspaceResourcesPage />);
+    renderWorkspaceResourcesPage();
     expect((await screen.findByRole("checkbox", { name: `选择 ${longName}` })).parentElement).toHaveClass("workspace-entry-select");
     expect(screen.getByRole("button", { name: `移动 ${longName}` })).toBeVisible();
     expect(document.querySelector(".workspace-entry-name__label")).toHaveTextContent(longName);

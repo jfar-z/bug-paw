@@ -1,6 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { ReferenceComposer } from "./reference-composer";
+
+function renderReferenceComposer(element: ReactElement) {
+  const wrap = (child: ReactElement) => <ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}>{child}</ApiTaskProvider></ErrorToastProvider>;
+  const result = render(wrap(element));
+  return { ...result, rerender: (next: ReactElement) => result.rerender(wrap(next)) };
+}
 
 const emptyCatalog = {
   skills: [],
@@ -18,7 +27,7 @@ describe("ReferenceComposer", () => {
       workspaceEntries: [],
     }));
     const onReferencesChange = vi.fn();
-    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={onReferencesChange} />);
+    renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={onReferencesChange} />);
 
     const textbox = screen.getByRole("textbox");
     fireEvent.change(textbox, { target: { value: "@know" } });
@@ -36,7 +45,7 @@ describe("ReferenceComposer", () => {
       skills: Array.from({ length: 25 }, (_, index) => ({ name: `skill-${index + 1}`, description: "测试技能" })),
       commands: Array.from({ length: 25 }, (_, index) => ({ name: `command-${index + 1}`, description: "测试命令", source: "extension" as const })),
     }));
-    const { rerender } = render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
+    const { rerender } = renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
 
     const textbox = screen.getByRole("textbox");
     fireEvent.change(textbox, { target: { value: "@" } });
@@ -48,7 +57,7 @@ describe("ReferenceComposer", () => {
   });
 
   it("加号菜单可通过页面空白处关闭，且附件控件与加号共用操作轨", async () => {
-    render(
+    renderReferenceComposer(
       <ReferenceComposer
         value=""
         references={[]}
@@ -80,7 +89,7 @@ describe("ReferenceComposer", () => {
       ...emptyCatalog,
       skills: [{ name: "first", description: "第一项" }, { name: "second", description: "第二项" }],
     }));
-    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
+    renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={loadCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
 
     const textbox = screen.getByRole("textbox");
     fireEvent.change(textbox, { target: { value: "@" } });
@@ -93,7 +102,7 @@ describe("ReferenceComposer", () => {
   it("粘贴剪贴板图片时转为附件并过滤图片占位文本", () => {
     const onChange = vi.fn();
     const onFilesInput = vi.fn();
-    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
     const image = new File(["image"], "clipboard.png", { type: "image/png" });
 
     fireEvent.paste(screen.getByRole("textbox"), {
@@ -107,7 +116,7 @@ describe("ReferenceComposer", () => {
   it("粘贴图片与真实文本时在光标位置保留真实文本", () => {
     const onChange = vi.fn();
     const onFilesInput = vi.fn();
-    render(<ReferenceComposer value="开头结尾" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    renderReferenceComposer(<ReferenceComposer value="开头结尾" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     textbox.setSelectionRange(2, 2);
     const image = new File(["image"], "clipboard.png", { type: "image/png" });
@@ -123,7 +132,7 @@ describe("ReferenceComposer", () => {
   it("过滤图片占位行时不裁剪真实文本的空白", () => {
     const onChange = vi.fn();
     const image = new File(["image"], "clipboard.png", { type: "image/png" });
-    render(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={vi.fn()} />);
+    renderReferenceComposer(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={vi.fn()} />);
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     textbox.setSelectionRange(1, 1);
 
@@ -137,7 +146,7 @@ describe("ReferenceComposer", () => {
   it("拖入本地图片添加附件，拖入纯文本则插入当前光标", () => {
     const onChange = vi.fn();
     const onFilesInput = vi.fn();
-    const { rerender } = render(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    const { rerender } = renderReferenceComposer(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
     const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
     textbox.setSelectionRange(1, 1);
     const image = new File(["image"], "drop.png", { type: "image/png" });
@@ -154,7 +163,7 @@ describe("ReferenceComposer", () => {
   it("拖入远程图片地址仅作为文本插入，不主动获取远程资源", () => {
     const onChange = vi.fn();
     const onFilesInput = vi.fn();
-    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
 
     fireEvent.drop(screen.getByRole("textbox"), {
       dataTransfer: transferData([], "https://example.com/image.png"),
@@ -166,7 +175,7 @@ describe("ReferenceComposer", () => {
 
   it("在输入组件附件区释放本地图片也会添加附件", () => {
     const onFilesInput = vi.fn();
-    render(
+    renderReferenceComposer(
       <ReferenceComposer
         value=""
         references={[]}

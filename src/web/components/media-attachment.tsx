@@ -2,6 +2,7 @@ import { Download, FileText } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { WorkspaceFileRef, WorkspaceFileSummary } from "../../shared/contracts";
 import { api, workspaceFileUrl } from "../api";
+import { useApiTask } from "../api-task-provider";
 import { formatFileSize } from "./attachment-picker";
 
 interface MediaAttachmentProps {
@@ -15,6 +16,7 @@ interface MediaAttachmentProps {
  * 根据工作目录相对路径恢复实时元数据，展示媒体预览和下载入口。
  */
 export function MediaAttachment({ file, agentId = "default", onResolved, onPreview }: MediaAttachmentProps) {
+  const { runApiTask } = useApiTask();
   const [summary, setSummary] = useState<WorkspaceFileSummary | undefined>(() => isWorkspaceFileSummary(file) ? file : undefined);
   const [unavailable, setUnavailable] = useState(false);
 
@@ -27,21 +29,16 @@ export function MediaAttachment({ file, agentId = "default", onResolved, onPrevi
     let active = true;
     setSummary(undefined);
     setUnavailable(false);
-    api.getWorkspaceFile(agentId, file.path)
-      .then((next) => {
-        if (active) {
-          setSummary(next);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setUnavailable(true);
-        }
-      });
+    void runApiTask(() => api.getWorkspaceFile(agentId, file.path), {
+      operation: "读取附件信息",
+      expected: { FILE_NOT_FOUND: () => { if (active) setUnavailable(true); } },
+    }).then((result) => {
+      if (active && result.status === "success") setSummary(result.data);
+    });
     return () => {
       active = false;
     };
-  }, [agentId, file]);
+  }, [agentId, file, runApiTask]);
 
   useEffect(() => {
     if (summary) onResolved?.(summary);

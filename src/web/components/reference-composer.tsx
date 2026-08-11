@@ -2,6 +2,7 @@ import { ChevronLeft, Database, File, Folder, Plus, Terminal, WandSparkles } fro
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import type { AgentReference, FileReference } from "../../shared/agent-reference-contracts";
 import type { ComposerCatalog, WorkspaceEntry } from "../../shared/contracts";
+import { useApiTask } from "../api-task-provider";
 import { AgentReferenceChips } from "./agent-reference-chips";
 
 interface ReferenceComposerProps {
@@ -31,6 +32,7 @@ type Candidate =
  * 支持 @ 资源引用、/ 安全命令补全与加号快捷选择的对话输入组件。
  */
 export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, onFilesInput, editingContext, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
+  const { runApiTask } = useApiTask();
   const [text, setText] = useState(value);
   const [catalog, setCatalog] = useState<ComposerCatalog>();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -48,6 +50,18 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
   const mode = useMemo(() => detectMode(text), [text]);
   const candidates = useMemo(() => catalog ? buildCandidates(catalog, mode, references) : [], [catalog, mode, references]);
   const displayMenu = (mode !== undefined && candidates.length > 0) || menuOpen;
+
+  const loadReferenceCatalog = async () => {
+    const result = await runApiTask(loadCatalog, {
+      operation: "加载引用目录",
+      expected: {
+        INVALID_REFERENCE: (error) => onCatalogError?.(error.message),
+        FILE_NOT_FOUND: (error) => onCatalogError?.(error.message),
+        AGENT_NOT_FOUND: (error) => onCatalogError?.(error.message),
+      },
+    });
+    if (result.status === "success") setCatalog(result.data);
+  };
 
   useEffect(() => {
     setActiveIndex((index) => Math.min(index, Math.max(candidates.length - 1, 0)));
@@ -89,9 +103,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
     const key = `${nextMode.type}:${nextMode.start}`;
     if (activeTriggerRef.current !== key) {
       activeTriggerRef.current = key;
-      void loadCatalog().then(setCatalog).catch((reason: unknown) => {
-        onCatalogError?.(reason instanceof Error ? reason.message : "引用目录加载失败。");
-      });
+      void loadReferenceCatalog();
     }
   };
 
@@ -163,9 +175,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
     setMenuOpen((open) => !open);
     setMenuDirectory("");
     if (!catalog) {
-      void loadCatalog().then(setCatalog).catch((reason: unknown) => {
-        onCatalogError?.(reason instanceof Error ? reason.message : "引用目录加载失败。");
-      });
+      void loadReferenceCatalog();
     }
   };
 
