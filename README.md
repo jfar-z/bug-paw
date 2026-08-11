@@ -78,7 +78,16 @@ Set-Location bug-paw
 .\scripts\deploy.ps1 core
 ```
 
-脚本会在缺少 `.env` 时从 `.env.example` 创建，不覆盖已有配置；随后校验 Compose、构建镜像、启动容器并等待健康检查。浏览器访问 `http://127.0.0.1:7080` 完成首启初始化。
+脚本会在缺少 `.env` 时从 `.env.example` 创建，不覆盖已有配置；随后校验 Compose、构建镜像、启动容器并等待健康检查。默认镜像构建只生成并检查生产 Bundle，不运行全量测试，以便快速启动。浏览器访问 `http://127.0.0.1:7080` 完成首启初始化。
+
+如需在部署前重新执行 TypeScript、架构、全部 Vitest、生产构建与 Bundle 门禁，请先显式构建验证目标；`--no-cache` 确保本次实际重新执行验证：
+
+```bash
+docker build --no-cache --target verify .
+./scripts/deploy.sh core
+```
+
+Windows PowerShell 将最后一行替换为 `.\scripts\deploy.ps1 core`。部署其他能力组合时，将 `core` 替换为 `search`、`vector` 或 `full`。
 
 ### 四种部署组合
 
@@ -196,9 +205,9 @@ npm run dev
 项目规定生产验证统一在 Node 24 容器中运行：
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm test
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run build
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run verify
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm test
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run build
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run verify
 ```
 
 更多架构与安全边界见 `docs/`。贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -289,7 +298,16 @@ Set-Location bug-paw
 .\scripts\deploy.ps1 core
 ```
 
-If `.env` is missing, the helper creates it from `.env.example` without replacing existing settings. It validates Compose, builds the image, starts services, and waits for health checks. Open `http://127.0.0.1:7080` to complete first-run setup.
+If `.env` is missing, the helper creates it from `.env.example` without replacing existing settings. It validates Compose, builds the image, starts services, and waits for health checks. By default, the image build only produces and checks the production bundle; it does not run the full test suite, which keeps first startup fast. Open `http://127.0.0.1:7080` to complete first-run setup.
+
+To rerun TypeScript, architecture, all Vitest, production build, and bundle gates before deployment, build the verification target first. `--no-cache` ensures this invocation actually reruns verification:
+
+```bash
+docker build --no-cache --target verify .
+./scripts/deploy.sh core
+```
+
+On Windows PowerShell, replace the last line with `.\scripts\deploy.ps1 core`. Replace `core` with `search`, `vector`, or `full` for another deployment combination.
 
 ### Deployment combinations
 
@@ -407,9 +425,9 @@ npm run dev
 Production verification is standardized on Node 24 containers:
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm test
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run build
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run verify
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm test
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run build
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run verify
 ```
 
 See `docs/` for architecture and security boundaries. Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.

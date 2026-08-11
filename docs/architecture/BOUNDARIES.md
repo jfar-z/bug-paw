@@ -14,4 +14,4 @@
 - 新 API 必须使用 `/api/v1`、共享 `ApiErrorCode`、统一错误出口和 `requestId`。
 - 修改后运行 `npm run verify`。
 
-自动门禁：`scripts/check-architecture.ts`、TypeScript strict、Vitest、Bundle 预算和 Docker build 内 `npm run verify`。
+自动门禁：`scripts/check-architecture.ts`、TypeScript strict、Vitest 与 Bundle 预算由 `npm run verify` 统一执行；容器化全量验证使用 Dockerfile 的 `verify` 目标，默认镜像构建只执行生产构建与 Bundle 检查。
