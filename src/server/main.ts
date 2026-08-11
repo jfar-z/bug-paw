@@ -52,6 +52,7 @@ import { ensureScheduledTaskSkill } from "./scheduled-tasks/global-skill";
 import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool";
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
+import { ManagedSearchProviderRegistry } from "./web-research/managed-search-provider-registry";
 import { createWebResearchService } from "./web-research/web-research-service";
 import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
 import { registerWebResearchRoutes } from "./routes/web-research";
@@ -214,9 +215,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     process.env.WEB_RESEARCH_EGRESS_PROFILES_PATH,
     process.env.WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS,
   );
-  const webResearchConfigs = new WebResearchConfigService(join(paths.appDir, "web-research.json"), webResearchEgressProfiles);
-  await webResearchConfigs.migrateLegacyInternalHost();
-  const webResearch = createWebResearchService(webResearchConfigs, webResearchEgressProfiles);
+  const managedSearchProviders = new ManagedSearchProviderRegistry(process.env.BUG_PAW_MANAGED_SEARCH_AVAILABLE === "true");
+  const webResearchConfigs = new WebResearchConfigService(join(paths.appDir, "web-research.json"), webResearchEgressProfiles, managedSearchProviders);
+  await webResearchConfigs.migrateLegacyConfig();
+  const webResearch = createWebResearchService(webResearchConfigs, webResearchEgressProfiles, undefined, managedSearchProviders);
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
   const ttsSynthesis = new TtsSynthesisService(ttsConfigs);
   await recoverPendingProviderRenames(paths, models, agentStore);

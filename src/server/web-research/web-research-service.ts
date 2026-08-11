@@ -4,6 +4,7 @@ import type { WebResearchConfigDocument } from "../../shared/web-research-contra
 import { SafeWebClient } from "./safe-web-client";
 import { WebResearchConfigService } from "./web-research-config-service";
 import { EgressProfileRegistry } from "./egress-profile-registry";
+import { ManagedSearchProviderRegistry } from "./managed-search-provider-registry";
 import type { SearchProvider, SearchProviderHealth, SearchProviderItem } from "./search-provider";
 import { SearxngSearchProvider } from "./searxng-search-provider";
 import type { ToolWarning } from "../retrieval/tool-response";
@@ -168,11 +169,24 @@ export class WebResearchService {
 }
 
 /** 创建生产环境使用的联网搜索服务。 */
-export function createWebResearchService(configs: WebResearchConfigService, egressProfiles = new EgressProfileRegistry(), client = new SafeWebClient()): WebResearchService {
+export function createWebResearchService(
+  configs: WebResearchConfigService,
+  egressProfiles = new EgressProfileRegistry(),
+  client = new SafeWebClient(),
+  managedProviders = new ManagedSearchProviderRegistry(false),
+): WebResearchService {
   return new WebResearchService({
     readConfig: () => configs.read(),
-    createSearchProvider: (config) => new SearxngSearchProvider(config.searxngBaseUrl, config.timeoutMs),
-    fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.egressProfileId)),
+    createSearchProvider: (config) => {
+      const provider = config.searchProviders.find((candidate) => candidate.enabled);
+      if (!provider || provider.type !== "searxng") throw new Error("尚未配置可用的 SearXNG 搜索服务");
+      const baseUrl = provider.connectionMode === "managed"
+        ? managedProviders.resolveManagedBaseUrl(provider.id)
+        : provider.baseUrl;
+      if (!baseUrl) throw new Error("SearXNG 地址尚未配置");
+      return new SearxngSearchProvider(baseUrl, provider.timeoutMs);
+    },
+    fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.webRead.egressProfileId)),
     extract: (html, url) => extractFromHtml(html, url),
   });
 }

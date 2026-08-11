@@ -1,19 +1,54 @@
+/** 搜索服务支持的供应商类型。 */
+export type SearchProviderType = "searxng" | "bocha" | "tavily";
+
+/** 搜索服务地址的受管方式。 */
+export type SearchProviderConnectionMode = "managed" | "custom" | "official";
+
+/** 单个搜索服务实例的非敏感配置。 */
+export interface SearchProviderConfig {
+  /** 创建后不可修改的实例标识。 */
+  id: string;
+  /** 配置中心展示的实例名称。 */
+  name: string;
+  /** 供应商协议类型。 */
+  type: SearchProviderType;
+  /** 服务地址由部署、管理员或官方 Adapter 管理。 */
+  connectionMode: SearchProviderConnectionMode;
+  /** 是否参与搜索路由。 */
+  enabled: boolean;
+  /** 单次供应商请求超时毫秒数。 */
+  timeoutMs: number;
+  /** 可选的部署侧联网出口标识。 */
+  egressProfileId?: string;
+  /** 仅自定义 SearXNG 使用的基础地址。 */
+  baseUrl?: string;
+}
+
+/** 配置中心可添加的搜索服务模板。 */
+export interface SearchProviderTemplate {
+  id: string;
+  name: string;
+  type: SearchProviderType;
+  connectionMode: SearchProviderConnectionMode;
+}
+
 /**
  * 联网搜索的持久化配置。
  */
 export interface WebResearchConfig {
   /** 是否向 Agent Runtime 提供联网工具。 */
   enabled: boolean;
-  /** 管理员受管的 SearXNG 服务地址。 */
-  searxngBaseUrl: string;
-  /** 当前联网请求使用的部署侧出口配置档。 */
-  egressProfileId: string;
+  /** 按数组顺序执行故障切换的搜索实例。 */
+  searchProviders: SearchProviderConfig[];
+  /** 网页正文读取专用的网络与超时设置。 */
+  webRead: {
+    egressProfileId: string;
+    timeoutMs: number;
+  };
   /** 单次搜索最多返回的结果数。 */
   maxResults: number;
   /** 单页正文最多保留的字符数。 */
   maxTextLength: number;
-  /** 单次出站请求的超时毫秒数。 */
-  timeoutMs: number;
   /** 单次网页读取允许的最大重定向次数。 */
   maxRedirects: number;
   /** 单次网页读取允许的最大响应体字节数。 */
@@ -24,6 +59,12 @@ export interface WebResearchConfig {
   allowedDomains: string[];
   /** Agent 可读取的公开响应 MIME 类型。 */
   allowedContentTypes: Array<"text/html" | "text/plain">;
+  /** @deprecated 仅供页面迁移期间保持类型兼容，服务端不会持久化。 */
+  searxngBaseUrl?: string;
+  /** @deprecated 仅供页面迁移期间保持类型兼容，服务端不会持久化。 */
+  egressProfileId?: string;
+  /** @deprecated 仅供页面迁移期间保持类型兼容，服务端不会持久化。 */
+  timeoutMs?: number;
 }
 
 /**
@@ -39,16 +80,16 @@ export interface WebResearchConfigDocument {
 /** 配置中心读取的联网搜索设置，附带安全出口摘要。 */
 export interface WebResearchSettingsDocument extends WebResearchConfigDocument {
   egressProfiles: import("./web-research-egress-contracts").WebResearchEgressProfileSummary[];
+  providerTemplates?: SearchProviderTemplate[];
 }
 
 /** 联网搜索的保守默认策略。 */
 export const DEFAULT_WEB_RESEARCH_CONFIG: WebResearchConfig = {
   enabled: false,
-  searxngBaseUrl: "http://bug-paw-search:8080",
-  egressProfileId: "direct",
+  searchProviders: [],
+  webRead: { egressProfileId: "direct", timeoutMs: 10_000 },
   maxResults: 5,
   maxTextLength: 20_000,
-  timeoutMs: 10_000,
   maxRedirects: 3,
   maxResponseBytes: 2 * 1024 * 1024,
   httpsOnly: true,
