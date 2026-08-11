@@ -18,4 +18,32 @@ describe("Chat SSE 轻量校验", () => {
     expect(isSessionEvent({ id: 3, type: "session_renamed", sessionId: "s1", name: "登录故障排查" })).toBe(true);
     expect(isProjectionRequiredEvent({ id: 7, type: "projection_required", sessionId: "s1", lastEventId: 7 })).toBe(true);
   });
+
+  it("校验工具准备开始与参数完成事件", () => {
+    expect(isSessionEvent({
+      id: 1,
+      type: "tool_preparing",
+      sessionId: "s1",
+      runId: "r1",
+      callId: "call-1",
+      toolName: "write",
+    })).toBe(true);
+    expect(isSessionEvent({
+      id: 2,
+      type: "tool_prepared",
+      sessionId: "s1",
+      runId: "r1",
+      callId: "call-1",
+      toolName: "write",
+      args: { path: "src/app.ts", content: "内容" },
+    })).toBe(true);
+    expect(isSessionEvent({
+      id: 3,
+      type: "tool_preparing",
+      sessionId: "s1",
+      runId: "r1",
+      callId: "",
+      toolName: "write",
+    })).toBe(false);
+  });
 });

@@ -42,6 +42,8 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     case "thinking_finished":
     case "completed":
     case "aborted": return true;
+    case "tool_preparing": return isToolIdentity(value);
+    case "tool_prepared": return isToolIdentity(value) && "args" in value;
     case "tool_started": return isToolIdentity(value) && "args" in value;
     case "tool_updated": return isToolIdentity(value) && "partialResult" in value;
     case "tool_finished": return isToolIdentity(value) && "result" in value && typeof value.isError === "boolean";
