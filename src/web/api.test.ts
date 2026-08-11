@@ -101,21 +101,43 @@ describe("会话批量 API", () => {
 describe("联网搜索 Provider API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("编码实例 ID 并使用独立版本发送凭证和删除请求", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      credentialRevision: "credential-2",
-      status: { providerId: "bocha/main", type: "api_key", configured: true },
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+  it("按作用域发送全局、渠道、排序和删除请求", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.setWebResearchProviderCredential("bocha/main", "credential-1", "secret");
+    const provider = { id: "bocha/main", name: "博查", type: "bocha" as const, connectionMode: "official" as const, enabled: false, timeoutMs: 8_000 };
+    await api.updateWebResearchGlobal("config-1", {
+      enabled: false,
+      webRead: { egressProfileId: "direct", timeoutMs: 10_000 },
+      maxResults: 5,
+      maxTextLength: 20_000,
+      maxRedirects: 3,
+      maxResponseBytes: 2_097_152,
+      httpsOnly: true,
+      allowedDomains: [],
+      allowedContentTypes: ["text/html"],
+    });
+    await api.createWebResearchProvider({ configRevision: "config-1", credentialRevision: "credential-1", provider, apiKey: "secret" });
+    await api.updateWebResearchProvider("bocha/main", {
+      configRevision: "config-2",
+      credentialRevision: "credential-2",
+      provider,
+      credential: { action: "keep" },
+    });
+    await api.reorderWebResearchProviders("config-3", ["bocha/main"]);
     await api.deleteWebResearchProvider("bocha/main", "config-1", "credential-2");
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/capabilities/web-research/providers/bocha%2Fmain/credential", expect.objectContaining({
-      method: "PUT",
-      body: JSON.stringify({ revision: "credential-1", apiKey: "secret" }),
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/capabilities/web-research/global", expect.objectContaining({ method: "PATCH" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/capabilities/web-research/providers", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ configRevision: "config-1", credentialRevision: "credential-1", provider, apiKey: "secret" }),
     }));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/capabilities/web-research/providers/bocha%2Fmain", expect.objectContaining({
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/v1/capabilities/web-research/providers/bocha%2Fmain", expect.objectContaining({ method: "PATCH" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/v1/capabilities/web-research/providers/order", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ revision: "config-3", providerIds: ["bocha/main"] }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(5, "/api/v1/capabilities/web-research/providers/bocha%2Fmain", expect.objectContaining({
       method: "DELETE",
       body: JSON.stringify({ configRevision: "config-1", credentialRevision: "credential-2" }),
     }));

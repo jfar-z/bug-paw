@@ -25,7 +25,7 @@ describe("联网搜索配置路由", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it("在版本化接口下读取、保存并测试受管搜索服务", async () => {
+  it("独立保存全局策略并测试已持久化的受管搜索服务", async () => {
     const { app, refreshRuntime, testProvider } = await fixture();
 
     const loaded = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" });
@@ -36,10 +36,11 @@ describe("联网搜索配置路由", () => {
     expect(JSON.stringify(loaded.json())).not.toContain("bug-paw-search:8080");
     expect(loaded.headers["cache-control"]).toBe("no-store");
 
+    const { searchProviders: _providers, ...globalConfig } = loaded.json().config;
     const saved = await app.inject({
       method: "PATCH",
-      url: "/api/v1/capabilities/web-research",
-      payload: { revision: loaded.json().revision, config: { ...loaded.json().config, enabled: true, maxResults: 8 } },
+      url: "/api/v1/capabilities/web-research/global",
+      payload: { revision: loaded.json().revision, config: { ...globalConfig, enabled: true, maxResults: 8 } },
     });
     expect(saved.statusCode).toBe(200);
     expect(saved.json().config).toMatchObject({ enabled: true, maxResults: 8 });
@@ -52,70 +53,77 @@ describe("联网搜索配置路由", () => {
     await app.close();
   });
 
-  it("独立保存并按需读取搜索 API Key，普通配置响应始终脱敏", async () => {
-    const { app } = await fixture();
+  it("原子新增和编辑搜索渠道，普通配置响应始终脱敏", async () => {
+    const { app, refreshRuntime } = await fixture();
     const loaded = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" });
     const added = await app.inject({
       method: "POST",
       url: "/api/v1/capabilities/web-research/providers",
       payload: {
-        revision: loaded.json().revision,
-        provider: { id: "bocha-main", name: "博查主线路", type: "bocha", connectionMode: "official", enabled: false, timeoutMs: 8_000, egressProfileId: "direct" },
+        configRevision: loaded.json().revision,
+        credentialRevision: loaded.json().credentialRevision,
+        provider: { id: "bocha-main", name: "博查主线路", type: "bocha", connectionMode: "official", enabled: true, timeoutMs: 8_000, egressProfileId: "direct" },
+        apiKey: "search-secret",
       },
     });
     expect(added.statusCode).toBe(201);
+    expect(added.json().config.searchProviders).toContainEqual(expect.objectContaining({ id: "bocha-main", enabled: true }));
+    expect(JSON.stringify(added.json())).not.toContain("search-secret");
 
-    const missingCredential = await app.inject({
+    const edited = await app.inject({
       method: "PATCH",
-      url: "/api/v1/capabilities/web-research",
+      url: "/api/v1/capabilities/web-research/providers/bocha-main",
       payload: {
-        revision: added.json().revision,
-        config: {
-          ...added.json().config,
-          enabled: true,
-          searchProviders: added.json().config.searchProviders.map((provider: { id: string }) => provider.id === "bocha-main" ? { ...provider, enabled: true } : { ...provider, enabled: false }),
-        },
+        configRevision: added.json().revision,
+        credentialRevision: added.json().credentialRevision,
+        provider: { id: "bocha-main", name: "博查备用线路", type: "bocha", connectionMode: "official", enabled: false, timeoutMs: 9_000 },
+        credential: { action: "replace", apiKey: "replacement-secret" },
       },
     });
-    expect(missingCredential.statusCode).toBe(400);
-    expect(missingCredential.json().error.message).toContain("API Key");
-
-    const saved = await app.inject({
-      method: "PUT",
-      url: "/api/v1/capabilities/web-research/providers/bocha-main/credential",
-      payload: { revision: added.json().credentialRevision, apiKey: "search-secret" },
-    });
-    expect(saved.statusCode).toBe(200);
-    expect(JSON.stringify(saved.json())).not.toContain("search-secret");
-
-    const enabled = await app.inject({
-      method: "PATCH",
-      url: "/api/v1/capabilities/web-research",
-      payload: {
-        revision: added.json().revision,
-        config: {
-          ...added.json().config,
-          enabled: true,
-          searchProviders: added.json().config.searchProviders.map((provider: { id: string }) => provider.id === "bocha-main" ? { ...provider, enabled: true } : { ...provider, enabled: false }),
-        },
-      },
-    });
-    expect(enabled.statusCode).toBe(200);
-
-    const deleteWhileEnabled = await app.inject({
-      method: "DELETE",
-      url: "/api/v1/capabilities/web-research/providers/bocha-main/credential",
-      payload: { revision: saved.json().credentialRevision },
-    });
-    expect(deleteWhileEnabled.statusCode).toBe(400);
+    expect(edited.statusCode).toBe(200);
+    expect(edited.json().config.searchProviders).toContainEqual(expect.objectContaining({ id: "bocha-main", name: "博查备用线路", enabled: false }));
+    expect(JSON.stringify(edited.json())).not.toContain("replacement-secret");
+    expect(refreshRuntime).toHaveBeenCalledTimes(2);
 
     const settings = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" });
     expect(settings.json().credentials).toContainEqual({ providerId: "bocha-main", type: "api_key", configured: true });
     expect(JSON.stringify(settings.json())).not.toContain("search-secret");
 
     const shown = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research/providers/bocha-main/credential" });
-    expect(shown.json()).toEqual({ apiKey: "search-secret" });
+    expect(shown.json()).toEqual({ apiKey: "replacement-secret" });
     expect(shown.headers["cache-control"]).toBe("no-store");
+
+    expect((await app.inject({
+      method: "PUT",
+      url: "/api/v1/capabilities/web-research/providers/bocha-main/credential",
+      payload: { revision: edited.json().credentialRevision, apiKey: "obsolete" },
+    })).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("按完整标识列表即时保存渠道顺序", async () => {
+    const { app, refreshRuntime } = await fixture();
+    const loaded = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" });
+    const added = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/web-research/providers",
+      payload: {
+        configRevision: loaded.json().revision,
+        credentialRevision: loaded.json().credentialRevision,
+        provider: { id: "bocha-main", name: "博查", type: "bocha", connectionMode: "official", enabled: false, timeoutMs: 8_000 },
+      },
+    });
+    const ids = added.json().config.searchProviders.map(({ id }: { id: string }) => id).reverse();
+
+    const reordered = await app.inject({
+      method: "PUT",
+      url: "/api/v1/capabilities/web-research/providers/order",
+      payload: { revision: added.json().revision, providerIds: ids },
+    });
+
+    expect(reordered.statusCode).toBe(200);
+    expect(reordered.json().config.searchProviders.map(({ id }: { id: string }) => id)).toEqual(ids);
+    expect(refreshRuntime).toHaveBeenCalledTimes(2);
     await app.close();
   });
 
@@ -126,20 +134,17 @@ describe("联网搜索配置路由", () => {
       method: "POST",
       url: "/api/v1/capabilities/web-research/providers",
       payload: {
-        revision: loaded.json().revision,
+        configRevision: loaded.json().revision,
+        credentialRevision: loaded.json().credentialRevision,
         provider: { id: "tavily-backup", name: "Tavily 备用", type: "tavily", connectionMode: "official", enabled: false, timeoutMs: 10_000 },
+        apiKey: "delete-me",
       },
-    });
-    const credential = await app.inject({
-      method: "PUT",
-      url: "/api/v1/capabilities/web-research/providers/tavily-backup/credential",
-      payload: { revision: added.json().credentialRevision, apiKey: "delete-me" },
     });
 
     const deleted = await app.inject({
       method: "DELETE",
       url: "/api/v1/capabilities/web-research/providers/tavily-backup",
-      payload: { configRevision: added.json().revision, credentialRevision: credential.json().credentialRevision },
+      payload: { configRevision: added.json().revision, credentialRevision: added.json().credentialRevision },
     });
 
     expect(deleted.statusCode).toBe(204);
@@ -156,13 +161,21 @@ describe("联网搜索配置路由", () => {
     expect((await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" })).statusCode).toBe(401);
     vi.mocked(authService.isAuthenticated).mockImplementation(async () => true);
     const loaded = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" });
+    const { searchProviders: _providers, ...globalConfig } = loaded.json().config;
     const invalid = await app.inject({
       method: "PATCH",
-      url: "/api/v1/capabilities/web-research",
-      payload: { revision: loaded.json().revision, config: { ...DEFAULT_WEB_RESEARCH_CONFIG, maxResults: 99 } },
+      url: "/api/v1/capabilities/web-research/global",
+      payload: { revision: loaded.json().revision, config: { ...globalConfig, maxResults: 99 } },
     });
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error.code).toBe("VALIDATION_FAILED");
+
+    const obsolete = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/capabilities/web-research",
+      payload: { revision: loaded.json().revision, config: DEFAULT_WEB_RESEARCH_CONFIG },
+    });
+    expect(obsolete.statusCode).toBe(404);
 
     await app.close();
   });
