@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createKnowledgeManageTool,
@@ -24,7 +24,25 @@ function parseResult(result: { content: readonly unknown[] }) {
   return JSON.parse((result.content[0] as { type: "text"; text: string }).text);
 }
 
+/** 断言工具参数使用 Provider 兼容的根对象 Schema。 */
+function expectObjectRootSchema(tool: { parameters: unknown }): void {
+  const schema = tool.parameters as Record<string, unknown>;
+  expect(schema.type).toBe("object");
+  expect(schema).not.toHaveProperty("anyOf");
+  expect(schema).not.toHaveProperty("oneOf");
+  expect(schema).not.toHaveProperty("allOf");
+}
+
 describe("知识库 Pi 工具", () => {
+  it("所有知识库工具都使用无根组合关键字的 Object Schema", () => {
+    const service = {} as never;
+    const files = {} as never;
+
+    expectObjectRootSchema(createKnowledgeSearchTool("agent-a", service));
+    expectObjectRootSchema(createKnowledgeReadTool("agent-a", service));
+    expectObjectRootSchema(createKnowledgeManageTool("agent-a", service, files));
+  });
+
   it("knowledge_search 转发多个知识库范围并返回统一成功协议", async () => {
     const calls: unknown[] = [];
     const tool = createKnowledgeSearchTool("agent-a", {
@@ -127,6 +145,22 @@ describe("知识库 Pi 工具", () => {
     ]);
   });
 
+  it("knowledge_read 缺少条件字段时不调用服务", async () => {
+    const readForAgent = vi.fn();
+    const tool = createKnowledgeReadTool("agent-a", { readForAgent });
+
+    const result = await tool.execute(
+      "bad-read",
+      { mode: "around_chunk", documentId: "doc-1" } as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(readForAgent).not.toHaveBeenCalled();
+    expect(parseResult(result)).toMatchObject({ status: "error" });
+  });
+
   it("knowledge_manage 使用六种规范 action 并保持工作区读取边界", async () => {
     const calls: unknown[] = [];
     const service = {
@@ -182,6 +216,31 @@ describe("知识库 Pi 工具", () => {
     expect(results.map((result) => parseResult(result).status)).toEqual([
       "ok", "ok", "ok", "ok", "ok", "ok",
     ]);
+  });
+
+  it("knowledge_manage 缺少 action 条件字段时不调用服务或文件读取", async () => {
+    const service = {
+      listBasesForAgent: vi.fn(),
+      createBaseForAgent: vi.fn(),
+      updateBaseForAgent: vi.fn(),
+      uploadDocumentsForAgent: vi.fn(),
+      removeBaseForAgent: vi.fn(),
+      removeDocumentForAgent: vi.fn(),
+    };
+    const files = { readFile: vi.fn() };
+    const tool = createKnowledgeManageTool("agent-a", service, files);
+
+    const result = await tool.execute(
+      "bad-manage",
+      { action: "delete_document", knowledgeBaseId: "base-1" } as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(Object.values(service).every((method) => method.mock.calls.length === 0)).toBe(true);
+    expect(files.readFile).not.toHaveBeenCalled();
+    expect(parseResult(result)).toMatchObject({ status: "error" });
   });
 
   it("工具错误只返回稳定错误事实", async () => {

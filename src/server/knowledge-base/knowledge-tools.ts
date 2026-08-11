@@ -91,25 +91,19 @@ export function createKnowledgeReadTool(agentId: string, service: KnowledgeReadS
     name: "knowledge_read",
     label: "读取知识库资料",
     description: "读取知识库命中切片周围的上下文，或按偏移量读取资料正文。",
-    parameters: Type.Union([
-      Type.Object({
-        mode: Type.Literal("around_chunk"),
-        documentId: Type.String({ minLength: 1 }),
-        anchorChunkId: Type.String({ minLength: 1 }),
-        beforeChunks: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
-        afterChunks: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
-        maxCharacters: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
-      }, { additionalProperties: false }),
-      Type.Object({
-        mode: Type.Literal("document"),
-        documentId: Type.String({ minLength: 1 }),
-        offset: Type.Optional(Type.Integer({ minimum: 0 })),
-        maxCharacters: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
-      }, { additionalProperties: false }),
-    ]),
+    parameters: Type.Object({
+      mode: Type.Union([Type.Literal("around_chunk"), Type.Literal("document")]),
+      documentId: Type.String({ minLength: 1 }),
+      anchorChunkId: Type.Optional(Type.String({ minLength: 1 })),
+      beforeChunks: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+      afterChunks: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+      offset: Type.Optional(Type.Integer({ minimum: 0 })),
+      maxCharacters: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       try {
-        const result = await service.readForAgent(agentId, params);
+        const input = validateKnowledgeReadInput(params);
+        const result = await service.readForAgent(agentId, input);
         const warnings: ToolWarning[] = [...result.warnings];
         if (result.metadata.truncated && !warnings.some(({ code }) => code === "CONTENT_TRUNCATED")) {
           warnings.push({ code: "CONTENT_TRUNCATED", message: "返回正文已按字符上限截断" });
@@ -139,34 +133,21 @@ export function createKnowledgeManageTool(
     name: "knowledge_manage",
     label: "管理知识库",
     description: "列出、创建、更新、导入或删除当前 Agent 可管理的知识库与资料。",
-    parameters: Type.Union([
-      Type.Object({ action: Type.Literal("list_bases") }, { additionalProperties: false }),
-      Type.Object({
-        action: Type.Literal("create_base"),
-        name: Type.String({ minLength: 1, maxLength: 80 }),
-        description: Type.Optional(Type.String({ maxLength: 300 })),
-      }, { additionalProperties: false }),
-      Type.Object({
-        action: Type.Literal("update_base"),
-        knowledgeBaseId: Type.String({ minLength: 1 }),
-        name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
-        description: Type.Optional(Type.String({ maxLength: 300 })),
-      }, { additionalProperties: false }),
-      Type.Object({
-        action: Type.Literal("upload_documents"),
-        knowledgeBaseId: Type.String({ minLength: 1 }),
-        paths: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 10 }),
-      }, { additionalProperties: false }),
-      Type.Object({
-        action: Type.Literal("delete_document"),
-        knowledgeBaseId: Type.String({ minLength: 1 }),
-        documentId: Type.String({ minLength: 1 }),
-      }, { additionalProperties: false }),
-      Type.Object({
-        action: Type.Literal("delete_base"),
-        knowledgeBaseId: Type.String({ minLength: 1 }),
-      }, { additionalProperties: false }),
-    ]),
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("list_bases"),
+        Type.Literal("create_base"),
+        Type.Literal("update_base"),
+        Type.Literal("upload_documents"),
+        Type.Literal("delete_document"),
+        Type.Literal("delete_base"),
+      ]),
+      knowledgeBaseId: Type.Optional(Type.String({ minLength: 1 })),
+      name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
+      description: Type.Optional(Type.String({ maxLength: 300 })),
+      paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 10 })),
+      documentId: Type.Optional(Type.String({ minLength: 1 })),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       try {
         if (params.action === "list_bases") {
@@ -176,6 +157,7 @@ export function createKnowledgeManageTool(
           ));
         }
         if (params.action === "create_base") {
+          if (params.name === undefined) throw new TypeError("create_base 操作必须提供 name");
           const knowledgeBase = await service.createBaseForAgent(agentId, {
             name: params.name.trim(),
             ...(params.description !== undefined ? { description: params.description } : {}),
@@ -183,6 +165,7 @@ export function createKnowledgeManageTool(
           return toPiToolResult(okResponse({ knowledgeBase }, { action: params.action }));
         }
         if (params.action === "update_base") {
+          if (params.knowledgeBaseId === undefined) throw new TypeError("update_base 操作必须提供 knowledgeBaseId");
           if (params.name === undefined && params.description === undefined) throw new Error("至少提供名称或说明");
           const knowledgeBase = await service.updateBaseForAgent(agentId, params.knowledgeBaseId, {
             ...(params.name !== undefined ? { name: params.name.trim() } : {}),
@@ -191,6 +174,8 @@ export function createKnowledgeManageTool(
           return toPiToolResult(okResponse({ knowledgeBase }, { action: params.action }));
         }
         if (params.action === "upload_documents") {
+          if (params.knowledgeBaseId === undefined) throw new TypeError("upload_documents 操作必须提供 knowledgeBaseId");
+          if (params.paths === undefined) throw new TypeError("upload_documents 操作必须提供 paths");
           const documents: KnowledgeDocument[] = [];
           let totalBytes = 0;
           for (const path of params.paths) {
@@ -207,6 +192,8 @@ export function createKnowledgeManageTool(
           ));
         }
         if (params.action === "delete_document") {
+          if (params.knowledgeBaseId === undefined) throw new TypeError("delete_document 操作必须提供 knowledgeBaseId");
+          if (params.documentId === undefined) throw new TypeError("delete_document 操作必须提供 documentId");
           await service.removeDocumentForAgent(agentId, params.knowledgeBaseId, params.documentId);
           return toPiToolResult(okResponse({
             knowledgeBaseId: params.knowledgeBaseId,
@@ -214,6 +201,7 @@ export function createKnowledgeManageTool(
             deleted: true,
           }, { action: params.action }));
         }
+        if (params.knowledgeBaseId === undefined) throw new TypeError("delete_base 操作必须提供 knowledgeBaseId");
         await service.removeBaseForAgent(agentId, params.knowledgeBaseId);
         return toPiToolResult(okResponse({
           knowledgeBaseId: params.knowledgeBaseId,
@@ -229,6 +217,37 @@ export function createKnowledgeManageTool(
       }
     },
   });
+}
+
+/** 在业务读取前校验 mode 对应的条件字段，并收窄为服务层输入。 */
+function validateKnowledgeReadInput(params: {
+  mode: "around_chunk" | "document";
+  documentId: string;
+  anchorChunkId?: string;
+  beforeChunks?: number;
+  afterChunks?: number;
+  offset?: number;
+  maxCharacters?: number;
+}): KnowledgeReadInput {
+  if (params.mode === "around_chunk") {
+    if (params.anchorChunkId === undefined) {
+      throw new TypeError("around_chunk 模式必须提供 anchorChunkId");
+    }
+    return {
+      mode: params.mode,
+      documentId: params.documentId,
+      anchorChunkId: params.anchorChunkId,
+      ...(params.beforeChunks !== undefined ? { beforeChunks: params.beforeChunks } : {}),
+      ...(params.afterChunks !== undefined ? { afterChunks: params.afterChunks } : {}),
+      ...(params.maxCharacters !== undefined ? { maxCharacters: params.maxCharacters } : {}),
+    };
+  }
+  return {
+    mode: params.mode,
+    documentId: params.documentId,
+    ...(params.offset !== undefined ? { offset: params.offset } : {}),
+    ...(params.maxCharacters !== undefined ? { maxCharacters: params.maxCharacters } : {}),
+  };
 }
 
 /** 将受控业务错误转换为工具可见消息。 */
