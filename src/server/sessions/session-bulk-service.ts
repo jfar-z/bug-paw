@@ -3,6 +3,7 @@ import type {
   SessionBulkAction,
   SessionBulkPreview,
   SessionBulkResult,
+  SessionBulkTarget,
 } from "../../shared/session-bulk-contracts";
 import { DomainError, toSafePublicMessage } from "../core/errors";
 import type { SessionBulkRepository } from "./session-bulk-repository";
@@ -21,13 +22,13 @@ interface SessionBulkServiceOptions {
 
 interface ExecuteSessionBulkInput {
   action: SessionBulkAction;
-  sessionIds: string[];
+  target: SessionBulkTarget;
   fingerprint: string;
 }
 
 /** 会话批量应用服务公开边界。 */
 export interface SessionBulkService {
-  preview(action: SessionBulkAction, sessionIds: string[]): Promise<SessionBulkPreview>;
+  preview(action: SessionBulkAction, target: SessionBulkTarget): Promise<SessionBulkPreview>;
   execute(input: ExecuteSessionBulkInput): Promise<SessionBulkResult>;
 }
 
@@ -36,20 +37,27 @@ export function createSessionBulkService(options: SessionBulkServiceOptions): Se
   const now = options.now ?? (() => new Date());
 
   /** 返回不包含内部 Agent 归属信息的确认预览。 */
-  async function preview(action: SessionBulkAction, sessionIds: string[]): Promise<SessionBulkPreview> {
-    const { agentId: _agentId, ...publicPreview } = await options.repository.preview(action, sessionIds);
+  async function preview(action: SessionBulkAction, target: SessionBulkTarget): Promise<SessionBulkPreview> {
+    const {
+      agentId: _agentId,
+      resolvedSessionIds: _resolvedSessionIds,
+      ...publicPreview
+    } = await options.repository.preview(action, target);
     return publicPreview;
   }
 
   /** 执行用户已用指纹确认的批量操作。 */
   async function execute(input: ExecuteSessionBulkInput): Promise<SessionBulkResult> {
-    const prepared = await options.repository.preview(input.action, input.sessionIds);
+    const prepared = await options.repository.preview(input.action, input.target);
     if (prepared.fingerprint !== input.fingerprint) {
       throw new DomainError("SESSION_BULK_PREVIEW_STALE", "会话或定时任务已发生变化，请重新确认");
     }
     const timestamp = now().toISOString();
     if (input.action === "archive") {
       return options.repository.archive(prepared, timestamp);
+    }
+    if (input.action === "restore") {
+      return options.repository.restore(prepared, timestamp);
     }
 
     const lease = await options.acquireRuntime(prepared.agentId);
@@ -59,7 +67,7 @@ export function createSessionBulkService(options: SessionBulkServiceOptions): Se
         throw new DomainError("OPERATION_ABORTED", "当前运行时不支持安全删除会话");
       }
       try {
-        for (const sessionId of prepared.sessionIds) {
+        for (const sessionId of prepared.resolvedSessionIds) {
           const deletion = await lease.runtime.prepareSessionDeletion(sessionId);
           staged.push({ sessionId, deletion });
         }
