@@ -23,7 +23,8 @@ import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import {
-  createToolCallCircuitBreakerExtension,
+  createToolCallCircuitBreaker,
+  type ToolCallCircuitBreaker,
   type ToolCallCircuitBreakerDiagnostic,
 } from "./retrieval/tool-call-circuit-breaker";
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
@@ -42,15 +43,12 @@ export function createWorkspaceResourceLoader(
     webSearch: false,
     webRead: false,
   },
-  customTools: readonly ToolDefinition[] = [],
-  onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
     extensionFactories: [
       createAgentSystemPromptInjectionExtension(retrievalCapabilities),
-      createToolCallCircuitBreakerExtension(customTools, onToolCallCircuitBreak),
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
@@ -282,6 +280,7 @@ export class PiRuntimeError extends Error {
 
 interface ManagedSession {
   session: PiSessionAdapter;
+  toolCallCircuitBreaker: ToolCallCircuitBreaker;
   unsubscribe: () => void;
   dispose(): void;
 }
@@ -301,6 +300,8 @@ interface PiRuntimeGatewayOptions {
   refreshSessionContext?: () => Promise<void>;
   onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
+  toolCallCircuitBreakerTools?: readonly ToolDefinition[];
+  onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
 }
 
 /**
@@ -393,12 +394,32 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   function manageSession(session: PiSessionAdapter): ManagedSession {
+    const toolCallCircuitBreaker = createToolCallCircuitBreaker(
+      options.toolCallCircuitBreakerTools ?? [],
+      options.onToolCallCircuitBreak,
+    );
     const unsubscribe = session.subscribe((event) => {
+      if (event.type === "tool_execution_start") {
+        const model = toModelSummary(session.model);
+        const decision = toolCallCircuitBreaker.observe({
+          sessionId: session.sessionId,
+          ...(model?.provider ? { provider: model.provider } : {}),
+          ...(model?.id ? { model: model.id } : {}),
+          toolName: event.toolName,
+          args: event.args,
+        });
+        if (decision.terminate && runs.has(session.sessionId)) {
+          // SDK 会等待该事件监听器；同步调用 abort 可在随后参数校验和业务执行前中止本 Run。
+          abortRequested.add(session.sessionId);
+          void session.abort().catch(() => undefined);
+        }
+      }
       const normalized = normalizeSessionEvent(session.sessionId, event);
       if (normalized) publishSequenced(session.sessionId, normalized);
     });
     return {
       session,
+      toolCallCircuitBreaker,
       unsubscribe,
       dispose() {
         unsubscribe();
@@ -494,11 +515,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   function beginRun(sessionId: string, text: string, titleInput?: string): ManagedRun {
+    const managed = sessionRegistry.peek(sessionId);
     const session = requireSession(sessionId);
     if (runs.has(sessionId) || session.isStreaming) {
       throw new PiRuntimeError("SESSION_BUSY", "会话正在生成中");
     }
     const releaseTurn = sessionRegistry.startTurn(sessionId);
+    managed?.toolCallCircuitBreaker.reset();
     const run = {
       runId: randomUUID(),
       sessionId,
@@ -1081,8 +1104,6 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       appendSystemPrompt,
       () => appendSystemPrompt,
       options.retrievalCapabilities,
-      options.customTools ?? [],
-      options.onToolCallCircuitBreak,
     );
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
@@ -1189,6 +1210,8 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     refreshSessionContext: refreshAppendSystemPrompt,
     onBackgroundError: options.onBackgroundError,
     onSessionTitleGenerated: options.onSessionTitleGenerated,
+    toolCallCircuitBreakerTools: options.customTools,
+    onToolCallCircuitBreak: options.onToolCallCircuitBreak,
   });
 }
 

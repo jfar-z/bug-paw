@@ -1,4 +1,4 @@
-import type { ExtensionFactory, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export type ToolCallArgumentState = "missing" | "empty_object" | "malformed" | "valid";
 
@@ -13,14 +13,20 @@ export interface ToolCallCircuitBreakerDiagnostic {
   action: "allowed" | "terminated";
 }
 
-/** 隐藏的 BugPaw Runtime 扩展定义。 */
-export interface ToolCallCircuitBreakerExtension {
-  name: string;
-  hidden: true;
-  factory: ExtensionFactory;
+/** Runtime 工具开始事件中供断路器判断的最小字段。 */
+export interface ToolCallCircuitBreakerInput {
+  sessionId: string;
+  provider?: string;
+  model?: string;
+  toolName: string;
+  args: unknown;
 }
 
-const CIRCUIT_BREAK_REASON = "同一工具连续三次缺少有效参数，已终止当前运行；请在下一条消息中重试。";
+/** 每个已打开会话独占一个实例，并在新 Run 开始时重置。 */
+export interface ToolCallCircuitBreaker {
+  reset(): void;
+  observe(input: ToolCallCircuitBreakerInput): { terminate: boolean };
+}
 
 /** 将模型生成的工具参数归一为不含正文的诊断状态。 */
 export function classifyToolCallArguments(input: unknown): ToolCallArgumentState {
@@ -29,55 +35,46 @@ export function classifyToolCallArguments(input: unknown): ToolCallArgumentState
   return Object.keys(input).length === 0 ? "empty_object" : "valid";
 }
 
-/** 创建限制同一 Run 内连续空参数调用的隐藏扩展。 */
-export function createToolCallCircuitBreakerExtension(
+/** 创建作用于 SDK Schema 校验之前工具开始事件的断路器。 */
+export function createToolCallCircuitBreaker(
   tools: readonly ToolDefinition[],
   onDiagnostic: (event: ToolCallCircuitBreakerDiagnostic) => void = () => undefined,
-): ToolCallCircuitBreakerExtension {
+): ToolCallCircuitBreaker {
   const guardedTools = new Set(tools.filter((tool) => {
     const required = (tool.parameters as { required?: unknown }).required;
     return Array.isArray(required) && required.length > 0;
   }).map((tool) => tool.name));
+  let previous: {
+    toolName: string;
+    state: Exclude<ToolCallArgumentState, "valid">;
+    count: number;
+  } | undefined;
 
   return {
-    name: "bug-paw-tool-call-circuit-breaker",
-    hidden: true,
-    factory: (pi) => {
-      let previous: {
-        toolName: string;
-        state: Exclude<ToolCallArgumentState, "valid">;
-        count: number;
-      } | undefined;
-
-      pi.on("before_agent_start", () => {
+    reset() {
+      previous = undefined;
+    },
+    observe(input) {
+      const state = classifyToolCallArguments(input.args);
+      if (!guardedTools.has(input.toolName) || state === "valid") {
         previous = undefined;
+        return { terminate: false };
+      }
+      const count = previous?.toolName === input.toolName && previous.state === state
+        ? previous.count + 1
+        : 1;
+      previous = { toolName: input.toolName, state, count };
+      const action = count >= 3 ? "terminated" : "allowed";
+      onDiagnostic({
+        sessionId: input.sessionId,
+        ...(input.provider ? { provider: input.provider } : {}),
+        ...(input.model ? { model: input.model } : {}),
+        toolName: input.toolName,
+        argumentState: state,
+        count,
+        action,
       });
-      pi.on("tool_call", (event, ctx) => {
-        const state = classifyToolCallArguments(event.input);
-        if (!guardedTools.has(event.toolName) || state === "valid") {
-          previous = undefined;
-          return;
-        }
-        const count = previous?.toolName === event.toolName && previous.state === state
-          ? previous.count + 1
-          : 1;
-        previous = { toolName: event.toolName, state, count };
-        const action = count >= 3 ? "terminated" : "allowed";
-        onDiagnostic({
-          sessionId: ctx.sessionManager.getSessionId(),
-          ...(ctx.model?.provider ? { provider: ctx.model.provider } : {}),
-          ...(ctx.model?.id ? { model: ctx.model.id } : {}),
-          toolName: event.toolName,
-          argumentState: state,
-          count,
-          action,
-        });
-        if (count < 3) return;
-
-        // terminate 受同批其他工具结果影响，abort 才能保证只结束当前 Agent Run。
-        ctx.abort();
-        return { block: true, reason: CIRCUIT_BREAK_REASON, terminate: true };
-      });
+      return { terminate: count >= 3 };
     },
   };
 }

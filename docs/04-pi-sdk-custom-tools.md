@@ -53,7 +53,8 @@ const tool = defineTool({
 - 本地 Qwen 推理服务需要多轮 thinking 时，模型 `compat.thinkingFormat` 应配置为 `qwen-chat-template`。当前 Pi SDK 会据此发送 `preserve_thinking: true`；配置保存后仍需通过“系统诊断 → 刷新 Pi 配置”重建 Runtime。
 - 新会话偶尔恢复正常不代表 Schema 已兼容。复现时至少对照第一回合/多回合、流式/非流式和新前缀/缓存前缀。
 - 诊断空参数时，只记录 `provider`、`model`、`sessionId`、工具名、连续计数、处理动作和最终参数状态。参数状态区分 `missing`、`empty_object`、`malformed` 与 `valid`；不得记录参数明文。
-- 对 Schema 声明了必填字段的自定义工具，同一 Run 内连续收到缺失、空对象或畸形参数时，前两次保留 SDK 正常校验错误；第三次在执行前阻止调用并终止当前 Agent Run。断路不得关闭 Session，用户下一条消息开始新 Run 后重新计数。不得通过默认参数猜测意图，或回退到更高权限工具绕过原工具的业务边界。
+- Pi SDK 的 `tool_call` 扩展钩子发生在参数 Schema 校验之后，不能用来拦截 `{}` 等校验失败调用。断路必须接在 BugPaw Runtime 的 `tool_execution_start` 事件层；该事件发生在 Schema 校验之前，且 SDK 会等待内部事件链完成。
+- 对 Schema 声明了必填字段的自定义工具，同一 Run 内连续收到缺失、空对象或畸形参数时，前两次保留 SDK 正常校验错误；第三次由 Runtime 同步请求 `abort`，在业务 `execute` 前终止当前 Agent Run。断路不得关闭 Session，用户下一条消息开始新 Run 后重新计数。不得通过默认参数猜测意图，或回退到更高权限工具绕过原工具的业务边界。
 - 断路诊断只记录 `sessionId`、`provider`、`model`、工具名、参数状态、连续计数和 `allowed/terminated` 动作，不记录参数正文。工具返回内容不包含 `nextAction`，也不能改变用户目标或扩大检索范围。
 
 ## 测试要求
