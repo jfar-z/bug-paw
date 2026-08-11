@@ -68,4 +68,28 @@ describe("搜索 Provider Router", () => {
     expect(routed.failures.map((failure) => failure.provider)).toEqual(["primary", "fallback"]);
     expect(state.circuit()).toEqual({ open: true, retryable: true });
   });
+
+  it("在 Retry-After 到期前跨 Run 跳过实例，到期后恢复尝试", async () => {
+    let now = 1_000;
+    const calls: string[] = [];
+    const factory = {
+      create: vi.fn(async (config: SearchProviderConfig): Promise<SearchProvider> => ({
+        search: async () => {
+          calls.push(config.id);
+          return config.id === "primary"
+            ? { ...result("unavailable", "primary"), failures: [{ provider: "primary", category: "rate_limited", retryable: true, retryAfterMs: 5_000 }] }
+            : result("healthy", "fallback", 1);
+        },
+      })),
+    };
+    const router = new SearchProviderRouter(factory, () => now);
+
+    await router.search(providers, { query: "first", count: 5 }, new SearchRunState());
+    await router.search(providers, { query: "second", count: 5 }, new SearchRunState());
+    expect(calls).toEqual(["primary", "fallback", "fallback"]);
+
+    now += 5_001;
+    await router.search(providers, { query: "third", count: 5 }, new SearchRunState());
+    expect(calls).toEqual(["primary", "fallback", "fallback", "primary", "fallback"]);
+  });
 });

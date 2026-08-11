@@ -9,18 +9,37 @@ interface SearchProviderFactoryLike {
 
 /** 按管理员配置顺序执行故障切换，且不向 Agent 暴露供应商选择权。 */
 export class SearchProviderRouter {
-  constructor(private readonly factory: SearchProviderFactoryLike) {}
+  private readonly cooldowns = new Map<string, { until: number; failure: SearchProviderFailure }>();
+
+  constructor(
+    private readonly factory: SearchProviderFactoryLike,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   /** 搜索所有可用候选；健康空结果和带结果的降级响应均视为有效终点。 */
   async search(configs: SearchProviderConfig[], input: SearchProviderInput, state = new SearchRunState()): Promise<SearchProviderResult> {
     for (const config of configs) {
       if (!config.enabled || state.shouldSkip(config.id)) continue;
+      const cooldown = this.cooldowns.get(config.id);
+      if (cooldown && cooldown.until > this.now()) {
+        state.recordUnavailable(cooldown.failure);
+        continue;
+      }
+      if (cooldown) this.cooldowns.delete(config.id);
       const providerResult = await this.searchOne(config, input);
       if (providerResult.health === "unavailable" || (providerResult.health === "degraded" && providerResult.results.length === 0)) {
         const failures = providerResult.failures.length > 0
           ? providerResult.failures
           : [this.upstreamFailure(config.id)];
-        for (const failure of failures) state.recordUnavailable({ ...failure, provider: config.id });
+        for (const failure of failures) {
+          const normalized = { ...failure, provider: config.id };
+          state.recordUnavailable(normalized);
+          if (normalized.retryAfterMs && normalized.retryAfterMs > 0) {
+            const existing = this.cooldowns.get(config.id);
+            const until = this.now() + normalized.retryAfterMs;
+            if (!existing || until > existing.until) this.cooldowns.set(config.id, { until, failure: normalized });
+          }
+        }
         continue;
       }
       return {
