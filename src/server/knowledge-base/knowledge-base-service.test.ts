@@ -44,9 +44,10 @@ describe("KnowledgeBaseService", () => {
       content: Buffer.from("年假需要提前提交申请", "utf8"),
     }]);
 
-    await expect(service.searchForAgent("agent-a", { query: "提前申请" })).resolves.toEqual([
-      expect.objectContaining({ documentId: document.id }),
-    ]);
+    await expect(service.searchForAgent("agent-a", { query: "提前申请" })).resolves.toMatchObject({
+      data: { results: [expect.objectContaining({ document: expect.objectContaining({ id: document.id }) })] },
+      metadata: { resultCount: 1, retrievalMode: "full_text" },
+    });
     await expect(service.getDocumentForAgent("agent-a", document.id)).resolves.toMatchObject({ id: document.id, status: "indexed" });
     await expect(service.getDocumentForAgent("agent-b", document.id)).rejects.toThrow("无权访问");
   });
@@ -200,6 +201,154 @@ describe("KnowledgeBaseService", () => {
     expect(embedQuery).not.toHaveBeenCalled();
     expect(searchVectors).not.toHaveBeenCalled();
     expect(search).toHaveBeenCalledWith(base.id, "全文检索", 10);
+  });
+
+  it("跨知识库融合全文与向量结果并在最终阶段统一截断", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-knowledge-service-"));
+    roots.push(root);
+    const paths = await createDataPaths(root);
+    const store = await createStore();
+    const search = vi.fn<(baseId: string, query: string, limit: number) => Promise<KnowledgeIndexSearchResult[]>>(async () => []);
+    const searchVectors = vi.fn<(baseId: string, vector: number[], limit: number) => Promise<KnowledgeIndexSearchResult[]>>(async () => []);
+    const embedQuery = vi.fn(async () => [0.1, 0.2]);
+    const service = createKnowledgeBaseService({
+      paths,
+      store,
+      agentExists: async () => true,
+      embeddingClient: { embedDocuments: vi.fn(async (values: string[]) => values.map(() => [0.1, 0.2])), embedQuery },
+      isSemanticSearchEnabled: async () => true,
+      index: {
+        upsertChunks: vi.fn(async () => undefined),
+        upsertVectorChunks: vi.fn(async () => undefined),
+        search,
+        searchVectors,
+        removeDocument: vi.fn(async () => undefined),
+      },
+    });
+    const baseA = await service.createBase({ name: "A 库", agentIds: ["agent-a"] });
+    const baseB = await service.createBase({ name: "B 库", agentIds: ["agent-a"] });
+    const [documentA] = await service.uploadDocuments(baseA.id, [{ name: "A.md", mediaType: "text/markdown", content: Buffer.from("A 部署要求") }]);
+    const [documentB] = await service.uploadDocuments(baseB.id, [{ name: "B.md", mediaType: "text/markdown", content: Buffer.from("B 部署要求") }]);
+    const resultForBase = (baseId: string): KnowledgeIndexSearchResult[] => [{
+      chunkId: `${baseId === baseA.id ? documentA.id : documentB.id}:0`,
+      documentId: baseId === baseA.id ? documentA.id : documentB.id,
+      index: 0,
+      text: baseId === baseA.id ? "A 部署要求" : "B 部署要求",
+      page: 1,
+      section: null,
+    }];
+    search.mockImplementation(async (baseId) => resultForBase(baseId));
+    searchVectors.mockImplementation(async (baseId) => resultForBase(baseId));
+
+    const result = await service.searchForAgent("agent-a", {
+      query: "部署要求",
+      knowledgeBaseIds: [baseA.id, baseB.id],
+      limit: 3,
+    });
+
+    expect(result.data.searchedKnowledgeBases).toEqual([
+      { id: baseA.id, name: "A 库" },
+      { id: baseB.id, name: "B 库" },
+    ]);
+    expect(result.metadata).toMatchObject({ resultCount: 2, retrievalMode: "hybrid" });
+    expect(result.data.results.map((item) => item.knowledgeBase.id)).toEqual(expect.arrayContaining([baseA.id, baseB.id]));
+    expect(result.data.results.map((item) => item.rank)).toEqual([1, 2]);
+    expect(result.data.results[0]).toMatchObject({
+      document: { id: expect.any(String), name: expect.any(String) },
+      chunk: { id: expect.any(String), page: 1, section: null },
+      matchedBy: expect.arrayContaining(["full_text", "vector"]),
+    });
+    expect(embedQuery).toHaveBeenCalledOnce();
+    expect(search).toHaveBeenCalledTimes(2);
+    expect(searchVectors).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls.every((call) => call[2] === 20)).toBe(true);
+  });
+
+  it("向量查询失败时保留全文结果并返回降级警告", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-knowledge-service-"));
+    roots.push(root);
+    const paths = await createDataPaths(root);
+    const store = await createStore();
+    const search = vi.fn(async (): Promise<KnowledgeIndexSearchResult[]> => []);
+    const service = createKnowledgeBaseService({
+      paths,
+      store,
+      agentExists: async () => true,
+      embeddingClient: {
+        embedDocuments: vi.fn(async (values: string[]) => values.map(() => [0.1, 0.2])),
+        embedQuery: vi.fn(async () => { throw new Error("vector unavailable"); }),
+      },
+      isSemanticSearchEnabled: async () => true,
+      index: {
+        upsertChunks: vi.fn(async () => undefined),
+        upsertVectorChunks: vi.fn(async () => undefined),
+        search,
+        searchVectors: vi.fn(async () => []),
+        removeDocument: vi.fn(async () => undefined),
+      },
+    });
+    const base = await service.createBase({ name: "制度库", agentIds: ["agent-a"] });
+    const [document] = await service.uploadDocuments(base.id, [{ name: "制度.md", mediaType: "text/markdown", content: Buffer.from("部署制度") }]);
+    search.mockResolvedValueOnce([{ chunkId: `${document.id}:0`, documentId: document.id, index: 0, text: "部署制度", page: 1 }]);
+
+    const result = await service.searchForAgent("agent-a", { query: "部署" });
+
+    expect(result.metadata).toMatchObject({ resultCount: 1, retrievalMode: "full_text" });
+    expect(result.data.results).toHaveLength(1);
+    expect(result.warnings).toEqual([{ code: "VECTOR_SEARCH_UNAVAILABLE", message: "语义检索暂时不可用，结果仅来自全文检索" }]);
+  });
+
+  it("按命中切片读取相邻上下文并支持整篇分页读取", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-knowledge-service-"));
+    roots.push(root);
+    const paths = await createDataPaths(root);
+    const listDocumentChunks = vi.fn(async () => [] as KnowledgeIndexChunk[]);
+    const service = createKnowledgeBaseService({
+      paths,
+      store: await createStore(),
+      agentExists: async () => true,
+      index: {
+        upsertChunks: vi.fn(async () => undefined),
+        listDocumentChunks,
+        search: vi.fn(async () => []),
+        removeDocument: vi.fn(async () => undefined),
+      },
+    });
+    const base = await service.createBase({ name: "上下文库", agentIds: ["agent-a"] });
+    const text = "0123456789abcdefghijABCDEFGHIJ";
+    const [document] = await service.uploadDocuments(base.id, [{ name: "上下文.txt", mediaType: "text/plain", content: Buffer.from(text) }]);
+    listDocumentChunks.mockResolvedValue([
+      { chunkId: `${document.id}:0`, documentId: document.id, index: 0, text: "第一段", page: 1, section: null },
+      { chunkId: `${document.id}:1`, documentId: document.id, index: 1, text: "第二段", page: 2, section: null },
+      { chunkId: `${document.id}:2`, documentId: document.id, index: 2, text: "第三段", page: 2, section: "审批" },
+      { chunkId: `${document.id}:3`, documentId: document.id, index: 3, text: "第四段", page: 3, section: null },
+    ]);
+
+    const around = await service.readForAgent("agent-a", {
+      mode: "around_chunk",
+      documentId: document.id,
+      anchorChunkId: `${document.id}:2`,
+      beforeChunks: 1,
+      afterChunks: 1,
+      maxCharacters: 12_000,
+    });
+    expect(around.data.location).toMatchObject({ startChunkIndex: 1, endChunkIndex: 3, startPage: 2, endPage: 3 });
+    expect(around.data.content).toContain("第二段\n\n第三段\n\n第四段");
+
+    const page = await service.readForAgent("agent-a", {
+      mode: "document",
+      documentId: document.id,
+      offset: 10,
+      maxCharacters: 20,
+    });
+    expect(page.data.content).toBe("abcdefghijABCDEFGHIJ");
+    expect(page.metadata).toMatchObject({ offset: 10, contentCharacters: 30, returnedCharacters: 20, truncated: false });
+
+    await expect(service.readForAgent("agent-a", {
+      mode: "around_chunk",
+      documentId: document.id,
+      anchorChunkId: "another-document:2",
+    })).rejects.toThrow("命中切片不属于指定资料");
   });
 
   it("上传时生成向量失败会清理索引并标记资料失败", async () => {

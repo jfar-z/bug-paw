@@ -14,11 +14,25 @@ describe("知识库 Pi 工具", () => {
     const tool = createSearchKnowledgeTool("agent-a", {
       searchForAgent: async (agentId, input) => {
         calls.push({ agentId, input });
-        return [{ chunkId: "chunk-1", documentId: "doc-1", index: 0, text: "命中内容" }];
+        return {
+          data: {
+            query: input.query,
+            searchedKnowledgeBases: [{ id: "base-1", name: "资料库" }],
+            results: [{
+              rank: 1,
+              knowledgeBase: { id: "base-1", name: "资料库" },
+              document: { id: "doc-1", name: "手册.md", mediaType: "text/markdown" },
+              chunk: { id: "chunk-1", index: 0, page: 1, section: null, text: "命中内容" },
+              matchedBy: ["full_text" as const],
+            }],
+          },
+          metadata: { resultCount: 1, retrievalMode: "full_text" as const, truncated: false },
+          warnings: [],
+        };
       },
     });
     const result = await tool.execute("call", { query: "命中", knowledgeBaseId: "base-1", limit: 3 }, undefined, undefined, {} as never);
-    expect(calls).toEqual([{ agentId: "agent-a", input: { query: "命中", knowledgeBaseId: "base-1", limit: 3 } }]);
+    expect(calls).toEqual([{ agentId: "agent-a", input: { query: "命中", knowledgeBaseIds: ["base-1"], limit: 3 } }]);
     expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("doc-1") });
   });
 

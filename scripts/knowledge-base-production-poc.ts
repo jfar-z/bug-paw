@@ -29,9 +29,12 @@ async function main(): Promise<void> {
     }]);
     if (document.status !== "indexed") throw new Error("生产验证资料未建立索引");
     const hits = await service.searchForAgent("production-poc-agent", { query: "关键词检索" });
-    if (!hits.some((hit) => hit.documentId === document.id)) throw new Error("生产验证未检索到资料");
-    const details = await service.getDocumentForAgent("production-poc-agent", document.id);
-    if (!details.text?.includes("LanceDB")) throw new Error("生产验证未读取到资料正文");
+    if (!hits.data.results.some((hit) => hit.document.id === document.id)) throw new Error("生产验证未检索到资料");
+    const details = await service.readForAgent("production-poc-agent", {
+      mode: "document",
+      documentId: document.id,
+    });
+    if (!details.data.content.includes("LanceDB")) throw new Error("生产验证未读取到资料正文");
     const searchTool = createSearchKnowledgeTool("production-poc-agent", service);
     const documentTool = createGetKnowledgeDocumentTool("production-poc-agent", service);
     const listTool = createListKnowledgeBasesTool("production-poc-agent", service);

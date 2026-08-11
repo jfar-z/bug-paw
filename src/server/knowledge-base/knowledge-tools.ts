@@ -1,12 +1,17 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { KnowledgeDocument, KnowledgeBaseSummary, KnowledgeUpload } from "./knowledge-base-service";
-import type { KnowledgeIndexSearchResult } from "./lance-index";
+import type {
+  KnowledgeDocument,
+  KnowledgeBaseSummary,
+  KnowledgeSearchInput,
+  KnowledgeSearchServiceResult,
+  KnowledgeUpload,
+} from "./knowledge-base-service";
 import { SYSTEM_LIMITS } from "../core/limits";
 
 interface KnowledgeSearchService {
-  searchForAgent(agentId: string, input: { query: string; knowledgeBaseId?: string; limit?: number }): Promise<KnowledgeIndexSearchResult[]>;
+  searchForAgent(agentId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchServiceResult>;
 }
 
 interface KnowledgeDocumentService {
@@ -54,7 +59,11 @@ export function createSearchKnowledgeTool(agentId: string, service: KnowledgeSea
     }),
     async execute(_toolCallId, params) {
       try {
-        return success(await service.searchForAgent(agentId, params));
+        return success(await service.searchForAgent(agentId, {
+          query: params.query,
+          ...(params.knowledgeBaseId ? { knowledgeBaseIds: [params.knowledgeBaseId] } : {}),
+          ...(params.limit !== undefined ? { limit: params.limit } : {}),
+        }));
       } catch (error) {
         return failure(error instanceof Error ? error.message : "知识库检索失败");
       }
