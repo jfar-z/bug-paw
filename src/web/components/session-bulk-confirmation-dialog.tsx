@@ -16,7 +16,7 @@ export function SessionBulkConfirmationDialog({ preview, busy = false, onCancel,
   const verb = deleting ? "删除" : restoring ? "恢复" : "归档";
   const titleId = "session-bulk-confirmation-title";
   return (
-    <div className="configuration-dialog-backdrop" role="presentation">
+    <div className="configuration-dialog-backdrop session-bulk-dialog-backdrop" role="presentation">
       <section className="configuration-dialog session-bulk-dialog" style={{ width: "min(520px, 100%)", display: "grid", gap: 16 }} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
           <span className={deleting ? "session-bulk-dialog__icon is-destructive" : "session-bulk-dialog__icon"} style={{ color: deleting ? "var(--danger)" : "var(--accent-strong)" }}>

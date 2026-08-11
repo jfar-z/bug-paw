@@ -7239,6 +7239,11 @@ a[aria-disabled="true"] {
   background: color-mix(in srgb, var(--canvas) 72%, transparent);
 }
 
+/* 批量确认可能叠加在已归档窗口上，必须保持为当前顶层交互面。 */
+.session-bulk-dialog-backdrop {
+  z-index: 110;
+}
+
 .configuration-dialog {
   width: min(720px, 100%);
   padding: 22px;
