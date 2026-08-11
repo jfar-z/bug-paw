@@ -83,19 +83,6 @@ describe("ScheduledTaskRepository", () => {
     expect(await repository.listTasks("a1")).toEqual([]);
   });
 
-  it("目标 Session 删除后由外键级联清理任务", async () => {
-    const { sessions, repository } = createFixture();
-    await sessions.assign("s1", "a1", "2026-08-07T00:00:00.000Z");
-    const task = await repository.createTask({
-      ...taskInput("绑定"),
-      target: { type: "existing_session", sessionId: "s1" },
-    });
-
-    await sessions.removeWithBoundTasks("s1", true);
-
-    expect(await repository.getTask(task.id)).toBeUndefined();
-  });
-
   it("原目标会话已删除时拒绝直接启用并允许重新指定目标", async () => {
     const { database, repository } = createFixture();
     const timestamp = "2026-08-11T00:00:00.000Z";

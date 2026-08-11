@@ -465,9 +465,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
   };
 
-  const deleteConversation = async (sessionId: string, archived = false, deleteScheduledTasks = false) => {
+  const deleteConversation = async (sessionId: string, archived = false, confirmBoundTasks = false) => {
     try {
-      await api.deleteSession(sessionId, deleteScheduledTasks);
+      await api.deleteSession(sessionId, confirmBoundTasks);
       if (archived) {
         setArchivedSessions((current) => current.filter((item) => item.id !== sessionId));
       } else {
@@ -931,7 +931,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onOpen={(sessionId) => void openConversation(sessionId)}
         onRename={(sessionId, name) => void renameConversation(sessionId, name)}
         onArchive={(sessionId) => void archiveConversation(sessionId)}
-        onDelete={(sessionId, deleteScheduledTasks) => void deleteConversation(sessionId, false, deleteScheduledTasks)}
+        onDelete={(sessionId, confirmBoundTasks) => void deleteConversation(sessionId, false, confirmBoundTasks)}
         onEnterSelection={enterSessionSelection}
         onToggleSelection={toggleSessionSelection}
         onCancelSelection={cancelSessionSelection}

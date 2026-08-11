@@ -1,8 +1,8 @@
 import { Cron } from "croner";
-import { CalendarClock, Check, ChevronsUpDown, Clock3, ListRestart, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, Check, ChevronsUpDown, Clock3, ListRestart, Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
-import type { ScheduledTaskSchedule } from "../../shared/scheduled-task-contracts";
+import { isDeletedSessionTarget, type ScheduledTaskSchedule } from "../../shared/scheduled-task-contracts";
 import { api, type ScheduledTask, type ScheduledTaskRun, type SessionSummary } from "../api";
 import { WorkspaceAgentNavigation, WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT } from "../components/workspace-agent-navigation";
 
@@ -130,17 +130,30 @@ export function ScheduledTasksPage() {
 
 /** 展示单个任务及其快捷操作。 */
 function TaskCard({ task, onRun, onEdit, onDelete, onRuns }: { task: ScheduledTask; onRun(): void; onEdit(): void; onDelete(): void; onRuns(): void }) {
+  const deletedTarget = isDeletedSessionTarget(task.target) ? task.target : undefined;
+  const targetMissing = Boolean(deletedTarget);
+
   return (
-    <article className="scheduled-task-card">
+    <article className={`scheduled-task-card${targetMissing ? " is-target-missing" : ""}`}>
       <div className="scheduled-task-card__icon"><CalendarClock size={17} aria-hidden="true" /></div>
       <div className="scheduled-task-card__body">
         <strong>{task.name}</strong>
         <small>{describeSchedule(task)}</small>
-        <small>{task.target.type === "new_session" ? "每次新建会话" : "执行到现有会话"} · {task.nextRunAt ? `下次：${formatDate(task.nextRunAt)}` : "已暂停"}</small>
+        {deletedTarget ? (
+          <div className="scheduled-task-target-missing" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            <span>
+              <strong>原目标会话“{deletedTarget.sessionName}”已删除</strong>
+              <small>任务已停用，请编辑并重新选择目标。</small>
+            </span>
+          </div>
+        ) : (
+          <small>{task.target.type === "new_session" ? "每次新建会话" : "执行到现有会话"} · {task.nextRunAt ? `下次：${formatDate(task.nextRunAt)}` : "已暂停"}</small>
+        )}
       </div>
-      <span className={task.enabled ? "scheduled-task-state is-enabled" : "scheduled-task-state"}>{task.enabled ? "已启用" : "已暂停"}</span>
+      <span className={!targetMissing && task.enabled ? "scheduled-task-state is-enabled" : "scheduled-task-state"}>{targetMissing ? "需重新指定目标" : task.enabled ? "已启用" : "已暂停"}</span>
       <div className="scheduled-task-card__actions">
-        <button type="button" className="scheduled-task-card__run" onClick={onRun}><Play size={14} aria-hidden="true" />立即执行</button>
+        <button type="button" className="scheduled-task-card__run" onClick={onRun} disabled={targetMissing} title={targetMissing ? "请先重新指定目标会话" : undefined}><Play size={14} aria-hidden="true" />立即执行</button>
         <button type="button" aria-label={`编辑 ${task.name}`} title="编辑任务" onClick={onEdit}><Pencil size={15} aria-hidden="true" /></button>
         <button type="button" aria-label={`查看 ${task.name} 执行记录`} title="执行记录" onClick={onRuns}><ListRestart size={15} aria-hidden="true" /></button>
         <button type="button" className="is-danger" aria-label={`删除 ${task.name}`} title="删除任务" onClick={onDelete}><Trash2 size={15} aria-hidden="true" /></button>
@@ -151,6 +164,7 @@ function TaskCard({ task, onRun, onEdit, onDelete, onRuns }: { task: ScheduledTa
 
 /** 创建或编辑任务的表单。 */
 function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?: ScheduledTask; onClose(): void; onSaved(): void }) {
+  const targetWasDeleted = task ? isDeletedSessionTarget(task.target) : false;
   const [name, setName] = useState(task?.name ?? "");
   const [prompt, setPrompt] = useState(task?.prompt ?? "");
   const [mode, setMode] = useState<"interval" | "cron" | "once">(task?.schedule.type ?? "cron");
@@ -161,7 +175,8 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
   const [onceAt, setOnceAt] = useState(task?.schedule.type === "once" ? task.schedule.runAt.slice(0, 16) : "");
   const [unit, setUnit] = useState<"minute" | "hour">(task?.schedule.type === "interval" ? task.schedule.unit : "hour");
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
-  const [targetMode, setTargetMode] = useState<"new_session" | "existing_session">(task?.target.type === "existing_session" ? "existing_session" : "new_session");
+  const [targetMode, setTargetMode] = useState<"new_session" | "existing_session">(task?.target.type === "new_session" ? "new_session" : "existing_session");
+  const [targetResolved, setTargetResolved] = useState(!targetWasDeleted);
   const [archiveAfterCompletion, setArchiveAfterCompletion] = useState(task?.target.type === "new_session" ? task.target.archiveAfterCompletion : false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState(task?.target.type === "existing_session" ? task.target.sessionId : "");
@@ -170,11 +185,12 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
   useEffect(() => {
     void Promise.all([api.listSessions(agentId), api.getScheduledTaskTimezones()]).then(([sessionResult, timezoneResult]) => {
       setSessions(sessionResult.sessions);
-      setSessionId((current) => current || sessionResult.sessions[0]?.id || "");
+      // 原目标已删除时保留空选择，避免在用户不知情时自动改投其他会话。
+      setSessionId((current) => current || (targetWasDeleted ? "" : sessionResult.sessions[0]?.id) || "");
       setTimezones(timezoneResult.timezones);
       setTimezone((current) => current || timezoneResult.serverTimeZone);
     }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "加载表单数据失败"));
-  }, [agentId]);
+  }, [agentId, targetWasDeleted]);
 
   const parts = normalizeParts(expression);
   const previews = useMemo(() => {
@@ -192,6 +208,10 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (!targetResolved) {
+      setError("请重新选择任务目标");
+      return;
+    }
     if (targetMode === "existing_session" && !sessionId) {
       setError("请选择现有会话");
       return;
@@ -227,7 +247,7 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
           <h2>{task ? "编辑定时任务" : "新建定时任务"}</h2>
         </div>
         <label className="scheduled-task-switch">
-          <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />
+          <input type="checkbox" checked={enabled} disabled={!targetResolved} onChange={(event) => setEnabled(event.target.checked)} />
           <span aria-hidden="true" />
           启用任务
         </label>
@@ -276,9 +296,18 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
           <div><span>TARGET SESSION</span><h3>目标会话</h3></div>
           <p>可为每次任务创建独立会话，或向已有会话发送消息。</p>
         </div>
+        {!targetResolved && task && isDeletedSessionTarget(task.target) ? (
+          <div className="scheduled-task-target-missing scheduled-task-target-missing--editor" role="alert">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <span>
+              <strong>原目标会话“{task.target.sessionName}”已删除</strong>
+              <small>任务已停用，重新选择目标后才能启用或保存。</small>
+            </span>
+          </div>
+        ) : null}
         <div className="scheduled-task-segmented" role="radiogroup" aria-label="目标会话">
-          <button type="button" role="radio" aria-checked={targetMode === "new_session"} className={targetMode === "new_session" ? "is-active" : undefined} onClick={() => setTargetMode("new_session")}>每次新建会话</button>
-          <button type="button" role="radio" aria-checked={targetMode === "existing_session"} className={targetMode === "existing_session" ? "is-active" : undefined} onClick={() => setTargetMode("existing_session")}>现有会话</button>
+          <button type="button" role="radio" aria-checked={targetMode === "new_session"} className={targetMode === "new_session" ? "is-active" : undefined} onClick={() => { setTargetMode("new_session"); setTargetResolved(true); }}>每次新建会话</button>
+          <button type="button" role="radio" aria-checked={targetMode === "existing_session"} className={targetMode === "existing_session" ? "is-active" : undefined} onClick={() => { setTargetMode("existing_session"); setTargetResolved(Boolean(sessionId)); }}>现有会话</button>
         </div>
         {targetMode === "new_session" ? (
           <label className="scheduled-task-check">
@@ -288,7 +317,7 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
         ) : (
           <div className="scheduled-task-field scheduled-task-session-select">
             <span>选择会话</span>
-            <SessionPicker sessions={sessions} value={sessionId} onChange={setSessionId} />
+            <SessionPicker sessions={sessions} value={sessionId} onChange={(nextSessionId) => { setSessionId(nextSessionId); setTargetResolved(true); }} />
           </div>
         )}
       </section>

@@ -33,7 +33,7 @@ interface ChatSidebarProps {
   shouldSuppressOpen(sessionId: string): boolean;
   onRename(sessionId: string, name: string): void;
   onArchive(sessionId: string): void;
-  onDelete(sessionId: string, deleteScheduledTasks: boolean): void;
+  onDelete(sessionId: string, confirmBoundTasks: boolean): void;
   onEnterSelection(sessionId: string): void;
   onToggleSelection(sessionId: string): void;
   onCancelSelection(): void;
@@ -121,7 +121,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
               openRequestId={props.actionsOpenRequest?.sessionId === item.id ? props.actionsOpenRequest.requestId : undefined}
               onRename={(name) => props.onRename(item.id, name)}
               onArchive={() => props.onArchive(item.id)}
-              onDelete={(deleteScheduledTasks) => props.onDelete(item.id, deleteScheduledTasks)}
+              onDelete={(confirmBoundTasks) => props.onDelete(item.id, confirmBoundTasks)}
               onSelectMultiple={() => props.onEnterSelection(item.id)}
             />
             </>}

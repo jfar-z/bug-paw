@@ -22,7 +22,6 @@ export interface SessionRepository {
   unarchive(sessionId: string, now: string): Promise<void>;
   rename(sessionId: string, name: string, now: string): Promise<void>;
   remove(sessionId: string): Promise<void>;
-  removeWithBoundTasks(sessionId: string, deleteScheduledTasks: boolean): Promise<void>;
   bumpProjectionVersion(sessionId: string, now: string): Promise<number>;
 }
 
@@ -105,21 +104,6 @@ export function createSessionRepository(database: Database): SessionRepository {
     async remove(sessionId) {
       assertId("Session", sessionId);
       database.write("DELETE FROM sessions WHERE id = ?", [sessionId]);
-    },
-    async removeWithBoundTasks(sessionId, deleteScheduledTasks) {
-      assertId("Session", sessionId);
-      database.transaction(() => {
-        const boundCount = database.readOne<{ count: number }>(
-          "SELECT COUNT(*) AS count FROM scheduled_tasks WHERE session_id = ?",
-          [sessionId],
-        )?.count ?? 0;
-        if (boundCount > 0 && !deleteScheduledTasks) {
-          throw new DomainError("SCHEDULED_TASKS_BOUND", `会话已绑定 ${boundCount} 个定时任务，请确认同时删除`);
-        }
-        if (deleteScheduledTasks) database.write("DELETE FROM scheduled_tasks WHERE session_id = ?", [sessionId]);
-        const result = database.write("DELETE FROM sessions WHERE id = ?", [sessionId]);
-        assertChanged(result.changes);
-      });
     },
     async bumpProjectionVersion(sessionId, now) {
       assertId("Session", sessionId);

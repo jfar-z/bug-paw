@@ -8,7 +8,7 @@ interface SessionActionsMenuProps {
   openRequestId?: number;
   onRename: (name: string) => void | Promise<void>;
   onArchive: () => void | Promise<void>;
-  onDelete: (deleteScheduledTasks: boolean) => void | Promise<void>;
+  onDelete: (confirmBoundTasks: boolean) => void | Promise<void>;
   onSelectMultiple?: () => void;
 }
 
