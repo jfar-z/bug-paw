@@ -3,34 +3,131 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  createGetKnowledgeDocumentTool,
-  createManageKnowledgeBaseTool,
-  createSearchKnowledgeTool,
+  createKnowledgeManageTool,
+  createKnowledgeReadTool,
+  createKnowledgeSearchTool,
 } from "./knowledge-tools";
 
+const searchData = {
+  query: "部署",
+  searchedKnowledgeBases: [{ id: "base-1", name: "资料库" }],
+  results: [{
+    rank: 1,
+    knowledgeBase: { id: "base-1", name: "资料库" },
+    document: { id: "doc-1", name: "手册.md", mediaType: "text/markdown" },
+    chunk: { id: "doc-1:0", index: 0, page: 1, section: null, text: "部署证据" },
+    matchedBy: ["full_text" as const, "vector" as const],
+  }],
+};
+
+function parseResult(result: { content: readonly unknown[] }) {
+  return JSON.parse((result.content[0] as { type: "text"; text: string }).text);
+}
+
 describe("知识库 Pi 工具", () => {
-  it("检索工具始终以当前 Agent 的授权范围查询", async () => {
+  it("knowledge_search 转发多个知识库范围并返回统一成功协议", async () => {
     const calls: unknown[] = [];
-    const tool = createSearchKnowledgeTool("agent-a", {
+    const tool = createKnowledgeSearchTool("agent-a", {
       searchForAgent: async (agentId, input) => {
         calls.push({ agentId, input });
-        return [{ chunkId: "chunk-1", documentId: "doc-1", index: 0, text: "命中内容" }];
+        return {
+          data: searchData,
+          metadata: { resultCount: 1, retrievalMode: "hybrid", truncated: false },
+          warnings: [],
+        };
       },
     });
-    const result = await tool.execute("call", { query: "命中", knowledgeBaseId: "base-1", limit: 3 }, undefined, undefined, {} as never);
-    expect(calls).toEqual([{ agentId: "agent-a", input: { query: "命中", knowledgeBaseId: "base-1", limit: 3 } }]);
-    expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("doc-1") });
-  });
 
-  it("单文件详情工具不允许指定其他 Agent", async () => {
-    const tool = createGetKnowledgeDocumentTool("agent-a", {
-      getDocumentForAgent: async (agentId, documentId) => ({ id: documentId, knowledgeBaseId: "base-1", name: "手册.txt", mediaType: "text/plain", status: "indexed", createdAt: "2026-08-07T00:00:00.000Z", text: agentId }),
+    const result = await tool.execute("call", {
+      query: "部署",
+      knowledgeBaseIds: ["base-1", "base-2"],
+      limit: 3,
+    }, undefined, undefined, {} as never);
+    const parsed = parseResult(result);
+
+    expect(tool.name).toBe("knowledge_search");
+    expect(calls).toEqual([{
+      agentId: "agent-a",
+      input: { query: "部署", knowledgeBaseIds: ["base-1", "base-2"], limit: 3 },
+    }]);
+    expect(parsed).toMatchObject({
+      status: "ok",
+      data: { results: [{ document: { name: "手册.md" }, chunk: { id: "doc-1:0" } }] },
+      metadata: { resultCount: 1, retrievalMode: "hybrid" },
     });
-    const result = await tool.execute("call", { documentId: "doc-1" }, undefined, undefined, {} as never);
-    expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("agent-a") });
+    expect(JSON.stringify(parsed)).not.toMatch(/nextAction|suggestedAction|recommendation/u);
   });
 
-  it("合并管理工具按 action 限制当前 Agent 的知识库和工作区范围", async () => {
+  it("knowledge_search 区分空结果和向量降级", async () => {
+    const emptyTool = createKnowledgeSearchTool("agent-a", {
+      searchForAgent: async () => ({
+        data: { ...searchData, results: [] },
+        metadata: { resultCount: 0, retrievalMode: "full_text", truncated: false },
+        warnings: [],
+      }),
+    });
+    const partialTool = createKnowledgeSearchTool("agent-a", {
+      searchForAgent: async () => ({
+        data: searchData,
+        metadata: { resultCount: 1, retrievalMode: "full_text", truncated: false },
+        warnings: [{ code: "VECTOR_SEARCH_UNAVAILABLE", message: "语义检索暂时不可用" }],
+      }),
+    });
+
+    const empty = await emptyTool.execute("empty", { query: "无命中" }, undefined, undefined, {} as never);
+    const partial = await partialTool.execute("partial", { query: "部署" }, undefined, undefined, {} as never);
+
+    expect(parseResult(empty)).toMatchObject({ status: "empty", metadata: { resultCount: 0 } });
+    expect(parseResult(partial)).toMatchObject({
+      status: "partial",
+      warnings: [{ code: "VECTOR_SEARCH_UNAVAILABLE" }],
+    });
+  });
+
+  it("knowledge_read 按严格联合参数读取命中上下文和整篇分页", async () => {
+    const calls: unknown[] = [];
+    const tool = createKnowledgeReadTool("agent-a", {
+      readForAgent: async (agentId, input) => {
+        calls.push({ agentId, input });
+        return {
+          data: {
+            mode: input.mode,
+            knowledgeBase: { id: "base-1", name: "资料库" },
+            document: { id: input.documentId, name: "手册.md", mediaType: "text/markdown" },
+            content: "上下文",
+            location: { startChunkIndex: 0, endChunkIndex: 2, startPage: 1, endPage: 2 },
+          },
+          metadata: { offset: 0, contentCharacters: 3, returnedCharacters: 3, truncated: false },
+          warnings: [],
+        };
+      },
+    });
+
+    const around = await tool.execute("around", {
+      mode: "around_chunk",
+      documentId: "doc-1",
+      anchorChunkId: "doc-1:1",
+      beforeChunks: 1,
+      afterChunks: 1,
+      maxCharacters: 4_000,
+    }, undefined, undefined, {} as never);
+    const document = await tool.execute("document", {
+      mode: "document",
+      documentId: "doc-1",
+      offset: 100,
+      maxCharacters: 2_000,
+    }, undefined, undefined, {} as never);
+
+    expect(tool.name).toBe("knowledge_read");
+    expect(parseResult(around)).toMatchObject({ status: "ok", data: { mode: "around_chunk" } });
+    expect(parseResult(document)).toMatchObject({ status: "ok", data: { mode: "document" } });
+    expect(calls).toEqual([
+      { agentId: "agent-a", input: { mode: "around_chunk", documentId: "doc-1", anchorChunkId: "doc-1:1", beforeChunks: 1, afterChunks: 1, maxCharacters: 4_000 } },
+      { agentId: "agent-a", input: { mode: "document", documentId: "doc-1", offset: 100, maxCharacters: 2_000 } },
+    ]);
+  });
+
+  it("knowledge_manage 使用六种规范 action 并保持工作区读取边界", async () => {
     const calls: unknown[] = [];
     const service = {
       listBasesForAgent: async (agentId: string) => {
@@ -42,7 +139,7 @@ describe("知识库 Pi 工具", () => {
         return { id: "base-b", name: input.name, description: input.description ?? "", documentCount: 0, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" };
       },
       updateBaseForAgent: async (agentId: string, knowledgeBaseId: string, input: { name?: string; description?: string }) => {
-        calls.push({ type: "modify", agentId, knowledgeBaseId, input });
+        calls.push({ type: "update", agentId, knowledgeBaseId, input });
         return { id: knowledgeBaseId, name: input.name ?? "产品资料", description: input.description ?? "", documentCount: 2, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" };
       },
       uploadDocumentsForAgent: async (agentId: string, knowledgeBaseId: string, uploads: Array<{ name: string }>) => {
@@ -62,38 +159,41 @@ describe("知识库 Pi 工具", () => {
         return { name: "manual.md", mediaType: "text/markdown", content: Buffer.from("# 手册", "utf8") };
       },
     };
-    const tool = createManageKnowledgeBaseTool("agent-a", service, files);
+    const tool = createKnowledgeManageTool("agent-a", service, files);
 
-    const listed = await tool.execute("call", { action: "list" }, undefined, undefined, {} as never);
-    const created = await tool.execute("call", { action: "create", name: "新资料", description: "说明" }, undefined, undefined, {} as never);
-    const modified = await tool.execute("call", { action: "modify_knowladge_base", knowledgeBaseId: "base-a", name: "新名称" }, undefined, undefined, {} as never);
-    const uploaded = await tool.execute("call", { action: "upload_documents", knowledgeBaseId: "base-a", paths: ["docs/manual.md"] }, undefined, undefined, {} as never);
-    const deletedBase = await tool.execute("call", { action: "delete_base", knowledgeBaseId: "base-a" }, undefined, undefined, {} as never);
-    const deletedDocument = await tool.execute("call", { action: "delete_document", knowledgeBaseId: "base-a", documentId: "document-a" }, undefined, undefined, {} as never);
+    const results = [];
+    results.push(await tool.execute("list", { action: "list_bases" }, undefined, undefined, {} as never));
+    results.push(await tool.execute("create", { action: "create_base", name: "新资料", description: "说明" }, undefined, undefined, {} as never));
+    results.push(await tool.execute("update", { action: "update_base", knowledgeBaseId: "base-a", name: "新名称" }, undefined, undefined, {} as never));
+    results.push(await tool.execute("upload", { action: "upload_documents", knowledgeBaseId: "base-a", paths: ["docs/manual.md"] }, undefined, undefined, {} as never));
+    results.push(await tool.execute("delete-document", { action: "delete_document", knowledgeBaseId: "base-a", documentId: "document-a" }, undefined, undefined, {} as never));
+    results.push(await tool.execute("delete-base", { action: "delete_base", knowledgeBaseId: "base-a" }, undefined, undefined, {} as never));
 
+    expect(tool.name).toBe("knowledge_manage");
     expect(calls).toEqual([
       { type: "list", agentId: "agent-a" },
       { type: "create", agentId: "agent-a", input: { name: "新资料", description: "说明" } },
-      { type: "modify", agentId: "agent-a", knowledgeBaseId: "base-a", input: { name: "新名称" } },
+      { type: "update", agentId: "agent-a", knowledgeBaseId: "base-a", input: { name: "新名称" } },
       { type: "read-file", agentId: "agent-a", path: "docs/manual.md" },
       { type: "upload", agentId: "agent-a", knowledgeBaseId: "base-a", names: ["manual.md"] },
-      { type: "delete-base", agentId: "agent-a", knowledgeBaseId: "base-a" },
       { type: "delete-document", agentId: "agent-a", knowledgeBaseId: "base-a", documentId: "document-a" },
+      { type: "delete-base", agentId: "agent-a", knowledgeBaseId: "base-a" },
     ]);
-    expect(tool.name).toBe("manage_knowledge_base");
-    expect(listed.content[0]).toMatchObject({ text: expect.stringContaining("documentCount") });
-    expect(created.content[0]).toMatchObject({ text: expect.stringContaining("新资料") });
-    expect(modified.content[0]).toMatchObject({ text: expect.stringContaining("新名称") });
-    expect(uploaded.content[0]).toMatchObject({ text: expect.stringContaining("manual.md") });
-    expect(deletedBase.content[0]).toMatchObject({ text: expect.stringContaining("deleted") });
-    expect(deletedDocument.content[0]).toMatchObject({ text: expect.stringContaining("document-a") });
+    expect(results.map((result) => parseResult(result).status)).toEqual([
+      "ok", "ok", "ok", "ok", "ok", "ok",
+    ]);
   });
 
-  it("合并管理工具拒绝缺失 action 必填字段", async () => {
-    const tool = createManageKnowledgeBaseTool("agent-a", {} as never, {} as never);
+  it("工具错误只返回稳定错误事实", async () => {
+    const tool = createKnowledgeSearchTool("agent-a", {
+      searchForAgent: async () => { throw new Error("无权访问指定知识库"); },
+    });
 
-    const result = await tool.execute("call", { action: "upload_documents", knowledgeBaseId: "base-b", paths: [] }, undefined, undefined, {} as never);
+    const result = await tool.execute("error", { query: "部署" }, undefined, undefined, {} as never);
 
-    expect(result.content[0]).toMatchObject({ type: "text", text: "至少提供一份工作区资料" });
+    expect(parseResult(result)).toEqual({
+      status: "error",
+      error: { code: "KNOWLEDGE_SEARCH_FAILED", message: "无权访问指定知识库", retryable: false },
+    });
   });
 });

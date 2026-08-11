@@ -4,6 +4,42 @@ import type { WebResearchConfigDocument } from "../../shared/web-research-contra
 import { SafeWebClient } from "./safe-web-client";
 import { WebResearchConfigService } from "./web-research-config-service";
 import { EgressProfileRegistry } from "./egress-profile-registry";
+import type { ToolWarning } from "../retrieval/tool-response";
+
+/** 规范化后的联网搜索服务结果。 */
+export interface WebSearchServiceResult {
+  data: {
+    query: string;
+    results: Array<{
+      rank: number;
+      title: string;
+      url: string;
+      hostname: string;
+      snippet: string;
+      sourceEngines: string[];
+      publishedAt: string | null;
+    }>;
+  };
+  metadata: { resultCount: number; duplicatesRemoved: number; truncated: boolean };
+  warnings: ToolWarning[];
+}
+
+/** 网页正文读取服务结果。 */
+export interface WebReadServiceResult {
+  data: {
+    requestedUrl: string;
+    finalUrl: string;
+    title: string;
+    hostname: string;
+    text: string;
+    publishedAt: string | null;
+    fetchedAt: string;
+    contentType: "text/html" | "text/plain";
+    extractionMode: "article" | "plain_text" | "html_fallback";
+  };
+  metadata: { truncated: boolean; contentCharacters: number; returnedCharacters: number; untrustedContent: true };
+  warnings: ToolWarning[];
+}
 
 interface WebResearchServiceDependencies {
   readConfig(): Promise<WebResearchConfigDocument>;
@@ -26,27 +62,80 @@ export class WebResearchService {
   }
 
   /** 搜索互联网并返回带来源的规范化结果。 */
-  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }): Promise<{ results: Array<{ title: string; url: string; snippet: string; source: string }> }> {
+  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }): Promise<WebSearchServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const count = Math.min(Math.max(input.count ?? config.maxResults, 1), config.maxResults);
     const raw = await this.dependencies.searchSearxng(config.searxngBaseUrl, { ...input, count }, config.timeoutMs);
-    return { results: readSearchResults(raw).slice(0, count) };
+    const rawResults = readSearchResults(raw);
+    const deduplicated = new Map<string, Omit<WebSearchServiceResult["data"]["results"][number], "rank">>();
+    for (const result of rawResults) {
+      const existing = deduplicated.get(result.url);
+      if (existing) {
+        for (const engine of result.sourceEngines) {
+          if (!existing.sourceEngines.includes(engine)) existing.sourceEngines.push(engine);
+        }
+        if (existing.publishedAt === null && result.publishedAt !== null) existing.publishedAt = result.publishedAt;
+        continue;
+      }
+      deduplicated.set(result.url, result);
+    }
+    const unique = [...deduplicated.values()];
+    const results = unique.slice(0, count).map((result, index) => ({ rank: index + 1, ...result }));
+    return {
+      data: { query: input.query, results },
+      metadata: {
+        resultCount: results.length,
+        duplicatesRemoved: rawResults.length - unique.length,
+        truncated: unique.length > results.length,
+      },
+      warnings: [],
+    };
   }
 
   /** 读取公开网页并返回经过长度限制的正文。 */
-  async open(input: { url: string; maxTextLength?: number }): Promise<{ title: string; finalUrl: string; text: string; published?: string; sourceUrl: string }> {
+  async read(input: { url: string; maxCharacters?: number }): Promise<WebReadServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const page = await this.dependencies.fetchText(input.url, config);
-    const article = await this.dependencies.extract(page.body, page.finalUrl);
-    const text = (article?.content?.trim() || stripHtml(page.body)).slice(0, Math.min(input.maxTextLength ?? config.maxTextLength, config.maxTextLength));
+    const article = page.contentType === "text/html"
+      ? await this.dependencies.extract(page.body, page.finalUrl).catch(() => null)
+      : null;
+    const articleText = article?.content?.trim();
+    const extractionMode = page.contentType === "text/plain"
+      ? "plain_text"
+      : articleText
+        ? "article"
+        : "html_fallback";
+    const fullText = extractionMode === "plain_text"
+      ? page.body.trim()
+      : extractionMode === "article"
+        ? articleText!
+        : stripHtml(page.body);
+    const maxCharacters = Math.min(Math.max(input.maxCharacters ?? config.maxTextLength, 1), config.maxTextLength);
+    const text = fullText.slice(0, maxCharacters);
+    const warnings: ToolWarning[] = extractionMode === "html_fallback"
+      ? [{ code: "ARTICLE_EXTRACTION_FALLBACK", message: "文章正文提取失败，已降级为 HTML 文本" }]
+      : [];
     return {
-      title: article?.title?.trim() || page.finalUrl,
-      finalUrl: page.finalUrl,
-      text,
-      ...(article?.published ? { published: article.published } : {}),
-      sourceUrl: page.finalUrl,
+      data: {
+        requestedUrl: input.url,
+        finalUrl: page.finalUrl,
+        title: article?.title?.trim() || page.finalUrl,
+        hostname: new URL(page.finalUrl).hostname.toLowerCase(),
+        text,
+        publishedAt: normalizePublishedDate(article?.published),
+        fetchedAt: new Date().toISOString(),
+        contentType: page.contentType,
+        extractionMode,
+      },
+      metadata: {
+        truncated: text.length < fullText.length,
+        contentCharacters: fullText.length,
+        returnedCharacters: text.length,
+        untrustedContent: true,
+      },
+      warnings,
     };
   }
 
@@ -82,12 +171,22 @@ function assertEnabled(enabled: boolean): asserts enabled {
 }
 
 /** 对 SearXNG 非法或不完整响应进行保守过滤。 */
-function readSearchResults(value: unknown): Array<{ title: string; url: string; snippet: string; source: string }> {
+function readSearchResults(value: unknown): Array<Omit<WebSearchServiceResult["data"]["results"][number], "rank">> {
   if (!isRecord(value) || !Array.isArray(value.results)) return [];
   return value.results.flatMap((item) => {
-    if (!isRecord(item) || typeof item.url !== "string" || !isHttpUrl(item.url)) return [];
-    const source = typeof item.engine === "string" ? item.engine : new URL(item.url).hostname;
-    return [{ title: typeof item.title === "string" ? item.title : item.url, url: item.url, snippet: typeof item.content === "string" ? item.content : "", source }];
+    if (!isRecord(item) || typeof item.url !== "string") return [];
+    const url = canonicalizeHttpUrl(item.url);
+    if (!url) return [];
+    const hostname = new URL(url).hostname.toLowerCase();
+    const engine = typeof item.engine === "string" && item.engine.trim() ? item.engine.trim() : hostname;
+    return [{
+      title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : url,
+      url,
+      hostname,
+      snippet: typeof item.content === "string" ? item.content.trim() : "",
+      sourceEngines: [engine],
+      publishedAt: normalizePublishedDate(item.publishedDate),
+    }];
   });
 }
 
@@ -97,12 +196,26 @@ function stripHtml(value: string): string {
 }
 
 /** 判断搜索结果 URL 是否为可引用的 HTTP 地址。 */
-function isHttpUrl(value: string): boolean {
+function canonicalizeHttpUrl(value: string): string | undefined {
   try {
-    return ["http:", "https:"].includes(new URL(value).protocol);
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    url.hostname = url.hostname.toLowerCase();
+    url.hash = "";
+    return url.toString();
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+/** 只保留可验证的发布时间，不根据模糊文本猜测。 */
+function normalizePublishedDate(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const normalized = value.trim();
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return normalized;
+  return new Date(timestamp).toISOString();
 }
 
 /** 判断未知值是否为对象。 */

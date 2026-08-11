@@ -23,9 +23,9 @@ export const BUILTIN_TOOL_CATALOG: ToolCatalogItem[] = [
 
 /** Web 系统注入、但同样必须获得 Agent 授权的工具。 */
 export const SYSTEM_TOOL_CATALOG: ToolCatalogItem[] = [
-  { name: "search_knowledge", description: "检索当前 Agent 可访问的知识库", source: "system", highRisk: false },
-  { name: "get_knowledge_document", description: "读取知识库文档内容", source: "system", highRisk: false },
-  { name: "manage_knowledge_base", description: "管理 Agent 的知识库与资料", source: "system", highRisk: true },
+  { name: "knowledge_search", description: "检索当前 Agent 可访问的知识库", source: "system", highRisk: false },
+  { name: "knowledge_read", description: "读取知识库资料或命中位置上下文", source: "system", highRisk: false },
+  { name: "knowledge_manage", description: "管理当前 Agent 的知识库与资料", source: "system", highRisk: true },
   { name: "scheduled_tasks", description: "创建、修改和执行定时任务", source: "system", highRisk: true },
   { name: "edit_own_prompts", description: "编辑自身的角色、行为风格、规则、用户和初始化提示词", source: "system", highRisk: true },
 ];
@@ -33,7 +33,7 @@ export const SYSTEM_TOOL_CATALOG: ToolCatalogItem[] = [
 /** 由能力扩展模块提供、可按全局开关停用的工具。 */
 export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
   { name: "web_search", description: "搜索互联网并返回可引用来源", source: "capability", highRisk: false },
-  { name: "web_open", description: "读取公开网页正文", source: "capability", highRisk: false },
+  { name: "web_read", description: "读取公开网页正文", source: "capability", highRisk: false },
 ];
 
 /** 新建 Agent 的默认权限，保持现有开箱即用的能力。 */

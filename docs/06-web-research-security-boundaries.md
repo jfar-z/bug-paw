@@ -8,7 +8,7 @@ BugPaw 需要让 Agent 能够检索互联网并读取公开网页，同时保持
 
 ```text
 web_search：搜索互联网
-web_open：读取公开网页的正文
+web_read：读取公开网页的正文
 ```
 
 当前不支持网页点击、表单输入、登录、上传、提交、截图或站点批量爬取。
@@ -37,14 +37,14 @@ SearXNG 通过其 JSON Search API 返回标题、链接和摘要。默认由同�
 
 联网工具属于 BugPaw 自身的系统能力，按项目约定通过 SDK `customTools` 注册，不作为核心扩展文件安装。
 
-运行时只在“联网检索”已启用时注册 `web_search` 和 `web_open`。工具名称同时进入 Agent 的可配置工具目录；只有管理员在对应 Agent 的“工具权限”中显式勾选后，才会进入该 Agent 的运行时白名单。
+运行时只在“联网检索”已启用时注册 `web_search` 和 `web_read`。工具名称同时进入 Agent 的可配置工具目录；只有管理员在对应 Agent 的“工具权限”中显式勾选后，才会进入该 Agent 的运行时白名单。Runtime 创建时会同时计算有效联网能力快照；工具注册和系统提示词的联网路由政策共同使用该快照。
 
 ```text
 Agent 工具权限
   ↓ 显式授权
 SDK tools allowlist
   ↓
-customTools: web_search / web_open
+customTools: web_search / web_read
   ↓
 SearXNG 与 Node 正文提取器
 ```
@@ -72,11 +72,11 @@ SearXNG 与 Node 正文提取器
 
 ### 工具输入与输出
 
-`web_search` 接收查询词以及可选的站点限定、时间范围、语言和结果数量，返回统一的 `title`、`url`、`snippet`、`source` 结果列表。
+`web_search` 接收查询词以及可选的站点限定、时间范围、语言和结果数量。它过滤非 HTTP(S) 地址、规范化并去重 URL、合并搜索引擎来源，返回 `rank`、`title`、`url`、`hostname`、`snippet`、`sourceEngines` 与可验证的 `publishedAt`；无法确认发布时间时为 `null`。
 
-`web_open` 接收 URL 和可选正文长度限制，返回 `title`、最终 `url`、正文文本或 Markdown，以及可获得的发布时间等元数据。
+`web_read` 接收 URL 和可选正文字符数限制，返回请求地址、最终地址、标题、主机名、正文、发布时间、抓取时间、内容类型与正文提取方式。HTML 正文提取失败时降级为清理后的文本，并以 `partial` 和 `ARTICLE_EXTRACTION_FALLBACK` 记录事实；超出长度限制时以 `partial` 和截断元数据记录事实。
 
-两个工具的输出必须保留来源 URL，供 Agent 在回答中引用，也为后续前端来源卡片保留数据基础。
+两个工具统一返回 `ok`、`empty`、`partial` 或 `error`。成功类响应包含 `data`、`metadata` 和事实性 `warnings`；错误只包含稳定的 `code`、安全消息与 `retryable`。`retryable` 只描述错误是否具备重试条件。工具响应不包含 `nextAction`、行为建议或答案充分性判断。联网结果的 Metadata 标记 `untrustedContent: true`，且始终保留来源 URL，供 Agent 引用和前端展示。
 
 ### 安全与资源限制
 
@@ -109,7 +109,7 @@ SearXNG 与 Node 正文提取器
 - 浏览器进程的内存、并发和超时预算；
 - 容器隔离、网络访问范围和下载限制；
 - 动态网页内容的安全过滤；
-- 与一期 `web_open` 结果格式的一致性；
+- 与现有 `web_read` 结果格式的一致性；
 - 失败时的可观测性与用户可理解的诊断信息。
 
 现有工具名称、授权模型和来源数据格式应保持稳定，使 Playwright 能力可以作为底层实现演进，而不需要改变 Agent 的使用方式。

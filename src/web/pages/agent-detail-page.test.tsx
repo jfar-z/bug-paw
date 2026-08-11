@@ -60,7 +60,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       status: "active" as const,
       cwd: "/data/workspace/agents/tool-agent",
       instructions: { role: "", behavior: "", rules: "", user: "" },
-      allowedTools: ["read", "search_knowledge"],
+      allowedTools: ["read", "knowledge_search"],
       createdAt: "2026-08-07T00:00:00.000Z",
       updatedAt: "2026-08-07T00:00:00.000Z",
     };
@@ -84,7 +84,10 @@ describe("AgentDetailPage v0 身份结构", () => {
     await screen.findByText("工具 Agent");
     fireEvent.click(screen.getByRole("button", { name: "工具权限" }));
 
-    expect(await screen.findByText("search_knowledge")).toBeInTheDocument();
+    expect(await screen.findByText("knowledge_search")).toBeInTheDocument();
+    expect(screen.getByText("knowledge_read")).toBeInTheDocument();
+    expect(screen.getByText("knowledge_manage")).toBeInTheDocument();
+    expect(screen.getByText("web_read")).toBeInTheDocument();
     expect(screen.getByText("scheduled_tasks")).toBeInTheDocument();
     expect(screen.getByText("edit_own_prompts")).toBeInTheDocument();
     const extensionTool = await screen.findByRole("checkbox", { name: /extension_lookup/ });

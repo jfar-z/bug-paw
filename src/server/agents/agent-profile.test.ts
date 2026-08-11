@@ -16,11 +16,19 @@ describe("createAgentProfile", () => {
       "grep",
       "find",
       "ls",
+      "knowledge_search",
+      "knowledge_read",
+      "knowledge_manage",
+      "scheduled_tasks",
+      "edit_own_prompts",
+      "web_search",
+      "web_read",
+    ]));
+    expect(profile.allowedTools).not.toEqual(expect.arrayContaining([
       "search_knowledge",
       "get_knowledge_document",
       "manage_knowledge_base",
-      "scheduled_tasks",
-      "edit_own_prompts",
+      "web_open",
     ]));
   });
 

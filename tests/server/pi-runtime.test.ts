@@ -524,7 +524,13 @@ describe("PiRuntimeGateway", () => {
   });
 
   it("通过 ResourceLoader 注册系统提示词注入扩展", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp/workspace", "/tmp/pi-agent-test", ["用户自定义 Agent 设定"]);
+    const loader = createWorkspaceResourceLoader(
+      "/tmp/workspace",
+      "/tmp/pi-agent-test",
+      ["用户自定义 Agent 设定"],
+      undefined,
+      { knowledgeSearch: false, knowledgeRead: false, webSearch: true, webRead: true },
+    );
     await loader.reload();
 
     expect(loader.getAppendSystemPrompt()).toEqual(["用户自定义 Agent 设定"]);

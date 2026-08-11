@@ -5,7 +5,12 @@ import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt
 describe("Agent 系统提示词注入扩展", () => {
   it("在 before_agent_start 中替换完整系统提示词的身份段", async () => {
     let handler: ((event: { systemPrompt: string }) => { systemPrompt: string } | Promise<{ systemPrompt: string }>) | undefined;
-    const extension = createAgentSystemPromptInjectionExtension();
+    const extension = createAgentSystemPromptInjectionExtension({
+      knowledgeSearch: true,
+      knowledgeRead: false,
+      webSearch: false,
+      webRead: false,
+    });
 
     extension.factory({
       on: (_event: string, callback: unknown) => {
@@ -17,5 +22,7 @@ describe("Agent 系统提示词注入扩展", () => {
 
     expect(result?.systemPrompt).toContain("You are a versatile work assistant");
     expect(result?.systemPrompt).toContain("Available tools:\n- read");
+    expect(result?.systemPrompt).toContain("### Knowledge retrieval policy");
+    expect(result?.systemPrompt).not.toContain("### Web research policy");
   });
 });

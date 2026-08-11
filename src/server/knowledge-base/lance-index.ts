@@ -1,4 +1,4 @@
-import { Index, connect } from "@lancedb/lancedb";
+import { Index, connect, type Table } from "@lancedb/lancedb";
 import { mkdir } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -9,6 +9,7 @@ export interface KnowledgeIndexChunk {
   index: number;
   text: string;
   page?: number;
+  section?: string | null;
 }
 
 /** 关键词检索命中的知识库切片。 */
@@ -43,11 +44,13 @@ export function createKnowledgeLanceIndex(indexesRoot: string): KnowledgeLanceIn
       if (chunks.length === 0) return;
       const connection = await openConnection(indexesRoot, knowledgeBaseId);
       const tableNames = await connection.tableNames();
-      const rows = chunks.map((chunk) => ({ ...chunk, page: chunk.page ?? 1 }));
+      // LanceDB 无法从全 null 列推断类型，空章节使用空字符串落库并在读取时还原。
+      const rows = chunks.map((chunk) => ({ ...chunk, page: chunk.page ?? 1, section: chunk.section ?? "" }));
       const table = tableNames.includes("chunks")
         ? await connection.openTable("chunks")
         : await connection.createTable("chunks", rows);
       if (tableNames.includes("chunks")) {
+        await ensureSectionColumn(table);
         await table.add(rows);
       }
       await table.createIndex("text", {
@@ -72,6 +75,7 @@ export function createKnowledgeLanceIndex(indexesRoot: string): KnowledgeLanceIn
         index: Number(row.index),
         text: String(row.text),
         ...(typeof row.page === "number" ? { page: row.page } : {}),
+        section: typeof row.section === "string" && row.section ? row.section : null,
         ...(typeof row._score === "number" ? { score: row._score } : {}),
       }));
     },
@@ -88,6 +92,7 @@ export function createKnowledgeLanceIndex(indexesRoot: string): KnowledgeLanceIn
         index: Number(row.index),
         text: String(row.text),
         ...(typeof row.page === "number" ? { page: row.page } : {}),
+        section: typeof row.section === "string" && row.section ? row.section : null,
       })).sort((left, right) => left.index - right.index || left.chunkId.localeCompare(right.chunkId));
     },
 
@@ -99,11 +104,15 @@ export function createKnowledgeLanceIndex(indexesRoot: string): KnowledgeLanceIn
       }
       const connection = await openConnection(indexesRoot, knowledgeBaseId);
       const tableNames = await connection.tableNames();
-      const rows = chunks.map((chunk) => ({ ...chunk, page: chunk.page ?? 1 }));
+      // 与全文表保持相同的稳定字符串 Schema。
+      const rows = chunks.map((chunk) => ({ ...chunk, page: chunk.page ?? 1, section: chunk.section ?? "" }));
       const table = tableNames.includes("vectors")
         ? await connection.openTable("vectors")
         : await connection.createTable("vectors", rows);
-      if (tableNames.includes("vectors")) await table.add(rows);
+      if (tableNames.includes("vectors")) {
+        await ensureSectionColumn(table);
+        await table.add(rows);
+      }
     },
 
     async searchVectors(knowledgeBaseId, vector, limit) {
@@ -118,6 +127,7 @@ export function createKnowledgeLanceIndex(indexesRoot: string): KnowledgeLanceIn
         index: Number(row.index),
         text: String(row.text),
         ...(typeof row.page === "number" ? { page: row.page } : {}),
+        section: typeof row.section === "string" && row.section ? row.section : null,
         ...(typeof row._distance === "number" ? { score: row._distance } : {}),
       }));
     },
@@ -132,6 +142,13 @@ export function createKnowledgeLanceIndex(indexesRoot: string): KnowledgeLanceIn
       }
     },
   };
+}
+
+/** 为升级前创建的 Lance 表补齐可选章节列。 */
+async function ensureSectionColumn(table: Table): Promise<void> {
+  const schema = await table.schema();
+  if (schema.fields.some((field) => field.name === "section")) return;
+  await table.addColumns([{ name: "section", valueSql: "''" }]);
 }
 
 /** 为单个知识库创建受根目录约束的本地连接。 */

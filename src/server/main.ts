@@ -35,6 +35,7 @@ import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
 import { SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
 import { ProviderRenameService, recoverPendingProviderRenames } from "./configuration/provider-rename-service";
@@ -52,7 +53,8 @@ import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool"
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { createWebResearchService } from "./web-research/web-research-service";
-import { createWebOpenTool, createWebSearchTool } from "./web-research/web-research-tools";
+import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
+import { ensureWebResearchSkill } from "./web-research/global-skill";
 import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
@@ -63,7 +65,7 @@ import { registerKnowledgeRetrievalRoutes } from "./routes/knowledge-retrieval";
 import { createKnowledgeRepository } from "./knowledge-base/knowledge-repository";
 import { createKnowledgeBaseService } from "./knowledge-base/knowledge-base-service";
 import { registerKnowledgeBaseRoutes } from "./routes/knowledge-bases";
-import { createGetKnowledgeDocumentTool, createManageKnowledgeBaseTool, createSearchKnowledgeTool } from "./knowledge-base/knowledge-tools";
+import { createKnowledgeManageTool, createKnowledgeReadTool, createKnowledgeSearchTool } from "./knowledge-base/knowledge-tools";
 import { ensureKnowledgeBaseSkill } from "./knowledge-base/global-skill";
 import { createAgentReferenceResolver } from "./agent-references";
 import { ComposerCatalogService } from "./composer-catalog";
@@ -249,6 +251,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           return buildAgentInstructionPrompts(latest.profile, bootsharp);
         };
         const webResearchConfig = (await webResearchConfigs.read()).config;
+        const retrievalCapabilities = resolveEffectiveRetrievalCapabilities({
+          allowedTools: profile.profile.allowedTools,
+          webResearchEnabled: webResearchConfig.enabled,
+        });
         return createSdkPiRuntimeGateway({
           cwd,
           agentDir: paths.piDir,
@@ -257,16 +263,19 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           defaultThinkingLevel: profile.profile.defaultThinkingLevel,
           titleGeneration: profile.profile.titleGeneration,
           allowedTools: profile.profile.allowedTools,
+          retrievalCapabilities,
           customTools: [
-            createSearchKnowledgeTool(agentId, knowledgeBases),
-            createGetKnowledgeDocumentTool(agentId, knowledgeBases),
-            createManageKnowledgeBaseTool(agentId, knowledgeBases, workspaceFileManager),
+            ...(retrievalCapabilities.knowledgeSearch ? [createKnowledgeSearchTool(agentId, knowledgeBases)] : []),
+            ...(retrievalCapabilities.knowledgeRead ? [createKnowledgeReadTool(agentId, knowledgeBases)] : []),
+            ...(profile.profile.allowedTools.includes("knowledge_manage")
+              ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
+              : []),
             createEditOwnPromptsTool(agentId, agentPrompts, async () => {
               await runtimeSupervisor?.refreshAgentPromptContext(agentId);
             }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
-            ...(webResearchConfig.enabled && profile.profile.allowedTools.includes("web_search") ? [createWebSearchTool(webResearch)] : []),
-            ...(webResearchConfig.enabled && profile.profile.allowedTools.includes("web_open") ? [createWebOpenTool(webResearch)] : []),
+            ...(retrievalCapabilities.webSearch ? [createWebSearchTool(webResearch)] : []),
+            ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
           appendSystemPrompt: await readInstructionPrompts(),
           refreshAppendSystemPrompt: readInstructionPrompts,
@@ -334,6 +343,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureKnowledgeBaseSkill(paths.piDir);
+  await ensureWebResearchSkill(paths.piDir);
   await scheduledTasks?.start();
   const composerCatalog = new ComposerCatalogService({
     agents: agentStore,
