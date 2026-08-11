@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { AgentsPage } from "../pages/agents-page";
 import type { AppRoute } from "../router";
 import { WorkbenchShell } from "./workbench-shell";
@@ -16,15 +18,19 @@ function renderShell(route: AppRoute = { page: "agents" }) {
     }],
   }), { status: 200 })));
   render(
-    <WorkbenchShell
-      route={route}
-      theme="light"
-      onThemeChange={vi.fn()}
-      onNavigate={onNavigate}
-      onLogout={onLogout}
-    >
-      <AgentsPage onNavigate={onNavigate} />
-    </WorkbenchShell>,
+    <ErrorToastProvider>
+      <ApiTaskProvider onAuthenticationRequired={vi.fn()}>
+        <WorkbenchShell
+          route={route}
+          theme="light"
+          onThemeChange={vi.fn()}
+          onNavigate={onNavigate}
+          onLogout={onLogout}
+        >
+          <AgentsPage onNavigate={onNavigate} />
+        </WorkbenchShell>
+      </ApiTaskProvider>
+    </ErrorToastProvider>,
   );
   return { onNavigate, onLogout };
 }
