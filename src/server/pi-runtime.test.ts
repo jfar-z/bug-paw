@@ -79,6 +79,37 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(loader.getAppendSystemPrompt()).toEqual(["第二版提示词"]);
   });
 
+  it("资源加载器注册隐藏的工具空参数断路扩展", async () => {
+    const tool = {
+      name: "required_tool",
+      label: "Required",
+      description: "requires action",
+      parameters: {
+        type: "object",
+        properties: { action: { type: "string" } },
+        required: ["action"],
+      },
+      execute: vi.fn(),
+    } as never;
+    const loader = createWorkspaceResourceLoader(
+      "/tmp",
+      "/tmp",
+      [],
+      undefined,
+      { knowledgeSearch: false, knowledgeRead: false, webSearch: false, webRead: false },
+      [tool],
+      vi.fn(),
+    );
+
+    await loader.reload();
+
+    const extension = loader.getExtensions().extensions.find(
+      ({ path }) => path === "<inline:bug-paw-tool-call-circuit-breaker>",
+    );
+    expect(extension?.hidden).toBe(true);
+    expect(loader.getExtensions().errors).toEqual([]);
+  });
+
   it("提示词被外部更新时立即 reload 空闲会话", async () => {
     const session = createSession();
     const refreshSessionContext = vi.fn(async () => undefined);

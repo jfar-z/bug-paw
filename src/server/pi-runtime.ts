@@ -22,6 +22,10 @@ import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
+import {
+  createToolCallCircuitBreakerExtension,
+  type ToolCallCircuitBreakerDiagnostic,
+} from "./retrieval/tool-call-circuit-breaker";
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
 
 /**
@@ -38,11 +42,16 @@ export function createWorkspaceResourceLoader(
     webSearch: false,
     webRead: false,
   },
+  customTools: readonly ToolDefinition[] = [],
+  onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
-    extensionFactories: [createAgentSystemPromptInjectionExtension(retrievalCapabilities)],
+    extensionFactories: [
+      createAgentSystemPromptInjectionExtension(retrievalCapabilities),
+      createToolCallCircuitBreakerExtension(customTools, onToolCallCircuitBreak),
+    ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
     // 提示词文件可在会话存活期间更新，reload 时从闭包读取最新快照。
@@ -1020,6 +1029,7 @@ interface SdkPiRuntimeOptions {
   sessionDir?: string;
   checkpointStore?: RunCheckpointStore;
   sessionMetadataStore?: SessionMetadataStore;
+  onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
   onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   stageSessionDeletion?: (sessionId: string, sessionFile: string) => Promise<StagedSessionDeletion>;
@@ -1071,6 +1081,8 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       appendSystemPrompt,
       () => appendSystemPrompt,
       options.retrievalCapabilities,
+      options.customTools ?? [],
+      options.onToolCallCircuitBreak,
     );
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
