@@ -1137,7 +1137,7 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByRole("button", { name: "跳转到用户消息 2：继续检查附件目录" })).toBeInTheDocument();
   });
 
-  it("按 SSE 到达顺序在两段文本之间展示工具", async () => {
+  it("按 SSE 到达顺序在两段文本之间展示可折叠活动段", async () => {
     render(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
     const source = FakeEventSource.instances.at(-1)!;
@@ -1147,17 +1147,26 @@ describe("LiveChatPage 时间线", () => {
       source.emit("tool_started", { type: "tool_started", callId: "tool-1", toolName: "bash", args: { cmd: "pwd" } });
       source.emit("tool_finished", { type: "tool_finished", callId: "tool-1", toolName: "bash", result: "/data/workspace", isError: false });
       source.emit("text_delta", { type: "text_delta", delta: "再说明" });
+      source.emit("tool_preparing", { type: "tool_preparing", callId: "tool-2", toolName: "write" });
+      source.emit("tool_started", { type: "tool_started", callId: "tool-2", toolName: "write", args: { path: "src/app.ts" } });
     });
 
     const first = await screen.findByText("先说明");
-    const tool = screen.getByText("bash");
+    const firstTool = screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" });
     const second = await screen.findByText("再说明");
-    expect(first.compareDocumentPosition(tool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(tool.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByRole("button", { name: "展开 bash 工具详情" })).toHaveAttribute("aria-expanded", "false");
+    const secondTool = screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" });
+    expect(first.compareDocumentPosition(firstTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(firstTool.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(second.compareDocumentPosition(secondTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(firstTool).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "收起本轮全部活动" }));
+    expect(first).toBeVisible();
+    expect(second).toBeVisible();
+    expect(screen.getByRole("button", { name: "展开活动段：正在写入 src/app.ts" })).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("实时展示思考过程，并在思考段结束时自动折叠", async () => {
+  it("思考过程默认不铺开全文，并在本轮结束时自动折叠活动段", async () => {
     render(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
     const source = FakeEventSource.instances.at(-1)!;
@@ -1169,7 +1178,11 @@ describe("LiveChatPage 时间线", () => {
       delta: "先分析上下文",
     }));
 
-    expect(screen.getByRole("button", { name: "收起Reasoning" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起活动段：正在思考" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开思考详情" })).toBeInTheDocument();
+    expect(screen.queryByText("先分析上下文")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
     expect(await screen.findByText("先分析上下文")).toBeInTheDocument();
 
     act(() => source.emit("thinking_finished", {
@@ -1178,7 +1191,64 @@ describe("LiveChatPage 时间线", () => {
       sessionId: "session-1",
     }));
 
-    expect(screen.getByRole("button", { name: "展开Reasoning" })).toBeInTheDocument();
+    act(() => source.emit("completed", {
+      id: 3,
+      type: "completed",
+      sessionId: "session-1",
+    }));
+
+    expect(screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" })).toBeInTheDocument();
+  });
+
+  it("工具参数生成开始时立即展示，并在同一活动项原位进入写入状态", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => source.emit("tool_preparing", {
+      type: "tool_preparing",
+      callId: "tool-write-1",
+      toolName: "write",
+    }));
+    expect(screen.getByRole("button", { name: "收起活动段：正在编写文件内容" })).toBeInTheDocument();
+
+    act(() => source.emit("tool_prepared", {
+      type: "tool_prepared",
+      callId: "tool-write-1",
+      toolName: "write",
+      args: { path: "src/app.ts", content: "const value = 1;" },
+    }));
+    expect(screen.getByRole("button", { name: "收起活动段：正在编写 src/app.ts" })).toBeInTheDocument();
+
+    act(() => source.emit("tool_started", {
+      type: "tool_started",
+      callId: "tool-write-1",
+      toolName: "write",
+      args: { path: "src/app.ts", content: "const value = 1;" },
+    }));
+    expect(screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /write 工具详情/ })).toHaveLength(1);
+  });
+
+  it("中止准备中的工具显示未执行，失败工具保持展开并显示失败数量", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const source = FakeEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("tool_preparing", { type: "tool_preparing", callId: "tool-cancelled", toolName: "write" });
+      source.emit("aborted", { type: "aborted" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" }));
+    expect(screen.getByText("write 未执行")).toBeInTheDocument();
+
+    act(() => {
+      source.emit("text_delta", { type: "text_delta", delta: "继续处理" });
+      source.emit("tool_started", { type: "tool_started", callId: "tool-error", toolName: "bash", args: { cmd: "false" } });
+      source.emit("tool_finished", { type: "tool_finished", callId: "tool-error", toolName: "bash", result: "命令失败", isError: true });
+    });
+    expect(screen.getByRole("button", { name: "收起活动段：1 项活动 · 1 项失败" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("bash 执行失败")).toBeInTheDocument();
   });
 
   it("工具结束后的流式标题与正文保持独立 Markdown 结构", async () => {
@@ -1215,6 +1285,7 @@ describe("LiveChatPage 时间线", () => {
       });
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" }));
     fireEvent.click(screen.getByRole("button", { name: "展开 bash 工具详情" }));
     expect(screen.getByText(/"cmd": "pwd"/)).toBeInTheDocument();
     expect(screen.getByText("/data/workspace")).toBeInTheDocument();
