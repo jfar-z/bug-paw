@@ -33,6 +33,19 @@ describe("Chat API Schema", () => {
       type: "model_changed",
       model: { provider: "openai", id: "gpt", name: "GPT" },
     })).toBe(true);
+    expect(Check(SessionEventSchema, {
+      id: 3,
+      sessionId: "s1",
+      type: "session_renamed",
+      name: "登录故障排查",
+    })).toBe(true);
+    expect(Check(SessionEventSchema, {
+      id: 3,
+      sessionId: "s1",
+      runId: "r1",
+      type: "session_renamed",
+      name: "登录故障排查",
+    })).toBe(false);
     expect(Check(SessionProjectionSchema, {
       sessionId: "s1",
       projectionVersion: 2,
