@@ -19,7 +19,8 @@ describe("LiveToolCard", () => {
 
     expect(screen.getByText("执行命令")).toBeInTheDocument();
     expect(screen.getByText("已完成")).toBeInTheDocument();
-    expect(screen.queryByText("入参")).not.toBeInTheDocument();
+    expect(screen.getByText("入参")).toBeInTheDocument();
+    expect(screen.getByText("入参").closest(".collapsible-region")).toHaveAttribute("aria-hidden", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "展开 bash 工具详情" }));
 
@@ -27,6 +28,7 @@ describe("LiveToolCard", () => {
     expect(screen.getByText("结果")).toBeInTheDocument();
     expect(screen.getByText(/"cmd": "pwd"/)).toBeInTheDocument();
     expect(screen.getByText("/data/workspace")).toBeInTheDocument();
+    expect(screen.getByText("入参").closest(".collapsible-region")).toHaveAttribute("aria-hidden", "false");
   });
 
   it.each([

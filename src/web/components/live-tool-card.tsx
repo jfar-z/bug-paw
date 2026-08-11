@@ -2,6 +2,7 @@ import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleSlash2, Loa
 import { useState } from "react";
 import { formatToolValue, type ToolBlock } from "../conversation-timeline";
 import { toolActivityCopy, toolStatusCopy } from "../features/chat/tool-activity-copy";
+import { CollapsibleRegion } from "./collapsible-region";
 
 interface LiveToolCardProps {
   tool: ToolBlock;
@@ -37,13 +38,13 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
         <span className="live-tool-card__status">{statusIcon}<span>{toolStatusCopy(tool)}</span></span>
       </button>
 
-      {expanded && (
+      <CollapsibleRegion expanded={expanded} className="live-tool-card__collapse">
         <div className="live-tool-card__details">
           <ToolDetail title="入参" value={tool.args} />
           <ToolDetail title="结果" value={output} />
           {hasToolDetailValue(tool.details) && <ToolDetail title="详情" value={tool.details} />}
         </div>
-      )}
+      </CollapsibleRegion>
     </section>
   );
 }

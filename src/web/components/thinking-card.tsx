@@ -1,7 +1,8 @@
-import { Brain, ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
+import { Brain, CheckCircle2, ChevronDown, ChevronRight, LoaderCircle } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ThinkingBlock } from "../conversation-timeline";
 import { useStreamingTextReveal } from "../use-streaming-text-reveal";
+import { CollapsibleRegion } from "./collapsible-region";
 
 interface ThinkingCardProps {
   thinking: ThinkingBlock;
@@ -37,11 +38,13 @@ export function ThinkingCard({ thinking }: ThinkingCardProps) {
         <Brain size={17} aria-hidden="true" />
         <strong>{thinking.streaming ? "正在思考" : "思考过程"}</strong>
         <span className="thinking-card__status">
-          {thinking.streaming && <LoaderCircle className="spinner" size={16} aria-hidden="true" />}
-          {!thinking.streaming && "已完成"}
+          {thinking.streaming
+            ? <LoaderCircle className="spinner" size={14} aria-hidden="true" />
+            : <CheckCircle2 size={14} aria-hidden="true" />}
+          <span>{thinking.streaming ? "思考中" : "已完成"}</span>
         </span>
       </button>
-      {expanded && (
+      <CollapsibleRegion expanded={expanded} className="thinking-card__collapse">
         <pre ref={contentRef} className={`thinking-card__content${isRevealing ? " is-text-revealing" : ""}`}>
           {stableText}
           {isRevealing && revealText ? (
@@ -50,7 +53,7 @@ export function ThinkingCard({ thinking }: ThinkingCardProps) {
             </span>
           ) : revealText}
         </pre>
-      )}
+      </CollapsibleRegion>
     </section>
   );
 }
