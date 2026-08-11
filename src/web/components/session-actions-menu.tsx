@@ -1,4 +1,4 @@
-import { Archive, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Archive, ListChecks, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { SessionSummary } from "../api";
 
@@ -9,12 +9,13 @@ interface SessionActionsMenuProps {
   onRename: (name: string) => void | Promise<void>;
   onArchive: () => void | Promise<void>;
   onDelete: (deleteScheduledTasks: boolean) => void | Promise<void>;
+  onSelectMultiple?: () => void;
 }
 
 /**
  * 提供单个会话的轻量操作菜单和危险操作确认。
  */
-export function SessionActionsMenu({ session, disabled, openRequestId, onRename, onArchive, onDelete }: SessionActionsMenuProps) {
+export function SessionActionsMenu({ session, disabled, openRequestId, onRename, onArchive, onDelete, onSelectMultiple }: SessionActionsMenuProps) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -97,7 +98,9 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
             />
           ) : confirmingDelete ? (
             <div className="session-actions__confirm">
-              <p>{session.scheduledTaskCount ? `永久删除此会话及绑定的 ${session.scheduledTaskCount} 个定时任务？` : "永久删除此会话？"}</p>
+              <p className={session.scheduledTaskCount ? "session-actions__task-warning" : undefined}>{session.scheduledTaskCount
+                ? `永久删除此会话？绑定的 ${session.scheduledTaskCount} 个定时任务将同步停用，任务记录会保留。`
+                : "永久删除此会话？"}</p>
               <div>
                 <button type="button" onClick={() => setConfirmingDelete(false)}>取消</button>
                 <button type="button" className="is-danger" onClick={() => { void onDelete(Boolean(session.scheduledTaskCount)); setOpen(false); }}>永久删除</button>
@@ -106,6 +109,7 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
           ) : (
             <>
               <button type="button" role="menuitem" onClick={() => setRenaming(true)}><Pencil size={15} />重命名</button>
+              {onSelectMultiple ? <button type="button" role="menuitem" onClick={() => { onSelectMultiple(); setOpen(false); }}><ListChecks size={15} />多选</button> : null}
               <button type="button" role="menuitem" disabled={disabled} onClick={() => { void onArchive(); setOpen(false); }}><Archive size={15} />归档</button>
               <button type="button" role="menuitem" className="is-danger" disabled={disabled} onClick={() => setConfirmingDelete(true)}><Trash2 size={15} />删除</button>
             </>

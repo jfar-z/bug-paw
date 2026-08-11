@@ -96,13 +96,32 @@ beforeEach(() => {
       return new Response(JSON.stringify({ id: "session-new", agentId: "default", messages: [], lastEventId: 0 }));
     }
     if (url === "/api/v1/sessions?agentId=default") {
-      return new Response(JSON.stringify({ sessions: [{ id: "session-1", firstMessage: "测试", modified: "", messageCount: 0 }] }));
+      return new Response(JSON.stringify({ sessions: [
+        { id: "session-1", firstMessage: "测试", modified: "", messageCount: 0 },
+        { id: "session-2", firstMessage: "第二会话", modified: "", messageCount: 2, scheduledTaskCount: 2 },
+      ] }));
     }
     if (url === "/api/v1/sessions?agentId=default&archived=true") {
       return new Response(JSON.stringify({ sessions: [{ id: "archived-1", name: "旧会话", firstMessage: "旧问题", modified: "", messageCount: 2 }] }));
     }
     if (url === "/api/v1/models") {
       return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+    }
+    if (url === "/api/v1/sessions/bulk/preview" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { action: "archive" | "delete"; sessionIds: string[] };
+      return new Response(JSON.stringify({
+        ...body,
+        sessionCount: body.sessionIds.length,
+        tasks: body.sessionIds.includes("session-2") ? [
+          { id: "task-1", name: "日报", sessionId: "session-2" },
+          { id: "task-2", name: "周报", sessionId: "session-2" },
+        ] : [],
+        fingerprint: "fingerprint-1",
+      }));
+    }
+    if (url === "/api/v1/sessions/bulk" && init?.method === "POST") {
+      const body = JSON.parse(String(init.body)) as { action: "archive" | "delete"; sessionIds: string[] };
+      return new Response(JSON.stringify({ action: body.action, sessionCount: body.sessionIds.length, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
       return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
@@ -371,6 +390,52 @@ describe("LiveChatPage 时间线", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("从会话菜单进入多选并经任务强化确认后批量删除", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^第二会话/ });
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：第二会话" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "多选" }));
+
+    expect(screen.getByRole("checkbox", { name: "选择 第二会话" })).toBeChecked();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "删除已选会话" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "确认删除 1 个会话" });
+    expect(dialog.querySelector(".session-bulk-dialog__task-warning.is-destructive")).not.toBeNull();
+    expect(screen.getByText(/任务记录会保留并标记原目标已删除/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除会话并停用任务" }));
+
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/bulk"));
+    const executeCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/v1/sessions/bulk");
+    expect(JSON.parse(String(executeCall?.[1]?.body))).toEqual({
+      action: "delete",
+      sessionIds: ["session-2"],
+      fingerprint: "fingerprint-1",
+    });
+    expect(screen.queryByRole("button", { name: /^第二会话/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("通过遮罩或工作台入口关闭侧栏都会取消当前选择", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^第二会话/ });
+    fireEvent.click(screen.getByRole("button", { name: "打开会话历史" }));
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：第二会话" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "多选" }));
+    expect(screen.getByRole("checkbox", { name: "选择 第二会话" })).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭会话侧栏" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开会话历史" }));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：第二会话" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "多选" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开工作台导航" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开会话历史" }));
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("为高密度对话布局保留消息列样式钩子", async () => {

@@ -45,12 +45,14 @@ describe("SessionActionsMenu", () => {
     expect(screen.getByRole("menuitem", { name: "删除" })).toBeDisabled();
   });
 
-  it("删除绑定定时任务的会话时明确要求同时删除任务", () => {
+  it("删除绑定定时任务的会话时明确要求停用并保留任务", () => {
     const onDelete = vi.fn();
     render(<SessionActionsMenu session={{ ...session, scheduledTaskCount: 2 }} onRename={vi.fn()} onArchive={vi.fn()} onDelete={onDelete} />);
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
-    expect(screen.getByText("永久删除此会话及绑定的 2 个定时任务？")).toBeInTheDocument();
+    const warning = screen.getByText(/绑定的 2 个定时任务将同步停用/);
+    expect(warning).toHaveClass("session-actions__task-warning");
+    expect(warning).toHaveTextContent("任务记录会保留");
     fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
     expect(onDelete).toHaveBeenCalledWith(true);
   });
@@ -63,5 +65,16 @@ describe("SessionActionsMenu", () => {
     rerender(<SessionActionsMenu session={session} openRequestId={1} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
 
     expect(screen.getByRole("menu")).toBeInTheDocument();
+  });
+
+  it("可从三点菜单进入多选模式", () => {
+    const onSelectMultiple = vi.fn();
+    render(<SessionActionsMenu session={session} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} onSelectMultiple={onSelectMultiple} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "多选" }));
+
+    expect(onSelectMultiple).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 });

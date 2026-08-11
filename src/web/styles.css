@@ -1982,6 +1982,47 @@ p {
   white-space: nowrap;
 }
 
+.session-row__select {
+  display: flex;
+  min-height: 38px;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.session-row__select > input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.session-row__select > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row__select > small {
+  color: var(--accent-strong);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.session-row__select.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .session-actions {
   position: relative;
   flex: 0 0 auto;
@@ -2066,6 +2107,15 @@ p {
   font-size: 12px;
 }
 
+.session-actions__confirm .session-actions__task-warning {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--border));
+  border-radius: 7px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  font-weight: 650;
+}
+
 .session-actions__confirm div,
 .archive-dialog__confirm {
   display: flex;
@@ -2103,6 +2153,45 @@ p {
 .archived-chat-button:hover {
   color: var(--text-primary);
   background: var(--surface-hover);
+}
+
+.session-selection-toolbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.session-selection-toolbar > button {
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  place-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 10px;
+}
+
+.session-selection-toolbar > button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.session-selection-toolbar > button.is-danger {
+  color: var(--danger);
+}
+
+.session-selection-toolbar > button:disabled {
+  opacity: 0.42;
 }
 
 .sidebar-footer {
@@ -7264,6 +7353,70 @@ a[aria-disabled="true"] {
   width: min(520px, 100%);
   display: grid;
   gap: 16px;
+}
+
+.session-bulk-dialog {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 18px;
+}
+
+.session-bulk-dialog__icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.session-bulk-dialog__icon.is-destructive {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+.session-bulk-dialog header p,
+.session-bulk-dialog__plain-impact {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.session-bulk-dialog__task-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 11px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-soft) 74%, var(--surface));
+}
+
+.session-bulk-dialog__task-warning.is-destructive {
+  border-width: 2px;
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.session-bulk-dialog__task-warning > svg {
+  margin-top: 1px;
+  flex: 0 0 auto;
+}
+
+.session-bulk-dialog__task-warning strong {
+  font-size: 13px;
+}
+
+.session-bulk-dialog__task-warning p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .provider-rename-dialog__field {
