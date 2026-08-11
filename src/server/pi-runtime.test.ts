@@ -174,6 +174,58 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     gateway.dispose();
   });
 
+  it("在工具参数生成开始与结束时发布轻量事件且不转发原始增量", async () => {
+    let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
+    const toolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "write",
+      arguments: { path: "src/app.ts", content: "完整内容" },
+    };
+    const assistantMessage = { role: "assistant", content: [toolCall] };
+    const session = createSession(async () => {
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: assistantMessage },
+      } as never);
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "large-content-delta",
+          partial: assistantMessage,
+        },
+      } as never);
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall, partial: assistantMessage },
+      } as never);
+    });
+    session.subscribe = (next) => {
+      listener = next;
+      return () => undefined;
+    };
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: Array<{ type: string }> = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "生成文件", "生成文件");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "completed")).toBe(true));
+
+    const toolEvents = events.filter((event) => event.type.startsWith("tool_"));
+    expect(toolEvents).toEqual([
+      expect.objectContaining({ type: "tool_preparing", callId: "call-1", toolName: "write" }),
+      expect.objectContaining({ type: "tool_prepared", callId: "call-1", toolName: "write", args: toolCall.arguments }),
+    ]);
+    expect(JSON.stringify(toolEvents)).not.toContain("large-content-delta");
+    gateway.dispose();
+  });
+
   it("第三次连续空参数工具事件终止当前 Run 并保留会话", async () => {
     let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
     let aborted = false;

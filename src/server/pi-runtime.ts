@@ -177,6 +177,8 @@ export type ChatEvent = ChatEventBase & (
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
+  | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
@@ -193,6 +195,8 @@ type UnsequencedChatEvent =
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
+  | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
@@ -1405,6 +1409,23 @@ function normalizeSessionEvent(
   event: AgentSessionEvent,
 ): UnsequencedChatEvent | undefined {
   if (event.type === "message_update") {
+    if (event.assistantMessageEvent.type === "toolcall_start") {
+      const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
+      return toolCall ? {
+        type: "tool_preparing",
+        callId: toolCall.id,
+        toolName: toolCall.name,
+      } : undefined;
+    }
+    if (event.assistantMessageEvent.type === "toolcall_end") {
+      return {
+        type: "tool_prepared",
+        callId: event.assistantMessageEvent.toolCall.id,
+        toolName: event.assistantMessageEvent.toolCall.name,
+        args: event.assistantMessageEvent.toolCall.arguments,
+      };
+    }
+    // 大型 write/edit 参数增量不进入 SSE，避免重复序列化和浏览器重渲染。
     if (event.assistantMessageEvent.type === "text_delta") {
       return { type: "text_delta", delta: event.assistantMessageEvent.delta };
     }
@@ -1441,6 +1462,15 @@ function normalizeSessionEvent(
     };
   }
   return undefined;
+}
+
+/** 从 Pi 的累计 Assistant 消息中读取刚开始生成的工具调用身份。 */
+function readStreamingToolCall(message: unknown, contentIndex: number): { id: string; name: string } | undefined {
+  if (!isRecord(message) || !Array.isArray(message.content)) return undefined;
+  const block = message.content[contentIndex];
+  if (!isRecord(block) || block.type !== "toolCall") return undefined;
+  if (typeof block.id !== "string" || !block.id || typeof block.name !== "string" || !block.name) return undefined;
+  return { id: block.id, name: block.name };
 }
 
 /**
@@ -1489,6 +1519,12 @@ function boundRealtimeEvent(
       return fitRealtimeText(event.delta, (delta) => ({ ...event, delta }), fits);
     case "error":
       return fitRealtimeText(event.message, (message) => ({ ...event, message }), fits);
+    case "tool_preparing":
+      candidate = { ...event, callId: truncateIdentifier(event.callId), toolName: truncateIdentifier(event.toolName) };
+      break;
+    case "tool_prepared":
+      candidate = { ...event, callId: truncateIdentifier(event.callId), toolName: truncateIdentifier(event.toolName), args: truncated };
+      break;
     case "tool_started":
       candidate = { ...event, callId: truncateIdentifier(event.callId), toolName: truncateIdentifier(event.toolName), args: truncated };
       break;

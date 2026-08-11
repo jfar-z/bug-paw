@@ -661,7 +661,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       autoSpeechEligibilityRef.current = undefined;
       pendingUserMessageRef.current = undefined;
       setActiveRun(undefined);
-      setTimeline((current) => reduceTimeline(current, { type: "generation_finished" }));
+      setTimeline((current) => reduceTimeline(current, { type: "generation_finished", outcome: "error" }));
       setDraft(text);
       setDraftReferences(draftReferences);
       setAttachmentItems(previousAttachmentItems);

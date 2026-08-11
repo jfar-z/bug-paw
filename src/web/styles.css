@@ -1531,103 +1531,106 @@ p {
   font-weight: 650;
 }
 
-.live-tool-card {
-  margin: 12px 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-soft);
-  overflow: hidden;
+.activity-group {
+  margin: 10px 0;
+  color: var(--text-secondary);
 }
 
-.live-tool-card.is-running {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+.activity-group__summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
 }
 
-.live-tool-card.is-error {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+.activity-group__summary strong {
+  color: var(--text-primary);
+  font-size: 12px;
 }
 
-.live-tool-card__summary {
+.activity-group__summary > span:last-child {
+  margin-left: auto;
+  font-size: 10px;
+}
+
+.activity-rail {
+  margin: 5px 0 3px 6px;
+  padding-left: 15px;
+  border-left: 1px solid var(--border);
+}
+
+.live-tool-card,
+.thinking-card {
+  position: relative;
+}
+
+.live-tool-card::before,
+.thinking-card::before {
+  position: absolute;
+  top: 13px;
+  left: -18px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  content: "";
+}
+
+.live-tool-card.is-preparing::before,
+.live-tool-card.is-running::before,
+.thinking-card.is-streaming::before {
+  background: var(--accent);
+}
+
+.live-tool-card.is-error::before {
+  background: var(--danger);
+}
+
+.live-tool-card__summary,
+.thinking-card__summary {
   display: grid;
   width: 100%;
-  min-height: 44px;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
+  gap: 7px;
+  padding: 4px 2px;
   border: 0;
   color: var(--text-primary);
   background: transparent;
   text-align: left;
 }
 
-.live-tool-card__summary:hover {
-  background: var(--surface-hover);
-}
-
-.live-tool-card__summary > strong {
-  overflow: hidden;
-  font-family: var(--font-mono);
+.live-tool-card__summary > strong,
+.thinking-card__summary > strong {
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.live-tool-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.live-tool-card.is-running .live-tool-card__status {
-  color: var(--accent);
-}
-
-.live-tool-card.is-error .live-tool-card__status {
-  color: var(--danger);
 }
 
 .live-tool-card__details {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  gap: 8px;
+  padding: 4px 2px 8px 31px;
 }
 
 .live-tool-card__detail h4 {
   margin: 0 0 6px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .live-tool-card__detail pre {
-  max-height: 320px;
   margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
   background: var(--surface-soft);
-  color: var(--text-primary);
   font-size: 11px;
-  line-height: 1.55;
   overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .live-tool-card .spinner {
-    animation: none;
-  }
-
-  .thinking-card .spinner {
+  .activity-rail .spinner {
     animation: none;
   }
 
@@ -1641,69 +1644,27 @@ p {
   }
 }
 
-.thinking-card {
-  margin: 12px 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-soft);
-  overflow: hidden;
-}
-
-.thinking-card.is-streaming {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-}
-
-.thinking-card__summary {
-  display: grid;
-  width: 100%;
-  min-height: 44px;
-  grid-template-columns: auto auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
-  border: 0;
-  color: var(--text-primary);
-  background: transparent;
-  text-align: left;
-}
-
-.thinking-card__summary:hover {
-  background: var(--surface-hover);
-}
-
-.thinking-card__summary > strong {
-  overflow: hidden;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thinking-card__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.thinking-card.is-streaming .thinking-card__status {
-  color: var(--accent);
-}
-
 .thinking-card__content {
   max-height: clamp(160px, 28vh, 300px);
   margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
+  padding: 5px 2px 8px 31px;
   font-size: 11px;
-  line-height: 1.55;
   overflow-y: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.agent-turn-activity-controls {
+  margin: -4px 0 8px;
+  text-align: right;
+}
+
+.agent-turn-activity-controls button {
+  padding: 2px 0;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  font-size: 10px;
 }
 
 /* 只让最新增量渐变，已显示文本保持静止且不参与重排。 */

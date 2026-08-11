@@ -144,7 +144,12 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       } else {
         callbacksRef.current.onRunChange(undefined);
         if (snapshot.run) {
-          callbacksRef.current.onTimelineEvent({ type: "generation_finished" });
+          const outcome = snapshot.run.status === "completed"
+            ? "completed"
+            : snapshot.run.status === "aborted"
+              ? "aborted"
+              : "error";
+          callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome });
         }
       }
     });
@@ -246,6 +251,39 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         callbacksRef.current.onTimelineEvent({ type: "thinking_finished" });
       }
     });
+    source.addEventListener("tool_preparing", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "tool_preparing") {
+        reportInvalidEvent();
+        return;
+      }
+      if (accept(payload)) {
+        flushDeltas();
+        callbacksRef.current.onTimelineEvent({
+          type: "tool_preparing",
+          callId: payload.callId,
+          toolName: payload.toolName,
+        });
+      }
+    });
+    source.addEventListener("tool_prepared", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "tool_prepared") {
+        reportInvalidEvent();
+        return;
+      }
+      if (accept(payload)) {
+        flushDeltas();
+        callbacksRef.current.onTimelineEvent({
+          type: "tool_prepared",
+          callId: payload.callId,
+          toolName: payload.toolName,
+          args: payload.args,
+        });
+      }
+    });
     source.addEventListener("tool_started", (rawEvent) => {
       const payload = parse(rawEvent as MessageEvent);
       if (!payload) return;
@@ -298,7 +336,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         });
       }
     });
-    ["completed", "aborted", "error"].forEach((type) => {
+    (["completed", "aborted", "error"] as const).forEach((type) => {
       source.addEventListener(type, (rawEvent) => {
         const payload = parse(rawEvent as MessageEvent);
         if (!payload) return;
@@ -311,7 +349,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         }
         flushDeltas();
         callbacksRef.current.onRunChange(undefined);
-        callbacksRef.current.onTimelineEvent({ type: "generation_finished" });
+        callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome: type });
         if (type === "error" && payload.type === "error") {
           callbacksRef.current.onError(payload.message);
         }
@@ -399,7 +437,7 @@ function readRun(value: unknown): ChatRunSummary | undefined {
   };
 }
 
-function isActiveRun(run: ChatRunSummary | undefined): run is ChatRunSummary {
+function isActiveRun(run: ChatRunSummary | undefined): run is ChatRunSummary & { status: "queued" | "running" } {
   return run?.status === "queued" || run?.status === "running";
 }
 

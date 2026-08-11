@@ -15,15 +15,16 @@ afterEach(() => {
 });
 
 describe("ThinkingCard", () => {
-  it("思考中默认展开，结束后自动折叠且可手动重新展开", () => {
+  it("思考中默认折叠且可手动展开，结束后保留用户选择", () => {
     const { rerender } = render(<ThinkingCard thinking={thinking} />);
 
-    expect(screen.getByRole("button", { name: "收起Reasoning" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "展开思考详情" })).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
+    expect(screen.getByText("分析中")).toBeInTheDocument();
 
     rerender(<ThinkingCard thinking={{ ...thinking, text: "分析完成", streaming: false }} />);
 
-    expect(screen.getByRole("button", { name: "展开Reasoning" })).toHaveAttribute("aria-expanded", "false");
-    fireEvent.click(screen.getByRole("button", { name: "展开Reasoning" }));
+    expect(screen.getByRole("button", { name: "收起思考详情" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("分析完成")).toBeInTheDocument();
   });
 
@@ -35,6 +36,7 @@ describe("ThinkingCard", () => {
     }));
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const { container, rerender } = render(<ThinkingCard thinking={thinking} />);
+    fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
     const content = container.querySelector<HTMLPreElement>(".thinking-card__content");
     expect(content).not.toBeNull();
     Object.defineProperties(content!, {
@@ -56,6 +58,7 @@ describe("ThinkingCard", () => {
     }));
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const { container, rerender } = render(<ThinkingCard thinking={{ ...thinking, text: "实时" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
     rerender(<ThinkingCard thinking={{ ...thinking, text: "实时思考" }} />);
 
     act(() => pendingFrame?.(16));
@@ -69,6 +72,8 @@ describe("ThinkingCard", () => {
     const { container } = render(
       <ThinkingCard thinking={{ ...thinking, text: "实时思考", revealStart: 2, revealPhase: 1 }} />,
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
 
     expect(container.querySelector(".streaming-text-tail--1")).toHaveTextContent("思考");
     expect(container.querySelector(".thinking-card__content")).toHaveTextContent("实时思考");

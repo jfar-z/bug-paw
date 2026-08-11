@@ -45,7 +45,7 @@ export interface ToolBlock {
   partialResult?: unknown;
   result?: unknown;
   details?: unknown;
-  status: "running" | "completed" | "error";
+  status: "preparing" | "running" | "completed" | "cancelled" | "error";
 }
 
 export type AgentBlock = MarkdownBlock | ThinkingBlock | FileBlock | ToolBlock;
@@ -65,10 +65,12 @@ export type TimelineEvent =
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
+  | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
-  | { type: "generation_finished" };
+  | { type: "generation_finished"; outcome: "completed" | "aborted" | "error" };
 
 /**
  * 将实时事件归并到单一有序时间线，文件与工具更新保持原始位置。
@@ -154,7 +156,13 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
     const turn = entries[turnIndex] as AgentTurn;
     return replaceTurn(entries, turnIndex, {
       ...turn,
-      blocks: turn.blocks.map((block) => block.type === "markdown" || block.type === "thinking" ? { ...block, streaming: false } : block),
+      blocks: turn.blocks.map((block) => {
+        if (block.type === "markdown" || block.type === "thinking") return { ...block, streaming: false };
+        if (block.type === "tool" && block.status === "preparing" && event.outcome !== "completed") {
+          return { ...block, status: "cancelled" };
+        }
+        return block;
+      }),
     });
   }
 
@@ -497,7 +505,7 @@ function createToolFromEvent(
     callId: event.callId,
     name: event.toolName,
     args: undefined,
-    status: "running",
+    status: event.type === "tool_preparing" || event.type === "tool_prepared" ? "preparing" : "running",
   }, event);
 }
 
@@ -505,6 +513,12 @@ function updateToolFromEvent(
   tool: ToolBlock,
   event: ToolTimelineEvent,
 ): ToolBlock {
+  if (event.type === "tool_preparing") {
+    return { ...tool, name: event.toolName, status: tool.status === "preparing" ? "preparing" : tool.status };
+  }
+  if (event.type === "tool_prepared") {
+    return { ...tool, name: event.toolName, args: event.args, status: tool.status === "preparing" ? "preparing" : tool.status };
+  }
   if (event.type === "tool_started") {
     return { ...tool, name: event.toolName, args: event.args, status: "running" };
   }
@@ -523,7 +537,7 @@ function updateToolFromEvent(
 }
 
 type ToolTimelineEvent = Extract<TimelineEvent, {
-  type: "tool_started" | "tool_updated" | "tool_finished";
+  type: "tool_preparing" | "tool_prepared" | "tool_started" | "tool_updated" | "tool_finished";
 }>;
 
 function extractContentText(content: unknown): string {
