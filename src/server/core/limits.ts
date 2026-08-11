@@ -15,6 +15,8 @@ export const SYSTEM_LIMITS = Object.freeze({
   eventJournalEntries: 2_000,
   eventJournalBytes: 8 * 1024 * 1024,
   realtimeEventBytes: 512 * 1024,
+  sessionToolTextBlockBytes: 32 * 1024,
+  sessionToolTextPageBytes: 256 * 1024,
   sseQueueEntries: 512,
   sseQueueBytes: 2 * 1024 * 1024,
   runtimeSessionsPerAgent: 256,
