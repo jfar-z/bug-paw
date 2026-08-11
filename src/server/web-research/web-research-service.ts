@@ -1,12 +1,15 @@
 import { extractFromHtml } from "@extractus/article-extractor";
 
 import type { WebResearchConfigDocument } from "../../shared/web-research-contracts";
+import type { CredentialService } from "../configuration/credential-service";
 import { SafeWebClient } from "./safe-web-client";
 import { WebResearchConfigService } from "./web-research-config-service";
 import { EgressProfileRegistry } from "./egress-profile-registry";
 import { ManagedSearchProviderRegistry } from "./managed-search-provider-registry";
-import type { SearchProvider, SearchProviderHealth, SearchProviderItem } from "./search-provider";
-import { SearxngSearchProvider } from "./searxng-search-provider";
+import type { SearchProviderHealth, SearchProviderInput, SearchProviderItem, SearchProviderResult } from "./search-provider";
+import { SearchProviderFactory } from "./search-provider-factory";
+import { SearchProviderRouter } from "./search-provider-router";
+import { SearchRunState } from "./search-run-state";
 import type { ToolWarning } from "../retrieval/tool-response";
 
 /** 规范化后的联网搜索服务结果。 */
@@ -53,7 +56,8 @@ export interface WebReadServiceResult {
 
 interface WebResearchServiceDependencies {
   readConfig(): Promise<WebResearchConfigDocument>;
-  createSearchProvider(config: WebResearchConfigDocument["config"]): SearchProvider;
+  searchProviders(config: WebResearchConfigDocument["config"], input: SearchProviderInput, state: SearchRunState): Promise<SearchProviderResult>;
+  testSearchProvider(config: WebResearchConfigDocument["config"]["searchProviders"][number], input: SearchProviderInput): Promise<SearchProviderResult>;
   fetchText(url: string, config: WebResearchConfigDocument["config"]): ReturnType<SafeWebClient["fetchText"]>;
   extract(html: string, url: string): Promise<{ title?: string | null; content?: string | null; published?: string | null } | null>;
 }
@@ -72,16 +76,16 @@ export class WebResearchService {
   }
 
   /** 搜索互联网并返回带来源的规范化结果。 */
-  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }): Promise<WebSearchServiceResult> {
+  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }, state = new SearchRunState()): Promise<WebSearchServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const count = Math.min(Math.max(input.count ?? config.maxResults, 1), config.maxResults);
-    const providerResult = await this.dependencies.createSearchProvider(config).search({ ...input, count });
+    const providerResult = await this.dependencies.searchProviders(config, { ...input, count }, state);
     const rawResults = readSearchResults(providerResult.results);
     // URL 安全过滤后重新归一化健康状态，避免把仅含非法地址的故障响应误报为空结果。
-    const providerHealth: SearchProviderHealth = providerResult.failures.length === 0
-      ? providerResult.health
-      : rawResults.length > 0 ? "degraded" : "unavailable";
+    const providerHealth: SearchProviderHealth = providerResult.health === "degraded" && rawResults.length === 0
+      ? "unavailable"
+      : providerResult.health;
     const deduplicated = new Map<string, Omit<WebSearchServiceResult["data"]["results"][number], "rank">>();
     for (const result of rawResults) {
       const existing = deduplicated.get(result.url);
@@ -161,7 +165,9 @@ export class WebResearchService {
   /** 验证受管 SearXNG 是否可返回 JSON 搜索结果。 */
   async testConnection(): Promise<void> {
     const { config } = await this.dependencies.readConfig();
-    const result = await this.dependencies.createSearchProvider(config).search({ query: "BugPaw", count: 1 });
+    const provider = config.searchProviders.find((candidate) => candidate.enabled);
+    if (!provider) throw new Error("尚未配置可用的搜索服务");
+    const result = await this.dependencies.testSearchProvider(provider, { query: "BugPaw", count: 1 });
     if (result.health === "unavailable") {
       throw new Error("搜索供应商当前不可用");
     }
@@ -172,7 +178,7 @@ export class WebResearchService {
     const { config } = await this.dependencies.readConfig();
     const provider = config.searchProviders.find((candidate) => candidate.id === providerId);
     if (!provider) throw new Error("搜索服务不存在");
-    const result = await this.dependencies.createSearchProvider({ ...config, searchProviders: [provider] }).search({ query: "BugPaw", count: 1 });
+    const result = await this.dependencies.testSearchProvider(provider, { query: "BugPaw", count: 1 });
     if (result.health === "unavailable") throw new Error("搜索供应商当前不可用");
   }
 }
@@ -183,18 +189,18 @@ export function createWebResearchService(
   egressProfiles = new EgressProfileRegistry(),
   client = new SafeWebClient(),
   managedProviders = new ManagedSearchProviderRegistry(false),
+  credentials?: Pick<CredentialService, "getApiKey">,
 ): WebResearchService {
+  const factory = new SearchProviderFactory({
+    credentials: credentials ?? { getApiKey: async () => undefined },
+    managedProviders,
+    egressProfiles,
+  });
+  const router = new SearchProviderRouter(factory);
   return new WebResearchService({
     readConfig: () => configs.read(),
-    createSearchProvider: (config) => {
-      const provider = config.searchProviders.find((candidate) => candidate.enabled);
-      if (!provider || provider.type !== "searxng") throw new Error("尚未配置可用的 SearXNG 搜索服务");
-      const baseUrl = provider.connectionMode === "managed"
-        ? managedProviders.resolveManagedBaseUrl(provider.id)
-        : provider.baseUrl;
-      if (!baseUrl) throw new Error("SearXNG 地址尚未配置");
-      return new SearxngSearchProvider(baseUrl, provider.timeoutMs);
-    },
+    searchProviders: (config, input, state) => router.search(config.searchProviders, input, state),
+    testSearchProvider: async (provider, input) => (await factory.create(provider)).search(input),
     fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.webRead.egressProfileId)),
     extract: (html, url) => extractFromHtml(html, url),
   });

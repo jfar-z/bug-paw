@@ -229,7 +229,13 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     transaction: new ConfigTransaction({ rootDir: paths.rootDir, transactionDir: paths.transactionDir }),
   });
   await webResearchConfigs.migrateLegacyConfig();
-  const webResearch = createWebResearchService(webResearchConfigs, webResearchEgressProfiles, undefined, managedSearchProviders);
+  const webResearch = createWebResearchService(
+    webResearchConfigs,
+    webResearchEgressProfiles,
+    undefined,
+    managedSearchProviders,
+    webResearchCredentials,
+  );
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
   const ttsSynthesis = new TtsSynthesisService(ttsConfigs);
   await recoverPendingProviderRenames(paths, models, agentStore);
@@ -286,9 +292,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
               await runtimeSupervisor?.refreshAgentPromptContext(agentId);
             }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
-            ...(retrievalCapabilities.webSearch ? [createWebSearchTool(webResearch)] : []),
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
+          createSessionTools: ({ searchRunState }) => retrievalCapabilities.webSearch
+            ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
+            : [],
           appendSystemPrompt: await readInstructionPrompts(),
           refreshAppendSystemPrompt: readInstructionPrompts,
           sessionDir: resolveAgentSessionDir(paths, agentId),
