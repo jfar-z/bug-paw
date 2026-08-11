@@ -31,11 +31,12 @@ class FakeEventSource {
     const suppliedId = typeof original.id === "number" ? original.id : undefined;
     const id = suppliedId ?? this.nextEventId;
     this.nextEventId = Math.max(this.nextEventId, id + 1);
+    const isRunScopedEvent = type !== "snapshot" && type !== "session_renamed";
     const normalized = {
       id,
       type,
       sessionId,
-      ...(type === "snapshot" ? {} : { runId: "run-1" }),
+      ...(isRunScopedEvent ? { runId: "run-1" } : {}),
       ...original,
       ...(type === "snapshot" && original.lastEventId === undefined ? { lastEventId: id } : {}),
     };

@@ -28,6 +28,12 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     || !isNonEmptyString(value.sessionId)
     || typeof value.type !== "string") return false;
   if (value.type === "model_changed") return isModel(value.model);
+  // 自动标题可能在所属 Run 结束后才到达，因此不绑定任何 Run。
+  if (value.type === "session_renamed") {
+    return value.runId === undefined
+      && isNonEmptyString(value.name)
+      && Array.from(value.name).length <= 120;
+  }
   if (!isNonEmptyString(value.runId)) return false;
   switch (value.type) {
     case "run_started": return isRun(value.run);
@@ -36,7 +42,6 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     case "thinking_finished":
     case "completed":
     case "aborted": return true;
-    case "session_renamed": return isNonEmptyString(value.name) && Array.from(value.name).length <= 120;
     case "tool_started": return isToolIdentity(value) && "args" in value;
     case "tool_updated": return isToolIdentity(value) && "partialResult" in value;
     case "tool_finished": return isToolIdentity(value) && "result" in value && typeof value.isError === "boolean";
