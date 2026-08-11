@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import { isDeletedSessionTarget, type ScheduledTaskSchedule } from "../../shared/scheduled-task-contracts";
 import { api, type ScheduledTask, type ScheduledTaskRun, type SessionSummary } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { WorkspaceAgentNavigation, WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT } from "../components/workspace-agent-navigation";
 
 const presets = [["每 5 分钟", "*/5 * * * *"], ["每小时", "0 * * * *"], ["工作日 9 点", "0 9 * * 1-5"], ["每天 9 点", "0 9 * * *"], ["每周一 9 点", "0 9 * * 1"], ["每月 1 日", "0 9 1 * *"]] as const;
@@ -15,8 +16,22 @@ const fields = [
   { label: "星期", hint: "0–7", samples: ["*", "1", "1-5", "0,6"] },
 ] as const;
 
+/** 将定时任务的目标、计划和状态错误保留在当前表单。 */
+function scheduledTaskExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_SCHEDULED_TASK: show,
+    SCHEDULED_TASK_NOT_FOUND: show,
+    SCHEDULED_TASK_TARGET_MISSING: show,
+    SCHEDULED_TASKS_BOUND: show,
+    SESSION_NOT_FOUND: show,
+    AGENT_NOT_FOUND: show,
+  };
+}
+
 /** 管理指定 Agent 定时任务的工作台页面。 */
 export function ScheduledTasksPage() {
+  const { runApiTask } = useApiTask();
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [agentId, setAgentId] = useState("");
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -29,19 +44,21 @@ export function ScheduledTasksPage() {
 
   const reload = async () => {
     if (!agentId) return;
-    const result = await api.listScheduledTasks(agentId);
-    setTasks(result.tasks);
+    const result = await runApiTask(() => api.listScheduledTasks(agentId), { operation: "加载定时任务", expected: scheduledTaskExpected(setError) });
+    if (result.status === "success") setTasks(result.data.tasks);
   };
 
   useEffect(() => {
-    void api.listAgents().then(({ agents: nextAgents }) => {
+    void runApiTask(api.listAgents, { operation: "加载定时任务 Agent" }).then((result) => {
+      if (result.status !== "success") return;
+      const nextAgents = result.data.agents;
       setAgents(nextAgents);
       setAgentId(nextAgents[0]?.profile.id ?? "");
-    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "加载 Agent 失败"));
-  }, []);
+    });
+  }, [runApiTask]);
   useEffect(() => {
-    void reload().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "加载定时任务失败"));
-  }, [agentId]);
+    void reload();
+  }, [agentId, runApiTask]);
   useEffect(() => {
     const toggle = () => setMobileNavigationOpen((current) => !current);
     window.addEventListener(WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT, toggle);
@@ -49,21 +66,15 @@ export function ScheduledTasksPage() {
   }, []);
 
   const runTask = async (task: ScheduledTask) => {
-    try {
-      await api.runScheduledTask(task.id);
-      setRunsTaskId(task.id);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "手动执行失败");
-    }
+    const result = await runApiTask(() => api.runScheduledTask(task.id), { operation: "手动执行定时任务", expected: scheduledTaskExpected(setError) });
+    if (result.status === "success") setRunsTaskId(task.id);
   };
   const removeTask = async () => {
     if (!deleteCandidate) return;
-    try {
-      await api.deleteScheduledTask(deleteCandidate.id);
+    const result = await runApiTask(() => api.deleteScheduledTask(deleteCandidate.id), { operation: "删除定时任务", expected: scheduledTaskExpected(setError) });
+    if (result.status === "success") {
       setDeleteCandidate(undefined);
       await reload();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除任务失败");
     }
   };
 
@@ -95,7 +106,7 @@ export function ScheduledTasksPage() {
         </header>
 
         {error ? <p className="configuration-inline-error">{error}</p> : null}
-        {editing ? <TaskForm agentId={agentId} task={editing === "new" ? undefined : editing} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); void reload().catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "加载定时任务失败")); }} /> : null}
+        {editing ? <TaskForm agentId={agentId} task={editing === "new" ? undefined : editing} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); void reload(); }} /> : null}
         {deleteCandidate ? (
           <section className="scheduled-task-confirm" aria-label="删除定时任务确认">
             <div>
@@ -164,6 +175,7 @@ function TaskCard({ task, onRun, onEdit, onDelete, onRuns }: { task: ScheduledTa
 
 /** 创建或编辑任务的表单。 */
 function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?: ScheduledTask; onClose(): void; onSaved(): void }) {
+  const { runApiTask } = useApiTask();
   const targetWasDeleted = task ? isDeletedSessionTarget(task.target) : false;
   const [name, setName] = useState(task?.name ?? "");
   const [prompt, setPrompt] = useState(task?.prompt ?? "");
@@ -183,14 +195,16 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
   const [error, setError] = useState("");
 
   useEffect(() => {
-    void Promise.all([api.listSessions(agentId), api.getScheduledTaskTimezones()]).then(([sessionResult, timezoneResult]) => {
+    void runApiTask(() => Promise.all([api.listSessions(agentId), api.getScheduledTaskTimezones()]), { operation: "加载定时任务表单", expected: scheduledTaskExpected(setError) }).then((result) => {
+      if (result.status !== "success") return;
+      const [sessionResult, timezoneResult] = result.data;
       setSessions(sessionResult.sessions);
       // 原目标已删除时保留空选择，避免在用户不知情时自动改投其他会话。
       setSessionId((current) => current || (targetWasDeleted ? "" : sessionResult.sessions[0]?.id) || "");
       setTimezones(timezoneResult.timezones);
       setTimezone((current) => current || timezoneResult.serverTimeZone);
-    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "加载表单数据失败"));
-  }, [agentId, targetWasDeleted]);
+    });
+  }, [agentId, targetWasDeleted, runApiTask]);
 
   const parts = normalizeParts(expression);
   const previews = useMemo(() => {
@@ -230,13 +244,11 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
         ? { type: "new_session" as const, archiveAfterCompletion }
         : { type: "existing_session" as const, sessionId },
     };
-    try {
-      if (task) await api.updateScheduledTask(task.id, input);
-      else await api.createScheduledTask(agentId, input);
-      onSaved();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存失败");
-    }
+    const result = await runApiTask(
+      () => task ? api.updateScheduledTask(task.id, input) : api.createScheduledTask(agentId, input),
+      { operation: "保存定时任务", expected: scheduledTaskExpected(setError) },
+    );
+    if (result.status === "success") onSaved();
   }
 
   return (
@@ -431,15 +443,15 @@ function CronFieldEditor({ field, value, onChange }: { field: typeof fields[numb
 
 /** 加载并显示任务的最近执行记录。 */
 function TaskRuns({ taskId }: { taskId: string }) {
+  const { runApiTask } = useApiTask();
   const [runs, setRuns] = useState<ScheduledTaskRun[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
-    void api.listScheduledTaskRuns(taskId)
-      .then(({ runs: nextRuns }) => { if (active) setRuns(nextRuns); })
-      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "执行记录加载失败"); });
+    void runApiTask(() => api.listScheduledTaskRuns(taskId), { operation: "加载定时任务执行记录", expected: scheduledTaskExpected(setError) })
+      .then((result) => { if (active && result.status === "success") setRuns(result.data.runs); });
     return () => { active = false; };
-  }, [taskId]);
+  }, [taskId, runApiTask]);
   return <section className="scheduled-task-runs"><header><div><span>RUN HISTORY</span><h2><Clock3 size={17} aria-hidden="true" />执行记录</h2></div></header>{error ? <p className="configuration-inline-error" role="alert">{error}</p> : runs.length ? <ol>{runs.map((run) => <li key={run.id}><strong data-status={run.status}>{run.status}</strong><span>{run.trigger === "manual" ? "手动" : "定时"} · {formatDate(run.startedAt)}{run.reason ? ` · ${run.reason}` : ""}</span></li>)}</ol> : <p className="scheduled-task-empty">尚无执行记录。</p>}</section>;
 }
 

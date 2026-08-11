@@ -2,7 +2,8 @@ import { Eye, File, FileAudio, FileImage, FileText, FileVideo, Folder, FolderPlu
 import { useEffect, useRef, useState } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import type { WorkspaceEntry } from "../../shared/contracts";
-import { ApiClientError, api, workspaceFileUrl } from "../api";
+import { api, workspaceFileUrl } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { WorkspaceAgentNavigation, WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT } from "../components/workspace-agent-navigation";
 import { WorkspaceFilePreview } from "../components/workspace-file-preview";
 import { useOnlineStatus } from "../use-online-status";
@@ -11,6 +12,7 @@ import { useOnlineStatus } from "../use-online-status";
  * 管理每个 Agent 独立工作目录中的文件、目录与可预览内容。
  */
 export function WorkspaceResourcesPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [agentId, setAgentId] = useState("");
@@ -47,17 +49,19 @@ export function WorkspaceResourcesPage() {
       if (generation === refreshGenerationRef.current) setEntries(result.entries);
     } catch (reason) {
       if (generation === refreshGenerationRef.current) {
-        setError(reason instanceof Error ? reason.message : "文件加载失败");
+        await runApiTask(async () => { throw reason; }, { operation: "加载工作区文件", expected: workspaceExpected(setError) });
       }
     }
   };
 
   useEffect(() => {
-    api.listAgents().then(({ agents: loaded }) => {
+    void runApiTask(api.listAgents, { operation: "加载工作区 Agent" }).then((result) => {
+      if (result.status !== "success") return;
+      const loaded = result.data.agents;
       setAgents(loaded);
       setAgentId((current) => current || loaded[0]?.profile.id || "");
-    }).catch((reason) => setError(reason instanceof Error ? reason.message : "Agent 加载失败"));
-  }, []);
+    });
+  }, [runApiTask]);
 
   useEffect(() => { void refreshEntries(); }, [agentId, directory, query, includeHidden]);
   useEffect(() => {
@@ -88,12 +92,13 @@ export function WorkspaceResourcesPage() {
   };
   const confirmCreateDirectory = async () => {
     if (!directoryName.trim()) return;
-    try {
-      await api.createWorkspaceDirectory(agentId, directory, directoryName.trim());
+    const result = await runApiTask(
+      () => api.createWorkspaceDirectory(agentId, directory, directoryName.trim()),
+      { operation: "创建工作区文件夹", expected: workspaceExpected(setError) },
+    );
+    if (result.status === "success") {
       setCreateDirectoryOpen(false);
       await refreshEntries();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "创建文件夹失败");
     }
   };
   const openRenameDialog = (entry: WorkspaceEntry) => {
@@ -102,12 +107,13 @@ export function WorkspaceResourcesPage() {
   };
   const confirmRenameEntry = async () => {
     if (!renameEntry || !renameValue.trim() || renameValue.trim() === renameEntry.name) return;
-    try {
-      await api.updateWorkspaceEntry(agentId, { operation: "rename", path: renameEntry.path, name: renameValue.trim() });
+    const result = await runApiTask(
+      () => api.updateWorkspaceEntry(agentId, { operation: "rename", path: renameEntry.path, name: renameValue.trim() }),
+      { operation: "重命名工作区文件", expected: workspaceExpected(setError) },
+    );
+    if (result.status === "success") {
       setRenameEntry(undefined);
       await refreshEntries();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "重命名文件失败");
     }
   };
   const openMoveDialog = (entry: WorkspaceEntry) => {
@@ -120,21 +126,26 @@ export function WorkspaceResourcesPage() {
     setMoveSubmitting(true);
     setError("");
     try {
-      await api.updateWorkspaceEntry(agentId, {
+      const result = await runApiTask(() => api.updateWorkspaceEntry(agentId, {
         operation: "move",
         path: moveEntry.path,
         targetDirectory: moveTargetDirectory.trim(),
         ...(createTargetDirectory ? { createTargetDirectory: true } : {}),
+      }), {
+        operation: "移动工作区文件",
+        expected: {
+          ...workspaceExpected(setError),
+          NOT_FOUND: () => {
+            if (!createTargetDirectory) setMoveConfirmationOpen(true);
+            else setError("目标目录创建后仍不可用");
+          },
+        },
       });
-      setMoveEntry(undefined);
-      setMoveConfirmationOpen(false);
-      await refreshEntries();
-    } catch (reason) {
-      if (!createTargetDirectory && reason instanceof ApiClientError && reason.code === "NOT_FOUND") {
-        setMoveConfirmationOpen(true);
-        return;
+      if (result.status === "success") {
+        setMoveEntry(undefined);
+        setMoveConfirmationOpen(false);
+        await refreshEntries();
       }
-      setError(reason instanceof Error ? reason.message : "移动文件失败");
     } finally {
       setMoveSubmitting(false);
     }
@@ -143,22 +154,24 @@ export function WorkspaceResourcesPage() {
   const confirmCreateAndMove = () => moveEntryToDirectory(true);
   const uploadFiles = async (files: FileList | null) => {
     if (!files?.length) return;
-    try {
-      await api.uploadWorkspaceFiles(agentId, directory, [...files]);
+    const result = await runApiTask(
+      () => api.uploadWorkspaceFiles(agentId, directory, [...files]),
+      { operation: "上传工作区文件", expected: workspaceExpected(setError) },
+    );
+    if (result.status === "success") {
       await refreshEntries();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "上传文件失败");
     }
   };
   const deleteSelected = async () => {
-    try {
-      await api.deleteWorkspaceEntries(agentId, selectedPaths);
+    const result = await runApiTask(
+      () => api.deleteWorkspaceEntries(agentId, selectedPaths),
+      { operation: "删除工作区文件", expected: workspaceExpected(setError) },
+    );
+    if (result.status === "success") {
       setSelectedPaths([]);
       setPreview(undefined);
       setDeleteOpen(false);
       await refreshEntries();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除文件失败");
     }
   };
   const currentAgent = agents.find((agent) => agent.profile.id === agentId);
@@ -187,6 +200,21 @@ export function WorkspaceResourcesPage() {
     {moveEntry ? <div className="workspace-dialog-backdrop"><section className="workspace-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-move-title"><h2 id="workspace-move-title">移动文件</h2><p>将“{moveEntry.name}”移动到指定目录。</p>{moveConfirmationOpen ? <><p>目录“{moveTargetDirectory.trim()}”不存在。</p><small>确认后将创建该目录及其缺失的父目录，再移动文件。</small><footer><button type="button" disabled={moveSubmitting} onClick={() => setMoveConfirmationOpen(false)}>返回修改</button><button type="button" className="configuration-primary-action" disabled={!online || moveSubmitting} onClick={() => void confirmCreateAndMove()}>创建并移动</button></footer></> : <><label className="workspace-dialog__field" htmlFor="workspace-move-target">目标目录<input id="workspace-move-target" aria-label="目标目录" value={moveTargetDirectory} placeholder="例如 docs/archive" onChange={(event) => setMoveTargetDirectory(event.target.value)} autoFocus /></label><small>留空表示移动到工作目录根部。</small><footer><button type="button" disabled={moveSubmitting} onClick={() => setMoveEntry(undefined)}>取消</button><button type="button" className="configuration-primary-action" disabled={!online || moveSubmitting} onClick={() => void confirmMoveEntry()}>确认移动</button></footer></>}</section></div> : null}
     {deleteOpen ? <div className="workspace-dialog-backdrop"><section className="workspace-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-delete-title"><h2 id="workspace-delete-title">永久删除文件</h2><p>{selectedPaths.length} 个项目将被永久删除，无法恢复。</p><footer><button type="button" onClick={() => setDeleteOpen(false)}>取消</button><button type="button" className="workspace-danger-button" onClick={() => void deleteSelected()}>永久删除</button></footer></section></div> : null}
   </div>;
+}
+
+/** 将工作区路径、上传和冲突错误保留在对应操作附近。 */
+function workspaceExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_PATH: show,
+    FILE_NOT_FOUND: show,
+    CONFLICT: show,
+    UNSAFE_LINK: show,
+    TEXT_PREVIEW_UNAVAILABLE: show,
+    WORKSPACE_SCAN_LIMIT: show,
+    INVALID_MULTIPART: show,
+    EMPTY_UPLOAD: show,
+  };
 }
 
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif"]);

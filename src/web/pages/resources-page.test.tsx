@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { ResourcesPage } from "./resources-page";
+
+function renderResourcesPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><ResourcesPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("ResourcesPage", () => {
   it("筛选来源和类型、查看只读内容并标记高风险工具", async () => {
@@ -12,7 +18,7 @@ describe("ResourcesPage", () => {
         { id: "prompt:/brief", type: "prompt", name: "brief", description: "摘要", path: "/brief", source: "auto", scope: "agent", origin: "top-level", enabled: true, inherited: false },
       ], tools: [{ name: "deploy", description: "部署", extensionPath: "/ext", highRisk: true }], diagnostics: [] }), { status: 200 });
     }));
-    render(<ResourcesPage />);
+    renderResourcesPage();
     expect(await screen.findByText("demo")).toBeInTheDocument();
     expect(screen.getByText("高风险")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("资源类型"), { target: { value: "skill" } });
@@ -27,7 +33,7 @@ describe("ResourcesPage", () => {
       return new Response(JSON.stringify({ resources: [], tools: [], packages: [], diagnostics: [] }), { status: 200 });
     }));
 
-    render(<ResourcesPage />);
+    renderResourcesPage();
 
     const emptyMascot = await screen.findByAltText("BUG 正在等候第一项扩展");
     expect(emptyMascot).toHaveAttribute("src", "/brand/bugpaw/bugpaw-sleeping.png");
@@ -42,7 +48,7 @@ describe("ResourcesPage", () => {
       ], tools: [], packages: [], diagnostics: [] }), { status: 200 });
     }));
 
-    render(<ResourcesPage />);
+    renderResourcesPage();
     await screen.findByText("demo");
     fireEvent.change(screen.getByLabelText("资源类型"), { target: { value: "prompt" } });
 

@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { KnowledgeBasePage, KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT } from "./knowledge-base-page";
+
+function renderKnowledgeBasePage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><KnowledgeBasePage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("KnowledgeBasePage", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -12,7 +18,7 @@ describe("KnowledgeBasePage", () => {
       return new Response(JSON.stringify({ id: "base-a", name: "产品资料", description: "", agentIds: ["agent-a"], documents: [] }));
     }));
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     expect(await screen.findByRole("heading", { name: "知识库" })).toBeInTheDocument();
     expect(screen.getByAltText("BUG 守着空知识库")).toHaveAttribute(
@@ -33,7 +39,7 @@ describe("KnowledgeBasePage", () => {
       return new Response(JSON.stringify({}));
     }));
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     fireEvent.click(await screen.findByRole("button", { name: "创建知识库" }));
     fireEvent.change(screen.getByRole("textbox", { name: "知识库名称" }), { target: { value: "产品资料" } });
@@ -49,7 +55,7 @@ describe("KnowledgeBasePage", () => {
       return new Response(JSON.stringify({}));
     }));
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     expect(await screen.findByRole("navigation", { name: "知识库列表" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "选择知识库 产品资料" })).toBeInTheDocument();
@@ -83,7 +89,7 @@ describe("KnowledgeBasePage", () => {
       return new Response(JSON.stringify({}));
     }));
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑知识库" }));
     fireEvent.change(screen.getByRole("textbox", { name: "知识库名称" }), { target: { value: "更新资料" } });
@@ -121,7 +127,7 @@ describe("KnowledgeBasePage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑知识库" }));
     fireEvent.click(screen.getByRole("button", { name: "删除知识库" }));
@@ -145,7 +151,7 @@ describe("KnowledgeBasePage", () => {
       return new Response(JSON.stringify({}));
     }));
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑知识库" }));
     fireEvent.click(screen.getByRole("button", { name: "删除知识库" }));
@@ -156,7 +162,7 @@ describe("KnowledgeBasePage", () => {
     expect(screen.getByRole("button", { name: "创建知识库" })).toBeInTheDocument();
   });
 
-  it("知识库删除失败时保留确认输入并显示错误", async () => {
+  it("知识库删除发生意外错误时保留确认输入并显示 Toast", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/v1/knowledge-bases" && !init?.method) return new Response(JSON.stringify({ knowledgeBases: [knowledgeBase("base-a", "产品资料")] }));
       if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }));
@@ -166,14 +172,14 @@ describe("KnowledgeBasePage", () => {
       return new Response(JSON.stringify({}));
     }));
 
-    render(<KnowledgeBasePage />);
+    renderKnowledgeBasePage();
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑知识库" }));
     fireEvent.click(screen.getByRole("button", { name: "删除知识库" }));
     fireEvent.change(await screen.findByRole("textbox", { name: "输入知识库名称以确认" }), { target: { value: "产品资料" } });
     fireEvent.click(screen.getByRole("button", { name: "永久删除知识库" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("删除知识库失败");
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "永久删除知识库" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "输入知识库名称以确认" })).toHaveValue("产品资料");
   });
