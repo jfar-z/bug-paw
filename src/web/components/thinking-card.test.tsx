@@ -15,17 +15,28 @@ afterEach(() => {
 });
 
 describe("ThinkingCard", () => {
+  it("为动作和状态提供稳定的排版连接类", () => {
+    const { container } = render(<ThinkingCard thinking={thinking} />);
+
+    expect(screen.getByText("正在思考")).toHaveClass("activity-item__action");
+    expect(container.querySelector(".thinking-card__status svg")).toHaveAttribute("width", "14");
+  });
+
   it("思考中默认折叠且可手动展开，结束后保留用户选择", () => {
-    const { rerender } = render(<ThinkingCard thinking={thinking} />);
+    const { container, rerender } = render(<ThinkingCard thinking={thinking} />);
 
     expect(screen.getByRole("button", { name: "展开思考详情" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("分析中").closest(".collapsible-region")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".thinking-card__status")).toHaveTextContent("思考中");
     fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
     expect(screen.getByText("分析中")).toBeInTheDocument();
+    expect(screen.getByText("分析中").closest(".collapsible-region")).toHaveAttribute("aria-hidden", "false");
 
     rerender(<ThinkingCard thinking={{ ...thinking, text: "分析完成", streaming: false }} />);
 
     expect(screen.getByRole("button", { name: "收起思考详情" })).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("分析完成")).toBeInTheDocument();
+    expect(container.querySelector(".thinking-card__status")).toHaveTextContent("已完成");
   });
 
   it("流式增长时在卡片内部滚动到最新思考文本", () => {

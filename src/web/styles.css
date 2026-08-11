@@ -1531,6 +1531,14 @@ p {
   font-weight: 650;
 }
 
+.activity-group,
+.activity-group__summary strong,
+.activity-item__action,
+.collapsible-region__inner,
+.live-tool-card__detail {
+  min-width: 0;
+}
+
 .activity-group {
   margin: 10px 0;
   color: var(--text-secondary);
@@ -1547,14 +1555,26 @@ p {
   text-align: left;
 }
 
-.activity-group__summary strong {
-  color: var(--text-primary);
+.activity-group__summary strong,
+.activity-item__action {
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
-.activity-group__summary > span:last-child {
+.activity-group__summary strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.activity-group__meta {
   margin-left: auto;
   font-size: 10px;
+  white-space: nowrap;
+}
+
+.collapsible-region__inner {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .activity-rail {
@@ -1604,9 +1624,8 @@ p {
   text-align: left;
 }
 
-.live-tool-card__summary > strong,
-.thinking-card__summary > strong {
-  font-size: 12px;
+.activity-item__action {
+  font-weight: 500;
 }
 
 .live-tool-card__details {
@@ -1615,9 +1634,11 @@ p {
   padding: 4px 2px 8px 31px;
 }
 
-.live-tool-card__detail h4 {
-  margin: 0 0 6px;
-  font-size: 10px;
+.live-tool-card__detail pre,
+.thinking-card__content {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .live-tool-card__detail pre {
@@ -1625,33 +1646,14 @@ p {
   padding: 10px 12px;
   border: 1px solid var(--border);
   background: var(--surface-soft);
-  font-size: 11px;
-  overflow: auto;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-rail .spinner {
-    animation: none;
-  }
-
-  .markdown-content.is-text-revealing,
-  .thinking-card__content.is-text-revealing {
-    animation: none;
-  }
-
-  .streaming-text-tail {
-    animation: none !important;
-  }
+  line-height: 1.55;
 }
 
 .thinking-card__content {
   max-height: clamp(160px, 28vh, 300px);
   margin: 0;
   padding: 5px 2px 8px 31px;
-  font-size: 11px;
   overflow-y: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .agent-turn-activity-controls {
@@ -7302,15 +7304,4 @@ a[aria-disabled="true"] {
 
 .session-row.is-pressing .session-actions__trigger {
   opacity: 1;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-  }
 }

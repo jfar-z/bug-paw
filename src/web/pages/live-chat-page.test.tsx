@@ -1154,7 +1154,7 @@ describe("LiveChatPage 时间线", () => {
     const first = await screen.findByText("先说明");
     const firstTool = screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" });
     const second = await screen.findByText("再说明");
-    const secondTool = screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" });
+    const secondTool = screen.getByRole("button", { name: "收起活动段：写入 src/app.ts" });
     expect(first.compareDocumentPosition(firstTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(firstTool.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(second.compareDocumentPosition(secondTool) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -1163,7 +1163,7 @@ describe("LiveChatPage 时间线", () => {
     fireEvent.click(screen.getByRole("button", { name: "收起本轮全部活动" }));
     expect(first).toBeVisible();
     expect(second).toBeVisible();
-    expect(screen.getByRole("button", { name: "展开活动段：正在写入 src/app.ts" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "展开活动段：写入 src/app.ts" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("思考过程默认不铺开全文，并在本轮结束时自动折叠活动段", async () => {
@@ -1180,7 +1180,7 @@ describe("LiveChatPage 时间线", () => {
 
     expect(screen.getByRole("button", { name: "收起活动段：正在思考" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "展开思考详情" })).toBeInTheDocument();
-    expect(screen.queryByText("先分析上下文")).not.toBeInTheDocument();
+    expect(screen.getByText("先分析上下文").closest(".collapsible-region")).toHaveAttribute("aria-hidden", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "展开思考详情" }));
     expect(await screen.findByText("先分析上下文")).toBeInTheDocument();
@@ -1210,7 +1210,7 @@ describe("LiveChatPage 时间线", () => {
       callId: "tool-write-1",
       toolName: "write",
     }));
-    expect(screen.getByRole("button", { name: "收起活动段：正在编写文件内容" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起活动段：编写文件内容" })).toBeInTheDocument();
 
     act(() => source.emit("tool_prepared", {
       type: "tool_prepared",
@@ -1218,7 +1218,7 @@ describe("LiveChatPage 时间线", () => {
       toolName: "write",
       args: { path: "src/app.ts", content: "const value = 1;" },
     }));
-    expect(screen.getByRole("button", { name: "收起活动段：正在编写 src/app.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起活动段：编写 src/app.ts" })).toBeInTheDocument();
 
     act(() => source.emit("tool_started", {
       type: "tool_started",
@@ -1226,7 +1226,7 @@ describe("LiveChatPage 时间线", () => {
       toolName: "write",
       args: { path: "src/app.ts", content: "const value = 1;" },
     }));
-    expect(screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "收起活动段：写入 src/app.ts" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /write 工具详情/ })).toHaveLength(1);
   });
 
@@ -1240,7 +1240,8 @@ describe("LiveChatPage 时间线", () => {
       source.emit("aborted", { type: "aborted" });
     });
     fireEvent.click(screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" }));
-    expect(screen.getByText("write 未执行")).toBeInTheDocument();
+    expect(screen.getByText("写入文件")).toBeInTheDocument();
+    expect(screen.getByText("未执行")).toBeInTheDocument();
 
     act(() => {
       source.emit("text_delta", { type: "text_delta", delta: "继续处理" });
@@ -1248,7 +1249,8 @@ describe("LiveChatPage 时间线", () => {
       source.emit("tool_finished", { type: "tool_finished", callId: "tool-error", toolName: "bash", result: "命令失败", isError: true });
     });
     expect(screen.getByRole("button", { name: "收起活动段：1 项活动 · 1 项失败" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("bash 执行失败")).toBeInTheDocument();
+    expect(screen.getByText("执行命令")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
   });
 
   it("工具结束后的流式标题与正文保持独立 Markdown 结构", async () => {

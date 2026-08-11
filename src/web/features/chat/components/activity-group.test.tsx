@@ -31,20 +31,30 @@ function ControlledGroup({ blocks, trailing = true, streaming = true }: {
 }
 
 describe("ActivityGroup", () => {
-  it("运行中的尾部活动段默认展开，完成并离开尾部后自动收起", () => {
-    const { rerender } = render(<ControlledGroup blocks={[runningWrite]} />);
+  it("为活动统计提供稳定的排版连接类", () => {
+    render(<ControlledGroup blocks={[runningWrite]} />);
 
-    expect(screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("write")).toBeInTheDocument();
+    expect(screen.getByText("工具 1")).toHaveClass("activity-group__meta");
+  });
+
+  it("运行中的尾部活动段默认展开，完成并离开尾部后自动收起", () => {
+    const { container, rerender } = render(<ControlledGroup blocks={[runningWrite]} />);
+
+    expect(screen.getByRole("button", { name: "收起活动段：写入 src/app.ts" })).toHaveAttribute("aria-expanded", "true");
+    expect(container.querySelector(".activity-rail .live-tool-card__summary strong")?.closest(".collapsible-region"))
+      .toHaveAttribute("aria-hidden", "false");
+    expect(screen.getByText("执行中")).toBeInTheDocument();
 
     rerender(<ControlledGroup blocks={[{ ...runningWrite, status: "completed" }]} trailing={false} streaming />);
 
     expect(screen.getByRole("button", { name: "展开活动段：已完成 1 项活动" })).toHaveAttribute("aria-expanded", "false");
+    expect(container.querySelector(".activity-rail .live-tool-card__summary strong")?.closest(".collapsible-region"))
+      .toHaveAttribute("aria-hidden", "true");
   });
 
   it("用户手动选择优先于后续自动状态", () => {
     const { rerender } = render(<ControlledGroup blocks={[runningWrite]} />);
-    fireEvent.click(screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起活动段：写入 src/app.ts" }));
 
     rerender(<ControlledGroup blocks={[{ ...runningWrite, status: "completed" }]} trailing={false} streaming={false} />);
 
@@ -55,7 +65,8 @@ describe("ActivityGroup", () => {
     render(<ControlledGroup blocks={[{ ...runningWrite, status: "error" }]} trailing={false} streaming={false} />);
 
     expect(screen.getByRole("button", { name: "收起活动段：1 项活动 · 1 项失败" })).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("write 执行失败 · src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText("写入 src/app.ts")).toBeInTheDocument();
+    expect(screen.getByText("失败")).toBeInTheDocument();
   });
 
   it("段控制向父级报告用户选择", () => {
@@ -68,7 +79,7 @@ describe("ActivityGroup", () => {
       onExpandedChange={onExpandedChange}
     />);
 
-    fireEvent.click(screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" }));
+    fireEvent.click(screen.getByRole("button", { name: "收起活动段：写入 src/app.ts" }));
     expect(onExpandedChange).toHaveBeenCalledWith(false);
   });
 });
