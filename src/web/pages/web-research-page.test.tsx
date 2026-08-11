@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG, type WebResearchSettingsDocument } from "../../shared/web-research-contracts";
@@ -20,8 +20,8 @@ const config = {
 };
 
 const settings: WebResearchSettingsDocument = {
-  revision: "r1",
-  credentialRevision: "c1",
+  revision: "config-1",
+  credentialRevision: "credential-1",
   credentials: [{ providerId: "bocha", type: "api_key", configured: true }],
   egressProfiles: [{ id: "direct", label: "直接访问", kind: "direct", available: true }],
   providerTemplates: [
@@ -36,58 +36,80 @@ const settings: WebResearchSettingsDocument = {
 describe("WebResearchPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("展示有序搜索服务和页面读取设置，并保存修改", async () => {
+  it("明确展示三个作用域且全局保存不包含渠道", async () => {
     const fetchMock = installFetch();
     renderWebResearchPage();
 
-    expect(await screen.findByText("2 个已启用服务")).toBeInTheDocument();
-    const cards = screen.getAllByRole("article");
-    expect(within(cards[0]!).getByText("内置 SearXNG")).toBeInTheDocument();
-    expect(within(cards[1]!).getByText("博查")).toBeInTheDocument();
-    expect(screen.getByRole("spinbutton", { name: "正文最大字符数" })).toHaveValue(20_000);
-    expect(screen.getByRole("combobox", { name: "页面读取出口" })).toHaveValue("direct");
+    expect(await screen.findByRole("heading", { name: "服务状态" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "已配置渠道" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "全局检索策略" })).toBeInTheDocument();
+    expect(screen.queryByText("添加类型")).not.toBeInTheDocument();
 
-    fireEvent.click(within(cards[1]!).getByRole("button", { name: "上移博查" }));
-    fireEvent.click(screen.getByRole("button", { name: "展开博查" }));
-    expect(screen.getByRole("button", { name: "测试博查" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/capabilities/web-research",
-      expect.objectContaining({ method: "PATCH", body: expect.stringMatching(/"id":"bocha".*"id":"managed-searxng"/u) }),
-    ));
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用联网搜索" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存全局设置" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/capabilities/web-research/global", expect.objectContaining({ method: "PATCH" })));
+    const request = fetchMock.mock.calls.find(([url, init]) => url === "/api/v1/capabilities/web-research/global" && init?.method === "PATCH");
+    const body = JSON.parse(String(request?.[1]?.body));
+    expect(body.config).not.toHaveProperty("searchProviders");
   });
 
-  it("只在点击小眼睛时读取凭证，隐藏时清除明文", async () => {
-    const fetchMock = installFetch();
+  it("从列表分别打开新增与编辑弹窗", async () => {
+    installFetch();
     renderWebResearchPage();
-    fireEvent.click(await screen.findByRole("button", { name: "展开博查" }));
+    await screen.findByRole("heading", { name: "已配置渠道" });
 
-    const apiKey = screen.getByLabelText("博查 API Key");
-    expect(apiKey).toHaveValue("");
-    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/credential"), expect.anything());
+    fireEvent.click(screen.getByRole("button", { name: "添加渠道" }));
+    expect(screen.getByRole("dialog", { name: "添加搜索渠道" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭配置搜索渠道" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "显示博查 API Key" }));
-    await waitFor(() => expect(apiKey).toHaveValue("provider-secret"));
-    expect(apiKey).toHaveAttribute("type", "text");
-
-    fireEvent.click(screen.getByRole("button", { name: "隐藏博查 API Key" }));
-    expect(apiKey).toHaveValue("");
-    expect(apiKey).toHaveAttribute("type", "password");
+    fireEvent.click(screen.getByRole("button", { name: "配置博查" }));
+    expect(screen.getByRole("dialog", { name: "配置搜索渠道" })).toBeInTheDocument();
   });
 
-  it("添加新的厂商实例并保持同厂商多实例 ID 唯一", async () => {
+  it("渠道保存返回新文档时保留未提交的全局草稿", async () => {
     const fetchMock = installFetch();
     renderWebResearchPage();
-    await screen.findByText("内置 SearXNG");
+    await screen.findByRole("heading", { name: "服务状态" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用联网搜索" }));
 
-    fireEvent.change(screen.getByRole("combobox", { name: "搜索服务类型" }), { target: { value: "bocha" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加搜索服务" }));
+    fireEvent.click(screen.getByRole("button", { name: "配置博查" }));
+    fireEvent.change(screen.getByLabelText("实例名称"), { target: { value: "博查备用" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存渠道" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/capabilities/web-research/providers",
-      expect.objectContaining({ method: "POST", body: expect.stringContaining('"id":"bocha-2"') }),
-    ));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "配置搜索渠道" })).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: "启用联网搜索" })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "保存全局设置" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/capabilities/web-research/global", expect.anything()));
+    const globalRequest = fetchMock.mock.calls.find(([url]) => url === "/api/v1/capabilities/web-research/global");
+    expect(JSON.parse(String(globalRequest?.[1]?.body)).config.enabled).toBe(false);
+  });
+
+  it("全局 revision 冲突时可在最新版本上重新应用本地草稿", async () => {
+    let globalWrites = 0;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/v1/capabilities/web-research/global" && init?.method === "PATCH") {
+        globalWrites += 1;
+        if (globalWrites === 1) return json({ error: { code: "VERSION_CONFLICT", message: "配置文件已被修改", requestId: "request-global-conflict" } }, 409);
+        const body = JSON.parse(String(init.body));
+        return json({ ...settings, revision: "config-3", config: { ...body.config, searchProviders: config.searchProviders } });
+      }
+      if (url === "/api/v1/capabilities/web-research") {
+        return json({ ...settings, revision: globalWrites ? "config-2" : "config-1", config: { ...config, maxResults: globalWrites ? 7 : 5 } });
+      }
+      return json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderWebResearchPage();
+    await screen.findByRole("heading", { name: "全局检索策略" });
+    fireEvent.click(screen.getByRole("button", { name: "展开全局检索策略" }));
+    fireEvent.change(screen.getByLabelText("最大结果数"), { target: { value: "6" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存全局设置" }));
+
+    expect(await screen.findByRole("dialog", { name: "配置已在磁盘上发生变化" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "在新版本上重新应用" }));
+    await waitFor(() => expect(globalWrites).toBe(2));
+    const reapplied = fetchMock.mock.calls.filter(([url]) => url === "/api/v1/capabilities/web-research/global").at(-1);
+    expect(JSON.parse(String(reapplied?.[1]?.body))).toMatchObject({ revision: "config-2", config: { maxResults: 6 } });
   });
 
   it("加载联网配置发生意外错误时显示全局 Toast", async () => {
@@ -101,13 +123,13 @@ describe("WebResearchPage", () => {
 
 function installFetch() {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url.endsWith("/providers/bocha/credential") && !init?.method) return json({ apiKey: "provider-secret" });
-    if (url === "/api/v1/capabilities/web-research" && init?.method === "PATCH") {
-      return json({ ...settings, revision: "r2", config: JSON.parse(String(init.body)).config });
+    if (url === "/api/v1/capabilities/web-research/global" && init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      return json({ ...settings, revision: "config-3", config: { ...body.config, searchProviders: config.searchProviders } });
     }
-    if (url === "/api/v1/capabilities/web-research/providers" && init?.method === "POST") {
-      const provider = JSON.parse(String(init.body)).provider;
-      return json({ ...settings, revision: "r2", config: { ...config, searchProviders: [...config.searchProviders, provider] } });
+    if (url.endsWith("/providers/bocha") && init?.method === "PATCH") {
+      const body = JSON.parse(String(init.body));
+      return json({ ...settings, revision: "config-2", config: { ...config, searchProviders: config.searchProviders.map((provider) => provider.id === "bocha" ? body.provider : provider) } });
     }
     if (url === "/api/v1/capabilities/web-research") return json(settings);
     return json({ ok: true, message: "搜索服务连接正常" });
@@ -116,6 +138,6 @@ function installFetch() {
   return fetchMock;
 }
 
-function json(value: unknown): Response {
-  return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
+function json(value: unknown, status = 200): Response {
+  return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }

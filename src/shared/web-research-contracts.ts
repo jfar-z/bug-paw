@@ -61,6 +61,47 @@ export interface WebResearchConfig {
   allowedContentTypes: Array<"text/html" | "text/plain">;
 }
 
+/** 不含渠道列表的全局联网检索策略。 */
+export type WebResearchGlobalConfig = Omit<WebResearchConfig, "searchProviders">;
+
+/** 编辑渠道时对已有凭证执行的明确操作。 */
+export type SearchProviderCredentialMutation =
+  | { action: "keep" }
+  | { action: "replace"; apiKey: string }
+  | { action: "remove" };
+
+/** 原子创建搜索渠道与可选凭证的输入。 */
+export interface CreateSearchProviderInput {
+  /** 非敏感配置文件版本。 */
+  configRevision: string;
+  /** 凭证文件版本。 */
+  credentialRevision: string;
+  /** 待创建的渠道配置。 */
+  provider: SearchProviderConfig;
+  /** 直连供应商使用的 API Key。 */
+  apiKey?: string;
+}
+
+/** 原子编辑搜索渠道及其凭证的输入。 */
+export interface UpdateSearchProviderInput {
+  /** 非敏感配置文件版本。 */
+  configRevision: string;
+  /** 凭证文件版本。 */
+  credentialRevision: string;
+  /** 编辑后的完整渠道配置。 */
+  provider: SearchProviderConfig;
+  /** 对渠道凭证执行的操作。 */
+  credential: SearchProviderCredentialMutation;
+}
+
+/** 调整搜索渠道优先级的输入。 */
+export interface ReorderSearchProvidersInput {
+  /** 非敏感配置文件版本。 */
+  revision: string;
+  /** 包含全部现有渠道且不重复的标识顺序。 */
+  providerIds: string[];
+}
+
 /**
  * 带乐观锁版本的联网搜索配置文档。
  */

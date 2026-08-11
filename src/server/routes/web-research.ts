@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
 
-import type { SearchProviderConfig, SearchProviderTemplate, WebResearchConfig, WebResearchSettingsDocument } from "../../shared/web-research-contracts";
+import type {
+  CreateSearchProviderInput,
+  ReorderSearchProvidersInput,
+  SearchProviderTemplate,
+  UpdateSearchProviderInput,
+  WebResearchConfig,
+  WebResearchGlobalConfig,
+  WebResearchSettingsDocument,
+} from "../../shared/web-research-contracts";
 import type { CredentialService } from "../configuration/credential-service";
 import { VersionConflictError } from "../configuration/versioned-json-store";
 import { EgressProfileRegistry } from "../web-research/egress-profile-registry";
@@ -36,13 +44,18 @@ export function registerWebResearchRoutes(app: FastifyInstance, dependencies: We
     return reply.send(await documentWithProfiles(dependencies));
   });
 
-  app.patch("/api/capabilities/web-research", async (request, reply) => {
+  app.patch("/api/capabilities/web-research/global", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     reply.header("Cache-Control", "no-store");
     const body = request.body as { revision?: unknown; config?: unknown };
     if (typeof body?.revision !== "string" || !isRecord(body.config)) return sendApiError(reply, 400, "VALIDATION_FAILED", "联网搜索配置格式无效");
     try {
-      const config = await dependencies.configs.validate(body.config as unknown as WebResearchConfig);
+      const current = await dependencies.configs.read();
+      if (current.revision !== body.revision) throw new VersionConflictError(body.revision, current.revision);
+      const config = await dependencies.configs.validate({
+        ...(body.config as unknown as WebResearchGlobalConfig),
+        searchProviders: current.config.searchProviders,
+      });
       await assertEnabledProviderCredentials(config, dependencies.credentials);
       await dependencies.configs.update(config, body.revision);
       await dependencies.refreshRuntime();
@@ -56,10 +69,56 @@ export function registerWebResearchRoutes(app: FastifyInstance, dependencies: We
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     reply.header("Cache-Control", "no-store");
     const body = isRecord(request.body) ? request.body : undefined;
-    if (!body || typeof body.revision !== "string" || !isRecord(body.provider)) return sendApiError(reply, 400, "VALIDATION_FAILED", "搜索服务配置格式无效");
+    if (!body
+      || typeof body.configRevision !== "string"
+      || typeof body.credentialRevision !== "string"
+      || !isRecord(body.provider)
+      || (body.apiKey !== undefined && typeof body.apiKey !== "string")) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "搜索服务配置格式无效");
+    }
     try {
-      await dependencies.management.add(body.provider as unknown as SearchProviderConfig, body.revision);
+      await dependencies.management.add(body as unknown as CreateSearchProviderInput);
+      await dependencies.refreshRuntime();
       return reply.code(201).send(await documentWithProfiles(dependencies));
+    } catch (error) {
+      return sendManagedError(reply, error);
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/capabilities/web-research/providers/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    reply.header("Cache-Control", "no-store");
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body
+      || typeof body.configRevision !== "string"
+      || typeof body.credentialRevision !== "string"
+      || !isRecord(body.provider)
+      || !isCredentialMutation(body.credential)) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "搜索服务配置格式无效");
+    }
+    try {
+      await dependencies.management.update(request.params.id, body as unknown as UpdateSearchProviderInput);
+      await dependencies.refreshRuntime();
+      return reply.send(await documentWithProfiles(dependencies));
+    } catch (error) {
+      return sendManagedError(reply, error);
+    }
+  });
+
+  app.put("/api/capabilities/web-research/providers/order", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    reply.header("Cache-Control", "no-store");
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body
+      || typeof body.revision !== "string"
+      || !Array.isArray(body.providerIds)
+      || body.providerIds.some((id) => typeof id !== "string")) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "搜索服务顺序格式无效");
+    }
+    try {
+      await dependencies.management.reorder(body as unknown as ReorderSearchProvidersInput);
+      await dependencies.refreshRuntime();
+      return reply.send(await documentWithProfiles(dependencies));
     } catch (error) {
       return sendManagedError(reply, error);
     }
@@ -98,35 +157,6 @@ export function registerWebResearchRoutes(app: FastifyInstance, dependencies: We
     return reply.header("Cache-Control", "no-store").send({ apiKey });
   });
 
-  app.put<{ Params: { id: string } }>("/api/capabilities/web-research/providers/:id/credential", async (request, reply) => {
-    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
-    const body = isRecord(request.body) ? request.body : undefined;
-    if (!body || typeof body.revision !== "string" || typeof body.apiKey !== "string" || !body.apiKey) {
-      return sendApiError(reply, 400, "VALIDATION_FAILED", "搜索服务凭证格式无效");
-    }
-    if (!(await providerExists(dependencies, request.params.id))) return sendApiError(reply, 404, "PROVIDER_NOT_FOUND", "搜索服务不存在");
-    try {
-      const credentialRevision = await dependencies.credentials.setApiKey(request.params.id, body.apiKey, body.revision);
-      return reply.header("Cache-Control", "no-store").send({ credentialRevision, status: { providerId: request.params.id, type: "api_key", configured: true } });
-    } catch (error) {
-      return sendManagedError(reply, error);
-    }
-  });
-
-  app.delete<{ Params: { id: string } }>("/api/capabilities/web-research/providers/:id/credential", async (request, reply) => {
-    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
-    const body = isRecord(request.body) ? request.body : undefined;
-    if (!body || typeof body.revision !== "string") return sendApiError(reply, 400, "VALIDATION_FAILED", "缺少凭证版本");
-    try {
-      const { config } = await dependencies.configs.read();
-      const provider = config.searchProviders.find((candidate) => candidate.id === request.params.id);
-      if (config.enabled && provider?.enabled) throw new TypeError("请先停用搜索服务，再删除 API Key");
-      const credentialRevision = await dependencies.credentials.remove(request.params.id, body.revision);
-      return reply.header("Cache-Control", "no-store").send({ credentialRevision, status: null });
-    } catch (error) {
-      return sendManagedError(reply, error);
-    }
-  });
 }
 
 /** 全局能力启用时，所有启用的直连实例都必须具备独立凭证。 */
@@ -153,13 +183,15 @@ async function documentWithProfiles(dependencies: WebResearchRouteDependencies):
   };
 }
 
-async function providerExists(dependencies: WebResearchRouteDependencies, providerId: string): Promise<boolean> {
-  return (await dependencies.configs.read()).config.searchProviders.some((provider) => provider.id === providerId);
-}
-
 function sendManagedError(reply: Parameters<typeof sendApiError>[0], error: unknown) {
   if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
   return sendApiError(reply, 400, "VALIDATION_FAILED", error instanceof Error ? error.message : "搜索服务配置无效");
+}
+
+/** 校验凭证操作的判别字段与替换值。 */
+function isCredentialMutation(value: unknown): boolean {
+  if (!isRecord(value) || !["keep", "replace", "remove"].includes(String(value.action))) return false;
+  return value.action !== "replace" || (typeof value.apiKey === "string" && Boolean(value.apiKey));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
