@@ -1368,6 +1368,13 @@ p {
   white-space: pre-wrap;
 }
 
+/* 图表源码需显式恢复单行布局，避免外层预览区域的 pre-wrap 覆盖。 */
+.markdown-content .highlighted-code-block:not(.is-line-wrapping) pre {
+  overflow-x: auto;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
 .highlighted-code-block .hljs-keyword,
 .highlighted-code-block .hljs-selector-tag,
 .highlighted-code-block .hljs-literal {

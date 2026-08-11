@@ -27,10 +27,22 @@ describe("HighlightedCodeBlock", () => {
 
   it("允许图表源码关闭自动换行", () => {
     const { container } = render(
-      <HighlightedCodeBlock code="graph TD\nA-->B" language="mermaid" wrapLines={false} />,
+      <>
+        <style>{applicationStyles}</style>
+        <div className="knowledge-base-document-dialog">
+          <div className="markdown-content">
+            <HighlightedCodeBlock code="graph TD\nA-->B" language="mermaid" wrapLines={false} />
+          </div>
+        </div>
+      </>,
     );
 
-    expect(container.querySelector(".highlighted-code-block")).not.toHaveClass("is-line-wrapping");
+    const block = container.querySelector(".highlighted-code-block");
+    const style = window.getComputedStyle(container.querySelector("pre")!);
+    expect(block).not.toHaveClass("is-line-wrapping");
+    expect(style.whiteSpace).toBe("pre");
+    expect(style.overflowWrap).toBe("normal");
+    expect(style.overflowX).toBe("auto");
   });
 
   it("高亮已知语言并展示语言标签", () => {
