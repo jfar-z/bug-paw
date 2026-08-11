@@ -1,26 +1,20 @@
 import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, LoaderCircle, TerminalSquare } from "lucide-react";
 import { useState } from "react";
 import { formatToolValue, type ToolBlock } from "../conversation-timeline";
+import { toolActivityCopy } from "../features/chat/tool-activity-copy";
 
 interface LiveToolCardProps {
   tool: ToolBlock;
 }
 
-const statusLabels = {
-  preparing: "准备中",
-  running: "执行中",
-  completed: "已完成",
-  cancelled: "未执行",
-  error: "执行失败",
-} as const;
-
 /**
- * 展示可折叠的工具入参、实时输出和最终结果。
+ * 在活动轨迹中展示可折叠的工具入参、实时输出和最终结果。
  */
 export function LiveToolCard({ tool }: LiveToolCardProps) {
   const [expanded, setExpanded] = useState(false);
   const output = tool.status === "running" ? tool.partialResult : tool.result;
-  const statusIcon = tool.status === "running"
+  const active = tool.status === "preparing" || tool.status === "running";
+  const statusIcon = active
     ? <LoaderCircle className="spinner" size={16} aria-hidden="true" />
     : tool.status === "error"
       ? <CircleAlert size={16} aria-hidden="true" />
@@ -37,8 +31,8 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
       >
         {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <TerminalSquare size={17} aria-hidden="true" />
-        <strong>{tool.name}</strong>
-        <span className="live-tool-card__status">{statusIcon}{statusLabels[tool.status]}</span>
+        <strong>{toolActivityCopy(tool)}</strong>
+        <span className="live-tool-card__status">{statusIcon}<span className="sr-only">{tool.name}</span></span>
       </button>
 
       {expanded && (

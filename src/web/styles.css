@@ -1531,30 +1531,112 @@ p {
   font-weight: 650;
 }
 
-.live-tool-card {
-  margin: 12px 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-soft);
+.activity-group {
+  margin: 10px 0;
+  color: var(--text-secondary);
+}
+
+.activity-group__summary {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.activity-group__summary:hover,
+.agent-turn-activity-controls button:hover {
+  color: var(--text-primary);
+}
+
+.activity-group__summary strong {
+  min-width: 0;
   overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.live-tool-card.is-running {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+.activity-group__summary > span:last-child {
+  margin-left: auto;
+  font-size: 10px;
+  white-space: nowrap;
 }
 
-.live-tool-card.is-error {
-  border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+.activity-group__chevron {
+  width: 12px;
+  color: var(--text-tertiary);
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+}
+
+.activity-group.has-error .activity-group__summary strong {
+  color: var(--danger);
+}
+
+.activity-rail {
+  position: relative;
+  margin: 5px 0 3px 6px;
+  padding-left: 15px;
+}
+
+/* 连接线只表达活动顺序，不承载额外状态语义。 */
+.activity-rail::before {
+  position: absolute;
+  inset: 5px auto 5px 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 76%, transparent);
+  content: "";
+}
+
+.live-tool-card,
+.thinking-card {
+  position: relative;
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+
+.live-tool-card::before,
+.thinking-card::before {
+  position: absolute;
+  top: 13px;
+  left: -18px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  content: "";
+}
+
+.live-tool-card.is-preparing::before,
+.live-tool-card.is-running::before,
+.thinking-card.is-streaming::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.live-tool-card.is-error::before {
+  border-color: var(--danger);
+  background: var(--danger);
 }
 
 .live-tool-card__summary {
   display: grid;
   width: 100%;
-  min-height: 44px;
+  min-height: 32px;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
+  gap: 7px;
+  padding: 4px 2px;
   border: 0;
   color: var(--text-primary);
   background: transparent;
@@ -1562,13 +1644,13 @@ p {
 }
 
 .live-tool-card__summary:hover {
-  background: var(--surface-hover);
+  color: var(--accent);
 }
 
 .live-tool-card__summary > strong {
   overflow: hidden;
-  font-family: var(--font-mono);
   font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1576,11 +1658,12 @@ p {
 .live-tool-card__status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   color: var(--text-secondary);
   font-size: 11px;
 }
 
+.live-tool-card.is-preparing .live-tool-card__status,
 .live-tool-card.is-running .live-tool-card__status {
   color: var(--accent);
 }
@@ -1591,10 +1674,8 @@ p {
 
 .live-tool-card__details {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  gap: 8px;
+  padding: 4px 2px 8px 31px;
 }
 
 .live-tool-card__detail h4 {
@@ -1641,26 +1722,14 @@ p {
   }
 }
 
-.thinking-card {
-  margin: 12px 0;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface-soft);
-  overflow: hidden;
-}
-
-.thinking-card.is-streaming {
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-}
-
 .thinking-card__summary {
   display: grid;
   width: 100%;
-  min-height: 44px;
+  min-height: 32px;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 11px;
+  gap: 7px;
+  padding: 4px 2px;
   border: 0;
   color: var(--text-primary);
   background: transparent;
@@ -1668,13 +1737,13 @@ p {
 }
 
 .thinking-card__summary:hover {
-  background: var(--surface-hover);
+  color: var(--accent);
 }
 
 .thinking-card__summary > strong {
   overflow: hidden;
-  font-family: var(--font-mono);
   font-size: 12px;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1694,9 +1763,7 @@ p {
 .thinking-card__content {
   max-height: clamp(160px, 28vh, 300px);
   margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+  padding: 5px 2px 8px 31px;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1704,6 +1771,20 @@ p {
   overflow-y: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.agent-turn-activity-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 8px;
+}
+
+.agent-turn-activity-controls button {
+  padding: 2px 0;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  font-size: 10px;
 }
 
 /* 只让最新增量渐变，已显示文本保持静止且不参与重排。 */

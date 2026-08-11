@@ -5,11 +5,8 @@ import type { AgentProfileDocument } from "../../../../shared/agent-contracts";
 import type { WorkspaceFileSummary } from "../../../../shared/contracts";
 import { AgentAvatar } from "../../../components/agent-avatar";
 import { AgentReferenceChips } from "../../../components/agent-reference-chips";
-import { LiveToolCard } from "../../../components/live-tool-card";
-import { MarkdownContent } from "../../../components/markdown-content";
 import { MessageAttachments } from "../../../components/message-attachments";
 import { MessageNavigator } from "../../../components/message-navigator";
-import { ThinkingCard } from "../../../components/thinking-card";
 import type { AgentTurn, ConversationEntry } from "../../../conversation-timeline";
 import type { IdentityPreview } from "../../../pages/chat-page";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../../../speech-text";
@@ -18,6 +15,7 @@ import { UserAvatar } from "./user-avatar";
 import { MessageSpeechButton } from "./message-speech-button";
 import { MessageCopyButton } from "./message-copy-button";
 import { copyTextForEntry } from "../message-copy";
+import { AgentTurnContent } from "./agent-turn-content";
 
 interface ConversationTimelineViewProps {
   timeline: ConversationEntry[];
@@ -83,12 +81,14 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               {props.streaming && entry.id === props.activeAgentEntryId && <span className="agent-run-indicator" aria-label="Agent 正在处理" />}
             </div>
             <div className="message-content">
-              {entry.blocks.map((block) => {
-                if (block.type === "markdown") return <MarkdownContent key={block.id} text={block.text} streaming={block.streaming} revealStart={block.revealStart} revealPhase={block.revealPhase} theme={props.theme} />;
-                if (block.type === "thinking") return <ThinkingCard key={block.id} thinking={block} />;
-                if (block.type === "files") return props.activeAgentId ? <MessageAttachments key={block.id} files={block.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} /> : null;
-                return <LiveToolCard key={block.id} tool={block} />;
-              })}
+              <AgentTurnContent
+                turn={entry}
+                streaming={props.streaming && entry.id === props.activeAgentEntryId}
+                activeAgentId={props.activeAgentId}
+                theme={props.theme}
+                onResolved={props.onResolved}
+                onPreview={props.onPreview}
+              />
               {(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
                 <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
                   {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
