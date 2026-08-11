@@ -69,13 +69,9 @@ export function AttachmentPickerButton({
     if (files.length === 0) {
       return;
     }
-    if (items.length + files.length > maxFiles) {
-      onError(`单次消息最多添加 ${maxFiles} 个附件。`);
-      return;
-    }
-    const oversized = files.find((file) => file.size > maxFileSize);
-    if (oversized) {
-      onError(`${oversized.name} 超过单文件大小限制。`);
+    const validationError = validateAttachmentSelection(items.length, files, maxFiles, maxFileSize);
+    if (validationError) {
+      onError(validationError);
       return;
     }
     onFilesSelected(files);
@@ -88,6 +84,18 @@ export function AttachmentPickerButton({
       <input type="file" aria-label="添加附件" multiple disabled={disabled} onChange={selectFiles} />
     </label>
   );
+}
+
+/** 统一校验文件选择、剪贴板与拖放入口的附件边界。 */
+export function validateAttachmentSelection(
+  currentCount: number,
+  files: File[],
+  maxFiles = 5,
+  maxFileSize = 100 * 1024 * 1024,
+): string | undefined {
+  if (currentCount + files.length > maxFiles) return `单次消息最多添加 ${maxFiles} 个附件。`;
+  const oversized = files.find((file) => file.size > maxFileSize);
+  return oversized ? `${oversized.name} 超过单文件大小限制。` : undefined;
 }
 
 function statusText(item: AttachmentUploadItem): string {

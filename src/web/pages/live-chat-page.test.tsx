@@ -1011,6 +1011,24 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByRole("img", { name: "图片.png" })).toBeInTheDocument();
   });
 
+  it("从剪贴板粘贴图片时上传为附件且不保留图片占位文本", async () => {
+    render(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    const textbox = screen.getByRole("textbox", { name: "消息内容" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        items: [{ kind: "file", type: "image/png", getAsFile: () => image }],
+        getData: (type: string) => type === "text/plain" ? "[图片]" : "",
+      },
+    });
+
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/agents/default/attachments"));
+    expect(screen.getByText("clipboard.png")).toBeInTheDocument();
+    expect(textbox).toHaveValue("");
+  });
+
   it("按 Agent 文本中的协议位置展示工作目录文件", async () => {
     render(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));

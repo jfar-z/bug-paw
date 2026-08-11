@@ -5,7 +5,7 @@ import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contract
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import { api, type ModelSummary, type SessionSnapshot, type SessionSummary } from "../api";
 import { AgentModelMenu } from "../components/agent-model-menu";
-import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem } from "../components/attachment-picker";
+import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem, validateAttachmentSelection } from "../components/attachment-picker";
 import { ReferenceComposer } from "../components/reference-composer";
 import { MediaLightbox } from "../components/media-lightbox";
 import { ArchivedSessionsDialog } from "../components/archived-sessions-dialog";
@@ -603,6 +603,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
   };
 
+  /** 让文件选择、粘贴和拖放共享相同的数量与大小限制。 */
+  const queueAttachmentFiles = (files: File[]) => {
+    const validationError = validateAttachmentSelection(attachmentItems.length, files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    void uploadFiles(files);
+  };
+
   const abort = async () => {
     if (!session) return;
     stopSpeech();
@@ -912,6 +922,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               loadCatalog={() => selectedAgentId ? api.getComposerCatalog(selectedAgentId) : Promise.resolve({ skills: [], commands: [], knowledgeBases: [], workspaceEntries: [] })}
               onChange={setDraft}
               onReferencesChange={setDraftReferences}
+              onFilesInput={queueAttachmentFiles}
               onSubmit={() => void send()}
               onCatalogError={setError}
               editingContext={editingEntryId ? <div className="composer-editing-context" role="status">
@@ -919,8 +930,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
                 <p title={editingEntry?.text || draft}>{editingEntry?.text || draft || "历史消息"}</p>
                 <button type="button" onClick={cancelEditing}>取消编辑</button>
               </div> : undefined}
-              attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={(files) => void uploadFiles(files)} onError={setError} />}
-              attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={(files) => void uploadFiles(files)} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
+              attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={queueAttachmentFiles} onError={setError} />}
+              attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
               bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
             />
           </div>

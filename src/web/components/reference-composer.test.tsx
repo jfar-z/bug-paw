@@ -89,4 +89,79 @@ describe("ReferenceComposer", () => {
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
   });
+
+  it("粘贴剪贴板图片时转为附件并过滤图片占位文本", () => {
+    const onChange = vi.fn();
+    const onFilesInput = vi.fn();
+    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+    fireEvent.paste(screen.getByRole("textbox"), {
+      clipboardData: clipboardData([image], "[图片]"),
+    });
+
+    expect(onFilesInput).toHaveBeenCalledWith([image]);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("粘贴图片与真实文本时在光标位置保留真实文本", () => {
+    const onChange = vi.fn();
+    const onFilesInput = vi.fn();
+    render(<ReferenceComposer value="开头结尾" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    textbox.setSelectionRange(2, 2);
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+    fireEvent.paste(textbox, {
+      clipboardData: clipboardData([image], "说明文字\n[Image]"),
+    });
+
+    expect(onChange).toHaveBeenCalledWith("开头说明文字结尾");
+    expect(onFilesInput).toHaveBeenCalledWith([image]);
+  });
+
+  it("拖入本地图片添加附件，拖入纯文本则插入当前光标", () => {
+    const onChange = vi.fn();
+    const onFilesInput = vi.fn();
+    const { rerender } = render(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    textbox.setSelectionRange(1, 1);
+    const image = new File(["image"], "drop.png", { type: "image/png" });
+
+    fireEvent.drop(textbox, { dataTransfer: transferData([image], "") });
+    expect(onFilesInput).toHaveBeenCalledWith([image]);
+
+    rerender(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+    textbox.setSelectionRange(1, 1);
+    fireEvent.drop(textbox, { dataTransfer: transferData([], "插入") });
+    expect(onChange).toHaveBeenLastCalledWith("前插入后");
+  });
+
+  it("拖入远程图片地址仅作为文本插入，不主动获取远程资源", () => {
+    const onChange = vi.fn();
+    const onFilesInput = vi.fn();
+    render(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={onFilesInput} />);
+
+    fireEvent.drop(screen.getByRole("textbox"), {
+      dataTransfer: transferData([], "https://example.com/image.png"),
+    });
+
+    expect(onChange).toHaveBeenCalledWith("https://example.com/image.png");
+    expect(onFilesInput).not.toHaveBeenCalled();
+  });
 });
+
+function clipboardData(files: File[], text: string) {
+  return {
+    items: files.map((file) => ({ kind: "file", type: file.type, getAsFile: () => file })),
+    getData: (type: string) => type === "text/plain" ? text : "",
+  };
+}
+
+function transferData(files: File[], text: string) {
+  return {
+    files,
+    types: files.length > 0 ? ["Files"] : ["text/plain"],
+    getData: (type: string) => type === "text/plain" ? text : "",
+  };
+}

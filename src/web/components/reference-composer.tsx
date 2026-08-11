@@ -1,5 +1,5 @@
 import { ChevronLeft, Database, File, Folder, Plus, Terminal, WandSparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import type { AgentReference, FileReference } from "../../shared/agent-reference-contracts";
 import type { ComposerCatalog, WorkspaceEntry } from "../../shared/contracts";
 import { AgentReferenceChips } from "./agent-reference-chips";
@@ -13,6 +13,8 @@ interface ReferenceComposerProps {
   onReferencesChange(references: AgentReference[]): void;
   onSubmit?: () => void;
   onCatalogError?: (message: string) => void;
+  /** 接收由剪贴板或拖放输入的本地图片文件。 */
+  onFilesInput?: (files: File[]) => void;
   editingContext?: ReactNode;
   attachmentControl?: ReactNode;
   attachmentContent?: ReactNode;
@@ -28,13 +30,16 @@ type Candidate =
 /**
  * 支持 @ 资源引用、/ 安全命令补全与加号快捷选择的对话输入组件。
  */
-export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, editingContext, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
+export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, onFilesInput, editingContext, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
   const [text, setText] = useState(value);
   const [catalog, setCatalog] = useState<ComposerCatalog>();
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [menuDirectory, setMenuDirectory] = useState("");
+  const [draggingInput, setDraggingInput] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const dragDepthRef = useRef(0);
   const candidateMenuRef = useRef<HTMLDivElement>(null);
   const activeTriggerRef = useRef<string | undefined>(undefined);
 
@@ -90,6 +95,50 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
     }
   };
 
+  /** 在受控输入框的当前选区插入来自剪贴板或拖放的文本。 */
+  const insertAtSelection = (inserted: string) => {
+    if (!inserted) return;
+    const textarea = textareaRef.current;
+    const start = textarea?.selectionStart ?? text.length;
+    const end = textarea?.selectionEnd ?? start;
+    updateText(`${text.slice(0, start)}${inserted}${text.slice(end)}`);
+    window.requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(start + inserted.length, start + inserted.length);
+    });
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (disabled) return;
+    const images = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .flatMap((item) => {
+        const file = item.getAsFile();
+        return file ? [file] : [];
+      });
+    if (images.length === 0) return;
+    event.preventDefault();
+    onFilesInput?.(images);
+    insertAtSelection(withoutImagePlaceholders(event.clipboardData.getData("text/plain")));
+  };
+
+  const handleDrop = (event: DragEvent<HTMLTextAreaElement>) => {
+    dragDepthRef.current = 0;
+    setDraggingInput(false);
+    if (disabled) return;
+    const droppedFiles = Array.from(event.dataTransfer.files);
+    if (droppedFiles.length > 0) {
+      event.preventDefault();
+      const images = droppedFiles.filter((file) => file.type.startsWith("image/"));
+      if (images.length > 0) onFilesInput?.(images);
+      return;
+    }
+    const droppedText = event.dataTransfer.getData("text/plain");
+    if (!droppedText) return;
+    event.preventDefault();
+    insertAtSelection(droppedText);
+  };
+
   const addReference = (reference: AgentReference) => {
     const key = referenceKey(reference);
     if (!references.some((item) => referenceKey(item) === key)) {
@@ -122,17 +171,36 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
 
   const menuEntries = catalog?.workspaceEntries.filter((entry) => parentDirectory(entry.path) === menuDirectory) ?? [];
   return (
-    <div className="reference-composer" ref={composerRef}>
+    <div
+      className={`reference-composer${draggingInput ? " is-dragging-input" : ""}`}
+      ref={composerRef}
+      onDragEnter={(event) => {
+        if (disabled || !supportsDrop(event.dataTransfer.types)) return;
+        event.preventDefault();
+        dragDepthRef.current += 1;
+        setDraggingInput(true);
+      }}
+      onDragOver={(event) => {
+        if (!disabled && supportsDrop(event.dataTransfer.types)) event.preventDefault();
+      }}
+      onDragLeave={() => {
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setDraggingInput(false);
+      }}
+    >
       {editingContext}
       <AgentReferenceChips references={references} removable onRemove={(reference) => onReferencesChange(references.filter((item) => referenceKey(item) !== referenceKey(reference)))} />
       <div className="reference-composer__input-row">
         <textarea
+          ref={textareaRef}
           rows={1}
           placeholder="给 Agent 发消息…（输入 @ 引用资源）"
           aria-label="消息内容"
           disabled={disabled}
           value={text}
           onChange={(event) => updateText(event.target.value)}
+          onPaste={handlePaste}
+          onDrop={handleDrop}
           onKeyDown={(event) => {
             if (mode && candidates.length > 0) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -229,6 +297,16 @@ function referenceKey(reference: AgentReference): string {
 function parentDirectory(path: string): string {
   const index = path.lastIndexOf("/");
   return index < 0 ? "" : path.slice(0, index);
+}
+
+/** 只移除浏览器为图片剪贴板内容生成的伪文本，不改写真实说明文字。 */
+function withoutImagePlaceholders(text: string): string {
+  if (!/\[(?:图片|image)\]/iu.test(text)) return text;
+  return text.replaceAll(/\[(?:图片|image)\]/giu, "").trim();
+}
+
+function supportsDrop(types: readonly string[]): boolean {
+  return types.includes("Files") || types.includes("text/plain");
 }
 
 function candidateLabel(candidate: Candidate): string {

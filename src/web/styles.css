@@ -3690,6 +3690,23 @@ img.message-avatar {
   position: relative;
 }
 
+/* 拖放进入输入区时给出稳定落点，不遮挡既有附件和发送控件。 */
+.reference-composer.is-dragging-input::after {
+  position: absolute;
+  z-index: 8;
+  inset: -8px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--accent);
+  border-radius: 13px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-soft) 88%, var(--surface));
+  content: "松开以添加图片或文本";
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
 /* 历史编辑态固定提示分支语义，避免回填文本与普通新消息混淆。 */
 .composer-editing-context {
   display: grid;
