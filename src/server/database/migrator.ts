@@ -1,10 +1,11 @@
 import type { Database } from "./database";
 import { initialMigration } from "./migrations/001-initial";
+import { retrievalToolNamesMigration } from "./migrations/002-retrieval-tool-names";
 
-const MIGRATIONS = [initialMigration] as const;
+const MIGRATIONS = [initialMigration, retrievalToolNamesMigration] as const;
 
 /** 按版本顺序执行未应用的数据库 Migration。 */
-export function runMigrations(database: Database): void {
+export function runMigrations(database: Database, options: { throughVersion?: number } = {}): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -13,13 +14,15 @@ export function runMigrations(database: Database): void {
   `);
 
   for (const migration of MIGRATIONS) {
+    if (options.throughVersion !== undefined && migration.version > options.throughVersion) break;
     const applied = database.readOne<{ version: number }>(
       "SELECT version FROM schema_migrations WHERE version = ?",
       [migration.version],
     );
     if (applied) continue;
     database.transaction(() => {
-      database.exec(migration.sql);
+      if ("sql" in migration) database.exec(migration.sql);
+      else migration.apply(database);
       database.write(
         "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
         [migration.version, new Date().toISOString()],

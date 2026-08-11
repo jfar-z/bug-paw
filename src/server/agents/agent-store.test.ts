@@ -54,11 +54,11 @@ describe("AgentStore", () => {
     const { store } = await fixture();
     const created = await store.create({ name: "历史 Agent", allowedTools: ["read"] });
 
-    await store.ensureSystemToolPermissions(["search_knowledge", "scheduled_tasks"]);
+    await store.ensureSystemToolPermissions(["knowledge_search", "scheduled_tasks"]);
 
     expect((await store.get(created.profile.id))?.profile.allowedTools).toEqual([
       "read",
-      "search_knowledge",
+      "knowledge_search",
       "scheduled_tasks",
     ]);
   });
