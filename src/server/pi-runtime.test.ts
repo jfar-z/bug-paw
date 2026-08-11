@@ -63,6 +63,45 @@ function createBackend(
 }
 
 describe("PiRuntimeGateway 提示词刷新", () => {
+  it("快照只返回当前分支最近页并用稳定 token 加载上一页", async () => {
+    const messages = Array.from({ length: 25 }, (_, index) => {
+      const number = index + 1;
+      return [
+        { role: "user", content: `question-${number}`, __piEntryId: `user-${number}` },
+        {
+          role: "toolResult",
+          content: [{ type: "image", data: "aGVsbG8=" }],
+          __piEntryId: `tool-${number}`,
+        },
+        { role: "assistant", content: `answer-${number}`, __piEntryId: `assistant-${number}` },
+      ];
+    }).flat();
+    const session = createSession(undefined, messages) as PiSessionAdapter & { branchLeafId: string };
+    Object.defineProperty(session, "branchLeafId", { get: () => "assistant-25" });
+    const gateway = createPiRuntimeGateway(createBackend(session));
+
+    const latest = await gateway.createSession();
+    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true });
+    expect(latest.messages[1]).toMatchObject({ content: [{ data: "<IMAGE_BASE64>" }] });
+
+    const previous = await gateway.loadHistoryPage("session-1", "user-6", latest.history.branchToken);
+    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false });
+    await expect(gateway.loadHistoryPage("session-1", "user-6", "stale-token")).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    gateway.dispose();
+  });
+
+  it("成功切换树分支后轮换分页 token", async () => {
+    const session = createSession();
+    session.navigateTree = vi.fn(async () => ({ cancelled: false }));
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const initial = await gateway.createSession();
+
+    const navigated = await gateway.navigateTree?.("session-1", "user-old");
+
+    expect(navigated?.snapshot.history.branchToken).not.toBe(initial.history.branchToken);
+    gateway.dispose();
+  });
+
   it("资源加载器 reload 时读取最新的动态提示词快照", async () => {
     let prompts = ["第一版提示词"];
     const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], () => prompts, {
