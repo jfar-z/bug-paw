@@ -12,7 +12,7 @@ describe("联网搜索 Pi 工具", () => {
     const tool = createWebSearchTool({
       search: async () => ({
         data: { query: "测试", results: [{ rank: 1, title: "标题", url: "https://example.com", hostname: "example.com", snippet: "摘要", sourceEngines: ["brave"], publishedAt: null }] },
-        metadata: { resultCount: 1, duplicatesRemoved: 0, truncated: false },
+        metadata: { resultCount: 1, duplicatesRemoved: 0, truncated: false, providerHealth: "healthy" as const, failedProviderCount: 0, providerRetryable: false },
         warnings: [],
       }),
     });
@@ -44,7 +44,7 @@ describe("联网搜索 Pi 工具", () => {
     const tool = createWebSearchTool({
       search: async () => ({
         data: { query: "无结果", results: [] },
-        metadata: { resultCount: 0, duplicatesRemoved: 0, truncated: false },
+        metadata: { resultCount: 0, duplicatesRemoved: 0, truncated: false, providerHealth: "healthy" as const, failedProviderCount: 0, providerRetryable: false },
         warnings: [],
       }),
     });
@@ -52,6 +52,51 @@ describe("联网搜索 Pi 工具", () => {
     const result = await tool.execute("call", { query: "无结果" }, undefined, undefined, {} as never);
 
     expect(parseResult(result)).toMatchObject({ status: "empty", metadata: { resultCount: 0, untrustedContent: true } });
+  });
+
+  it("web_search 将部分供应商故障返回为 partial", async () => {
+    const tool = createWebSearchTool({
+      search: async () => ({
+        data: { query: "部分结果", results: [{ rank: 1, title: "标题", url: "https://example.com", hostname: "example.com", snippet: "摘要", sourceEngines: ["brave"], publishedAt: null }] },
+        metadata: { resultCount: 1, duplicatesRemoved: 0, truncated: false, providerHealth: "degraded", failedProviderCount: 1, providerRetryable: true },
+        warnings: [{ code: "SEARCH_PROVIDERS_DEGRADED", message: "部分搜索供应商暂不可用，结果可能不完整" }],
+      }),
+    });
+
+    const result = await tool.execute("call", { query: "部分结果" }, undefined, undefined, {} as never);
+
+    expect(parseResult(result)).toMatchObject({ status: "partial", metadata: { providerHealth: "degraded" }, warnings: [{ code: "SEARCH_PROVIDERS_DEGRADED" }] });
+  });
+
+  it("web_search 将供应商不可用返回为可重试错误而非 empty", async () => {
+    const tool = createWebSearchTool({
+      search: async () => ({
+        data: { query: "不可用", results: [] },
+        metadata: { resultCount: 0, duplicatesRemoved: 0, truncated: false, providerHealth: "unavailable", failedProviderCount: 2, providerRetryable: true },
+        warnings: [],
+      }),
+    });
+
+    const result = await tool.execute("call", { query: "不可用" }, undefined, undefined, {} as never);
+
+    expect(parseResult(result)).toEqual({
+      status: "error",
+      error: { code: "SEARCH_PROVIDERS_UNAVAILABLE", message: "搜索供应商当前不可用", retryable: true },
+    });
+  });
+
+  it("web_search 保留纯鉴权失败的不可重试属性", async () => {
+    const tool = createWebSearchTool({
+      search: async () => ({
+        data: { query: "鉴权失败", results: [] },
+        metadata: { resultCount: 0, duplicatesRemoved: 0, truncated: false, providerHealth: "unavailable", failedProviderCount: 1, providerRetryable: false },
+        warnings: [],
+      }),
+    });
+
+    const result = await tool.execute("call", { query: "鉴权失败" }, undefined, undefined, {} as never);
+
+    expect(parseResult(result)).toMatchObject({ status: "error", error: { code: "SEARCH_PROVIDERS_UNAVAILABLE", retryable: false } });
   });
 
   it("安全策略错误仅返回代码、消息和可重试性", async () => {

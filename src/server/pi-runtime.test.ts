@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
+import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import {
   createPiRuntimeGateway,
   createWorkspaceResourceLoader,
@@ -79,11 +80,11 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(loader.getAppendSystemPrompt()).toEqual(["第二版提示词"]);
   });
 
-  it("资源加载器只注册提示词注入扩展", async () => {
+  it("资源加载器注册提示词注入与搜索断路扩展", async () => {
     const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
       knowledgeSearch: false,
       knowledgeRead: false,
-      webSearch: false,
+      webSearch: true,
       webRead: false,
     });
 
@@ -91,8 +92,58 @@ describe("PiRuntimeGateway 提示词刷新", () => {
 
     expect(loader.getExtensions().extensions.map(({ path }) => path)).toEqual([
       "<inline:bug-paw-system-prompt-injection>",
+      "<inline:bug-paw-search-run-circuit>",
     ]);
     expect(loader.getExtensions().errors).toEqual([]);
+  });
+
+  it("未授权 web_search 时不注册搜索断路扩展", async () => {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+      knowledgeSearch: false,
+      knowledgeRead: false,
+      webSearch: false,
+      webRead: true,
+    });
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions.map(({ path }) => path)).toEqual([
+      "<inline:bug-paw-system-prompt-injection>",
+    ]);
+  });
+
+  it("通过 Pi ExtensionRunner 在新 Run 重置搜索断路且不影响其他工具", async () => {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+      knowledgeSearch: false,
+      knowledgeRead: false,
+      webSearch: true,
+      webRead: true,
+    });
+    await loader.reload();
+    const loaded = loader.getExtensions();
+    const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, "/tmp", {} as never, {} as never);
+    const searchCall = { type: "tool_call" as const, toolCallId: "search-1", toolName: "web_search", input: { query: "测试" } };
+
+    await runner.emitBeforeAgentStart("第一轮", undefined, "identity\n\nAvailable tools:\n", {} as never);
+    expect(await runner.emitToolCall(searchCall)).toBeUndefined();
+    await runner.emitToolResult({
+      type: "tool_result",
+      toolCallId: "search-1",
+      toolName: "web_search",
+      input: searchCall.input,
+      content: [{ type: "text", text: JSON.stringify({ status: "error", error: { code: "SEARCH_PROVIDERS_UNAVAILABLE", retryable: false } }) }],
+      details: {},
+      isError: false,
+    });
+
+    const blocked = await runner.emitToolCall({ ...searchCall, toolCallId: "search-2" });
+    expect(blocked).toMatchObject({ block: true });
+    expect(blocked?.terminate).toBeUndefined();
+    expect(JSON.parse(blocked?.reason ?? "")).toMatchObject({ error: { code: "SEARCH_PROVIDERS_UNAVAILABLE", retryable: false } });
+    expect(await runner.emitToolCall({ ...searchCall, toolCallId: "read-1", toolName: "web_read", input: { url: "https://example.com" } })).toBeUndefined();
+
+    await runner.emitBeforeAgentStart("第二轮", undefined, "identity\n\nAvailable tools:\n", {} as never);
+    expect(await runner.emitToolCall({ ...searchCall, toolCallId: "search-3" })).toBeUndefined();
   });
 
   it("提示词被外部更新时立即 reload 空闲会话", async () => {

@@ -22,7 +22,9 @@ SearXNG                         提供搜索结果
 @extractus/article-extractor    在 Node 服务内提取网页正文
 ```
 
-SearXNG 通过其 JSON Search API 返回标题、链接和摘要。默认由同一份 Compose 启动内部 `bug-paw-search` 与 `bug-paw-cache` 服务；管理员也可以在能力扩展页改为其他受管实例。两个搜索相关容器均不映射宿主机端口。
+SearXNG 通过其 JSON Search API 返回标题、链接、摘要和引擎状态。BugPaw 先把响应映射为供应商无关的 `healthy`、`degraded` 或 `unavailable` 健康状态，以及稳定的 `rate_limited`、`authentication`、`timeout`、`captcha`、`upstream_error` 失败分类。默认由同一份 Compose 启动内部 `bug-paw-search` 与 `bug-paw-cache` 服务；管理员也可以在能力扩展页改为其他受管实例。两个搜索相关容器均不映射宿主机端口。
+
+业务服务只依赖统一搜索供应商接口，不直接依赖 SearXNG 响应结构。未来直接接入搜索 API 服务商时，由新 Adapter 将 HTTP 鉴权、限流、超时和上游错误映射到同一结果协议；工具响应、系统政策和 Run 级断路无需感知供应商类型。
 
 部署前在根目录 `.env` 设置 `SEARXNG_SECRET` 为强随机值。该文件属于部署环境，不应提交到代码仓库，也不得在接口、日志或诊断中回显其值。
 
@@ -76,11 +78,13 @@ SearXNG 与 Node 正文提取器
 
 `web_read` 接收 URL 和可选正文字符数限制，返回请求地址、最终地址、标题、主机名、正文、发布时间、抓取时间、内容类型与正文提取方式。HTML 正文提取失败时降级为清理后的文本，并以 `partial` 和 `ARTICLE_EXTRACTION_FALLBACK` 记录事实；超出长度限制时以 `partial` 和截断元数据记录事实。
 
-两个工具统一返回 `ok`、`empty`、`partial` 或 `error`。成功类响应包含 `data`、`metadata` 和事实性 `warnings`；错误只包含稳定的 `code`、安全消息与 `retryable`。`retryable` 只描述错误是否具备重试条件。工具响应不包含 `nextAction`、行为建议或答案充分性判断。联网结果的 Metadata 标记 `untrustedContent: true`，且始终保留来源 URL，供 Agent 引用和前端展示。
+两个工具统一返回 `ok`、`empty`、`partial` 或 `error`。成功类响应包含 `data`、`metadata` 和事实性 `warnings`；错误只包含稳定的 `code`、安全消息与 `retryable`。`retryable` 只描述错误是否具备重试条件；多个供应商失败时，只要至少一个失败具备重试条件就为 `true`，纯鉴权失败为 `false`。搜索供应商健康且确实无命中时才返回 `empty`；部分引擎失败但经 URL 安全过滤后仍有结果时返回 `partial` 和 `SEARCH_PROVIDERS_DEGRADED`；无有效结果且存在引擎故障时返回 `SEARCH_PROVIDERS_UNAVAILABLE`，不再伪装成空结果。工具响应不包含 `nextAction`、行为建议或答案充分性判断，也不回显上游原始错误正文。联网结果的 Metadata 标记 `untrustedContent: true`，且始终保留来源 URL，供 Agent 引用和前端展示。
 
 系统政策把 `web_search` 的标题与摘要定义为发现线索，而不是已核验事实。当 `web_read` 同时可用时，Agent 在回答事实问题前必须主动读取至少一个相关页面，不需要等待用户额外要求“查看页面”；发布、可用性、版本、价格、政策、法律、规格和下载优先读取官方或一手来源。页面无法读取时必须说明结论未核验。只有用户明确要求候选链接或搜索结果列表时，才可以不逐页读取直接返回搜索结果。
 
 BugPaw 不自动安装 `web-research` Skill。上述最低路由与核验规则由有效能力快照动态注入系统提示词，用户可以另行安装调研 Skill 组织多轮查询或来源比较。工具结果只提供数据和状态，不能扩大用户指定的来源范围。
+
+当 `web_search` 在某一 Run 首次返回 `SEARCH_PROVIDERS_UNAVAILABLE` 时，隐藏 Runtime Extension 会阻止该 Run 后续 `web_search` 调用，避免改写关键词反复请求造成限流反馈循环。断路不会终止当前任务，不影响 `web_read` 或其他工具；Agent 应使用已有证据说明临时限制。用户下一条消息开始新 Run 后自动恢复一次搜索机会。
 
 ### 安全与资源限制
 
@@ -101,6 +105,7 @@ BugPaw 不自动安装 `web-research` Skill。上述最低路由与核验规则�
 3. 未授权 Agent 在运行时无法调用上述工具。
 4. 内网 URL、非法协议、超时页面、过大页面和重定向到受限地址的请求均被安全拒绝。
 5. 工具结果包含可追溯的原始 URL。
+6. 健康空结果、部分供应商降级和全部供应商不可用能被明确区分；同一 Run 在供应商不可用后不再重复调用搜索，但仍能继续回答或使用其他工具。
 
 ## 可选演进方向：Playwright
 

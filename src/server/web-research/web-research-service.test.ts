@@ -6,7 +6,7 @@ import { WebResearchService } from "./web-research-service";
 function createService(overrides: Partial<ConstructorParameters<typeof WebResearchService>[0]> = {}) {
   return new WebResearchService({
     readConfig: async () => ({ revision: "r1", config: { ...DEFAULT_WEB_RESEARCH_CONFIG, enabled: true, maxTextLength: 1_000 } }),
-    searchSearxng: async () => ({ results: [] }),
+    createSearchProvider: () => ({ search: async () => ({ health: "healthy", results: [], failures: [] }) }),
     fetchText: async () => ({ finalUrl: "https://example.com/article", contentType: "text/html", body: "<main>正文</main>" }),
     extract: async () => ({ title: "文章", content: "正文", published: "2026-08-08" }),
     ...overrides,
@@ -16,10 +16,14 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebResear
 describe("联网搜索服务", () => {
   it("规范化 URL、合并搜索引擎并去除重复结果", async () => {
     const service = createService({
-      searchSearxng: async () => ({ results: [
-        { title: "文档", url: "https://Example.com:443/docs#intro", content: "摘要一", engine: "brave", publishedDate: "2026-08-10" },
-        { title: "文档副本", url: "https://example.com/docs", content: "摘要二", engine: "bing", publishedDate: "invalid" },
-      ] }),
+      createSearchProvider: () => ({ search: async () => ({
+        health: "healthy",
+        results: [
+          { title: "文档", url: "https://Example.com:443/docs#intro", snippet: "摘要一", source: "brave", publishedAt: "2026-08-10" },
+          { title: "文档副本", url: "https://example.com/docs", snippet: "摘要二", source: "bing", publishedAt: "invalid" },
+        ],
+        failures: [],
+      }) }),
     });
 
     await expect(service.search({ query: "BugPaw", count: 2 })).resolves.toEqual({
@@ -35,9 +39,54 @@ describe("联网搜索服务", () => {
           publishedAt: "2026-08-10",
         }],
       },
-      metadata: { resultCount: 1, duplicatesRemoved: 1, truncated: false },
+      metadata: { resultCount: 1, duplicatesRemoved: 1, truncated: false, providerHealth: "healthy", failedProviderCount: 0, providerRetryable: false },
       warnings: [],
     });
+  });
+
+  it("保留部分供应商结果并标记 degraded", async () => {
+    const service = createService({
+      createSearchProvider: () => ({ search: async () => ({
+        health: "degraded",
+        results: [{ title: "可用结果", url: "https://example.com", snippet: "摘要", source: "brave", publishedAt: null }],
+        failures: [{ provider: "duckduckgo", category: "captcha", retryable: true }],
+      }) }),
+    });
+
+    const result = await service.search({ query: "BugPaw" });
+
+    expect(result.metadata).toMatchObject({ providerHealth: "degraded", failedProviderCount: 1, providerRetryable: true });
+    expect(result.warnings).toEqual([{ code: "SEARCH_PROVIDERS_DEGRADED", message: "部分搜索供应商暂不可用，结果可能不完整" }]);
+  });
+
+  it("无结果且供应商故障时保留 unavailable 状态", async () => {
+    const service = createService({
+      createSearchProvider: () => ({ search: async () => ({
+        health: "unavailable",
+        results: [],
+        failures: [{ provider: "brave", category: "rate_limited", retryable: true }],
+      }) }),
+    });
+
+    const result = await service.search({ query: "BugPaw" });
+
+    expect(result.data.results).toEqual([]);
+    expect(result.metadata).toMatchObject({ providerHealth: "unavailable", failedProviderCount: 1, providerRetryable: true });
+  });
+
+  it("供应商故障且唯一结果被安全过滤时标记 unavailable", async () => {
+    const service = createService({
+      createSearchProvider: () => ({ search: async () => ({
+        health: "degraded",
+        results: [{ title: "非法结果", url: "javascript:alert(1)", snippet: "", source: "brave", publishedAt: null }],
+        failures: [{ provider: "duckduckgo", category: "captcha", retryable: true }],
+      }) }),
+    });
+
+    const result = await service.search({ query: "BugPaw" });
+
+    expect(result.data.results).toEqual([]);
+    expect(result.metadata).toMatchObject({ providerHealth: "unavailable", providerRetryable: true });
   });
 
   it("读取 HTML 文章时返回正文完整性与不可信标记", async () => {
