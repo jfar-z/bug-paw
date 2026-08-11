@@ -123,7 +123,7 @@ export function MermaidDiagram({ code, theme }: MermaidDiagramProps) {
       )}
       {sourceVisible && (
         <div className="mermaid-diagram__source">
-          <HighlightedCodeBlock code={code} language="mermaid" />
+          <HighlightedCodeBlock code={code} language="mermaid" wrapLines={false} />
         </div>
       )}
     </section>

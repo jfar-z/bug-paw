@@ -141,6 +141,7 @@ describe("MarkdownContent", () => {
     const { container, rerender } = render(<MarkdownContent text={text} streaming theme="light" />);
 
     expect(container.querySelector(".mermaid-diagram")).toBeNull();
+    expect(container.querySelector(".highlighted-code-block")).not.toHaveClass("is-line-wrapping");
     expect(loadMermaid).not.toHaveBeenCalled();
 
     rerender(<MarkdownContent text={text} streaming={false} theme="light" />);
