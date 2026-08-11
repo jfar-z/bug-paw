@@ -27,12 +27,23 @@ describe("SessionBulkConfirmationDialog", () => {
     expect(warning).toHaveTextContent("仍保持启用并继续运行");
     expect(screen.getByRole("button", { name: "归档会话" })).toBeInTheDocument();
   });
+
+  it("恢复全部归档会话时说明会话与任务状态变化", () => {
+    render(<SessionBulkConfirmationDialog preview={preview("restore")} onCancel={vi.fn()} onConfirm={vi.fn()} />);
+
+    expect(screen.getByRole("dialog", { name: "确认恢复 2 个会话" })).toBeInTheDocument();
+    expect(screen.getByText(/重新出现在会话列表/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("保持原启用状态和原目标");
+    expect(screen.getByRole("button", { name: "恢复全部会话" })).toBeInTheDocument();
+  });
 });
 
-function preview(action: "archive" | "delete"): SessionBulkPreview {
+function preview(action: "archive" | "restore" | "delete"): SessionBulkPreview {
   return {
     action,
-    sessionIds: ["session-1", "session-2"],
+    target: action === "restore"
+      ? { mode: "all_archived", agentId: "agent-1" }
+      : { mode: "selected", sessionIds: ["session-1", "session-2"] },
     sessionCount: 2,
     tasks: [
       { id: "task-1", name: "日报", sessionId: "session-1" },

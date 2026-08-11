@@ -122,11 +122,15 @@ beforeEach(() => {
       return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
     }
     if (url === "/api/v1/sessions/bulk/preview" && init?.method === "POST") {
-      const body = JSON.parse(String(init.body)) as { action: "archive" | "delete"; sessionIds: string[] };
+      const body = JSON.parse(String(init.body)) as {
+        action: "archive" | "restore" | "delete";
+        target: { mode: "selected"; sessionIds: string[] } | { mode: "all_archived"; agentId: string };
+      };
+      const sessionIds = body.target.mode === "selected" ? body.target.sessionIds : ["archived-1"];
       return new Response(JSON.stringify({
         ...body,
-        sessionCount: body.sessionIds.length,
-        tasks: body.sessionIds.includes("session-2") ? [
+        sessionCount: sessionIds.length,
+        tasks: body.action === "delete" && (sessionIds.includes("session-2") || body.target.mode === "all_archived") ? [
           { id: "task-1", name: "日报", sessionId: "session-2" },
           { id: "task-2", name: "周报", sessionId: "session-2" },
         ] : [],
@@ -134,11 +138,18 @@ beforeEach(() => {
       }));
     }
     if (url === "/api/v1/sessions/bulk" && init?.method === "POST") {
-      const body = JSON.parse(String(init.body)) as { action: "archive" | "delete"; sessionIds: string[] };
-      return new Response(JSON.stringify({ action: body.action, sessionCount: body.sessionIds.length, affectedTaskCount: 2 }));
+      const body = JSON.parse(String(init.body)) as {
+        action: "archive" | "restore" | "delete";
+        target: { mode: "selected"; sessionIds: string[] } | { mode: "all_archived"; agentId: string };
+      };
+      const sessionCount = body.target.mode === "selected" ? body.target.sessionIds.length : 1;
+      return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
       return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
+    }
+    if (url === "/api/v1/sessions/archived-1") {
+      return new Response(JSON.stringify({ id: "archived-1", agentId: "default", messages: [], lastEventId: 0 }));
     }
     if (url.endsWith("/edit")) {
       return new Response(JSON.stringify({ snapshot: { id: "session-1", messages: [], lastEventId: 0 }, draft: { text: "编辑后的版本", filePaths: [], missingFilePaths: [], references: [] } }));
@@ -426,7 +437,7 @@ describe("LiveChatPage 时间线", () => {
     const executeCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/v1/sessions/bulk");
     expect(JSON.parse(String(executeCall?.[1]?.body))).toEqual({
       action: "delete",
-      sessionIds: ["session-2"],
+      target: { mode: "selected", sessionIds: ["session-2"] },
       fingerprint: "fingerprint-1",
     });
     expect(screen.queryByRole("button", { name: /^第二会话/ })).not.toBeInTheDocument();
@@ -829,6 +840,105 @@ describe("LiveChatPage 时间线", () => {
     expect(await screen.findByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "恢复旧会话" }));
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/archived-1/archive" && init?.method === "DELETE")).toBe(true));
+  });
+
+  it("全部恢复按服务端归档范围确认并刷新两个列表", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "查看已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    await screen.findByRole("dialog", { name: "已归档会话" });
+
+    fireEvent.click(screen.getByRole("button", { name: "全部恢复" }));
+    await screen.findByRole("dialog", { name: "确认恢复 1 个会话" });
+    fireEvent.click(screen.getByRole("button", { name: "恢复全部会话" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/v1/sessions?agentId=default")).toHaveLength(2));
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url) === "/api/v1/sessions?agentId=default&archived=true")).toHaveLength(2);
+    const previewCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/v1/sessions/bulk/preview");
+    const executeCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/v1/sessions/bulk");
+    expect(JSON.parse(String(previewCall?.[1]?.body))).toEqual({
+      action: "restore",
+      target: { mode: "all_archived", agentId: "default" },
+    });
+    expect(JSON.parse(String(executeCall?.[1]?.body))).toEqual({
+      action: "restore",
+      target: { mode: "all_archived", agentId: "default" },
+      fingerprint: "fingerprint-1",
+    });
+    expect(screen.getByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
+  });
+
+  it("全部删除含定时任务时使用强化确认且归档对话框保持打开", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "查看已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    await screen.findByRole("dialog", { name: "已归档会话" });
+
+    fireEvent.click(screen.getByRole("button", { name: "全部删除" }));
+    expect(await screen.findByRole("button", { name: "删除会话并停用任务" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除会话并停用任务" }));
+
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/bulk"));
+    const executeCall = vi.mocked(fetch).mock.calls.find(([url]) => String(url) === "/api/v1/sessions/bulk");
+    expect(JSON.parse(String(executeCall?.[1]?.body))).toEqual({
+      action: "delete",
+      target: { mode: "all_archived", agentId: "default" },
+      fingerprint: "fingerprint-1",
+    });
+    expect(screen.getByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
+  });
+
+  it("取消全部操作确认时不关闭归档对话框", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "查看已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    await screen.findByRole("dialog", { name: "已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "全部删除" }));
+    await screen.findByRole("dialog", { name: "确认删除 1 个会话" });
+
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+
+    expect(screen.queryByRole("dialog", { name: "确认删除 1 个会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
+    expect(operationLog).not.toContain("fetch:POST:/api/v1/sessions/bulk");
+  });
+
+  it("全部删除失败时保留归档列表并显示服务端错误", async () => {
+    const defaultFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/sessions/bulk" && init?.method === "POST") {
+        return new Response(JSON.stringify({ error: { code: "SESSION_BULK_PREVIEW_STALE", message: "归档范围已变化" } }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return defaultFetch(input, init);
+    });
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "查看已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    await screen.findByRole("button", { name: "打开旧会话" });
+    fireEvent.click(screen.getByRole("button", { name: "全部删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除会话并停用任务" }));
+
+    expect(await screen.findByText("归档范围已变化")).toHaveClass("live-chat-error");
+    expect(screen.getByRole("button", { name: "打开旧会话" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
+  });
+
+  it("全部删除当前打开的归档会话后进入新对话草稿", async () => {
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "查看已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    fireEvent.click(await screen.findByRole("button", { name: "打开旧会话" }));
+    await waitFor(() => expect(operationLog).toContain("fetch:GET:/api/v1/sessions/archived-1"));
+    fireEvent.click(screen.getByRole("button", { name: "查看已归档会话" }));
+    await screen.findByRole("dialog", { name: "已归档会话" });
+    fireEvent.click(screen.getByRole("button", { name: "全部删除" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除会话并停用任务" }));
+
+    await waitFor(() => expect(screen.getByText("新对话", { selector: ".chat-title strong" })).toBeInTheDocument());
+    expect(screen.getByRole("dialog", { name: "已归档会话" })).toBeInTheDocument();
   });
 
   it("草稿首次发送只创建一个 session 并先建立其事件流", async () => {

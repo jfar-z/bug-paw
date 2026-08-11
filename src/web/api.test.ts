@@ -56,11 +56,14 @@ describe("会话批量 API", () => {
 
   it("发送批量预览与带指纹执行请求", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { action: "delete" | "archive"; sessionIds: string[] };
+      const body = JSON.parse(String(init?.body)) as {
+        action: "delete" | "archive" | "restore";
+        target: { mode: "selected"; sessionIds: string[] } | { mode: "all_archived"; agentId: string };
+      };
       return new Response(JSON.stringify({
         action: body.action,
-        sessionIds: body.sessionIds,
-        sessionCount: body.sessionIds.length,
+        target: body.target,
+        sessionCount: body.target.mode === "selected" ? body.target.sessionIds.length : 2,
         tasks: [],
         fingerprint: "fingerprint-1",
         affectedTaskCount: 0,
@@ -68,16 +71,17 @@ describe("会话批量 API", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await api.previewSessionBulk("delete", ["session-1"]);
-    await api.executeSessionBulk("delete", ["session-1"], "fingerprint-1");
+    const target = { mode: "all_archived" as const, agentId: "agent-1" };
+    await api.previewSessionBulk("delete", target);
+    await api.executeSessionBulk("delete", target, "fingerprint-1");
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/sessions/bulk/preview", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ action: "delete", sessionIds: ["session-1"] }),
+      body: JSON.stringify({ action: "delete", target }),
     }));
     expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/sessions/bulk", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ action: "delete", sessionIds: ["session-1"], fingerprint: "fingerprint-1" }),
+      body: JSON.stringify({ action: "delete", target, fingerprint: "fingerprint-1" }),
     }));
   });
 

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
-import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionSnapshot, type SessionSummary } from "../api";
+import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionBulkTarget, type SessionSnapshot, type SessionSummary } from "../api";
 import { AgentModelMenu } from "../components/agent-model-menu";
 import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem, validateAttachmentSelection } from "../components/attachment-picker";
 import { ReferenceComposer } from "../components/reference-composer";
@@ -498,12 +498,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   };
 
   /** 请求服务端稳定预览后才展示批量操作二次确认。 */
-  const previewSessionBulk = async (action: SessionBulkAction) => {
-    if (selectedSessionIds.length === 0 || sessionBulkBusy) return;
+  const previewSessionBulk = async (action: SessionBulkAction, target?: SessionBulkTarget) => {
+    const resolvedTarget = target ?? { mode: "selected", sessionIds: selectedSessionIds };
+    if ((resolvedTarget.mode === "selected" && resolvedTarget.sessionIds.length === 0) || sessionBulkBusy) return;
     setSessionBulkBusy(true);
+    setSessionBulkPreview(undefined);
     setError("");
     try {
-      setSessionBulkPreview(await api.previewSessionBulk(action, selectedSessionIds));
+      setSessionBulkPreview(await api.previewSessionBulk(action, resolvedTarget));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "会话批量操作预览失败。");
     } finally {
@@ -518,8 +520,23 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setSessionBulkBusy(true);
     setError("");
     try {
-      await api.executeSessionBulk(preview.action, preview.sessionIds, preview.fingerprint);
-      const removedIds = new Set(preview.sessionIds);
+      const activeArchivedSession = preview.target.mode === "all_archived"
+        && Boolean(session?.id && archivedSessions.some((item) => item.id === session.id));
+      await api.executeSessionBulk(preview.action, preview.target, preview.fingerprint);
+      if (preview.target.mode === "all_archived") {
+        if (!selectedAgentId) return;
+        const [normal, archived] = await Promise.all([
+          api.listSessions(selectedAgentId),
+          api.listSessions(selectedAgentId, true),
+        ]);
+        setSessions(normal.sessions);
+        setArchivedSessions(archived.sessions);
+        setSessionBulkPreview(undefined);
+        sessionSyncRef.current?.notify();
+        if (preview.action === "delete" && activeArchivedSession) enterDraft();
+        return;
+      }
+      const removedIds = new Set(preview.target.sessionIds);
       setSessions((current) => current.filter((item) => !removedIds.has(item.id)));
       sessionSyncRef.current?.notify();
       if (session?.id && removedIds.has(session.id)) {
@@ -1028,10 +1045,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       <ArchivedSessionsDialog
         open={archiveDialogOpen}
         sessions={archivedSessions}
+        busy={sessionBulkBusy}
         onClose={() => setArchiveDialogOpen(false)}
         onOpen={openArchivedConversation}
         onRestore={restoreConversation}
         onDelete={(sessionId) => deleteConversation(sessionId, true)}
+        onRestoreAll={() => selectedAgentId && void previewSessionBulk("restore", { mode: "all_archived", agentId: selectedAgentId })}
+        onDeleteAll={() => selectedAgentId && void previewSessionBulk("delete", { mode: "all_archived", agentId: selectedAgentId })}
       />
       {sessionBulkPreview ? <SessionBulkConfirmationDialog
         preview={sessionBulkPreview}
