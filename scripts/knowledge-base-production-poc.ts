@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createDataPaths } from "../src/server/paths";
 import { createKnowledgeBaseService } from "../src/server/knowledge-base/knowledge-base-service";
 import { createKnowledgeBaseStore } from "../src/server/knowledge-base/knowledge-base-store";
-import { createDeleteKnowledgeBaseTool, createGetKnowledgeDocumentTool, createKnowledgeBaseTool, createListKnowledgeBasesTool, createSearchKnowledgeTool } from "../src/server/knowledge-base/knowledge-tools";
+import { createKnowledgeManageTool, createKnowledgeReadTool, createKnowledgeSearchTool } from "../src/server/knowledge-base/knowledge-tools";
 
 /**
  * 在生产镜像内执行独立临时目录的知识库端到端验证。
@@ -35,18 +35,18 @@ async function main(): Promise<void> {
       documentId: document.id,
     });
     if (!details.data.content.includes("LanceDB")) throw new Error("生产验证未读取到资料正文");
-    const searchTool = createSearchKnowledgeTool("production-poc-agent", service);
-    const documentTool = createGetKnowledgeDocumentTool("production-poc-agent", service);
-    const listTool = createListKnowledgeBasesTool("production-poc-agent", service);
-    const createTool = createKnowledgeBaseTool("production-poc-agent", service);
-    const deleteTool = createDeleteKnowledgeBaseTool("production-poc-agent", service);
+    const searchTool = createKnowledgeSearchTool("production-poc-agent", service);
+    const documentTool = createKnowledgeReadTool("production-poc-agent", service);
+    const manageTool = createKnowledgeManageTool("production-poc-agent", service, {
+      readFile: async () => { throw new Error("生产验证未使用文件导入工具"); },
+    });
     const toolSearch = await searchTool.execute("production-poc-search", { query: "关键词检索" }, undefined, undefined, {} as never);
-    const toolDocument = await documentTool.execute("production-poc-document", { documentId: document.id }, undefined, undefined, {} as never);
-    const toolList = await listTool.execute("production-poc-list", {}, undefined, undefined, {} as never);
-    const toolCreate = await createTool.execute("production-poc-create", { name: "工具创建知识库" }, undefined, undefined, {} as never);
-    const createdId = JSON.parse(toolCreate.content[0]?.text ?? "{}").id as string | undefined;
+    const toolDocument = await documentTool.execute("production-poc-document", { mode: "document", documentId: document.id }, undefined, undefined, {} as never);
+    const toolList = await manageTool.execute("production-poc-list", { action: "list_bases" }, undefined, undefined, {} as never);
+    const toolCreate = await manageTool.execute("production-poc-create", { action: "create_base", name: "工具创建知识库" }, undefined, undefined, {} as never);
+    const createdId = JSON.parse(toolCreate.content[0]?.text ?? "{}").data?.knowledgeBase?.id as string | undefined;
     if (!createdId) throw new Error("生产验证创建工具未返回知识库 ID");
-    const toolDelete = await deleteTool.execute("production-poc-delete", { knowledgeBaseId: createdId }, undefined, undefined, {} as never);
+    const toolDelete = await manageTool.execute("production-poc-delete", { action: "delete_base", knowledgeBaseId: createdId }, undefined, undefined, {} as never);
     if (!toolSearch.content[0]?.text.includes(document.id) || !toolDocument.content[0]?.text.includes(document.id) || !toolList.content[0]?.text.includes(base.id) || !toolDelete.content[0]?.text.includes("deleted")) {
       throw new Error("生产验证 Pi 工具未返回预期资料");
     }

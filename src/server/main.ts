@@ -65,7 +65,7 @@ import { registerKnowledgeRetrievalRoutes } from "./routes/knowledge-retrieval";
 import { createKnowledgeRepository } from "./knowledge-base/knowledge-repository";
 import { createKnowledgeBaseService } from "./knowledge-base/knowledge-base-service";
 import { registerKnowledgeBaseRoutes } from "./routes/knowledge-bases";
-import { createGetKnowledgeDocumentTool, createManageKnowledgeBaseTool, createSearchKnowledgeTool } from "./knowledge-base/knowledge-tools";
+import { createKnowledgeManageTool, createKnowledgeReadTool, createKnowledgeSearchTool } from "./knowledge-base/knowledge-tools";
 import { ensureKnowledgeBaseSkill } from "./knowledge-base/global-skill";
 import { createAgentReferenceResolver } from "./agent-references";
 import { ComposerCatalogService } from "./composer-catalog";
@@ -265,10 +265,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           allowedTools: profile.profile.allowedTools,
           retrievalCapabilities,
           customTools: [
-            ...(retrievalCapabilities.knowledgeSearch ? [createSearchKnowledgeTool(agentId, knowledgeBases)] : []),
-            ...(retrievalCapabilities.knowledgeRead ? [createGetKnowledgeDocumentTool(agentId, knowledgeBases)] : []),
+            ...(retrievalCapabilities.knowledgeSearch ? [createKnowledgeSearchTool(agentId, knowledgeBases)] : []),
+            ...(retrievalCapabilities.knowledgeRead ? [createKnowledgeReadTool(agentId, knowledgeBases)] : []),
             ...(profile.profile.allowedTools.includes("knowledge_manage")
-              ? [createManageKnowledgeBaseTool(agentId, knowledgeBases, workspaceFileManager)]
+              ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
               : []),
             createEditOwnPromptsTool(agentId, agentPrompts, async () => {
               await runtimeSupervisor?.refreshAgentPromptContext(agentId);
