@@ -12,6 +12,7 @@ interface SessionStreamOptions {
   onModelChange?: (model: ModelSummary) => void;
   onSessionRenamed?: (sessionId: string, name: string) => void;
   onError: (message: string) => void;
+  onUnexpectedError?: (error: unknown) => void;
 }
 
 export interface SessionStreamControl {
@@ -174,8 +175,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
           cursor: snapshot.lastEventId,
           nonce: (current?.nonce ?? 0) + 1,
         }));
-      }).catch(() => {
+      }).catch((error: unknown) => {
         if (!active || sourceRef.current !== source) return;
+        const cancelled = error instanceof DOMException && error.name === "AbortError";
+        if (!cancelled) callbacksRef.current.onUnexpectedError?.(error);
         callbacksRef.current.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
         setReconnectRequest((current) => ({
           sessionId: options.sessionId!,

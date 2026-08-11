@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionBulkTarget, type SessionSnapshot, type SessionSummary } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { AgentModelMenu } from "../components/agent-model-menu";
 import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem, validateAttachmentSelection } from "../components/attachment-picker";
 import { ReferenceComposer } from "../components/reference-composer";
@@ -68,11 +69,39 @@ const SELECTED_AGENT_STORAGE_KEY = "pi-agent-web.selected-agent-id";
 const SESSION_LONG_PRESS_DURATION_MS = 450;
 const SESSION_SCROLLBAR_HIDE_DELAY_MS = 700;
 
+/** 将聊天、会话、模型和附件的可恢复业务错误保留在编辑器附近。 */
+function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_MESSAGE: show,
+    INVALID_ATTACHMENT: show,
+    INVALID_REFERENCE: show,
+    UNKNOWN_COMMAND: show,
+    SESSION_BUSY: show,
+    SESSION_NOT_FOUND: show,
+    SESSION_AGENT_CONFLICT: show,
+    AGENT_ARCHIVED: show,
+    INVALID_SESSION_NAME: show,
+    SCHEDULED_TASKS_BOUND: show,
+    SESSION_BULK_PREVIEW_STALE: show,
+    VALIDATION_FAILED: show,
+    INVALID_MODEL: show,
+    MODEL_NOT_FOUND: show,
+    PROVIDER_NOT_FOUND: show,
+    MODEL_RUNTIME_UNAVAILABLE: show,
+    EMPTY_UPLOAD: show,
+    ATTACHMENT_TOO_LARGE: show,
+    TOO_MANY_ATTACHMENTS: show,
+    AGENT_NOT_FOUND: show,
+  };
+}
+
 /**
  * 接入真实会话 API 与 SSE 的第一版对话工作台。
  */
 export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useViewportScrollLock();
+  const { runApiTask, runOptionalApiTask } = useApiTask();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
@@ -97,6 +126,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [draftReferences, setDraftReferences] = useState<AgentReference[]>([]);
   const [activeRun, setActiveRun] = useState<ChatRunSummary>();
   const [error, setError] = useState("");
+  const reportFailure = useCallback((reason: unknown, operation: string) => runApiTask(
+    async () => { throw reason; },
+    { operation, expected: chatExpected(setError) },
+  ), [runApiTask]);
   const [attachmentItems, setAttachmentItems] = useState<AttachmentUploadItem[]>([]);
   const editingEntry = editingEntryId
     ? timeline.find((entry): entry is UserEntry => entry.type === "user" && entry.piEntryId === editingEntryId)
@@ -175,6 +208,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       sessionSyncRef.current?.notify();
     },
     onError: setError,
+    onUnexpectedError: (reason) => void reportFailure(reason, "恢复会话实时连接"),
   });
 
   const registerMediaSummary = useCallback((summary: WorkspaceFileSummary) => {
@@ -210,14 +244,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       onStateChange: setSpeechState,
       onError: (reason) => {
         const blocked = reason instanceof DOMException && reason.name === "NotAllowedError";
-        setError(blocked
-          ? "浏览器阻止了自动播放，请先与页面交互后重试。"
-          : "语音合成服务暂时不可用。");
+        if (blocked) {
+          setError("浏览器阻止了自动播放，请先与页面交互后重试。");
+          return;
+        }
+        void reportFailure(reason, "播放语音");
       },
     });
     speechControllerRef.current = { agentId, controller };
     return controller;
-  }, []);
+  }, [reportFailure]);
 
   /** 清除自动播放资格并同步停止当前音频与待处理队列。 */
   const stopSpeech = useCallback(() => {
@@ -234,11 +270,20 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useEffect(() => {
     let active = true;
     const generation = ++agentSelectionGenerationRef.current;
-    Promise.all([api.listAgents(), api.listModels(), api.getGlobalSettings().catch(() => undefined)])
-      .then(async ([agentResult, modelResult, globalSettings]) => {
+    const globalSettingsTask = runOptionalApiTask(
+      () => api.getGlobalSettings(),
+      {
+        operation: "加载全局默认模型",
+        fallbackReason: "全局默认模型是聊天初始化的可选配置",
+        fallback: () => undefined,
+      },
+    );
+    Promise.all([api.listAgents(), api.listModels(), globalSettingsTask])
+      .then(async ([agentResult, modelResult, globalSettingsResult]) => {
         if (!active || generation !== agentSelectionGenerationRef.current) {
           return;
         }
+        const globalSettings = globalSettingsResult.status === "success" ? globalSettingsResult.data : undefined;
         const defaultProvider = globalSettings?.effective?.defaultProvider;
         const defaultModel = globalSettings?.effective?.defaultModel;
         const inheritedModel = defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined;
@@ -268,13 +313,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       })
       .catch((reason: unknown) => {
         if (active && generation === agentSelectionGenerationRef.current) {
-          setError(reason instanceof Error ? reason.message : "加载工作台失败。");
+          void reportFailure(reason, "加载聊天工作台");
         }
       });
     return () => {
       active = false;
     };
-  }, [applySnapshot]);
+  }, [applySnapshot, reportFailure, runOptionalApiTask]);
 
   useEffect(() => {
     let active = true;
@@ -284,10 +329,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setProfileIdentity(toIdentityPreview(document.profile));
       setProfileDisplayName(document.profile.displayName);
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : "个人资料加载失败。");
+      if (active) void reportFailure(reason, "加载个人资料");
     });
     return () => { active = false; };
-  }, []);
+  }, [reportFailure]);
 
   useEffect(() => {
     let active = true;
@@ -295,11 +340,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (selectedAgentId) {
         void api.listSessions(selectedAgentId)
           .then((result) => { if (active) setSessions(result.sessions); })
-          .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "会话列表同步失败。"); });
+          .catch((reason: unknown) => { if (active) void reportFailure(reason, "同步会话列表"); });
         if (archiveDialogOpen) {
           void api.listSessions(selectedAgentId, true)
             .then((result) => { if (active) setArchivedSessions(result.sessions); })
-            .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "归档会话同步失败。"); });
+            .catch((reason: unknown) => { if (active) void reportFailure(reason, "同步归档会话"); });
         }
       }
     });
@@ -308,7 +353,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       active = false;
       sync.close();
     };
-  }, [archiveDialogOpen, selectedAgentId]);
+  }, [archiveDialogOpen, reportFailure, selectedAgentId]);
 
   const createConversation = async (agentId: string) => {
     setError("");
@@ -409,7 +454,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       applySnapshot(await api.openSession(sessionId), "once");
       closeSidebar();
     } catch (reason) {
-      setError(reason instanceof Error ? `加载会话失败：${reason.message}` : "加载会话失败。");
+      await reportFailure(reason, "打开会话");
     } finally {
       openingSessionRef.current = undefined;
       setOpeningSessionId(undefined);
@@ -436,7 +481,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         }
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "刷新会话列表失败。");
+      await reportFailure(reason, "刷新会话列表");
     } finally {
       setRefreshingSessions(false);
     }
@@ -448,7 +493,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话重命名失败。");
+      await reportFailure(reason, "重命名会话");
     }
   };
 
@@ -461,7 +506,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话归档失败。");
+      await reportFailure(reason, "归档会话");
     }
   };
 
@@ -478,7 +523,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话删除失败。");
+      await reportFailure(reason, "删除会话");
     }
   };
 
@@ -507,7 +552,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       setSessionBulkPreview(await api.previewSessionBulk(action, resolvedTarget));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话批量操作预览失败。");
+      await reportFailure(reason, "预览会话批量操作");
     } finally {
       setSessionBulkBusy(false);
     }
@@ -546,7 +591,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
     } catch (reason) {
       setSessionBulkPreview(undefined);
-      setError(reason instanceof Error ? reason.message : "会话批量操作失败。");
+      await reportFailure(reason, "执行会话批量操作");
     } finally {
       setSessionBulkBusy(false);
     }
@@ -559,7 +604,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       const result = await api.listSessions(selectedAgentId, true);
       setArchivedSessions(result.sessions);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "归档会话加载失败。");
+      await reportFailure(reason, "加载归档会话");
     }
   };
 
@@ -572,7 +617,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setArchivedSessions(archived.sessions);
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话恢复失败。");
+      await reportFailure(reason, "恢复会话");
     }
   };
 
@@ -666,7 +711,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setDraftReferences(draftReferences);
       setAttachmentItems(previousAttachmentItems);
       if (branchEntryId) setEditingEntryId(branchEntryId);
-      setError(reason instanceof Error ? reason.message : "消息发送失败。");
+      await reportFailure(reason, branchEntryId ? "编辑并重新发送消息" : "发送消息");
     }
   };
 
@@ -689,7 +734,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }));
     } catch (reason) {
       if (selectedAgentIdRef.current !== selectedAgentId) return;
-      const message = reason instanceof Error ? reason.message : "附件上传失败。";
+      const outcome = await reportFailure(reason, "上传聊天附件");
+      const message = outcome.status === "handled" && reason instanceof Error
+        ? reason.message
+        : "附件上传失败，请检查文件后重试。";
       setAttachmentItems((current) => current.map((item) => localItems.some((local) => local.localId === item.localId)
         ? { ...item, status: "error", error: message }
         : item));
@@ -713,7 +761,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       await api.abort(session.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "停止生成失败。");
+      await reportFailure(reason, "停止消息生成");
     }
   };
 
@@ -733,7 +781,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setSession((current) => current?.id === targetSessionId ? { ...current, model } : current);
     } catch (reason) {
       if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
-      setError(reason instanceof Error ? reason.message : "切换模型失败。");
+      await reportFailure(reason, "切换会话模型");
     }
   };
 
@@ -824,7 +872,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         };
       }));
       setError(result.draft.missingFilePaths.length > 0 ? `历史附件已失效：${result.draft.missingFilePaths.join("、")}` : "");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新编辑历史消息。"); }
+    } catch (reason) {
+      await reportFailure(reason, "编辑历史消息");
+    }
   };
 
   /** 退出历史消息编辑态，避免回填草稿被误认为一条普通新消息。 */
@@ -844,7 +894,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       const result = await api.regenerateSessionBranch(session.id, entryId);
       setActiveRun(result.run);
       setError("");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法重新生成回答。"); }
+    } catch (reason) {
+      await reportFailure(reason, "重新生成回答");
+    }
   };
 
   /** 切换到历史分支的可渲染叶节点，不触发编辑草稿回填。 */
@@ -859,7 +911,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setAttachmentItems([]);
       setError("");
       applySnapshot(snapshot, "once");
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "无法切换会话分支。"); }
+    } catch (reason) {
+      await reportFailure(reason, "切换会话分支");
+    }
   };
 
   const selectAgent = async (agentId: string) => {
@@ -875,7 +929,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (generation === agentSelectionGenerationRef.current) setSessions(result.sessions);
     } catch (reason) {
       if (generation === agentSelectionGenerationRef.current) {
-        setError(reason instanceof Error ? reason.message : "加载 Agent 会话失败。");
+        await reportFailure(reason, "切换 Agent");
       }
     }
   };
@@ -889,7 +943,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setProfileIdentity(toIdentityPreview(document.profile));
       setProfileDisplayName(document.profile.displayName);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存个人资料失败。");
+      await reportFailure(reason, "保存个人资料");
     } finally {
       setProfileSaving(false);
     }
@@ -903,7 +957,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setProfileRevision(document.revision);
       setProfileIdentity(toIdentityPreview(document.profile));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "上传头像失败。");
+      await reportFailure(reason, "上传个人头像");
     } finally {
       setProfileSaving(false);
     }

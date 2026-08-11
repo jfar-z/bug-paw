@@ -338,6 +338,7 @@ describe("useSessionStream", () => {
   it("Projection 快照请求永久挂起时按截止时间中止并恢复 SSE", async () => {
     vi.useFakeTimers();
     let recoverySignal: AbortSignal | undefined;
+    const onUnexpectedError = vi.fn();
     vi.spyOn(api, "openSession").mockImplementation((_sessionId, signal) => {
       recoverySignal = signal;
       return new Promise((_resolve, reject) => {
@@ -350,6 +351,7 @@ describe("useSessionStream", () => {
       onTimelineEvent: vi.fn(),
       onRunChange: vi.fn(),
       onError: vi.fn(),
+      onUnexpectedError,
     }));
 
     await act(async () => {
@@ -363,8 +365,36 @@ describe("useSessionStream", () => {
     });
 
     expect(recoverySignal?.aborted).toBe(true);
+    expect(onUnexpectedError).not.toHaveBeenCalled();
     expect(FakeEventSource.instances).toHaveLength(2);
     expect(FakeEventSource.instances[1]?.url).toBe("/api/v1/sessions/session-1/events?after=0");
+  });
+
+  it("Projection 快照恢复遇到真实请求错误时仅上报一次意外错误", async () => {
+    const failure = new Error("projection unavailable");
+    const onUnexpectedError = vi.fn();
+    vi.spyOn(api, "openSession").mockRejectedValue(failure);
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot: vi.fn(),
+      onTimelineEvent: vi.fn(),
+      onRunChange: vi.fn(),
+      onError: vi.fn(),
+      onUnexpectedError,
+    }));
+
+    await act(async () => {
+      FakeEventSource.instances[0].emit("projection_required", {
+        id: 9,
+        type: "projection_required",
+        sessionId: "session-1",
+        lastEventId: 9,
+      });
+      await Promise.resolve();
+    });
+
+    expect(onUnexpectedError).toHaveBeenCalledTimes(1);
+    expect(onUnexpectedError).toHaveBeenCalledWith(failure);
   });
 
   it("把其他客户端切换的模型同步到当前页面", () => {
