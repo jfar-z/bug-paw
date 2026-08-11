@@ -31,6 +31,12 @@ function ControlledGroup({ blocks, trailing = true, streaming = true }: {
 }
 
 describe("ActivityGroup", () => {
+  it("为活动统计提供稳定的排版连接类", () => {
+    render(<ControlledGroup blocks={[runningWrite]} />);
+
+    expect(screen.getByText("工具 1")).toHaveClass("activity-group__meta");
+  });
+
   it("运行中的尾部活动段默认展开，完成并离开尾部后自动收起", () => {
     const { container, rerender } = render(<ControlledGroup blocks={[runningWrite]} />);
 

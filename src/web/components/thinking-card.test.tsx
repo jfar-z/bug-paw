@@ -15,6 +15,13 @@ afterEach(() => {
 });
 
 describe("ThinkingCard", () => {
+  it("为动作和状态提供稳定的排版连接类", () => {
+    const { container } = render(<ThinkingCard thinking={thinking} />);
+
+    expect(screen.getByText("正在思考")).toHaveClass("activity-item__action");
+    expect(container.querySelector(".thinking-card__status svg")).toHaveAttribute("width", "14");
+  });
+
   it("思考中默认折叠且可手动展开，结束后保留用户选择", () => {
     const { container, rerender } = render(<ThinkingCard thinking={thinking} />);
 

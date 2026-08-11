@@ -59,6 +59,13 @@ describe("LiveToolCard", () => {
     expect(screen.getByText("写入 src/app.ts")).toBeInTheDocument();
   });
 
+  it("为动作和状态提供稳定的排版连接类", () => {
+    const { container } = render(<LiveToolCard tool={completedTool} />);
+
+    expect(screen.getByText("执行命令")).toHaveClass("activity-item__action");
+    expect(container.querySelector(".live-tool-card__status svg")).toHaveAttribute("width", "14");
+  });
+
   it("执行中展开时显示最新增量结果", () => {
     render(<LiveToolCard tool={{ ...completedTool, result: undefined, partialResult: "已读取 12 行", status: "running" }} />);
     fireEvent.click(screen.getByRole("button", { name: "展开 bash 工具详情" }));

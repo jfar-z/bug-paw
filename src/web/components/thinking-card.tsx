@@ -36,8 +36,11 @@ export function ThinkingCard({ thinking }: ThinkingCardProps) {
       >
         {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <Brain size={17} aria-hidden="true" />
-        <strong>{thinking.streaming ? "正在思考" : "思考过程"}</strong>
-        <span className="thinking-card__status">
+        <strong className="activity-item__action">{thinking.streaming ? "正在思考" : "思考过程"}</strong>
+        <span
+          className="thinking-card__status"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" }}
+        >
           {thinking.streaming
             ? <LoaderCircle className="spinner" size={14} aria-hidden="true" />
             : <CheckCircle2 size={14} aria-hidden="true" />}

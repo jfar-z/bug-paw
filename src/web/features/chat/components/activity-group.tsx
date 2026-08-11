@@ -34,7 +34,7 @@ export function ActivityGroup({
     >
       <span className="activity-group__chevron" aria-hidden="true">{expanded ? "⌄" : "›"}</span>
       <strong>{summary}</strong>
-      <span>{activityGroupMeta(blocks)}</span>
+      <span className="activity-group__meta">{activityGroupMeta(blocks)}</span>
     </button>
     <CollapsibleRegion expanded={expanded} className="activity-group__collapse">
       <div className="activity-rail">

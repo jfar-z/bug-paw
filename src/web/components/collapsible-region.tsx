@@ -12,6 +12,13 @@ export function CollapsibleRegion({ expanded, className, children }: Collapsible
     <div
       className={`collapsible-region ${className}${expanded ? " is-expanded" : ""}`}
       aria-hidden={!expanded}
+      style={{
+        display: "grid",
+        gridTemplateRows: expanded ? "1fr" : "0fr",
+        opacity: expanded ? 1 : 0,
+        transform: expanded ? "none" : "translateY(-2px)",
+        transition: "grid-template-rows 180ms ease, opacity 180ms ease, transform 180ms ease",
+      }}
     >
       <div className="collapsible-region__inner">{children}</div>
     </div>

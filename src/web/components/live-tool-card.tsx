@@ -34,8 +34,13 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
       >
         {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <TerminalSquare size={17} aria-hidden="true" />
-        <strong>{toolActivityCopy(tool)}</strong>
-        <span className="live-tool-card__status">{statusIcon}<span>{toolStatusCopy(tool)}</span></span>
+        <strong className="activity-item__action">{toolActivityCopy(tool)}</strong>
+        <span
+          className="live-tool-card__status"
+          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" }}
+        >
+          {statusIcon}<span>{toolStatusCopy(tool)}</span>
+        </span>
       </button>
 
       <CollapsibleRegion expanded={expanded} className="live-tool-card__collapse">
@@ -61,7 +66,7 @@ export function hasToolDetailValue(value: unknown): boolean {
 function ToolDetail({ title, value }: { title: string; value: unknown }) {
   return (
     <section className="live-tool-card__detail">
-      <h4>{title}</h4>
+      <h4 style={{ margin: "0 0 6px", fontSize: 10, fontWeight: 600 }}>{title}</h4>
       <pre><code>{formatToolValue(value)}</code></pre>
     </section>
   );
