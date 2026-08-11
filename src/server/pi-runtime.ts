@@ -1072,6 +1072,8 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       settingsManager,
       sessionManager,
       resourceLoader,
+      // Agent 配置必须传入 SDK，避免推理模型回退到 Pi 的 medium 默认值。
+      thinkingLevel: options.defaultThinkingLevel ?? "medium",
       // 工具白名单必须与 Agent Profile 一致，不能因为工具已注册就自动放行。
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
       customTools: options.customTools,
