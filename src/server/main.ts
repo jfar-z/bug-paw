@@ -54,7 +54,6 @@ import { WebResearchConfigService } from "./web-research/web-research-config-ser
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { createWebResearchService } from "./web-research/web-research-service";
 import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
-import { ensureWebResearchSkill } from "./web-research/global-skill";
 import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
@@ -66,7 +65,7 @@ import { createKnowledgeRepository } from "./knowledge-base/knowledge-repository
 import { createKnowledgeBaseService } from "./knowledge-base/knowledge-base-service";
 import { registerKnowledgeBaseRoutes } from "./routes/knowledge-bases";
 import { createKnowledgeManageTool, createKnowledgeReadTool, createKnowledgeSearchTool } from "./knowledge-base/knowledge-tools";
-import { ensureKnowledgeBaseSkill } from "./knowledge-base/global-skill";
+import { cleanupBundledRetrievalSkills } from "./retrieval/legacy-retrieval-skills";
 import { createAgentReferenceResolver } from "./agent-references";
 import { ComposerCatalogService } from "./composer-catalog";
 import { registerComposerCatalogRoutes } from "./routes/composer-catalog";
@@ -342,8 +341,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
   await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
-  await ensureKnowledgeBaseSkill(paths.piDir);
-  await ensureWebResearchSkill(paths.piDir);
+  const legacySkillCleanup = await cleanupBundledRetrievalSkills(paths.piDir);
+  for (const result of legacySkillCleanup) {
+    if (result.status !== "absent") app.log.info(result, "检索内置 Skill 清理完成");
+  }
   await scheduledTasks?.start();
   const composerCatalog = new ComposerCatalogService({
     agents: agentStore,
