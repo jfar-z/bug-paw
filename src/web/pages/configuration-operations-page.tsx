@@ -2,6 +2,7 @@ import { Download, FileClock, RotateCcw, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { api, type ConfigurationHistoryEntry, type ConfigurationImportPreview } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
 
@@ -9,6 +10,7 @@ import { useOnlineStatus } from "../use-online-status";
  * 提供安全导出、先预览后确认的导入，以及可审阅的设置历史恢复。
  */
 export function ConfigurationOperationsPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [source, setSource] = useState("");
   const [preview, setPreview] = useState<ConfigurationImportPreview>();
@@ -17,28 +19,32 @@ export function ConfigurationOperationsPage() {
   const [busy, setBusy] = useState(false);
   const [restoreEntry, setRestoreEntry] = useState<ConfigurationHistoryEntry>();
   const refreshHistory = useCallback(async () => {
-    try {
-      setHistory((await api.listConfigurationHistory()).entries);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "配置历史加载失败");
-    }
-  }, []);
+    const result = await runApiTask(api.listConfigurationHistory, { operation: "加载配置历史" });
+    if (result.status === "success") setHistory(result.data.entries);
+  }, [runApiTask]);
   useEffect(() => { void refreshHistory(); }, [refreshHistory]);
 
   const createPreview = async () => {
     setMessage("");
-    try {
-      const value = JSON.parse(source) as unknown;
-      setPreview(await api.previewConfigurationImport(value));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "JSON 无法解析");
-    }
+    let value: unknown;
+    try { value = JSON.parse(source) as unknown; }
+    catch { setMessage("JSON 无法解析"); return; }
+    const result = await runApiTask(
+      () => api.previewConfigurationImport(value),
+      { operation: "生成配置导入预览", expected: configurationOperationExpected(setMessage) },
+    );
+    if (result.status === "success") setPreview(result.data);
   };
   const apply = async () => {
     if (!preview) return;
     setBusy(true);
-    try { await api.applyConfigurationImport(preview.previewId); setMessage("配置导入完成"); setPreview(undefined); await refreshHistory(); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "导入失败"); }
+    try {
+      const result = await runApiTask(
+        () => api.applyConfigurationImport(preview.previewId),
+        { operation: "应用配置导入", expected: configurationOperationExpected(setMessage) },
+      );
+      if (result.status === "success") { setMessage("配置导入完成"); setPreview(undefined); await refreshHistory(); }
+    }
     finally { setBusy(false); }
   };
   const restore = async () => {
@@ -47,11 +53,14 @@ export function ConfigurationOperationsPage() {
     setRestoreEntry(undefined);
     setBusy(true);
     try {
-      const current = entry.scope === "agent" && entry.targetId ? await api.getAgentSettings(entry.targetId) : await api.getGlobalSettings();
-      await api.restoreConfigurationHistory(entry.id, current.revision);
+      const result = await runApiTask(async () => {
+        const current = entry.scope === "agent" && entry.targetId ? await api.getAgentSettings(entry.targetId) : await api.getGlobalSettings();
+        return api.restoreConfigurationHistory(entry.id, current.revision);
+      }, { operation: "恢复历史配置", expected: configurationOperationExpected(setMessage) });
+      if (result.status !== "success") return;
       setMessage("历史设置已恢复");
       await refreshHistory();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "恢复失败"); }
+    }
     finally { setBusy(false); }
   };
 
@@ -66,6 +75,19 @@ export function ConfigurationOperationsPage() {
     <section className="configuration-form-card"><h2><FileClock size={18} aria-hidden="true" />变更历史</h2><div className="configuration-history-list">{history.length ? history.map((entry) => <div key={entry.id}><span><strong>{entry.summary}</strong><small>{new Date(entry.createdAt).toLocaleString()} · {entry.scope}</small></span>{entry.restorable ? <button type="button" className="text-button" onClick={() => setRestoreEntry(entry)} disabled={busy || !online}><RotateCcw size={15} aria-hidden="true" />恢复</button> : <small>仅审计</small>}</div>) : <p>尚无配置变更记录。</p>}</div></section>
     {restoreEntry ? <ConfirmationDialog title="确认恢复配置" description="恢复会重新校验快照，并要求当前 revision 未变化。" confirmLabel="继续恢复" busy={busy} onCancel={() => setRestoreEntry(undefined)} onConfirm={() => void restore()} /> : null}
   </div>;
+}
+
+/** 将配置导入和历史恢复的可恢复业务错误保留在当前页面。 */
+function configurationOperationExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setMessage(error.message);
+  return {
+    IMPORT_PREVIEW_EXPIRED: show,
+    IMPORT_CONFIRMATION_REQUIRED: show,
+    IMPORT_INVALID: show,
+    HISTORY_NOT_RESTORABLE: show,
+    HISTORY_RESTORE_INVALID: show,
+    VERSION_CONFLICT: show,
+  };
 }
 
 function PreviewGroup({ label, values }: { label: string; values: string[] }) {

@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG, type WebResearchSettingsDocument } from "../../shared/web-research-contracts";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { WebResearchPage } from "./web-research-page";
+
+function renderWebResearchPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><WebResearchPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 const config = {
   ...DEFAULT_WEB_RESEARCH_CONFIG,
@@ -32,7 +38,7 @@ describe("WebResearchPage", () => {
 
   it("展示有序搜索服务和页面读取设置，并保存修改", async () => {
     const fetchMock = installFetch();
-    render(<WebResearchPage />);
+    renderWebResearchPage();
 
     expect(await screen.findByText("2 个已启用服务")).toBeInTheDocument();
     const cards = screen.getAllByRole("article");
@@ -54,7 +60,7 @@ describe("WebResearchPage", () => {
 
   it("只在点击小眼睛时读取凭证，隐藏时清除明文", async () => {
     const fetchMock = installFetch();
-    render(<WebResearchPage />);
+    renderWebResearchPage();
     fireEvent.click(await screen.findByRole("button", { name: "展开博查" }));
 
     const apiKey = screen.getByLabelText("博查 API Key");
@@ -72,7 +78,7 @@ describe("WebResearchPage", () => {
 
   it("添加新的厂商实例并保持同厂商多实例 ID 唯一", async () => {
     const fetchMock = installFetch();
-    render(<WebResearchPage />);
+    renderWebResearchPage();
     await screen.findByText("内置 SearXNG");
 
     fireEvent.change(screen.getByRole("combobox", { name: "搜索服务类型" }), { target: { value: "bocha" } });
@@ -82,6 +88,14 @@ describe("WebResearchPage", () => {
       "/api/v1/capabilities/web-research/providers",
       expect.objectContaining({ method: "POST", body: expect.stringContaining('"id":"bocha-2"') }),
     ));
+  });
+
+  it("加载联网配置发生意外错误时显示全局 Toast", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("private network detail"); }));
+    renderWebResearchPage();
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.queryByText("private network detail")).not.toBeInTheDocument();
   });
 });
 

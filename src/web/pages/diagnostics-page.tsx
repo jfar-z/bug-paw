@@ -2,6 +2,7 @@ import { Activity, AlertTriangle, CheckCircle2, RefreshCw, Server } from "lucide
 import { useCallback, useEffect, useState } from "react";
 
 import { api, type DiagnosticsReport } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 
 const FRONTEND_RELOAD_DELAY_MS = 500;
@@ -15,6 +16,7 @@ interface DiagnosticsPageProps {
  * 展示服务端实时生成且已脱敏的运行诊断。
  */
 export function DiagnosticsPage({ reloadPage = () => window.location.reload() }: DiagnosticsPageProps) {
+  const { runApiTask } = useApiTask();
   const [report, setReport] = useState<DiagnosticsReport>();
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -24,10 +26,12 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
   const refresh = useCallback(async () => {
     setLoading(true);
     setError("");
-    try { setReport(await api.getDiagnostics()); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "诊断失败"); }
+    try {
+      const result = await runApiTask(api.getDiagnostics, { operation: "执行系统诊断" });
+      if (result.status === "success") setReport(result.data);
+    }
     finally { setLoading(false); }
-  }, []);
+  }, [runApiTask]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   /**
@@ -39,13 +43,16 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
     setError("");
     setNotice("");
     try {
-      const { abortedSessions } = await api.refreshPiRuntime();
+      const result = await runApiTask(
+        api.refreshPiRuntime,
+        { operation: "刷新核心配置", expected: runtimeRefreshExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const { abortedSessions } = result.data;
       setNotice(`已中断 ${abortedSessions} 个活动会话并刷新核心配置，正在刷新页面…`);
       await refresh();
       // 短暂保留成功提示，避免页面立即切换而让用户误以为操作未生效。
       window.setTimeout(reloadPage, FRONTEND_RELOAD_DELAY_MS);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "核心配置刷新失败");
     } finally {
       setRefreshingRuntime(false);
     }
@@ -63,4 +70,14 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
     </> : null}
     {refreshConfirmationOpen ? <ConfirmationDialog title="确认刷新核心配置" description="这会立即停止所有正在生成的对话，并重新加载核心运行配置。" confirmLabel="继续刷新" busy={refreshingRuntime} onCancel={() => setRefreshConfirmationOpen(false)} onConfirm={() => void refreshPiRuntime()} /> : null}
   </div>;
+}
+
+/** 将运行时刷新中的可恢复状态保留在诊断页面。 */
+function runtimeRefreshExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    REFRESH_IN_PROGRESS: show,
+    RUNTIME_REFRESH_FAILED: show,
+    RUNTIME_INITIALIZATION_REFRESH_FAILED: show,
+  };
 }

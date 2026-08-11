@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { SearchProviderConfig, SearchProviderTemplate, WebResearchConfig, WebResearchSettingsDocument } from "../../shared/web-research-contracts";
 import { api } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
 import { useOnlineStatus } from "../use-online-status";
 
 /** 呈现联网搜索的有序服务路由、凭证和网页读取策略。 */
 export function WebResearchPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [document, setDocument] = useState<WebResearchSettingsDocument>();
   const [draft, setDraft] = useState<WebResearchConfig>();
@@ -21,19 +23,21 @@ export function WebResearchPage() {
 
   useEffect(() => {
     let active = true;
-    api.getWebResearch().then((next) => {
+    void runApiTask(api.getWebResearch, { operation: "加载联网搜索配置" }).then((result) => {
+      if (result.status !== "success") return;
+      const next = result.data;
       if (!active) return;
       setDocument(next);
       setDraft(next.config);
       setSelectedTemplateId(availableTemplates(next)[0]?.id ?? "");
-    }).catch(() => { if (active) setMessage("无法读取联网搜索配置"); });
+    });
     return () => {
       active = false;
       // 页面卸载时主动丢弃已按需读取的凭证明文。
       setSecretValues({});
       setSecretVisible({});
     };
-  }, []);
+  }, [runApiTask]);
 
   const dirty = Boolean(document && draft && JSON.stringify(document.config) !== JSON.stringify(draft));
   const templates = useMemo(() => document ? availableTemplates({ ...document, config: draft ?? document.config }) : [], [document, draft]);
@@ -72,12 +76,15 @@ export function WebResearchPage() {
     setBusy(true);
     setMessage("");
     try {
-      const next = await api.updateWebResearch(document.revision, draft);
+      const result = await runApiTask(
+        () => api.updateWebResearch(document.revision, draft),
+        { operation: "保存联网搜索配置", expected: webResearchExpected(setMessage) },
+      );
+      if (result.status !== "success") return;
+      const next = result.data;
       setDocument(next);
       setDraft(next.config);
       setMessage("已保存，联网工具将在 Runtime 刷新后生效");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败");
     } finally { setBusy(false); }
   };
   const addProvider = async () => {
@@ -98,15 +105,18 @@ export function WebResearchPage() {
     setBusy(true);
     setMessage("");
     try {
-      const next = await api.addWebResearchProvider(document.revision, provider);
+      const result = await runApiTask(
+        () => api.addWebResearchProvider(document.revision, provider),
+        { operation: "添加搜索服务", expected: webResearchExpected(setMessage) },
+      );
+      if (result.status !== "success") return;
+      const next = result.data;
       setDocument(next);
       setDraft(next.config);
       setExpandedId(provider.id);
       setCustomBaseUrl("");
       setSelectedTemplateId(availableTemplates(next)[0]?.id ?? "");
       setMessage("已添加搜索服务；直接 API 请先配置凭证再启用");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "添加搜索服务失败");
     } finally { setBusy(false); }
   };
   const removeProvider = async (provider: SearchProviderConfig) => {
@@ -114,23 +124,29 @@ export function WebResearchPage() {
     setBusy(true);
     setMessage("");
     try {
-      await api.deleteWebResearchProvider(provider.id, document.revision, document.credentialRevision);
-      const next = await api.getWebResearch();
+      const result = await runApiTask(async () => {
+        await api.deleteWebResearchProvider(provider.id, document.revision, document.credentialRevision);
+        return api.getWebResearch();
+      }, { operation: "删除搜索服务", expected: webResearchExpected(setMessage) });
+      if (result.status !== "success") return;
+      const next = result.data;
       clearSecrets();
       setExpandedId(undefined);
       setDocument(next);
       setDraft(next.config);
       setMessage("已删除搜索服务");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "删除搜索服务失败");
     } finally { setBusy(false); }
   };
   const testProvider = async (provider: SearchProviderConfig) => {
     setBusy(true);
     setMessage("");
-    try { setMessage((await api.testWebResearchProvider(provider.id)).message); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "连接测试失败"); }
-    finally { setBusy(false); }
+    try {
+      const result = await runApiTask(
+        () => api.testWebResearchProvider(provider.id),
+        { operation: `测试搜索服务 ${provider.name}` },
+      );
+      if (result.status === "success") setMessage(result.data.message);
+    } finally { setBusy(false); }
   };
   const toggleSecret = async (provider: SearchProviderConfig, visible: boolean) => {
     if (!visible) {
@@ -138,18 +154,27 @@ export function WebResearchPage() {
       setSecretValues((current) => ({ ...current, [provider.id]: "" }));
       return;
     }
-    try {
+    const result = await runApiTask(async () => {
       let value = secretValues[provider.id] ?? "";
       if (!value && hasCredential(document, provider.id)) value = (await api.getWebResearchProviderCredential(provider.id)).apiKey;
+      return value;
+    }, { operation: `读取 ${provider.name} API Key`, expected: webResearchExpected(setMessage) });
+    if (result.status === "success") {
+      const value = result.data;
       setSecretValues((current) => ({ ...current, [provider.id]: value }));
       setSecretVisible((current) => ({ ...current, [provider.id]: true }));
-    } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 API Key"); }
+    }
   };
   const saveCredential = async (provider: SearchProviderConfig) => {
     if (!document || !secretValues[provider.id]) return;
     setBusy(true);
     try {
-      const result = await api.setWebResearchProviderCredential(provider.id, document.credentialRevision, secretValues[provider.id]!);
+      const task = await runApiTask(
+        () => api.setWebResearchProviderCredential(provider.id, document.credentialRevision, secretValues[provider.id]!),
+        { operation: `保存 ${provider.name} API Key`, expected: webResearchExpected(setMessage) },
+      );
+      if (task.status !== "success") return;
+      const result = task.data;
       setDocument((current) => current ? {
         ...current,
         credentialRevision: result.credentialRevision,
@@ -157,14 +182,18 @@ export function WebResearchPage() {
       } : current);
       await toggleSecret(provider, false);
       setMessage("已保存 API Key");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "保存 API Key 失败"); }
-    finally { setBusy(false); }
+    } finally { setBusy(false); }
   };
   const removeCredential = async (provider: SearchProviderConfig) => {
     if (!document) return;
     setBusy(true);
     try {
-      const result = await api.deleteWebResearchProviderCredential(provider.id, document.credentialRevision);
+      const task = await runApiTask(
+        () => api.deleteWebResearchProviderCredential(provider.id, document.credentialRevision),
+        { operation: `删除 ${provider.name} API Key`, expected: webResearchExpected(setMessage) },
+      );
+      if (task.status !== "success") return;
+      const result = task.data;
       setDocument((current) => current ? {
         ...current,
         credentialRevision: result.credentialRevision,
@@ -172,8 +201,7 @@ export function WebResearchPage() {
       } : current);
       await toggleSecret(provider, false);
       setMessage("已删除 API Key");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "删除 API Key 失败"); }
-    finally { setBusy(false); }
+    } finally { setBusy(false); }
   };
   const updateContentType = (contentType: "text/html" | "text/plain", enabled: boolean) => {
     setDraft((current) => {
@@ -255,6 +283,17 @@ export function WebResearchPage() {
     </section>
     <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" disabled={!online || busy || !dirty || (draft.enabled && (enabledCount === 0 || Boolean(missingCredential)))} onClick={() => void save()}><Save size={16} aria-hidden="true" />{busy ? "处理中…" : "保存更改"}</button></div>
   </main>;
+}
+
+/** 将联网配置和凭证的可恢复业务错误保留在当前页面。 */
+function webResearchExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setMessage(error.message);
+  return {
+    VERSION_CONFLICT: show,
+    VALIDATION_FAILED: show,
+    INVALID_CREDENTIAL: show,
+    CREDENTIAL_NOT_FOUND: show,
+  };
 }
 
 interface ProviderCardProps {

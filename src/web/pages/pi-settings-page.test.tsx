@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { PiSettingsPage } from "./pi-settings-page";
+
+function renderPiSettingsPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><PiSettingsPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("PiSettingsPage", () => {
   it("展示七组设置并在 Agent 作用域呈现继承状态", async () => {
@@ -10,7 +16,7 @@ describe("PiSettingsPage", () => {
       if (String(input).includes("/agents/agent-a/settings")) return new Response(JSON.stringify({ revision: "r2", own: { retry: { maxRetries: 2 } }, inherited: { defaultProvider: "openai", defaultModel: "gpt-4o", retry: { maxRetries: 5 } }, effective: { defaultProvider: "openai", defaultModel: "gpt-4o", retry: { maxRetries: 2 } }, diagnostics: [] }), { status: 200 });
       return new Response(JSON.stringify({ revision: "r1", own: { defaultProvider: "openai", defaultModel: "gpt-4o" }, effective: { defaultProvider: "openai", defaultModel: "gpt-4o" }, diagnostics: [] }), { status: 200 });
     }));
-    render(<PiSettingsPage />);
+    renderPiSettingsPage();
 
     expect(await screen.findByRole("heading", { name: "运行设置" })).toBeInTheDocument();
     expect(screen.getAllByRole("option", { name: "核心默认值" }).length).toBeGreaterThan(0);
@@ -33,7 +39,7 @@ describe("PiSettingsPage", () => {
         ? { revision: "r1", own: { retry: { maxRetries: 2 } }, effective: { retry: { maxRetries: 2 } }, diagnostics: [] }
         : { revision: "r2", own: { retry: { maxRetries: 3 } }, effective: { retry: { maxRetries: 3 } }, diagnostics: [] }), { status: 200 });
     }));
-    render(<PiSettingsPage />);
+    renderPiSettingsPage();
     const input = await screen.findByLabelText("最大重试次数");
     fireEvent.change(input, { target: { value: "5" } });
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
@@ -56,7 +62,7 @@ describe("PiSettingsPage", () => {
       }
       return new Response(JSON.stringify({ revision: "r1", own: { defaultProvider: "provider-a", defaultModel: "model-a" }, effective: { defaultProvider: "provider-a", defaultModel: "model-a" }, diagnostics: [] }), { status: 200 });
     }));
-    render(<PiSettingsPage />);
+    renderPiSettingsPage();
 
     const modelSelector = await screen.findByRole("combobox", { name: "默认模型" });
     expect(screen.queryByLabelText("默认 Provider")).not.toBeInTheDocument();
@@ -71,5 +77,13 @@ describe("PiSettingsPage", () => {
       revision: "r1",
       set: { defaultProvider: "provider-b", defaultModel: "model-b" },
     });
+  });
+
+  it("运行设置加载发生意外错误时显示全局 Toast", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("settings network secret"); }));
+    renderPiSettingsPage();
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.queryByText("settings network secret")).not.toBeInTheDocument();
   });
 });

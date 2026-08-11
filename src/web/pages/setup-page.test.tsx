@@ -1,10 +1,16 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { SetupPage } from "./setup-page";
+
+function renderSetup(onComplete?: (input: import("../api").SetupRequest) => Promise<void>) {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><SetupPage theme="light" onThemeChange={vi.fn()} onComplete={onComplete} /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("SetupPage", () => {
   it("复用登录页的品牌与表单骨架呈现初始化品牌区", () => {
-    render(<SetupPage theme="light" onThemeChange={vi.fn()} />);
+    renderSetup();
 
     expect(document.querySelector(".setup-page.login-page")).toBeInTheDocument();
     expect(document.querySelector(".setup-page .login-brand-panel")).toBeInTheDocument();
@@ -26,7 +32,7 @@ describe("SetupPage", () => {
   });
 
   it("只收集访问密码和确认密码", () => {
-    render(<SetupPage theme="light" onThemeChange={vi.fn()} />);
+    renderSetup();
 
     expect(screen.getByRole("heading", { name: "创建访问密码" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /用户名/ })).not.toBeInTheDocument();
@@ -36,7 +42,7 @@ describe("SetupPage", () => {
   });
 
   it("确认密码和初始化 API Key 都可通过小眼睛显示和隐藏", () => {
-    render(<SetupPage theme="light" onThemeChange={vi.fn()} />);
+    renderSetup();
 
     fireEvent.click(screen.getByRole("button", { name: "显示确认密码" }));
     expect(screen.getByLabelText("确认密码")).toHaveAttribute("type", "text");
@@ -51,7 +57,7 @@ describe("SetupPage", () => {
   it("提交初始化时保持按钮禁用直到请求结束", async () => {
     let resolveSetup: (() => void) | undefined;
     const onComplete = vi.fn(() => new Promise<void>((resolve) => { resolveSetup = resolve; }));
-    render(<SetupPage theme="light" onThemeChange={vi.fn()} onComplete={onComplete} />);
+    renderSetup(onComplete);
 
     fireEvent.change(screen.getByLabelText("访问密码"), { target: { value: "correct horse battery staple" } });
     fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "correct horse battery staple" } });
@@ -62,5 +68,18 @@ describe("SetupPage", () => {
 
     expect(await screen.findByRole("button", { name: "正在初始化…" })).toBeDisabled();
     resolveSetup?.();
+  });
+
+  it("意外初始化错误只进入全局 Toast", async () => {
+    renderSetup(vi.fn(async () => { throw new Error("初始化内部堆栈"); }));
+    fireEvent.change(screen.getByLabelText("访问密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "correct horse battery staple" } });
+    fireEvent.click(screen.getByRole("button", { name: "继续" }));
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "test-key" } });
+    fireEvent.change(screen.getByLabelText("使用的模型"), { target: { value: "test-model" } });
+    fireEvent.submit(screen.getByRole("button", { name: "完成初始化" }).closest("form")!);
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.queryByText("初始化内部堆栈")).not.toBeInTheDocument();
   });
 });
