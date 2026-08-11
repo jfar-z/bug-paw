@@ -1,8 +1,38 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { HighlightedCodeBlock } from "./highlighted-code-block";
 
+const applicationStyles = readFileSync("src/web/styles.css", "utf8");
+
 describe("HighlightedCodeBlock", () => {
+  it("普通代码块在容器内保留格式并自动换行", () => {
+    const { container } = render(
+      <>
+        <style>{applicationStyles}</style>
+        <div className="markdown-content">
+          <HighlightedCodeBlock code={`const url = "https://example.com/${"long-path/".repeat(20)}";`} language="typescript" />
+        </div>
+      </>,
+    );
+
+    const block = container.querySelector(".highlighted-code-block");
+    const pre = container.querySelector("pre");
+    const style = window.getComputedStyle(pre!);
+    expect(block).toHaveClass("is-line-wrapping");
+    expect(style.whiteSpace).toBe("pre-wrap");
+    expect(style.overflowWrap).toBe("anywhere");
+    expect(style.overflowX).toBe("hidden");
+  });
+
+  it("允许图表源码关闭自动换行", () => {
+    const { container } = render(
+      <HighlightedCodeBlock code="graph TD\nA-->B" language="mermaid" wrapLines={false} />,
+    );
+
+    expect(container.querySelector(".highlighted-code-block")).not.toHaveClass("is-line-wrapping");
+  });
+
   it("高亮已知语言并展示语言标签", () => {
     const { container } = render(<HighlightedCodeBlock code="const answer = 42;" language="typescript" />);
 

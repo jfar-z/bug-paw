@@ -1362,6 +1362,12 @@ p {
   line-height: 1.65;
 }
 
+.markdown-content .highlighted-code-block.is-line-wrapping pre {
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .highlighted-code-block .hljs-keyword,
 .highlighted-code-block .hljs-selector-tag,
 .highlighted-code-block .hljs-literal {

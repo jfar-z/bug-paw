@@ -50,10 +50,11 @@ export const MarkdownContent = memo(function MarkdownContent({
       }
       const language = /language-([^\s]+)/.exec(codeElement.className ?? "")?.[1];
       const code = String(codeElement.children).replace(/\n$/, "");
-      if (language?.toLowerCase() === "mermaid" && !streaming) {
+      const isMermaid = language?.toLowerCase() === "mermaid";
+      if (isMermaid && !streaming) {
         return <MermaidDiagram code={code} theme={theme} />;
       }
-      return <HighlightedCodeBlock code={code} language={language} />;
+      return <HighlightedCodeBlock code={code} language={language} wrapLines={!isMermaid} />;
     },
   }), [streaming, theme]);
 
