@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 
-import type {
-  CreateScheduledTaskInput,
-  ScheduledTask,
-  ScheduledTaskRun,
-  UpdateScheduledTaskInput,
+import {
+  isDeletedSessionTarget,
+  type CreateScheduledTaskInput,
+  type ScheduledTask,
+  type ScheduledTaskRun,
+  type UpdateScheduledTaskInput,
 } from "../../shared/scheduled-task-contracts";
 import type { Database } from "../database/database";
 import { DomainError } from "../core/errors";
@@ -90,6 +91,9 @@ export function createScheduledTaskRepository(database: Database): ScheduledTask
           ...(input.lastRunAt !== undefined ? { lastRunAt: input.lastRunAt } : {}),
           updatedAt: new Date().toISOString(),
         };
+        if (updated.enabled && isDeletedSessionTarget(updated.target)) {
+          throw new DomainError("SCHEDULED_TASK_TARGET_MISSING", "原目标会话已删除，请重新选择任务目标");
+        }
         const sessionId = targetSessionId(updated);
         validateTargetSession(database, updated.agentId, sessionId);
         database.write("UPDATE scheduled_tasks SET session_id = ?, task_json = ?, updated_at = ? WHERE id = ?", [

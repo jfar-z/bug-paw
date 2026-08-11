@@ -1,6 +1,6 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskSchedule, ScheduledTaskTarget, UpdateScheduledTaskInput } from "../../shared/scheduled-task-contracts";
+import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskSchedule, UpdateScheduledTaskInput, WritableScheduledTaskTarget } from "../../shared/scheduled-task-contracts";
 
 interface ScheduledTaskToolService {
   list(agentId: string): Promise<ScheduledTask[]>;
@@ -55,7 +55,7 @@ export function createScheduledTasksTool(agentId: string, service: ScheduledTask
             prompt: params.prompt,
             enabled: params.enabled,
             schedule: params.schedule as ScheduledTaskSchedule,
-            target: params.target as ScheduledTaskTarget,
+            target: params.target as WritableScheduledTaskTarget,
           }));
         }
         if (!params.taskId) {
@@ -74,7 +74,7 @@ export function createScheduledTasksTool(agentId: string, service: ScheduledTask
         if (params.prompt !== undefined) patch.prompt = params.prompt;
         if (params.enabled !== undefined) patch.enabled = params.enabled;
         if (params.schedule !== undefined) patch.schedule = params.schedule as ScheduledTaskSchedule;
-        if (params.target !== undefined) patch.target = params.target as ScheduledTaskTarget;
+        if (params.target !== undefined) patch.target = params.target as WritableScheduledTaskTarget;
         if (Object.keys(patch).length === 0) {
           return failure("修改任务至少需要一个可更新字段。");
         }

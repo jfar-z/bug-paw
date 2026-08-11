@@ -96,6 +96,33 @@ describe("ScheduledTaskRepository", () => {
     expect(await repository.getTask(task.id)).toBeUndefined();
   });
 
+  it("原目标会话已删除时拒绝直接启用并允许重新指定目标", async () => {
+    const { database, repository } = createFixture();
+    const timestamp = "2026-08-11T00:00:00.000Z";
+    database.write(
+      "INSERT INTO scheduled_tasks(id, agent_id, session_id, task_json, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)",
+      ["missing-target-task", "a1", JSON.stringify({
+        ...taskInput("缺失目标"),
+        id: "missing-target-task",
+        enabled: false,
+        target: { type: "deleted_session", sessionId: "deleted-session", sessionName: "已删除日报会话" },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }), timestamp, timestamp],
+    );
+
+    await expect(repository.updateTask("missing-target-task", { enabled: true }))
+      .rejects.toMatchObject({ code: "SCHEDULED_TASK_TARGET_MISSING" });
+
+    await expect(repository.updateTask("missing-target-task", {
+      enabled: true,
+      target: { type: "new_session", archiveAfterCompletion: false },
+    })).resolves.toMatchObject({
+      enabled: true,
+      target: { type: "new_session", archiveAfterCompletion: false },
+    });
+  });
+
   function createFixture() {
     const database = createTestDatabase();
     databases.push(database);

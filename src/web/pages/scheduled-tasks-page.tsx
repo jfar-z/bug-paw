@@ -161,7 +161,7 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
   const [onceAt, setOnceAt] = useState(task?.schedule.type === "once" ? task.schedule.runAt.slice(0, 16) : "");
   const [unit, setUnit] = useState<"minute" | "hour">(task?.schedule.type === "interval" ? task.schedule.unit : "hour");
   const [enabled, setEnabled] = useState(task?.enabled ?? true);
-  const [targetMode, setTargetMode] = useState<"new_session" | "existing_session">(task?.target.type ?? "new_session");
+  const [targetMode, setTargetMode] = useState<"new_session" | "existing_session">(task?.target.type === "existing_session" ? "existing_session" : "new_session");
   const [archiveAfterCompletion, setArchiveAfterCompletion] = useState(task?.target.type === "new_session" ? task.target.archiveAfterCompletion : false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState(task?.target.type === "existing_session" ? task.target.sessionId : "");
