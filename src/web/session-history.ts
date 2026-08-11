@@ -18,7 +18,9 @@ export function mergeOlderHistory(currentMessages: readonly unknown[], pageMessa
 }
 
 export function snapshotExtendsCurrentBranch(current: SessionSnapshot, next: SessionSnapshot): boolean {
-  return current.id === next.id && current.history.branchToken === next.history.branchToken;
+  return Boolean(current.history && next.history)
+    && current.id === next.id
+    && current.history.branchToken === next.history.branchToken;
 }
 
 /** 同一分支保留已分页历史，token 变化时丢弃旧分支消息。 */

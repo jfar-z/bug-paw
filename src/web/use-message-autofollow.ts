@@ -6,6 +6,7 @@ export interface MessageAutofollowControls {
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   contentRef: RefObject<HTMLDivElement | null>;
   resumeFollowing: () => void;
+  pauseFollowing: () => void;
   /**
    * 在下一次内容提交后仅执行一次底部对齐，避免切换会话时跟随异步高度变化。
    */
@@ -32,6 +33,10 @@ export function useMessageAutofollow(contentVersion: unknown): MessageAutofollow
     followingRef.current = true;
     scrollToBottom();
   }, [scrollToBottom]);
+
+  const pauseFollowing = useCallback(() => {
+    followingRef.current = false;
+  }, []);
 
   const alignAfterNextContentCommit = useCallback(() => {
     followingRef.current = false;
@@ -76,5 +81,5 @@ export function useMessageAutofollow(contentVersion: unknown): MessageAutofollow
     };
   }, [scrollToBottom]);
 
-  return { scrollContainerRef, contentRef, resumeFollowing, alignAfterNextContentCommit };
+  return { scrollContainerRef, contentRef, resumeFollowing, pauseFollowing, alignAfterNextContentCommit };
 }

@@ -68,7 +68,10 @@ describe("useSessionHistory", () => {
     const { result, rerender } = renderHook(() => useSessionHistory({
       snapshot: current,
       scrollRef: { current: element } as RefObject<HTMLDivElement | null>,
-      onPrepend: (page) => { current = { ...current, messages: [...page.messages, ...current.messages], history: page.history }; },
+      onPrepend: (page) => {
+        Object.defineProperty(element, "scrollHeight", { value: 1600, writable: true });
+        current = { ...current, messages: [...page.messages, ...current.messages], history: page.history };
+      },
       onError: vi.fn(),
     }));
     act(() => result.current.sentinelRef(element));
@@ -76,7 +79,6 @@ describe("useSessionHistory", () => {
       observerCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
       await Promise.resolve();
     });
-    Object.defineProperty(element, "scrollHeight", { value: 1600, writable: true });
     rerender();
     expect(element.scrollTop).toBe(720);
   });

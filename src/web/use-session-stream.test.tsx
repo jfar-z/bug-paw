@@ -43,7 +43,12 @@ class FakeEventSource {
 
   emitQueued(type: string, payload: unknown) {
     const normalized = payload && typeof payload === "object"
-      ? { ...(type === "snapshot" ? {} : { runId: "run-1" }), ...payload as Record<string, unknown> }
+      ? {
+          ...(type === "snapshot"
+            ? { history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 } }
+            : { runId: "run-1" }),
+          ...payload as Record<string, unknown>,
+        }
       : payload;
     const event = { data: JSON.stringify(normalized) } as MessageEvent;
     this.listeners.get(type)?.forEach((listener) => listener(event));
@@ -301,6 +306,7 @@ describe("useSessionStream", () => {
     const recovered = {
       id: "session-1",
       messages: [],
+      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
       lastEventId: 9,
     };
     renderHook(() => useSessionStream({

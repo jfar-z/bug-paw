@@ -9,6 +9,7 @@ interface UseSessionHistoryOptions {
   snapshot?: SessionSnapshot;
   scrollRef: RefObject<HTMLDivElement | null>;
   onPrepend(page: SessionHistoryResult): void;
+  onBeforePrepend?(): void;
   onError(error: unknown): void;
 }
 
@@ -21,22 +22,22 @@ interface ScrollAnchor {
 export function useSessionHistory(options: UseSessionHistoryOptions) {
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
   const [state, setState] = useState<SessionHistoryLoadState>("idle");
-  const requestRef = useRef<AbortController>();
-  const requestedKeyRef = useRef<string>();
-  const anchorRef = useRef<ScrollAnchor>();
+  const requestRef = useRef<AbortController | undefined>(undefined);
+  const requestedKeyRef = useRef<string | undefined>(undefined);
+  const anchorRef = useRef<ScrollAnchor | undefined>(undefined);
   const latestRef = useRef(options);
   latestRef.current = options;
 
   const sessionId = options.snapshot?.id;
-  const before = options.snapshot?.history.startEntryId;
-  const branchToken = options.snapshot?.history.branchToken;
-  const hasMore = options.snapshot?.history.hasMoreBefore ?? false;
+  const before = options.snapshot?.history?.startEntryId;
+  const branchToken = options.snapshot?.history?.branchToken;
+  const hasMore = options.snapshot?.history?.hasMoreBefore ?? false;
   const requestKey = sessionId && before && branchToken ? `${sessionId}\n${branchToken}\n${before}` : undefined;
 
   const load = useCallback(async () => {
     const current = latestRef.current.snapshot;
     const currentBefore = current?.history.startEntryId;
-    if (!current || !currentBefore || !current.history.hasMoreBefore) return;
+    if (!current?.history || !currentBefore || !current.history.hasMoreBefore) return;
     const key = `${current.id}\n${current.history.branchToken}\n${currentBefore}`;
     if (requestRef.current || requestedKeyRef.current === key) return;
     requestedKeyRef.current = key;
@@ -52,6 +53,7 @@ export function useSessionHistory(options: UseSessionHistoryOptions) {
         || latest.history.startEntryId !== currentBefore) return;
       const container = latestRef.current.scrollRef.current;
       if (container) anchorRef.current = { height: container.scrollHeight, top: container.scrollTop };
+      latestRef.current.onBeforePrepend?.();
       latestRef.current.onPrepend(page);
       setState(page.history.hasMoreBefore ? "idle" : "complete");
     } catch (error) {
@@ -72,7 +74,7 @@ export function useSessionHistory(options: UseSessionHistoryOptions) {
     requestedKeyRef.current = undefined;
     requestRef.current?.abort();
     requestRef.current = undefined;
-    setState(hasMore ? "idle" : options.snapshot?.messages.length ? "complete" : "idle");
+    setState(hasMore ? "idle" : options.snapshot?.messages?.length ? "complete" : "idle");
   }, [branchToken, sessionId]);
 
   useEffect(() => {
