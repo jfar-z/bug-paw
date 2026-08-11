@@ -200,7 +200,7 @@ export function WebResearchPage() {
 
     <section className="configuration-form-card web-research-providers">
       <div className="configuration-section__heading"><div><span>02</span><h2>搜索服务</h2></div><small>从上到下依次尝试</small></div>
-      <div className="web-research-provider-list">
+      <div className="configuration-entry-list web-research-provider-list">
         {draft.searchProviders.map((provider, index) => <ProviderCard
           key={provider.id}
           provider={provider}
@@ -226,11 +226,13 @@ export function WebResearchPage() {
         />)}
         {draft.searchProviders.length === 0 ? <p className="configuration-help">尚未配置搜索服务。</p> : null}
       </div>
-      {templates.length > 0 ? <div className="web-research-provider-add">
-        <label><span>添加类型</span><select aria-label="搜索服务类型" value={selectedTemplate?.id ?? ""} onChange={(event) => { setSelectedTemplateId(event.target.value); setCustomBaseUrl(""); }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
-        {selectedTemplate?.connectionMode === "custom" ? <label><span>SearXNG 地址</span><input aria-label="新搜索服务地址" placeholder="https://search.example.com" value={customBaseUrl} onChange={(event) => setCustomBaseUrl(event.target.value)} /></label> : null}
+      {templates.length > 0 ? <div className="configuration-create-panel">
+        <div className="configuration-create-panel__fields">
+          <label><span>添加类型</span><select aria-label="搜索服务类型" value={selectedTemplate?.id ?? ""} onChange={(event) => { setSelectedTemplateId(event.target.value); setCustomBaseUrl(""); }}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>
+          {selectedTemplate?.connectionMode === "custom" ? <label><span>SearXNG 地址</span><input aria-label="新搜索服务地址" placeholder="https://search.example.com" value={customBaseUrl} onChange={(event) => setCustomBaseUrl(event.target.value)} /></label> : null}
+        </div>
         <button type="button" className="configuration-secondary-action" aria-label="添加搜索服务" disabled={!online || busy || dirty} onClick={() => void addProvider()}><Plus size={15} aria-hidden="true" />添加</button>
-        {dirty ? <small>请先保存当前修改，再添加新实例。</small> : null}
+        {dirty ? <small className="configuration-create-panel__onboarding">请先保存当前修改，再添加新实例。</small> : null}
       </div> : null}
     </section>
 
@@ -283,13 +285,13 @@ function ProviderCard(props: ProviderCardProps) {
   const provider = props.provider;
   const needsCredential = provider.type !== "searxng";
   return <article className={props.expanded ? "web-research-provider is-expanded" : "web-research-provider"}>
-    <header>
+    <header className="configuration-entry">
       <span className="web-research-provider__order">{String(props.index + 1).padStart(2, "0")}</span>
-      <div className="web-research-provider__identity"><strong>{provider.name}</strong><small>{providerLabel(provider)} · {provider.connectionMode === "managed" ? "受管服务" : provider.enabled ? "已启用" : "已停用"}{needsCredential ? ` · ${props.credentialConfigured ? "凭证已配置" : "缺少凭证"}` : ""}</small></div>
+      <span><strong>{provider.name}</strong><small>{providerLabel(provider)} · {provider.connectionMode === "managed" ? "受管服务" : provider.enabled ? "已启用" : "已停用"}{needsCredential ? ` · ${props.credentialConfigured ? "凭证已配置" : "缺少凭证"}` : ""}</small></span>
       <div className="web-research-provider__actions">
-        <button type="button" aria-label={`上移${provider.name}`} disabled={props.index === 0 || props.busy} onClick={() => props.onMove(-1)}><ArrowUp size={15} aria-hidden="true" /></button>
-        <button type="button" aria-label={`下移${provider.name}`} disabled={props.index === props.total - 1 || props.busy} onClick={() => props.onMove(1)}><ArrowDown size={15} aria-hidden="true" /></button>
-        <button type="button" aria-label={`${props.expanded ? "收起" : "展开"}${provider.name}`} aria-expanded={props.expanded} onClick={props.onExpand}>{props.expanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}</button>
+        <button type="button" className="icon-button" aria-label={`上移${provider.name}`} disabled={props.index === 0 || props.busy} onClick={() => props.onMove(-1)}><ArrowUp size={15} aria-hidden="true" /></button>
+        <button type="button" className="icon-button" aria-label={`下移${provider.name}`} disabled={props.index === props.total - 1 || props.busy} onClick={() => props.onMove(1)}><ArrowDown size={15} aria-hidden="true" /></button>
+        <button type="button" className="icon-button" aria-label={`${props.expanded ? "收起" : "展开"}${provider.name}`} aria-expanded={props.expanded} onClick={props.onExpand}>{props.expanded ? <ChevronUp size={16} aria-hidden="true" /> : <ChevronDown size={16} aria-hidden="true" />}</button>
       </div>
     </header>
     {props.expanded ? <div className="web-research-provider__details">
@@ -299,7 +301,7 @@ function ProviderCard(props: ProviderCardProps) {
       <label><span>请求超时（毫秒）</span><input aria-label={`${provider.name}请求超时`} type="number" min={1000} max={60000} value={provider.timeoutMs} onChange={(event) => props.onUpdate({ timeoutMs: Number(event.target.value) })} /></label>
       <label><span>联网出口</span><select aria-label={`${provider.name}联网出口`} value={provider.egressProfileId ?? "direct"} onChange={(event) => props.onUpdate({ egressProfileId: event.target.value })}>{props.egressProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}</select></label>
       {needsCredential ? <label><span>API Key<small>{props.credentialConfigured ? "已保存；小眼睛按需读取" : "仅保存到服务端"}</small></span><SecretInput aria-label={`${provider.name} API Key`} autoComplete="new-password" placeholder={props.credentialConfigured ? "已配置" : "请输入 API Key"} value={props.secretValue} visible={props.secretVisible} onVisibilityChange={props.onSecretVisibility} onChange={(event) => props.onSecretChange(event.target.value)} /></label> : null}
-      <footer>
+      <footer className="configuration-button-row">
         <button type="button" className="configuration-secondary-action" aria-label={`测试${provider.name}`} title={props.dirty ? "请先保存当前修改" : undefined} disabled={!props.online || props.busy || props.dirty} onClick={props.onTest}>测试连接</button>
         {needsCredential ? <button type="button" className="configuration-secondary-action" disabled={!props.online || props.busy || !props.secretValue} onClick={props.onSaveCredential}><KeyRound size={14} aria-hidden="true" />保存 Key</button> : null}
         {needsCredential && props.credentialConfigured ? <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" title={provider.enabled ? "请先停用实例并保存" : undefined} disabled={!props.online || props.busy || provider.enabled} onClick={props.onRemoveCredential}>删除 Key</button> : null}
