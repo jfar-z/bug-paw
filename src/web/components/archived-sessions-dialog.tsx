@@ -44,14 +44,17 @@ export function ArchivedSessionsDialog({
           <div><span>会话管理</span><h2 id="archive-dialog-title">已归档会话</h2></div>
           <button type="button" className="icon-button" aria-label="关闭已归档会话" onClick={onClose}><X size={18} /></button>
         </header>
-        <div className="archive-dialog__bulk-bar">
-          <span>共 {sessions.length} 个会话</span>
-          <div className="archive-dialog__bulk-actions">
-            <button type="button" className="configuration-secondary-action" disabled={busy || sessions.length === 0} onClick={onRestoreAll}>
+        <div
+          className="configuration-heading-actions archive-dialog__bulk-bar"
+          style={{ flexWrap: "wrap", padding: "10px 16px", borderBottom: "1px solid var(--border)", background: "var(--panel)" }}
+        >
+          <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>共 {sessions.length} 个会话</span>
+          <div className="configuration-heading-actions" style={{ gap: 8 }}>
+            <button type="button" className="configuration-secondary-action" style={{ minHeight: 44 }} disabled={busy || sessions.length === 0} onClick={onRestoreAll}>
               <ArchiveRestore size={16} aria-hidden="true" />
               全部恢复
             </button>
-            <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={busy || sessions.length === 0} onClick={onDeleteAll}>
+            <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" style={{ minHeight: 44 }} disabled={busy || sessions.length === 0} onClick={onDeleteAll}>
               <Trash2 size={16} aria-hidden="true" />
               全部删除
             </button>

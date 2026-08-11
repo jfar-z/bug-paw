@@ -2162,34 +2162,6 @@ p {
   padding: 10px;
 }
 
-/* 集合级操作保持紧凑，并和单条会话动作明确分层。 */
-.archive-dialog__bulk-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--panel);
-}
-
-.archive-dialog__bulk-bar > span {
-  color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.archive-dialog__bulk-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.archive-dialog__bulk-actions button {
-  min-height: 44px;
-}
-
 .archive-dialog__row {
   display: flex;
   align-items: center;
@@ -2253,7 +2225,6 @@ p {
 
 .archive-dialog__actions button:disabled,
 .archive-dialog__open:disabled {
-  cursor: not-allowed;
   opacity: 0.48;
 }
 
@@ -7073,20 +7044,6 @@ img.message-avatar {
 }
 
 @media (max-width: 470px) {
-  .archive-dialog__backdrop {
-    padding: 12px;
-  }
-
-  .archive-dialog__bulk-bar,
-  .archive-dialog__bulk-actions {
-    width: 100%;
-  }
-
-  .archive-dialog__bulk-actions button {
-    flex: 1;
-    justify-content: center;
-  }
-
   .auth-context__topline .preview-label,
   .service-state,
   .chat-title {
