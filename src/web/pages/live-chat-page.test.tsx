@@ -80,12 +80,26 @@ const props = {
   agentIdentity: { displayName: "默认 Agent", avatarText: "π" },
 };
 
+function mediaQueryResult(matches: boolean): MediaQueryList {
+  return {
+    matches,
+    media: "",
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(() => true),
+  };
+}
+
 beforeEach(() => {
   FakeEventSource.instances = [];
   PageFakeAudio.instances = [];
   operationLog.length = 0;
   window.sessionStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(false)));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     operationLog.push(`fetch:${init?.method ?? "GET"}:${url}`);
@@ -436,6 +450,47 @@ describe("LiveChatPage 时间线", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开工作台导航" }));
     fireEvent.click(screen.getByRole("button", { name: "打开会话历史" }));
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("移动端内容区右划打开侧栏，侧栏左划关闭并取消选择", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(true)));
+    render(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^第二会话/ });
+    const workspace = document.querySelector<HTMLElement>(".chat-workspace")!;
+    const sidebar = screen.getByRole("complementary", { name: "会话历史" });
+
+    fireEvent.pointerDown(workspace, { pointerType: "touch", pointerId: 1, clientX: 20, clientY: 200 });
+    fireEvent.pointerMove(workspace, { pointerType: "touch", pointerId: 1, clientX: 125, clientY: 208 });
+    fireEvent.pointerUp(workspace, { pointerType: "touch", pointerId: 1, clientX: 125, clientY: 208 });
+    expect(sidebar).toHaveClass("is-open");
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：第二会话" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "多选" }));
+    expect(screen.getByRole("checkbox", { name: "选择 第二会话" })).toBeChecked();
+
+    fireEvent.pointerDown(sidebar, { pointerType: "touch", pointerId: 2, clientX: 240, clientY: 200 });
+    fireEvent.pointerMove(sidebar, { pointerType: "touch", pointerId: 2, clientX: 130, clientY: 205 });
+    fireEvent.pointerUp(sidebar, { pointerType: "touch", pointerId: 2, clientX: 130, clientY: 205 });
+    expect(sidebar).not.toHaveClass("is-open");
+
+    fireEvent.pointerDown(workspace, { pointerType: "touch", pointerId: 3, clientX: 20, clientY: 200 });
+    fireEvent.pointerMove(workspace, { pointerType: "touch", pointerId: 3, clientX: 125, clientY: 204 });
+    fireEvent.pointerUp(workspace, { pointerType: "touch", pointerId: 3, clientX: 125, clientY: 204 });
+    expect(sidebar).toHaveClass("is-open");
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("移动端从输入框起划时不触发侧栏手势", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(true)));
+    render(<LiveChatPage {...props} />);
+    const textbox = await screen.findByRole("textbox", { name: "消息内容" });
+    const sidebar = screen.getByRole("complementary", { name: "会话历史" });
+
+    fireEvent.pointerDown(textbox, { pointerType: "touch", pointerId: 1, clientX: 20, clientY: 200 });
+    fireEvent.pointerMove(textbox, { pointerType: "touch", pointerId: 1, clientX: 140, clientY: 202 });
+    fireEvent.pointerUp(textbox, { pointerType: "touch", pointerId: 1, clientX: 140, clientY: 202 });
+
+    expect(sidebar).not.toHaveClass("is-open");
   });
 
   it("为高密度对话布局保留消息列样式钩子", async () => {

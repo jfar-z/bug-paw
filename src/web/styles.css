@@ -4212,6 +4212,14 @@ img.message-avatar {
     transform: translateX(0);
   }
 
+  .chat-sidebar.is-swiping {
+    transition: none;
+  }
+
+  .chat-workspace {
+    touch-action: pan-y;
+  }
+
   .sidebar-scrim {
     position: fixed;
     inset: 0;
@@ -4350,6 +4358,14 @@ img.message-avatar {
 
   .chat-sidebar.is-open {
     transform: translateX(0);
+  }
+
+  .chat-sidebar.is-swiping {
+    transition: none;
+  }
+
+  .chat-workspace {
+    touch-action: pan-y;
   }
 
   .sidebar-scrim {

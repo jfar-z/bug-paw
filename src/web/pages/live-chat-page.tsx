@@ -28,6 +28,7 @@ import type { AgentReference } from "../../shared/agent-reference-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
+import { useMobileSidebarSwipe } from "../features/chat/mobile-sidebar-swipe";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
@@ -328,6 +329,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     cancelSessionSelection();
     setSidebarOpen(false);
   };
+  const sidebarSwipe = useMobileSidebarSwipe({
+    open: sidebarOpen,
+    onOpen: () => setSidebarOpen(true),
+    onClose: closeSidebar,
+  });
 
   const enterDraft = () => {
     stopSpeech();
@@ -894,7 +900,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const activeAgentEntryId = [...timeline].reverse().find((entry) => entry.type === "agent")?.id;
 
   return (
-    <main className="chat-shell live-chat-shell">
+    <main className="chat-shell live-chat-shell" {...sidebarSwipe.handlers}>
       <ChatSidebar
         open={sidebarOpen}
         sessions={sessions}
@@ -909,6 +915,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         selectionMode={sessionSelectionMode}
         selectedSessionIds={selectedSessionIds}
         bulkBusy={sessionBulkBusy}
+        swiping={sidebarSwipe.swiping}
+        swipeTranslatePercent={sidebarSwipe.translatePercent}
         onClose={closeSidebar}
         onEnterDraft={enterDraft}
         onRefresh={() => void refreshSessions()}
