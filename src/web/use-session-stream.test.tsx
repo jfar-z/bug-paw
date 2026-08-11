@@ -267,7 +267,7 @@ describe("useSessionStream", () => {
     act(() => FakeEventSource.instances[0].onerror?.());
 
     expect(result.current.reconnecting).toBe(true);
-    expect(onError).toHaveBeenCalledWith("实时连接暂时中断，浏览器会自动重连。");
+    expect(onError).not.toHaveBeenCalled();
     expect(onRunChange).not.toHaveBeenCalled();
     expect(onTimelineEvent).not.toHaveBeenCalled();
   });

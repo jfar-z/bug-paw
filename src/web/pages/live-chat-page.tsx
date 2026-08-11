@@ -226,6 +226,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   }, [registerMediaSummary]);
   const streaming = activeRun?.status === "queued" || activeRun?.status === "running";
   const isOpeningSession = openingSessionId !== undefined;
+  // 连接状态独立于业务错误，重连成功后提示会自然撤销且不会误清其他错误。
+  const composerError = error || (stream.reconnecting ? "实时连接暂时中断，浏览器会自动重连。" : "");
 
   /** 获取当前 Agent 的唯一播放控制器，切换 Agent 时销毁旧实例。 */
   const ensureSpeechController = useCallback((agentId: string): StreamingTtsController => {
@@ -1075,7 +1077,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         />
 
         <footer className="composer-dock">
-          {error && <p className="live-chat-error" role="alert">{error}</p>}
+          {composerError && <p className="live-chat-error" role="alert">{composerError}</p>}
           <div className="composer">
             <ReferenceComposer
               value={draft}

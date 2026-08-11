@@ -363,7 +363,6 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     source.onerror = () => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       setReconnecting(true);
-      callbacksRef.current.onError("实时连接暂时中断，浏览器会自动重连。");
     };
 
     return () => {
