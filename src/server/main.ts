@@ -53,7 +53,7 @@ import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool"
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { createWebResearchService } from "./web-research/web-research-service";
-import { createWebOpenTool, createWebSearchTool } from "./web-research/web-research-tools";
+import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
 import { ensureWebResearchSkill } from "./web-research/global-skill";
 import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
@@ -275,7 +275,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
             ...(retrievalCapabilities.webSearch ? [createWebSearchTool(webResearch)] : []),
-            ...(retrievalCapabilities.webRead ? [createWebOpenTool(webResearch)] : []),
+            ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
           appendSystemPrompt: await readInstructionPrompts(),
           refreshAppendSystemPrompt: readInstructionPrompts,
