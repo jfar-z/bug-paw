@@ -363,6 +363,7 @@ function agentDetailExpected(setError: (message: string) => void): ApiTaskPolicy
     INVALID_AGENT_NAME: show,
     VERSION_CONFLICT: show,
     AGENT_HAS_SESSIONS: show,
+    AGENT_REMOVAL_IN_PROGRESS: show,
     DELETE_OPTIONS_REQUIRED: show,
     WORKSPACE_IN_USE: show,
     WORKSPACE_OUTSIDE_DATA: show,

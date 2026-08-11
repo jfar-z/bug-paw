@@ -38,7 +38,7 @@ it("展示意外错误并允许在卡片内展开详情", async () => {
   };
   const { rerender } = render(<module.ErrorToastViewport
     items={[item]}
-    announcement="操作未完成。请稍后重试"
+    announcement={{ id: "announcement-1", text: "操作未完成。请稍后重试" }}
     onDismiss={vi.fn()}
     onExpandedChange={setExpanded}
     onPauseChange={vi.fn()}
@@ -54,7 +54,7 @@ it("展示意外错误并允许在卡片内展开详情", async () => {
 
   rerender(<module.ErrorToastViewport
     items={[{ ...item, expanded: true, paused: true }]}
-    announcement="操作未完成。请稍后重试"
+    announcement={{ id: "announcement-1", text: "操作未完成。请稍后重试" }}
     onDismiss={vi.fn()}
     onExpandedChange={setExpanded}
     onPauseChange={vi.fn()}
@@ -69,7 +69,7 @@ it("允许复制请求标识并在卡片内反馈成功", async () => {
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
   render(<ErrorToastViewport
     items={[expandedItem]}
-    announcement=""
+    announcement={undefined}
     onDismiss={vi.fn()}
     onExpandedChange={vi.fn()}
     onPauseChange={vi.fn()}

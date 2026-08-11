@@ -338,6 +338,7 @@ describe("useSessionStream", () => {
   it("Projection 快照请求永久挂起时按截止时间中止并恢复 SSE", async () => {
     vi.useFakeTimers();
     let recoverySignal: AbortSignal | undefined;
+    const onError = vi.fn();
     const onUnexpectedError = vi.fn();
     vi.spyOn(api, "openSession").mockImplementation((_sessionId, signal) => {
       recoverySignal = signal;
@@ -350,7 +351,7 @@ describe("useSessionStream", () => {
       onSnapshot: vi.fn(),
       onTimelineEvent: vi.fn(),
       onRunChange: vi.fn(),
-      onError: vi.fn(),
+      onError,
       onUnexpectedError,
     }));
 
@@ -365,6 +366,7 @@ describe("useSessionStream", () => {
     });
 
     expect(recoverySignal?.aborted).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
     expect(onUnexpectedError).not.toHaveBeenCalled();
     expect(FakeEventSource.instances).toHaveLength(2);
     expect(FakeEventSource.instances[1]?.url).toBe("/api/v1/sessions/session-1/events?after=0");

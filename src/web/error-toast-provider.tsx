@@ -12,6 +12,11 @@ interface ManagedToast extends ErrorToastItem {
   startedAt?: number;
 }
 
+interface ToastAnnouncement {
+  id: string;
+  text: string;
+}
+
 const ErrorToastContext = createContext<ErrorToastController | undefined>(undefined);
 
 /** 在应用根部维护错误提示队列，并向业务组件提供稳定控制器。 */
@@ -19,17 +24,21 @@ export function ErrorToastProvider({ children }: { children: ReactNode }) {
   const sequence = useRef(0);
   const [items, setItems] = useState<ManagedToast[]>([]);
   const itemsRef = useRef<ManagedToast[]>([]);
-  const [announcement, setAnnouncement] = useState("");
+  const [announcement, setAnnouncement] = useState<ToastAnnouncement>();
 
   const dismiss = useCallback((id: string) => {
     setItems((current) => {
       const now = Date.now();
-      const next = current.filter((item) => item.id !== id).map((item, index) => (
-        index < MAX_VISIBLE_TOASTS && !item.paused && item.startedAt === undefined
-          ? { ...item, startedAt: now }
-          : item
-      ));
+      let promoted: ManagedToast | undefined;
+      const next = current.filter((item) => item.id !== id).map((item, index) => {
+        if (index >= MAX_VISIBLE_TOASTS || item.paused || item.startedAt !== undefined) return item;
+        promoted = item;
+        return { ...item, startedAt: now };
+      });
       itemsRef.current = next;
+      if (promoted) {
+        setAnnouncement({ id: promoted.id, text: `${promoted.title}。${promoted.summary}` });
+      }
       return next;
     });
   }, []);
@@ -53,14 +62,16 @@ export function ErrorToastProvider({ children }: { children: ReactNode }) {
     };
     itemsRef.current = [...itemsRef.current, item];
     setItems(itemsRef.current);
-    setAnnouncement(`${input.title}。${input.summary}`);
+    if (item.startedAt !== undefined) {
+      setAnnouncement({ id: item.id, text: `${input.title}。${input.summary}` });
+    }
     return resolvedId;
   }, []);
 
   const clear = useCallback(() => {
     itemsRef.current = [];
     setItems([]);
-    setAnnouncement("");
+    setAnnouncement(undefined);
   }, []);
 
   const setExpanded = useCallback((id: string, expanded: boolean) => {

@@ -236,6 +236,7 @@ function agentExpected(setError: (message: string) => void): ApiTaskPolicy["expe
     INVALID_AGENT_ORDER: show,
     VERSION_CONFLICT: show,
     AGENT_HAS_SESSIONS: show,
+    AGENT_REMOVAL_IN_PROGRESS: show,
     DELETE_OPTIONS_REQUIRED: show,
     WORKSPACE_IN_USE: show,
     WORKSPACE_OUTSIDE_DATA: show,

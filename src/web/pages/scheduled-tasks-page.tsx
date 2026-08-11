@@ -25,7 +25,9 @@ function scheduledTaskExpected(setError: (message: string) => void): ApiTaskPoli
     SCHEDULED_TASK_TARGET_MISSING: show,
     SCHEDULED_TASKS_BOUND: show,
     SESSION_NOT_FOUND: show,
+    SESSION_BUSY: show,
     AGENT_NOT_FOUND: show,
+    OPERATION_ABORTED: show,
   };
 }
 

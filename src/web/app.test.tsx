@@ -112,4 +112,24 @@ describe("App 首次初始化", () => {
     expect(await screen.findByText("无法连接 Agent 服务，请检查容器状态。")).toBeInTheDocument();
     expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
   });
+
+  it("退出登录失败时保留工作台并显示统一错误提示", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/status") return new Response(JSON.stringify({ initialized: true, authenticated: true }));
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }));
+      if (url === "/api/v1/logout") {
+        return new Response(JSON.stringify({
+          error: { code: "INTERNAL_ERROR", message: "退出服务暂不可用", requestId: "request-logout" },
+        }), { status: 500 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "工作台主导航" })).toBeInTheDocument();
+  });
 });

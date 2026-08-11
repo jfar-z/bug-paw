@@ -4,7 +4,7 @@ import type { ErrorToastItem } from "../error-toast-types";
 
 interface ErrorToastViewportProps {
   items: ErrorToastItem[];
-  announcement: string;
+  announcement?: { id: string; text: string };
   onDismiss: (id: string) => void;
   onExpandedChange: (id: string, expanded: boolean) => void;
   onPauseChange: (id: string, source: "hover" | "focus", paused: boolean) => void;
@@ -14,7 +14,9 @@ interface ErrorToastViewportProps {
 export function ErrorToastViewport(props: ErrorToastViewportProps) {
   return (
     <div className="error-toast-layer">
-      <div className="visually-hidden" role="alert">{props.announcement}</div>
+      <div className="visually-hidden" role="alert">
+        {props.announcement ? <span key={props.announcement.id}>{props.announcement.text}</span> : null}
+      </div>
       <div className="error-toast-viewport" aria-label="意外错误通知">
         {props.items.map((item) => (
           <ErrorToastCard key={item.id} item={item} {...props} />

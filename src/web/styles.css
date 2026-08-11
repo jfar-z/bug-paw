@@ -7302,8 +7302,11 @@ a[aria-disabled="true"] {
   right: 24px;
   display: grid;
   width: min(380px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
   gap: 10px;
-  pointer-events: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
 }
 
 .error-toast {
@@ -7478,10 +7481,29 @@ a[aria-disabled="true"] {
   .error-toast__details {
     margin-left: 14px;
   }
+
+  .error-toast__details-toggle,
+  .error-toast__close,
+  .error-toast__request-id button {
+    min-height: 44px;
+  }
+
+  .error-toast__close {
+    width: 44px;
+    margin: -8px -8px 0 0;
+  }
+
+  .error-toast__details-toggle {
+    padding-inline: 4px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .error-toast {
+    animation: none;
+  }
+
+  .error-toast__progress {
     animation: none;
   }
 }

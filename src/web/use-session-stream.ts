@@ -178,8 +178,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }).catch((error: unknown) => {
         if (!active || sourceRef.current !== source) return;
         const cancelled = error instanceof DOMException && error.name === "AbortError";
-        if (!cancelled) callbacksRef.current.onUnexpectedError?.(error);
-        callbacksRef.current.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
+        if (!cancelled) {
+          callbacksRef.current.onUnexpectedError?.(error);
+          callbacksRef.current.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
+        }
         setReconnectRequest((current) => ({
           sessionId: options.sessionId!,
           cursor: lastEventIdRef.current,

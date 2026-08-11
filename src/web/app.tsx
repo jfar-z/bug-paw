@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { ArrowRight } from "lucide-react";
-import { api, type SetupRequest } from "./api";
+import { api, ApiClientError, type SetupRequest } from "./api";
 import { toUnexpectedErrorNotice } from "./api-error-policy";
 import { ApiTaskProvider } from "./api-task-provider";
 import { useErrorToast } from "./error-toast-provider";
@@ -102,7 +102,10 @@ export function App() {
       await api.login(input.password, true);
       navigateTo({ page: "agents", onboarding: "create" }, true);
       setPage("workbench");
-    } catch {
+    } catch (error) {
+      const expectedAuthenticationFailure = error instanceof ApiClientError
+        && ["INVALID_CREDENTIALS", "INVALID_LOGIN_REQUEST", "LOGIN_RATE_LIMITED"].includes(error.code);
+      if (!expectedAuthenticationFailure) toast.push(toUnexpectedErrorNotice(error, "初始化后自动登录"));
       navigateTo({ page: "chat" }, true);
       setPage("login");
     }
@@ -115,9 +118,13 @@ export function App() {
   };
 
   const logout = async () => {
-    await api.logout();
-    navigateTo({ page: "chat" }, true);
-    setPage("login");
+    try {
+      await api.logout();
+      navigateTo({ page: "chat" }, true);
+      setPage("login");
+    } catch (error) {
+      toast.push(toUnexpectedErrorNotice(error, "退出登录"));
+    }
   };
 
   const renderRoute = (activeRoute: AppRoute) => {
