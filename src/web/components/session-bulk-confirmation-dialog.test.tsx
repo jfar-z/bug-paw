@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionBulkPreview } from "../api";
 import { SessionBulkConfirmationDialog } from "./session-bulk-confirmation-dialog";
+
+const applicationStyles = readFileSync("src/web/styles.css", "utf8");
 
 describe("SessionBulkConfirmationDialog", () => {
   it("删除含定时任务的会话时强化提示任务将停用但保留", () => {
@@ -35,6 +38,20 @@ describe("SessionBulkConfirmationDialog", () => {
     expect(screen.getByText(/重新出现在会话列表/)).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("保持原启用状态和原目标");
     expect(screen.getByRole("button", { name: "恢复全部会话" })).toBeInTheDocument();
+  });
+
+  it("嵌套在已归档窗口上方时保持可交互的顶层层级", () => {
+    render(<>
+      <style>{applicationStyles}</style>
+      <div className="archive-dialog__backdrop" data-testid="archive-backdrop" />
+      <SessionBulkConfirmationDialog preview={preview("restore")} onCancel={vi.fn()} onConfirm={vi.fn()} />
+    </>);
+
+    const confirmationBackdrop = screen.getByRole("dialog").parentElement;
+    expect(confirmationBackdrop).not.toBeNull();
+    const archiveLayer = Number(getComputedStyle(screen.getByTestId("archive-backdrop")).zIndex);
+    const confirmationLayer = Number(getComputedStyle(confirmationBackdrop!).zIndex);
+    expect(confirmationLayer).toBeGreaterThan(archiveLayer);
   });
 });
 
