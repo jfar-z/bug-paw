@@ -1,6 +1,6 @@
 import { Archive, Clock3, MessageSquare, MessageSquarePlus, RefreshCw, Trash2, X } from "lucide-react";
 import { useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
 
 import type { SessionSummary } from "../../../api";
 import type { IdentityPreview } from "../../../pages/chat-page";
@@ -42,6 +42,8 @@ interface ChatSidebarProps {
   onShowArchived(): void;
   onEditProfile(): void;
 }
+
+const selectionActionStyle: CSSProperties = { display: "grid", flex: 1, minHeight: 42, placeItems: "center", border: 0, borderRadius: 7, color: "var(--text-secondary)", background: "transparent", fontSize: 10 };
 
 /** 会话侧栏仅负责展示与手势转发，不持有请求或领域状态。 */
 export function ChatSidebar(props: ChatSidebarProps) {
@@ -89,9 +91,10 @@ export function ChatSidebar(props: ChatSidebarProps) {
           const selectionDisabled = isOpeningSession || (props.streaming && item.id === props.activeSessionId);
           return (
           <div className={`session-row${item.id === props.activeSessionId ? " is-active" : ""}${item.id === props.openingSessionId ? " is-opening" : ""}`} key={item.id}>
-            {props.selectionMode ? <label className={`session-row__select${selectionDisabled ? " is-disabled" : ""}`}>
+            {props.selectionMode ? <label className={`session-row__open session-row__select${selectionDisabled ? " is-disabled" : ""}`} style={{ display: "flex", alignItems: "center", color: "var(--text-secondary)", cursor: selectionDisabled ? "not-allowed" : "pointer", opacity: selectionDisabled ? 0.62 : 1 }}>
               <input
                 type="checkbox"
+                style={{ width: 15, height: 15, margin: 0, flex: "0 0 auto", accentColor: "var(--accent)" }}
                 aria-label={`选择 ${title}`}
                 checked={props.selectedSessionIds.includes(item.id)}
                 disabled={selectionDisabled}
@@ -128,10 +131,10 @@ export function ChatSidebar(props: ChatSidebarProps) {
           </div>
         ); })}
       </nav>
-      {props.selectionMode ? <div className="session-selection-toolbar" aria-label="会话多选操作">
-        <button type="button" aria-label="归档已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkArchive}><Archive size={15} aria-hidden="true" /><span>归档</span></button>
-        <button type="button" className="is-danger" aria-label="删除已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkDelete}><Trash2 size={15} aria-hidden="true" /><span>删除</span></button>
-        <button type="button" aria-label="取消多选" disabled={props.bulkBusy} onClick={props.onCancelSelection}><X size={15} aria-hidden="true" /><span>取消</span></button>
+      {props.selectionMode ? <div className="session-selection-toolbar" style={{ display: "flex", gap: 5, margin: "8px 0" }} aria-label="会话多选操作">
+        <button type="button" style={selectionActionStyle} aria-label="归档已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkArchive}><Archive size={15} aria-hidden="true" /><span>归档</span></button>
+        <button type="button" style={{ ...selectionActionStyle, color: "var(--danger)" }} className="is-danger" aria-label="删除已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkDelete}><Trash2 size={15} aria-hidden="true" /><span>删除</span></button>
+        <button type="button" style={selectionActionStyle} aria-label="取消多选" disabled={props.bulkBusy} onClick={props.onCancelSelection}><X size={15} aria-hidden="true" /><span>取消</span></button>
       </div> : <button type="button" className="archived-chat-button" aria-label="查看已归档会话" disabled={isOpeningSession} onClick={props.onShowArchived}>
         <Archive size={16} aria-hidden="true" /><span>已归档</span>
       </button>}

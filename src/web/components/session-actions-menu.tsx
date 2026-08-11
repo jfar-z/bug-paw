@@ -98,7 +98,7 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
             />
           ) : confirmingDelete ? (
             <div className="session-actions__confirm">
-              <p className={session.scheduledTaskCount ? "session-actions__task-warning" : undefined}>{session.scheduledTaskCount
+              <p className={session.scheduledTaskCount ? "session-actions__task-warning" : undefined} style={session.scheduledTaskCount ? { padding: 7, border: "1px solid var(--danger)", borderRadius: 7, color: "var(--danger)", background: "color-mix(in srgb, var(--danger) 9%, var(--surface))", fontWeight: 650 } : undefined}>{session.scheduledTaskCount
                 ? `永久删除此会话？绑定的 ${session.scheduledTaskCount} 个定时任务将同步停用，任务记录会保留。`
                 : "永久删除此会话？"}</p>
               <div>

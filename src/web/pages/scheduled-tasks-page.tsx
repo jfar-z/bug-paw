@@ -134,17 +134,17 @@ function TaskCard({ task, onRun, onEdit, onDelete, onRuns }: { task: ScheduledTa
   const targetMissing = Boolean(deletedTarget);
 
   return (
-    <article className={`scheduled-task-card${targetMissing ? " is-target-missing" : ""}`}>
+    <article className={`scheduled-task-card${targetMissing ? " is-target-missing" : ""}`} style={targetMissing ? { background: "color-mix(in srgb, var(--danger) 5%, var(--panel))", boxShadow: "3px 0 0 var(--danger) inset" } : undefined}>
       <div className="scheduled-task-card__icon"><CalendarClock size={17} aria-hidden="true" /></div>
       <div className="scheduled-task-card__body">
         <strong>{task.name}</strong>
         <small>{describeSchedule(task)}</small>
         {deletedTarget ? (
-          <div className="scheduled-task-target-missing" role="alert">
+          <div className="scheduled-task-target-missing" style={{ display: "flex", gap: 7, color: "var(--danger)" }} role="alert">
             <AlertTriangle size={16} aria-hidden="true" />
-            <span>
-              <strong>原目标会话“{deletedTarget.sessionName}”已删除</strong>
-              <small>任务已停用，请编辑并重新选择目标。</small>
+            <span style={{ display: "grid" }}>
+              <strong style={{ color: "var(--danger)", whiteSpace: "normal" }}>原目标会话“{deletedTarget.sessionName}”已删除</strong>
+              <small style={{ color: "var(--danger)", whiteSpace: "normal" }}>任务已停用，请编辑并重新选择目标。</small>
             </span>
           </div>
         ) : (
@@ -297,9 +297,9 @@ function TaskForm({ agentId, task, onClose, onSaved }: { agentId: string; task?:
           <p>可为每次任务创建独立会话，或向已有会话发送消息。</p>
         </div>
         {!targetResolved && task && isDeletedSessionTarget(task.target) ? (
-          <div className="scheduled-task-target-missing scheduled-task-target-missing--editor" role="alert">
+          <div className="scheduled-task-target-missing scheduled-task-target-missing--editor" style={{ display: "flex", gap: 7, padding: 12, border: "1px solid var(--danger)", borderRadius: 9, color: "var(--danger)", background: "color-mix(in srgb, var(--danger) 8%, var(--panel))" }} role="alert">
             <AlertTriangle size={18} aria-hidden="true" />
-            <span>
+            <span style={{ display: "grid" }}>
               <strong>原目标会话“{task.target.sessionName}”已删除</strong>
               <small>任务已停用，重新选择目标后才能启用或保存。</small>
             </span>
