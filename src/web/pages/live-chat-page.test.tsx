@@ -28,6 +28,12 @@ class FakeEventSource {
 
   close() {}
 
+  /** 模拟浏览器完成 EventSource 自动重连。 */
+  emitOpen() {
+    const event = { data: "" } as MessageEvent;
+    this.listeners.get("open")?.forEach((listener) => listener(event));
+  }
+
   emit(type: string, payload: unknown) {
     const sessionId = decodeURIComponent(this.url.match(/\/sessions\/([^/]+)\/events/)?.[1] ?? "");
     const original = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
@@ -218,6 +224,33 @@ beforeEach(() => {
 });
 
 describe("LiveChatPage 时间线", () => {
+  it("实时连接自动重连成功后撤销中断提示", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.onerror?.());
+    expect(screen.getByText("实时连接暂时中断，浏览器会自动重连。")).toHaveClass("live-chat-error");
+
+    act(() => source.emitOpen());
+    await waitFor(() => expect(screen.queryByText("实时连接暂时中断，浏览器会自动重连。")).not.toBeInTheDocument());
+  });
+
+  it("实时连接重连不会覆盖或清除业务错误", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.emit("error", { code: "AGENT_EXECUTION_FAILED", message: "Agent 执行失败" }));
+    expect(screen.getByText("Agent 执行失败")).toHaveClass("live-chat-error");
+
+    act(() => source.onerror?.());
+    expect(screen.getByText("Agent 执行失败")).toHaveClass("live-chat-error");
+
+    act(() => source.emitOpen());
+    expect(screen.getByText("Agent 执行失败")).toHaveClass("live-chat-error");
+  });
+
   it("将用户操作区置于气泡外侧，并把版本切换发送到分支导航接口", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
