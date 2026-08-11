@@ -111,21 +111,13 @@ function assertPreviewFresh(database: Database, expected: SessionBulkPreparedPre
 
 function readPreview(database: Database, action: SessionBulkAction, target: SessionBulkTarget, stale: boolean) {
   assertActionTarget(action, target);
-  const sessionIds = resolveSessionIds(database, target, stale);
-  const placeholders = sessionIds.map(() => "?").join(", ");
-  const sessions = database.read<SessionBulkRow>(`
-    SELECT id, agent_id, archived_at, display_name, projection_version, updated_at
-    FROM sessions WHERE id IN (${placeholders}) ORDER BY id
-  `, sessionIds);
-  if (sessions.length !== sessionIds.length) throw stale ? stalePreviewError() : new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+  const sessions = readSessionRows(database, target, stale);
+  const sessionIds = sessions.map(({ id }) => id);
   const agentIds = new Set(sessions.map((session) => session.agent_id));
   if (agentIds.size !== 1) {
     throw new DomainError("SESSION_AGENT_CONFLICT", "批量操作的 Session 必须属于同一 Agent");
   }
-  const taskRows = database.read<SessionBulkTaskRow>(
-    `SELECT id, session_id, task_json, updated_at FROM scheduled_tasks WHERE session_id IN (${placeholders}) ORDER BY created_at, id`,
-    sessionIds,
-  );
+  const taskRows = readTaskRows(database, target, sessionIds);
   const tasks = taskRows.map((row) => {
     const task = JSON.parse(row.task_json) as ScheduledTask;
     return { id: task.id, name: task.name, sessionId: row.session_id };
@@ -167,25 +159,53 @@ function assertActionTarget(action: SessionBulkAction, target: SessionBulkTarget
 }
 
 /** 将客户端范围解析为稳定排序的真实会话集合。 */
-function resolveSessionIds(database: Database, target: SessionBulkTarget, stale: boolean): string[] {
+function readSessionRows(database: Database, target: SessionBulkTarget, stale: boolean): SessionBulkRow[] {
   if (target.mode === "selected") {
     const sessionIds = [...new Set(target.sessionIds)].sort();
     if (sessionIds.length === 0 || sessionIds.length > 200) {
       if (stale) throw stalePreviewError();
       throw new DomainError("VALIDATION_FAILED", sessionIds.length === 0 ? "至少选择一个会话" : "批量选择不能超过 200 个会话");
     }
-    return sessionIds;
+    const placeholders = sessionIds.map(() => "?").join(", ");
+    const sessions = database.read<SessionBulkRow>(`
+      SELECT id, agent_id, archived_at, display_name, projection_version, updated_at
+      FROM sessions WHERE id IN (${placeholders}) ORDER BY id
+    `, sessionIds);
+    if (sessions.length !== sessionIds.length) {
+      throw stale ? stalePreviewError() : new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+    }
+    return sessions;
   }
   assertId("Agent", target.agentId);
-  const sessionIds = database.read<{ id: string }>(
-    "SELECT id FROM sessions WHERE agent_id = ? AND archived_at IS NOT NULL ORDER BY id",
+  const sessions = database.read<SessionBulkRow>(`
+    SELECT id, agent_id, archived_at, display_name, projection_version, updated_at
+    FROM sessions WHERE agent_id = ? AND archived_at IS NOT NULL ORDER BY id
+  `,
     [target.agentId],
-  ).map(({ id }) => id);
-  if (sessionIds.length === 0) {
+  );
+  if (sessions.length === 0) {
     if (stale) throw stalePreviewError();
     throw new DomainError("VALIDATION_FAILED", "没有可操作的归档会话");
   }
-  return sessionIds;
+  return sessions;
+}
+
+/** 全归档范围使用联表查询，避免把无界 ID 集合展开为 SQLite 参数。 */
+function readTaskRows(database: Database, target: SessionBulkTarget, sessionIds: string[]): SessionBulkTaskRow[] {
+  if (target.mode === "all_archived") {
+    return database.read<SessionBulkTaskRow>(`
+      SELECT tasks.id, tasks.session_id, tasks.task_json, tasks.updated_at
+      FROM scheduled_tasks AS tasks
+      INNER JOIN sessions ON sessions.id = tasks.session_id
+      WHERE sessions.agent_id = ? AND sessions.archived_at IS NOT NULL
+      ORDER BY tasks.created_at, tasks.id
+    `, [target.agentId]);
+  }
+  const placeholders = sessionIds.map(() => "?").join(", ");
+  return database.read<SessionBulkTaskRow>(
+    `SELECT id, session_id, task_json, updated_at FROM scheduled_tasks WHERE session_id IN (${placeholders}) ORDER BY created_at, id`,
+    sessionIds,
+  );
 }
 
 function normalizeTarget(target: SessionBulkTarget, sessionIds: string[]): SessionBulkTarget {
