@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import type { SessionBulkAction } from "../../shared/session-bulk-contracts";
 import type { PiRuntimeGateway } from "../pi-runtime";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
 import type { SessionMetadataStore } from "../session-metadata";
 import { resolveSessionAgentId } from "../session-agent";
+import type { SessionBulkService } from "../sessions/session-bulk-service";
 import type { AuthService } from "./auth";
 import { sendApiError } from "./http";
 import { requireAuthentication } from "./protected";
@@ -13,8 +15,8 @@ interface SessionRouteDependencies {
   runtime?: PiRuntimeGateway;
   runtimeSupervisor?: RuntimeSupervisor;
   sessionMetadata?: SessionMetadataStore;
-  scheduledTasks?: { boundTasks(sessionId: string): Promise<Array<unknown>>; removeTasksForSession?(sessionId: string): Promise<void> };
-  deleteSession?: (sessionId: string, deleteScheduledTasks: boolean) => Promise<void>;
+  scheduledTasks?: { boundTasks(sessionId: string): Promise<Array<unknown>> };
+  sessionBulk?: SessionBulkService;
   assertCanCreateSession?: (agentId: string) => Promise<void>;
 }
 
@@ -73,6 +75,34 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
       return reply.code(201).send({ ...created, agentId });
     } finally {
       acquired.release();
+    }
+  });
+
+  app.post("/api/sessions/bulk/preview", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const input = readBulkBody(request.body, false);
+    if (!input) return sendApiError(reply, 400, "VALIDATION_FAILED", "批量会话预览参数格式不正确");
+    if (!dependencies.sessionBulk) throw new Error("Session 批量应用服务尚未配置");
+    try {
+      return reply.send(await dependencies.sessionBulk.preview(input.action, input.sessionIds));
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
+  app.post("/api/sessions/bulk", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const input = readBulkBody(request.body, true);
+    if (!input?.fingerprint) return sendApiError(reply, 400, "VALIDATION_FAILED", "批量会话执行参数格式不正确");
+    if (!dependencies.sessionBulk) throw new Error("Session 批量应用服务尚未配置");
+    try {
+      return reply.send(await dependencies.sessionBulk.execute({
+        action: input.action,
+        sessionIds: input.sessionIds,
+        fingerprint: input.fingerprint,
+      }));
+    } catch (error) {
+      return sendRuntimeError(reply, error);
     }
   });
 
@@ -163,15 +193,22 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
   });
 
-  app.delete<{ Params: { id: string }; Querystring: { deleteScheduledTasks?: string } }>("/api/sessions/:id", async (request, reply) => {
+  app.delete<{ Params: { id: string }; Querystring: { confirmBoundTasks?: string; deleteScheduledTasks?: string } }>("/api/sessions/:id", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;
     }
     try {
-      const bound = await dependencies.scheduledTasks?.boundTasks(request.params.id) ?? [];
-      if (bound.length && request.query.deleteScheduledTasks !== "true") return sendApiError(reply, 409, "SCHEDULED_TASKS_BOUND", `会话已绑定 ${bound.length} 个定时任务，请确认同时删除`);
-      if (!dependencies.deleteSession) throw new Error("Session 删除应用服务尚未配置");
-      await dependencies.deleteSession(request.params.id, request.query.deleteScheduledTasks === "true");
+      if (!dependencies.sessionBulk) throw new Error("Session 批量应用服务尚未配置");
+      const preview = await dependencies.sessionBulk.preview("delete", [request.params.id]);
+      const confirmed = request.query.confirmBoundTasks === "true" || request.query.deleteScheduledTasks === "true";
+      if (preview.tasks.length && !confirmed) {
+        return sendApiError(reply, 409, "SCHEDULED_TASKS_BOUND", `会话已绑定 ${preview.tasks.length} 个定时任务，请确认停用任务后删除会话`);
+      }
+      await dependencies.sessionBulk.execute({
+        action: "delete",
+        sessionIds: preview.sessionIds,
+        fingerprint: preview.fingerprint,
+      });
       return reply.code(204).send();
     } catch (error) {
       return sendRuntimeError(reply, error);
@@ -206,4 +243,21 @@ async function acquireRuntimeForSession(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 校验批量接口输入，避免将无界 ID 集合传入数据库。 */
+function readBulkBody(value: unknown, requireFingerprint: boolean): {
+  action: SessionBulkAction;
+  sessionIds: string[];
+  fingerprint?: string;
+} | undefined {
+  if (!isRecord(value) || (value.action !== "archive" && value.action !== "delete")) return undefined;
+  if (!Array.isArray(value.sessionIds) || value.sessionIds.length === 0 || value.sessionIds.length > 200) return undefined;
+  if (!value.sessionIds.every((id) => typeof id === "string" && id.trim().length > 0)) return undefined;
+  if (requireFingerprint && (typeof value.fingerprint !== "string" || value.fingerprint.length === 0)) return undefined;
+  return {
+    action: value.action,
+    sessionIds: value.sessionIds,
+    ...(typeof value.fingerprint === "string" ? { fingerprint: value.fingerprint } : {}),
+  };
 }

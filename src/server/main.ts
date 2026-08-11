@@ -24,6 +24,8 @@ import { registerWorkspaceFileRoutes } from "./routes/workspace-files";
 import { registerAgentRoutes } from "./routes/agents";
 import { createRunCheckpointStore } from "./runtime/checkpoint-store";
 import { createSessionMetadataStore } from "./session-metadata";
+import { createSessionBulkRepository } from "./sessions/session-bulk-repository";
+import { createSessionBulkService } from "./sessions/session-bulk-service";
 import { recoverPendingTransactions } from "./configuration/config-transaction";
 import { createAgentService } from "./agents/agent-service";
 import { AgentPromptStore } from "./agents/agent-prompt-store";
@@ -132,6 +134,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const authService = createAuthService(paths, { identityRepository: identities });
   registerOriginProtection(app);
   const sessionRepository = createSessionRepository(applicationDatabase);
+  const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
   const modelMutations = new KeyedMutex();
@@ -290,6 +293,17 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       recreateModelRuntime: createSharedModelRuntime,
       onModelRuntimeReplaced: (modelRuntime) => { sharedModelRuntime = modelRuntime; },
     });
+  const sessionBulk = createSessionBulkService({
+    repository: sessionBulkRepository,
+    acquireRuntime: async (agentId) => {
+      const lease = await runtimeSupervisor.acquire(agentId);
+      return { runtime: lease.runtime, release: lease.release };
+    },
+    onCleanupError: (error) => {
+      backgroundErrors.record("SESSION_DELETE_CLEANUP_FAILED", { sessionId: error.sessionId });
+      app.log.error(error, "Session 暂存文件清理失败");
+    },
+  });
   const providerRenameService = new ProviderRenameService({
     paths,
     models,
@@ -360,31 +374,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     runtimeSupervisor,
     sessionMetadata: sessionMetadataStore,
     scheduledTasks,
+    sessionBulk,
     assertCanCreateSession: (agentId) => agentStore.assertCanCreateSession(agentId),
-    deleteSession: async (sessionId, deleteScheduledTasks) => {
-      const agentId = await resolveSessionAgentId(sessionId, sessionMetadataStore);
-      const lease = await runtimeSupervisor.acquire(agentId);
-      try {
-        const staged = await lease.runtime.prepareSessionDeletion?.(sessionId);
-        if (!staged) throw new Error("当前 Runtime 不支持事务化删除 Session");
-        try {
-          await sessionRepository.removeWithBoundTasks(sessionId, deleteScheduledTasks);
-        } catch (error) {
-          const rollback = await Promise.allSettled([staged.rollback()]);
-          if (rollback[0]?.status === "rejected") {
-            throw new AggregateError([error, rollback[0].reason], "Session 删除事务回滚失败");
-          }
-          throw error;
-        }
-        // SQLite 已提交后，文件清理失败不能把已成功的删除伪装成可重试事务。
-        await staged.commit().catch((error) => {
-          backgroundErrors.record("SESSION_DELETE_CLEANUP_FAILED", { sessionId });
-          app.log.error(error, "Session 暂存文件清理失败");
-        });
-      } finally {
-        lease.release();
-      }
-    },
   });
   registerScheduledTaskRoutes(app, { authService, service: scheduledTasks });
   registerChatRoutes(app, { authService, runtimeSupervisor, sessionMetadata: sessionMetadataStore, workspaceFiles, referenceResolver, chatService });

@@ -50,3 +50,46 @@ describe("知识库 API", () => {
     });
   });
 });
+
+describe("会话批量 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("发送批量预览与带指纹执行请求", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { action: "delete" | "archive"; sessionIds: string[] };
+      return new Response(JSON.stringify({
+        action: body.action,
+        sessionIds: body.sessionIds,
+        sessionCount: body.sessionIds.length,
+        tasks: [],
+        fingerprint: "fingerprint-1",
+        affectedTaskCount: 0,
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.previewSessionBulk("delete", ["session-1"]);
+    await api.executeSessionBulk("delete", ["session-1"], "fingerprint-1");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/sessions/bulk/preview", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ action: "delete", sessionIds: ["session-1"] }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/sessions/bulk", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ action: "delete", sessionIds: ["session-1"], fingerprint: "fingerprint-1" }),
+    }));
+  });
+
+  it("单会话删除确认使用停用绑定任务参数", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.deleteSession("session/a", true);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session%2Fa?confirmBoundTasks=true",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
