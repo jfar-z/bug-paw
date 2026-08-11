@@ -14,6 +14,7 @@
 | 配置历史 | `/data/app/config-history` | Web 脱敏审计与非敏感设置快照 |
 | 配置事务 | `/data/app/config-transactions` | 中断恢复临时数据 |
 | 联网搜索配置 | `/data/app/web-research.json` | Web 能力扩展配置 |
+| 联网搜索凭证 | `/data/app/web-research-auth.json` | 搜索实例 API Key，仅服务端读取 |
 
 配置 JSON 使用 revision 乐观锁和原子替换。页面读到的 revision 已过期时，服务返回 `409 VERSION_CONFLICT`；界面只允许重新加载，或把本地字段在最新 revision 上重新应用并再次校验，不支持盲目覆盖。
 
@@ -47,7 +48,13 @@ BugPaw 不自动安装 `knowledge-base` 或 `web-research` Skill。检索的最�
 
 配置中心按“工作区 → 能力扩展 → 运行环境”组织。能力扩展保存独立于 Pi SDK 的增强能力与安全策略；联网搜索、TTS 与知识能力均在此模块配置。
 
-联网搜索由同一份 Compose 中的 `bug-paw-search` 与 `bug-paw-cache` 提供内部搜索服务，并通过受版本控制的非敏感限流配置防止把反向代理来源误判为客户端。部署前须在根目录 `.env` 设置强随机的 `SEARXNG_SECRET`；该文件为本机部署配置，不应提交。搜索服务不暴露宿主机端口。`bug-paw-embedding` 在同一内部网络提供默认中文语义检索模型，也不暴露宿主机端口。语义检索默认启用，资料上传时自动完成全文和向量索引；仅在更换模型、重新启用或修复索引时手动重建。
+联网搜索可以按管理员配置的顺序管理多个 SearXNG、博查 Web Search 与 Tavily Search 实例。搜索或全能力 Compose 组合中的 `bug-paw-search` 与 `bug-paw-cache` 会自动注册为“内置 SearXNG”，页面不要求填写容器名称、内部端口或地址；核心组合不会展示虚假的受管实例。部署前须在根目录 `.env` 设置强随机的 `SEARXNG_SECRET`；该文件为本机部署配置，不应提交。搜索服务不暴露宿主机端口。
+
+博查与 Tavily 的 API Key 使用独立 revision 保存在 `/data/app/web-research-auth.json`。配置列表只返回“已配置”状态；点击小眼睛时才按需读取明文，隐藏、切换实例、删除实例或离开页面后清除浏览器内的值。全局能力启用时，启用中的直连实例必须已有 Key；删除 Key 前必须先停用该实例并保存。
+
+Provider 数组顺序就是实际故障切换顺序。运行时只在实例返回 `unavailable` 时尝试下一个；健康空结果与带结果的降级响应都会停止路由。同一 Run 会跳过已失败实例，所有候选不可用后只阻止该 Run 的后续 `web_search`，不会终止 Agent 或影响其他工具；明确的 `Retry-After` 在后续 Run 中仍会被遵守。厂商原始错误、内部尝试过程、生成答案和 `nextAction` 均不进入 Agent 工具结果。
+
+`bug-paw-embedding` 在同一内部网络提供默认中文语义检索模型，也不暴露宿主机端口。语义检索默认启用，资料上传时自动完成全文和向量索引；仅在更换模型、重新启用或修复索引时手动重建。
 
 联网工具 `web_search` 与 `web_read` 仅在全局开关启用且对应 Agent 已授权时注入 Runtime。知识库工具 `knowledge_search`、`knowledge_read` 与 `knowledge_manage` 则按对应 Agent 的工具权限注册。系统在 Runtime 创建时生成一次有效能力快照，并用同一快照决定工具注册和系统提示词中的检索路由政策，避免提示词宣称了实际不可用的能力。新建 Agent 默认预授权检索工具，存量权限中的旧工具名会在数据库迁移时更新为新名称，不会借迁移扩大原有授权范围。
 
