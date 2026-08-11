@@ -1,7 +1,7 @@
-import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, LoaderCircle, TerminalSquare } from "lucide-react";
+import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleSlash2, LoaderCircle, TerminalSquare } from "lucide-react";
 import { useState } from "react";
 import { formatToolValue, type ToolBlock } from "../conversation-timeline";
-import { toolActivityCopy } from "../features/chat/tool-activity-copy";
+import { toolActivityCopy, toolStatusCopy } from "../features/chat/tool-activity-copy";
 
 interface LiveToolCardProps {
   tool: ToolBlock;
@@ -15,10 +15,12 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
   const output = tool.status === "running" ? tool.partialResult : tool.result;
   const active = tool.status === "preparing" || tool.status === "running";
   const statusIcon = active
-    ? <LoaderCircle className="spinner" size={16} aria-hidden="true" />
+    ? <LoaderCircle className="spinner" size={14} aria-hidden="true" />
     : tool.status === "error"
-      ? <CircleAlert size={16} aria-hidden="true" />
-      : <CheckCircle2 size={16} aria-hidden="true" />;
+      ? <CircleAlert size={14} aria-hidden="true" />
+      : tool.status === "cancelled"
+        ? <CircleSlash2 size={14} aria-hidden="true" />
+        : <CheckCircle2 size={14} aria-hidden="true" />;
 
   return (
     <section className={`live-tool-card is-${tool.status}`}>
@@ -32,18 +34,27 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
         {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
         <TerminalSquare size={17} aria-hidden="true" />
         <strong>{toolActivityCopy(tool)}</strong>
-        <span className="live-tool-card__status">{statusIcon}<span className="sr-only">{tool.name}</span></span>
+        <span className="live-tool-card__status">{statusIcon}<span>{toolStatusCopy(tool)}</span></span>
       </button>
 
       {expanded && (
         <div className="live-tool-card__details">
           <ToolDetail title="入参" value={tool.args} />
           <ToolDetail title="结果" value={output} />
-          {tool.details !== undefined && <ToolDetail title="详情" value={tool.details} />}
+          {hasToolDetailValue(tool.details) && <ToolDetail title="详情" value={tool.details} />}
         </div>
       )}
     </section>
   );
+}
+
+/** 判断可选详情是否包含值得展示的信息。 */
+export function hasToolDetailValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
 }
 
 function ToolDetail({ title, value }: { title: string; value: unknown }) {
