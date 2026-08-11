@@ -74,6 +74,7 @@ export const ApiErrorCodeSchema = Type.Union([
   Type.Literal("INVALID_SESSION_NAME"),
   Type.Literal("SCHEDULED_TASKS_BOUND"),
   Type.Literal("SCHEDULED_TASK_TARGET_MISSING"),
+  Type.Literal("SESSION_BULK_PREVIEW_STALE"),
   Type.Literal("INVALID_MULTIPART"),
   Type.Literal("EMPTY_UPLOAD"),
   Type.Literal("ATTACHMENT_TOO_LARGE"),
