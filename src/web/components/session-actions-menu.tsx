@@ -1,6 +1,15 @@
 import { Archive, ListChecks, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { SessionSummary } from "../api";
+
+const MENU_VIEWPORT_MARGIN = 8;
+const MENU_TRIGGER_GAP = 4;
+
+interface MenuPosition {
+  top: number;
+  left: number;
+}
 
 interface SessionActionsMenuProps {
   session: SessionSummary;
@@ -20,16 +29,42 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [name, setName] = useState(session.name || session.firstMessage || "新对话");
+  const [menuPosition, setMenuPosition] = useState<MenuPosition>();
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const handledOpenRequestRef = useRef(openRequestId);
   const title = session.name || session.firstMessage || "新对话";
+
+  /** 将浮层约束在视口内，避免受到会话滚动容器的边界裁切。 */
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current;
+    const menu = menuRef.current;
+    if (!trigger || !menu) {
+      return;
+    }
+
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const below = triggerRect.bottom + MENU_TRIGGER_GAP;
+    const above = triggerRect.top - MENU_TRIGGER_GAP - menuRect.height;
+    const top = below + menuRect.height <= window.innerHeight - MENU_VIEWPORT_MARGIN
+      ? below
+      : Math.max(MENU_VIEWPORT_MARGIN, above);
+    const left = Math.min(
+      Math.max(MENU_VIEWPORT_MARGIN, triggerRect.right - menuRect.width),
+      Math.max(MENU_VIEWPORT_MARGIN, window.innerWidth - MENU_VIEWPORT_MARGIN - menuRect.width),
+    );
+    setMenuPosition({ top, left });
+  }, []);
 
   useEffect(() => {
     if (!open) {
       return;
     }
     const closeOutside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false);
         setRenaming(false);
         setConfirmingDelete(false);
@@ -38,6 +73,19 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
     document.addEventListener("pointerdown", closeOutside);
     return () => document.removeEventListener("pointerdown", closeOutside);
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [confirmingDelete, open, renaming, updatePosition]);
 
   useEffect(() => {
     if (openRequestId === undefined || openRequestId === handledOpenRequestRef.current) {
@@ -62,6 +110,7 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
   return (
     <div className="session-actions" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="session-actions__trigger"
         aria-label={`管理会话：${title}`}
@@ -74,12 +123,20 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
       >
         <MoreHorizontal size={16} aria-hidden="true" />
       </button>
-      {open && (
-        <div className="session-actions__popover" role="menu" onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            setOpen(false);
-          }
-        }}>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          className="session-actions__popover"
+          role="menu"
+          style={menuPosition
+            ? { top: menuPosition.top, left: menuPosition.left }
+            : { top: 0, left: 0, visibility: "hidden" }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setOpen(false);
+            }
+          }}
+        >
           {renaming ? (
             <input
               autoFocus
@@ -114,7 +171,8 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
               <button type="button" role="menuitem" className="is-danger" disabled={disabled} onClick={() => setConfirmingDelete(true)}><Trash2 size={15} />删除</button>
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
