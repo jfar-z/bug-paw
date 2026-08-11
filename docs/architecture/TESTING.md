@@ -1,8 +1,8 @@
 # 测试与质量门禁
 
-统一在 `node:24-bookworm-slim` 中验证。本地 Node 结果不作为交付证据。
+统一在 `node:24.19.0-bookworm-slim` 中验证。本地 Node 结果不作为交付证据。
 
-`npm run verify` 顺序执行：TypeScript strict 类型检查、架构边界检查、全部 Vitest、Vite 生产构建、gzip Bundle 预算。Docker build 也执行同一门禁。
+`npm run verify` 顺序执行：TypeScript strict 类型检查、架构边界检查、全部 Vitest、Vite 生产构建、gzip Bundle 预算。默认 Docker build 只执行生产构建与 Bundle 检查；需要完整门禁时显式执行 `docker build --no-cache --target verify .`。
 
 新增功能至少覆盖成功、认证/授权、非法输入、并发冲突、失败回滚和资源释放。Runtime/SSE 变更必须覆盖双订阅者、重连、缺口 Projection、慢客户端、跨端终止和 listener/lease 清零。Repository 变更必须使用临时 SQLite 并验证事务、外键、版本冲突和重开。
 
