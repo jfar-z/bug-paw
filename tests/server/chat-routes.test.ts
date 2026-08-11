@@ -24,6 +24,7 @@ import { runMigrations } from "../../src/server/database/migrator";
 import { createIdentityRepository } from "../../src/server/identity/identity-repository";
 import { createAgentRepository } from "../../src/server/agents/agent-repository";
 import { createSessionRepository } from "../../src/server/sessions/session-repository";
+import type { SessionBulkService } from "../../src/server/sessions/session-bulk-service";
 
 const apps: FastifyInstance[] = [];
 const temporaryRoots: string[] = [];
@@ -97,6 +98,19 @@ class FakeRuntime implements PiRuntimeGateway {
   }
 }
 
+/** 为路由集成测试保留 Runtime 删除断言，批量事务本身由专用测试覆盖。 */
+function createSessionBulkDouble(removeSession: (sessionId: string) => Promise<void>): SessionBulkService {
+  return {
+    async preview(action, sessionIds) {
+      return { action, sessionIds, sessionCount: sessionIds.length, tasks: [], fingerprint: "test-fingerprint" };
+    },
+    async execute(input) {
+      for (const sessionId of input.sessionIds) await removeSession(sessionId);
+      return { action: input.action, sessionCount: input.sessionIds.length, affectedTaskCount: 0 };
+    },
+  };
+}
+
 async function createTestApp(
   runtime = new FakeRuntime(),
   workspaceFiles?: WorkspaceFileService,
@@ -113,7 +127,7 @@ async function createTestApp(
   registerSetupRoutes(app, { paths });
   registerAuthRoutes(app, { authService });
   registerModelRoutes(app, { authService, runtime });
-  registerSessionRoutes(app, { authService, runtime, deleteSession: (sessionId) => runtime.deleteSession(sessionId) });
+  registerSessionRoutes(app, { authService, runtime, sessionBulk: createSessionBulkDouble((sessionId) => runtime.deleteSession(sessionId)) });
   registerChatRoutes(app, { authService, runtime, workspaceFiles, referenceResolver, chatService: chatService as ChatApplicationService | undefined, heartbeatMs: 50 });
   await app.ready();
   return { app, runtime };
@@ -312,7 +326,7 @@ describe("对话 API", () => {
       authService,
       runtimeSupervisor,
       sessionMetadata,
-      deleteSession: async (sessionId) => {
+      sessionBulk: createSessionBulkDouble(async (sessionId) => {
         const agentId = await sessionMetadata.getAgentId(sessionId);
         const lease = await runtimeSupervisor.acquire(agentId!);
         try {
@@ -320,7 +334,7 @@ describe("对话 API", () => {
         } finally {
           lease.release();
         }
-      },
+      }),
     });
     registerChatRoutes(app, { authService, runtimeSupervisor, sessionMetadata });
     await app.ready();
