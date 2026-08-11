@@ -53,7 +53,7 @@ describe("SearchProviderList", () => {
       revision: "config-2",
       config: { ...settings.config, searchProviders: [...settings.config.searchProviders].reverse() },
     };
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(reordered), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(reordered), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     render(<Harness />);
 

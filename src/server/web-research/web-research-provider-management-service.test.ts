@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { SearchProviderConfig } from "../../shared/web-research-contracts";
 import { ConfigTransaction } from "../configuration/config-transaction";
 import { CredentialService } from "../configuration/credential-service";
 import { VersionConflictError } from "../configuration/versioned-json-store";
@@ -150,16 +151,16 @@ describe("联网搜索 Provider 管理服务", () => {
     };
   }
 
-  function provider(overrides: Partial<ReturnType<typeof baseProvider>> = {}) {
+  function provider(overrides: Partial<SearchProviderConfig> = {}): SearchProviderConfig {
     return { ...baseProvider(), ...overrides };
   }
 
-  function baseProvider() {
+  function baseProvider(): SearchProviderConfig {
     return {
       id: "bocha-main",
       name: "自定义渠道",
-      type: "bocha" as const,
-      connectionMode: "official" as const,
+      type: "bocha",
+      connectionMode: "official",
       enabled: false,
       timeoutMs: 8_000,
     };
