@@ -42,7 +42,9 @@ export function registerWebResearchRoutes(app: FastifyInstance, dependencies: We
     const body = request.body as { revision?: unknown; config?: unknown };
     if (typeof body?.revision !== "string" || !isRecord(body.config)) return sendApiError(reply, 400, "VALIDATION_FAILED", "联网搜索配置格式无效");
     try {
-      await dependencies.configs.update(body.config as unknown as WebResearchConfig, body.revision);
+      const config = await dependencies.configs.validate(body.config as unknown as WebResearchConfig);
+      await assertEnabledProviderCredentials(config, dependencies.credentials);
+      await dependencies.configs.update(config, body.revision);
       await dependencies.refreshRuntime();
       return reply.send(await documentWithProfiles(dependencies));
     } catch (error) {
@@ -116,12 +118,23 @@ export function registerWebResearchRoutes(app: FastifyInstance, dependencies: We
     const body = isRecord(request.body) ? request.body : undefined;
     if (!body || typeof body.revision !== "string") return sendApiError(reply, 400, "VALIDATION_FAILED", "缺少凭证版本");
     try {
+      const { config } = await dependencies.configs.read();
+      const provider = config.searchProviders.find((candidate) => candidate.id === request.params.id);
+      if (config.enabled && provider?.enabled) throw new TypeError("请先停用搜索服务，再删除 API Key");
       const credentialRevision = await dependencies.credentials.remove(request.params.id, body.revision);
       return reply.header("Cache-Control", "no-store").send({ credentialRevision, status: null });
     } catch (error) {
       return sendManagedError(reply, error);
     }
   });
+}
+
+/** 全局能力启用时，所有启用的直连实例都必须具备独立凭证。 */
+async function assertEnabledProviderCredentials(config: WebResearchConfig, credentials: CredentialService): Promise<void> {
+  if (!config.enabled) return;
+  const configured = new Set((await credentials.list()).map((status) => status.providerId));
+  const missing = config.searchProviders.find((provider) => provider.enabled && provider.type !== "searxng" && !configured.has(provider.id));
+  if (missing) throw new TypeError(`搜索服务“${missing.name}”尚未配置 API Key`);
 }
 
 async function documentWithProfiles(dependencies: WebResearchRouteDependencies): Promise<WebResearchSettingsDocument> {

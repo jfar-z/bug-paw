@@ -65,6 +65,21 @@ describe("联网搜索配置路由", () => {
     });
     expect(added.statusCode).toBe(201);
 
+    const missingCredential = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/capabilities/web-research",
+      payload: {
+        revision: added.json().revision,
+        config: {
+          ...added.json().config,
+          enabled: true,
+          searchProviders: added.json().config.searchProviders.map((provider: { id: string }) => provider.id === "bocha-main" ? { ...provider, enabled: true } : { ...provider, enabled: false }),
+        },
+      },
+    });
+    expect(missingCredential.statusCode).toBe(400);
+    expect(missingCredential.json().error.message).toContain("API Key");
+
     const saved = await app.inject({
       method: "PUT",
       url: "/api/v1/capabilities/web-research/providers/bocha-main/credential",
@@ -72,6 +87,27 @@ describe("联网搜索配置路由", () => {
     });
     expect(saved.statusCode).toBe(200);
     expect(JSON.stringify(saved.json())).not.toContain("search-secret");
+
+    const enabled = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/capabilities/web-research",
+      payload: {
+        revision: added.json().revision,
+        config: {
+          ...added.json().config,
+          enabled: true,
+          searchProviders: added.json().config.searchProviders.map((provider: { id: string }) => provider.id === "bocha-main" ? { ...provider, enabled: true } : { ...provider, enabled: false }),
+        },
+      },
+    });
+    expect(enabled.statusCode).toBe(200);
+
+    const deleteWhileEnabled = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/capabilities/web-research/providers/bocha-main/credential",
+      payload: { revision: saved.json().credentialRevision },
+    });
+    expect(deleteWhileEnabled.statusCode).toBe(400);
 
     const settings = await app.inject({ method: "GET", url: "/api/v1/capabilities/web-research" });
     expect(settings.json().credentials).toContainEqual({ providerId: "bocha-main", type: "api_key", configured: true });

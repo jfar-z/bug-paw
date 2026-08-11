@@ -59,12 +59,6 @@ export interface WebResearchConfig {
   allowedDomains: string[];
   /** Agent 可读取的公开响应 MIME 类型。 */
   allowedContentTypes: Array<"text/html" | "text/plain">;
-  /** @deprecated 仅供页面迁移期间保持类型兼容，服务端不会持久化。 */
-  searxngBaseUrl?: string;
-  /** @deprecated 仅供页面迁移期间保持类型兼容，服务端不会持久化。 */
-  egressProfileId?: string;
-  /** @deprecated 仅供页面迁移期间保持类型兼容，服务端不会持久化。 */
-  timeoutMs?: number;
 }
 
 /**

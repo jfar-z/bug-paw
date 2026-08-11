@@ -5147,6 +5147,20 @@ img.message-avatar {
   resize: vertical;
 }
 
+/* 配置页统一使用 SecretInput 外框，避免内部输入框叠加第二层边框。 */
+.configuration-form-card .password-field {
+  background: var(--surface-soft);
+}
+
+.configuration-form-card .password-field input {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  resize: none;
+}
+
 /* 统一能力开关的视觉尺寸，同时保留原生复选框的无障碍语义。 */
 .configuration-form-card .configuration-capability-toggle input[type="checkbox"] {
   appearance: none;
@@ -5402,6 +5416,166 @@ img.message-avatar {
   margin: 16px 0 0;
   color: var(--accent);
   font-size: 11px;
+}
+
+/* 联网搜索沿用配置中心的分隔式信息密度，并让路由顺序始终可见。 */
+.web-research-provider-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--border);
+}
+
+.web-research-provider {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.web-research-provider.is-expanded {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.web-research-provider > header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  padding: 11px 13px;
+}
+
+.web-research-provider__order {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.web-research-provider__identity {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.web-research-provider__identity strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.web-research-provider__identity small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.web-research-provider__actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.web-research-provider__actions button {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.web-research-provider__actions button:hover:not(:disabled),
+.web-research-provider__actions button:focus-visible {
+  border-color: var(--border);
+  color: var(--text-primary);
+  background: var(--surface-soft);
+}
+
+.web-research-provider__actions button:disabled {
+  cursor: not-allowed;
+  opacity: .35;
+}
+
+.web-research-provider__details {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.web-research-provider__details footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.web-research-provider-add {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) minmax(0, 1.4fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 15px;
+  padding: 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.web-research-provider-add > label {
+  display: grid;
+  grid-template-columns: none;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+}
+
+.web-research-provider-add > small {
+  grid-column: 1 / -1;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  .web-research-provider > header {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .web-research-provider__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+    padding-top: 7px;
+    border-top: 1px solid var(--border);
+  }
+
+  .web-research-provider__actions button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .web-research-provider__details > label,
+  .web-research-provider-add {
+    grid-template-columns: 1fr;
+  }
+
+  .web-research-provider__details footer {
+    justify-content: stretch;
+  }
+
+  .web-research-provider__details footer button,
+  .web-research-provider-add > button {
+    min-height: 44px;
+    flex: 1 1 140px;
+    justify-content: center;
+  }
 }
 
 .inherited-field {
