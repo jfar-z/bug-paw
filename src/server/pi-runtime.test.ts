@@ -64,7 +64,12 @@ function createBackend(
 describe("PiRuntimeGateway 提示词刷新", () => {
   it("资源加载器 reload 时读取最新的动态提示词快照", async () => {
     let prompts = ["第一版提示词"];
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], () => prompts);
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], () => prompts, {
+      knowledgeSearch: false,
+      knowledgeRead: false,
+      webSearch: false,
+      webRead: false,
+    });
 
     await loader.reload();
     expect(loader.getAppendSystemPrompt()).toEqual(["第一版提示词"]);

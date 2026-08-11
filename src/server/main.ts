@@ -35,6 +35,7 @@ import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
 import { SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
 import { ProviderRenameService, recoverPendingProviderRenames } from "./configuration/provider-rename-service";
@@ -249,6 +250,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           return buildAgentInstructionPrompts(latest.profile, bootsharp);
         };
         const webResearchConfig = (await webResearchConfigs.read()).config;
+        const retrievalCapabilities = resolveEffectiveRetrievalCapabilities({
+          allowedTools: profile.profile.allowedTools,
+          webResearchEnabled: webResearchConfig.enabled,
+        });
         return createSdkPiRuntimeGateway({
           cwd,
           agentDir: paths.piDir,
@@ -257,16 +262,19 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           defaultThinkingLevel: profile.profile.defaultThinkingLevel,
           titleGeneration: profile.profile.titleGeneration,
           allowedTools: profile.profile.allowedTools,
+          retrievalCapabilities,
           customTools: [
-            createSearchKnowledgeTool(agentId, knowledgeBases),
-            createGetKnowledgeDocumentTool(agentId, knowledgeBases),
-            createManageKnowledgeBaseTool(agentId, knowledgeBases, workspaceFileManager),
+            ...(retrievalCapabilities.knowledgeSearch ? [createSearchKnowledgeTool(agentId, knowledgeBases)] : []),
+            ...(retrievalCapabilities.knowledgeRead ? [createGetKnowledgeDocumentTool(agentId, knowledgeBases)] : []),
+            ...(profile.profile.allowedTools.includes("knowledge_manage")
+              ? [createManageKnowledgeBaseTool(agentId, knowledgeBases, workspaceFileManager)]
+              : []),
             createEditOwnPromptsTool(agentId, agentPrompts, async () => {
               await runtimeSupervisor?.refreshAgentPromptContext(agentId);
             }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
-            ...(webResearchConfig.enabled && profile.profile.allowedTools.includes("web_search") ? [createWebSearchTool(webResearch)] : []),
-            ...(webResearchConfig.enabled && profile.profile.allowedTools.includes("web_open") ? [createWebOpenTool(webResearch)] : []),
+            ...(retrievalCapabilities.webSearch ? [createWebSearchTool(webResearch)] : []),
+            ...(retrievalCapabilities.webRead ? [createWebOpenTool(webResearch)] : []),
           ],
           appendSystemPrompt: await readInstructionPrompts(),
           refreshAppendSystemPrompt: readInstructionPrompts,

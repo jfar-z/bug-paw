@@ -21,6 +21,7 @@ import { CheckpointWriter } from "./runtime/checkpoint-writer";
 import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
+import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
 
 /**
@@ -31,11 +32,17 @@ export function createWorkspaceResourceLoader(
   agentDir: string,
   additionalPrompts: string[] = [],
   currentAdditionalPrompts?: () => string[],
+  retrievalCapabilities: EffectiveRetrievalCapabilities = {
+    knowledgeSearch: false,
+    knowledgeRead: false,
+    webSearch: false,
+    webRead: false,
+  },
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
-    extensionFactories: [createAgentSystemPromptInjectionExtension()],
+    extensionFactories: [createAgentSystemPromptInjectionExtension(retrievalCapabilities)],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
     // 提示词文件可在会话存活期间更新，reload 时从闭包读取最新快照。
@@ -1007,6 +1014,7 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
+  retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
   refreshAppendSystemPrompt?: () => Promise<string[]>;
   sessionDir?: string;
@@ -1062,6 +1070,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       options.agentDir,
       appendSystemPrompt,
       () => appendSystemPrompt,
+      options.retrievalCapabilities,
     );
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
