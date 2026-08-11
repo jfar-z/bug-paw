@@ -281,6 +281,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
+          onToolCallCircuitBreak: (event) => {
+            app.log.warn(event, "重复空参数工具调用已限制");
+          },
           stageSessionDeletion: (sessionId, sessionFile) => durableDeletions.stage("session", sessionId, [
             sessionFile,
             join(paths.runDir, `${sessionId}.json`),

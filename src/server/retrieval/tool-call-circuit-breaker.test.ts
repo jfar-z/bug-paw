@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import {
   classifyToolCallArguments,
@@ -133,7 +134,7 @@ function register(extension: ToolCallCircuitBreakerExtension) {
 }
 
 /** 创建声明 action 必填的最小工具定义。 */
-function requiredActionTool(name: string) {
+function requiredActionTool(name: string): ToolDefinition {
   return {
     name,
     label: name,
@@ -158,5 +159,5 @@ function context(abort: ReturnType<typeof vi.fn>) {
     abort,
     sessionManager: { getSessionId: () => "session-1" },
     model: { provider: "local", id: "qwen-test" },
-  } as never;
+  };
 }
