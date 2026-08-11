@@ -6,8 +6,9 @@ import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateS
 import type { WebResearchConfig, WebResearchSettingsDocument } from "../shared/web-research-contracts";
 import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
+import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult } from "../shared/session-bulk-contracts";
 
-export type { ScheduledTask, ScheduledTaskRun };
+export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult };
 
 export interface ServiceStatus {
   initialized: boolean;
@@ -385,6 +386,14 @@ export const api = {
   listSessions: (agentId: string, archived = false) => request<{ sessions: SessionSummary[] }>(
     `/api/sessions?agentId=${encodeURIComponent(agentId)}${archived ? "&archived=true" : ""}`,
   ),
+  previewSessionBulk: (action: SessionBulkAction, sessionIds: string[]) => request<SessionBulkPreview>("/api/sessions/bulk/preview", {
+    method: "POST",
+    body: JSON.stringify({ action, sessionIds }),
+  }),
+  executeSessionBulk: (action: SessionBulkAction, sessionIds: string[], fingerprint: string) => request<SessionBulkResult>("/api/sessions/bulk", {
+    method: "POST",
+    body: JSON.stringify({ action, sessionIds, fingerprint }),
+  }),
   createSession: (agentId: string) => request<SessionSnapshot>("/api/sessions", { method: "POST", body: JSON.stringify({ agentId }) }),
   openSession: (sessionId: string, signal?: AbortSignal) => request<SessionSnapshot>(
     `/api/sessions/${encodeURIComponent(sessionId)}`,
@@ -456,6 +465,6 @@ export const api = {
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" }),
   unarchiveSession: (sessionId: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "DELETE" }),
-  deleteSession: (sessionId: string, deleteScheduledTasks = false) =>
-    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}${deleteScheduledTasks ? "?deleteScheduledTasks=true" : ""}`, { method: "DELETE" }),
+  deleteSession: (sessionId: string, confirmBoundTasks = false) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}${confirmBoundTasks ? "?confirmBoundTasks=true" : ""}`, { method: "DELETE" }),
 };

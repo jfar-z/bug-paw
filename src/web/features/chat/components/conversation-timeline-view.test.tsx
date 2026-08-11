@@ -1,7 +1,7 @@
 import { createRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentTurn } from "../../../conversation-timeline";
+import type { AgentTurn, UserEntry } from "../../../conversation-timeline";
 import { ConversationTimelineView } from "./conversation-timeline-view";
 
 const firstTurn: AgentTurn = {
@@ -82,6 +82,51 @@ describe("ConversationTimelineView 朗读操作", () => {
 
     expect(screen.getByLabelText("Agent 消息操作"))
       .toHaveClass("message-actions--separated");
+  });
+});
+
+describe("ConversationTimelineView 消息复制", () => {
+  it("用户消息复制纯文本，Agent 消息复制最后一个正文段", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const user: UserEntry = {
+      id: "user-1",
+      type: "user",
+      text: "用户正文",
+      files: [{ path: "image.png" }],
+      references: [],
+      piEntryId: "pi-user-1",
+    };
+    const agent: AgentTurn = {
+      id: "agent-1",
+      type: "agent",
+      blocks: [
+        { id: "text-1", type: "markdown", text: "工具前文本", streaming: false },
+        { id: "tool-1", type: "tool", callId: "call-1", name: "read", args: {}, status: "completed" },
+        { id: "text-2", type: "markdown", text: "最终正文", streaming: false },
+      ],
+    };
+    render(<ConversationTimelineView {...baseProps()} timeline={[user, agent]} speechEnabled={false} />);
+
+    const copyButtons = screen.getAllByRole("button", { name: "复制消息" });
+    fireEvent.click(copyButtons[0]!);
+    fireEvent.click(copyButtons[1]!);
+
+    expect(writeText).toHaveBeenNthCalledWith(1, "用户正文");
+    expect(writeText).toHaveBeenNthCalledWith(2, "最终正文");
+    expect(await screen.findAllByRole("button", { name: "已复制" })).toHaveLength(2);
+  });
+
+  it("没有正文的 Agent 消息不显示复制操作", () => {
+    const toolOnly: AgentTurn = {
+      id: "agent-tool-only",
+      type: "agent",
+      blocks: [{ id: "tool-1", type: "tool", callId: "call-1", name: "read", args: {}, status: "completed" }],
+    };
+
+    render(<ConversationTimelineView {...baseProps()} timeline={[toolOnly]} speechEnabled={false} />);
+
+    expect(screen.queryByRole("button", { name: "复制消息" })).not.toBeInTheDocument();
   });
 });
 

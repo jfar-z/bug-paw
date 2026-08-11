@@ -3,12 +3,13 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
-import { api, type ModelSummary, type SessionSnapshot, type SessionSummary } from "../api";
+import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionSnapshot, type SessionSummary } from "../api";
 import { AgentModelMenu } from "../components/agent-model-menu";
-import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem } from "../components/attachment-picker";
+import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem, validateAttachmentSelection } from "../components/attachment-picker";
 import { ReferenceComposer } from "../components/reference-composer";
 import { MediaLightbox } from "../components/media-lightbox";
 import { ArchivedSessionsDialog } from "../components/archived-sessions-dialog";
+import { SessionBulkConfirmationDialog } from "../components/session-bulk-confirmation-dialog";
 import {
   parsePiHistory,
   reduceTimeline,
@@ -27,6 +28,7 @@ import type { AgentReference } from "../../shared/agent-reference-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
+import { useMobileSidebarSwipe } from "../features/chat/mobile-sidebar-swipe";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
@@ -75,6 +77,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [sessionBulkPreview, setSessionBulkPreview] = useState<SessionBulkPreview>();
+  const [sessionBulkBusy, setSessionBulkBusy] = useState(false);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
@@ -311,6 +317,24 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     return created;
   };
 
+  /** 退出批量模式并清理尚未执行的确认预览。 */
+  const cancelSessionSelection = () => {
+    setSessionSelectionMode(false);
+    setSelectedSessionIds([]);
+    setSessionBulkPreview(undefined);
+  };
+
+  /** 统一所有侧栏关闭入口，保证选择不会跨抽屉生命周期残留。 */
+  const closeSidebar = () => {
+    cancelSessionSelection();
+    setSidebarOpen(false);
+  };
+  const sidebarSwipe = useMobileSidebarSwipe({
+    open: sidebarOpen,
+    onOpen: () => setSidebarOpen(true),
+    onClose: closeSidebar,
+  });
+
   const enterDraft = () => {
     stopSpeech();
     stream.close();
@@ -325,7 +349,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setAttachmentItems([]);
     setError("");
     pendingUserMessageRef.current = undefined;
-    setSidebarOpen(false);
+    closeSidebar();
   };
 
   const clearSessionLongPress = () => {
@@ -383,7 +407,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setOpeningSessionId(sessionId);
     try {
       applySnapshot(await api.openSession(sessionId), "once");
-      setSidebarOpen(false);
+      closeSidebar();
     } catch (reason) {
       setError(reason instanceof Error ? `加载会话失败：${reason.message}` : "加载会话失败。");
     } finally {
@@ -441,9 +465,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
   };
 
-  const deleteConversation = async (sessionId: string, archived = false, deleteScheduledTasks = false) => {
+  const deleteConversation = async (sessionId: string, archived = false, confirmBoundTasks = false) => {
     try {
-      await api.deleteSession(sessionId, deleteScheduledTasks);
+      await api.deleteSession(sessionId, confirmBoundTasks);
       if (archived) {
         setArchivedSessions((current) => current.filter((item) => item.id !== sessionId));
       } else {
@@ -455,6 +479,59 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       sessionSyncRef.current?.notify();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "会话删除失败。");
+    }
+  };
+
+  /** 从会话菜单进入多选，触发会话可操作时默认选中。 */
+  const enterSessionSelection = (sessionId: string) => {
+    const selectable = !(streaming && session?.id === sessionId);
+    setSessionSelectionMode(true);
+    setSelectedSessionIds(selectable ? [sessionId] : []);
+    setSessionBulkPreview(undefined);
+  };
+
+  const toggleSessionSelection = (sessionId: string) => {
+    if (streaming && session?.id === sessionId) return;
+    setSelectedSessionIds((current) => current.includes(sessionId)
+      ? current.filter((id) => id !== sessionId)
+      : [...current, sessionId]);
+  };
+
+  /** 请求服务端稳定预览后才展示批量操作二次确认。 */
+  const previewSessionBulk = async (action: SessionBulkAction) => {
+    if (selectedSessionIds.length === 0 || sessionBulkBusy) return;
+    setSessionBulkBusy(true);
+    setError("");
+    try {
+      setSessionBulkPreview(await api.previewSessionBulk(action, selectedSessionIds));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "会话批量操作预览失败。");
+    } finally {
+      setSessionBulkBusy(false);
+    }
+  };
+
+  /** 使用预览指纹提交原子批量操作，并同步刷新本地会话列表。 */
+  const executeSessionBulk = async () => {
+    const preview = sessionBulkPreview;
+    if (!preview || sessionBulkBusy) return;
+    setSessionBulkBusy(true);
+    setError("");
+    try {
+      await api.executeSessionBulk(preview.action, preview.sessionIds, preview.fingerprint);
+      const removedIds = new Set(preview.sessionIds);
+      setSessions((current) => current.filter((item) => !removedIds.has(item.id)));
+      sessionSyncRef.current?.notify();
+      if (session?.id && removedIds.has(session.id)) {
+        enterDraft();
+      } else {
+        cancelSessionSelection();
+      }
+    } catch (reason) {
+      setSessionBulkPreview(undefined);
+      setError(reason instanceof Error ? reason.message : "会话批量操作失败。");
+    } finally {
+      setSessionBulkBusy(false);
     }
   };
 
@@ -601,6 +678,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         : item));
       setError(message);
     }
+  };
+
+  /** 让文件选择、粘贴和拖放共享相同的数量与大小限制。 */
+  const queueAttachmentFiles = (files: File[]) => {
+    const validationError = validateAttachmentSelection(attachmentItems.length, files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    void uploadFiles(files);
   };
 
   const abort = async () => {
@@ -813,7 +900,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const activeAgentEntryId = [...timeline].reverse().find((entry) => entry.type === "agent")?.id;
 
   return (
-    <main className="chat-shell live-chat-shell">
+    <main className="chat-shell live-chat-shell" {...sidebarSwipe.handlers}>
       <ChatSidebar
         open={sidebarOpen}
         sessions={sessions}
@@ -825,7 +912,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         refreshing={refreshingSessions}
         profileIdentity={profileIdentity}
         actionsOpenRequest={sessionActionsOpenRequest}
-        onClose={() => setSidebarOpen(false)}
+        selectionMode={sessionSelectionMode}
+        selectedSessionIds={selectedSessionIds}
+        bulkBusy={sessionBulkBusy}
+        swiping={sidebarSwipe.swiping}
+        swipeTranslatePercent={sidebarSwipe.translatePercent}
+        onClose={closeSidebar}
         onEnterDraft={enterDraft}
         onRefresh={() => void refreshSessions()}
         onScroll={showSessionNavScrollbar}
@@ -839,7 +931,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onOpen={(sessionId) => void openConversation(sessionId)}
         onRename={(sessionId, name) => void renameConversation(sessionId, name)}
         onArchive={(sessionId) => void archiveConversation(sessionId)}
-        onDelete={(sessionId, deleteScheduledTasks) => void deleteConversation(sessionId, false, deleteScheduledTasks)}
+        onDelete={(sessionId, confirmBoundTasks) => void deleteConversation(sessionId, false, confirmBoundTasks)}
+        onEnterSelection={enterSessionSelection}
+        onToggleSelection={toggleSessionSelection}
+        onCancelSelection={cancelSessionSelection}
+        onBulkArchive={() => void previewSessionBulk("archive")}
+        onBulkDelete={() => void previewSessionBulk("delete")}
         onShowArchived={() => void showArchivedSessions()}
         onEditProfile={() => setProfileOpen(true)}
       />
@@ -849,7 +946,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           <div className="chat-header__left">
             <button type="button" className="icon-button mobile-menu" aria-label="打开会话历史" onClick={() => setSidebarOpen(true)}><Menu size={19} /></button>
             <button type="button" className="chat-workbench-switcher" aria-label="打开工作台导航" onClick={() => {
-              setSidebarOpen(false);
+              closeSidebar();
               window.dispatchEvent(new Event(WORKBENCH_NAVIGATION_TOGGLE_EVENT));
             }}><span>工作台</span><ChevronDown size={14} aria-hidden="true" /></button>
             <div className="chat-title"><strong>{session ? "Agent 对话" : "新对话"}</strong><span>pi SDK · 实时连接</span></div>
@@ -912,6 +1009,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               loadCatalog={() => selectedAgentId ? api.getComposerCatalog(selectedAgentId) : Promise.resolve({ skills: [], commands: [], knowledgeBases: [], workspaceEntries: [] })}
               onChange={setDraft}
               onReferencesChange={setDraftReferences}
+              onFilesInput={queueAttachmentFiles}
               onSubmit={() => void send()}
               onCatalogError={setError}
               editingContext={editingEntryId ? <div className="composer-editing-context" role="status">
@@ -919,8 +1017,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
                 <p title={editingEntry?.text || draft}>{editingEntry?.text || draft || "历史消息"}</p>
                 <button type="button" onClick={cancelEditing}>取消编辑</button>
               </div> : undefined}
-              attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={(files) => void uploadFiles(files)} onError={setError} />}
-              attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={(files) => void uploadFiles(files)} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
+              attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={queueAttachmentFiles} onError={setError} />}
+              attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
               bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
             />
           </div>
@@ -935,6 +1033,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onRestore={restoreConversation}
         onDelete={(sessionId) => deleteConversation(sessionId, true)}
       />
+      {sessionBulkPreview ? <SessionBulkConfirmationDialog
+        preview={sessionBulkPreview}
+        busy={sessionBulkBusy}
+        onCancel={() => setSessionBulkPreview(undefined)}
+        onConfirm={() => void executeSessionBulk()}
+      /> : null}
       {previewImage ? <MediaLightbox item={previewImage} images={collectTimelineImages(timeline, mediaSummaries)} agentId={activeAgentId} onClose={() => setPreviewImage(undefined)} /> : null}
       <ProfileDialog
         open={profileOpen}

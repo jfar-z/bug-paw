@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import type { PiRuntimeGateway } from "../pi-runtime";
 import type { SessionMetadataStore } from "../session-metadata";
+import type { SessionBulkService } from "../sessions/session-bulk-service";
 import type { AuthService } from "./auth";
 import { registerSessionRoutes } from "./sessions";
 
@@ -37,23 +38,17 @@ describe("会话路由的定时任务联动", () => {
   });
 
   it("会话列表返回绑定任务数量，删除前要求确认", async () => {
-    const deleteSession = vi.fn(async (_sessionId: string, _deleteScheduledTasks = false) => undefined);
-    const removeTasksForSession = vi.fn(async (_sessionId: string) => undefined);
     const runtime = {
       listSessions: async () => [{ id: "session-1", path: "", created: "2026-08-07T00:00:00.000Z", modified: "2026-08-07T00:00:00.000Z", messageCount: 1, firstMessage: "日报" }],
-      deleteSession,
     } as unknown as PiRuntimeGateway;
+    const sessionBulk = bulkServiceDouble({ tasks: [{ id: "task-1", name: "日报", sessionId: "session-1" }] });
     const app = Fastify();
     registerSessionRoutes(app, {
       authService,
       runtime,
-      deleteSession: async (sessionId, deleteScheduledTasks) => {
-        await deleteSession(sessionId, deleteScheduledTasks);
-        await removeTasksForSession(sessionId);
-      },
+      sessionBulk,
       scheduledTasks: {
         boundTasks: async () => [{ id: "task-1" }],
-        removeTasksForSession,
       },
     });
 
@@ -63,24 +58,28 @@ describe("会话路由的定时任务联动", () => {
 
     const rejected = await app.inject({ method: "DELETE", url: "/api/sessions/session-1" });
     expect(rejected.statusCode).toBe(409);
-    expect(deleteSession).not.toHaveBeenCalled();
+    expect(rejected.json().error.message).toContain("停用任务");
+    expect(sessionBulk.execute).not.toHaveBeenCalled();
 
-    const confirmed = await app.inject({ method: "DELETE", url: "/api/sessions/session-1?deleteScheduledTasks=true" });
+    const confirmed = await app.inject({ method: "DELETE", url: "/api/sessions/session-1?confirmBoundTasks=true" });
     expect(confirmed.statusCode).toBe(204);
-    expect(deleteSession).toHaveBeenCalledWith("session-1", true);
-    expect(removeTasksForSession).toHaveBeenCalledWith("session-1");
+    expect(sessionBulk.execute).toHaveBeenCalledWith({
+      action: "delete",
+      sessionIds: ["session-1"],
+      fingerprint: "fingerprint-1",
+    });
     await app.close();
   });
 
   it("模型切换只修改模型，不会误触发 Session 删除服务", async () => {
-    const deleteSession = vi.fn(async () => undefined);
+    const sessionBulk = bulkServiceDouble();
     const setModel = vi.fn(async () => undefined);
     const runtime = {
       openSession: vi.fn(async (id: string) => ({ id, messages: [], lastEventId: 0 })),
       setModel,
     } as unknown as PiRuntimeGateway;
     const app = Fastify();
-    registerSessionRoutes(app, { authService, runtime, deleteSession });
+    registerSessionRoutes(app, { authService, runtime, sessionBulk });
 
     const response = await app.inject({
       method: "PUT",
@@ -90,26 +89,73 @@ describe("会话路由的定时任务联动", () => {
 
     expect(response.statusCode).toBe(204);
     expect(setModel).toHaveBeenCalledWith("session-1", "test", "model-1");
-    expect(deleteSession).not.toHaveBeenCalled();
+    expect(sessionBulk.execute).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("配置事务化删除服务时由服务统一删除 Session 与绑定任务", async () => {
-    const deleteSession = vi.fn(async () => undefined);
-    const removeTasksForSession = vi.fn(async () => undefined);
+  it("批量预览与执行接口透传确认指纹", async () => {
+    const sessionBulk = bulkServiceDouble();
     const app = Fastify();
     registerSessionRoutes(app, {
       authService,
       runtime: {} as PiRuntimeGateway,
-      deleteSession,
-      scheduledTasks: { boundTasks: async () => [{ id: "task-1" }], removeTasksForSession },
+      sessionBulk,
     });
 
-    const response = await app.inject({ method: "DELETE", url: "/api/sessions/session-1?deleteScheduledTasks=true" });
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/sessions/bulk/preview",
+      payload: { action: "archive", sessionIds: ["session-1", "session-2"] },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/sessions/bulk",
+      payload: { action: "archive", sessionIds: ["session-1", "session-2"], fingerprint: "fingerprint-1" },
+    });
 
-    expect(response.statusCode).toBe(204);
-    expect(deleteSession).toHaveBeenCalledWith("session-1", true);
-    expect(removeTasksForSession).not.toHaveBeenCalled();
+    expect(preview.statusCode).toBe(200);
+    expect(sessionBulk.preview).toHaveBeenCalledWith("archive", ["session-1", "session-2"]);
+    expect(response.statusCode).toBe(200);
+    expect(sessionBulk.execute).toHaveBeenCalledWith({
+      action: "archive",
+      sessionIds: ["session-1", "session-2"],
+      fingerprint: "fingerprint-1",
+    });
+    await app.close();
+  });
+
+  it("批量接口拒绝空集合和超过上限的 ID 集合", async () => {
+    const sessionBulk = bulkServiceDouble();
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime: {} as PiRuntimeGateway, sessionBulk });
+
+    const empty = await app.inject({ method: "POST", url: "/api/sessions/bulk/preview", payload: { action: "delete", sessionIds: [] } });
+    const excessive = await app.inject({
+      method: "POST",
+      url: "/api/sessions/bulk/preview",
+      payload: { action: "delete", sessionIds: Array.from({ length: 201 }, (_, index) => `session-${index}`) },
+    });
+
+    expect(empty.statusCode).toBe(400);
+    expect(excessive.statusCode).toBe(400);
+    expect(sessionBulk.preview).not.toHaveBeenCalled();
     await app.close();
   });
 });
+
+function bulkServiceDouble(overrides: { tasks?: Array<{ id: string; name: string; sessionId: string }> } = {}): SessionBulkService {
+  return {
+    preview: vi.fn(async (action, sessionIds) => ({
+      action,
+      sessionIds,
+      sessionCount: sessionIds.length,
+      tasks: overrides.tasks ?? [],
+      fingerprint: "fingerprint-1",
+    })),
+    execute: vi.fn(async (input) => ({
+      action: input.action,
+      sessionCount: input.sessionIds.length,
+      affectedTaskCount: overrides.tasks?.length ?? 0,
+    })),
+  };
+}

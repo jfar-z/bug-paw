@@ -1982,6 +1982,47 @@ p {
   white-space: nowrap;
 }
 
+.session-row__select {
+  display: flex;
+  min-height: 38px;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.session-row__select > input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.session-row__select > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row__select > small {
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.session-row__select.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .session-actions {
   position: relative;
   flex: 0 0 auto;
@@ -2066,6 +2107,15 @@ p {
   font-size: 12px;
 }
 
+.session-actions__confirm .session-actions__task-warning {
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--danger) 48%, var(--border));
+  border-radius: 7px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  font-weight: 650;
+}
+
 .session-actions__confirm div,
 .archive-dialog__confirm {
   display: flex;
@@ -2103,6 +2153,45 @@ p {
 .archived-chat-button:hover {
   color: var(--text-primary);
   background: var(--surface-hover);
+}
+
+.session-selection-toolbar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin: 8px 0;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.session-selection-toolbar > button {
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  place-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 10px;
+}
+
+.session-selection-toolbar > button:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.session-selection-toolbar > button.is-danger {
+  color: var(--danger);
+}
+
+.session-selection-toolbar > button:disabled {
+  opacity: 0.42;
 }
 
 .sidebar-footer {
@@ -3690,6 +3779,23 @@ img.message-avatar {
   position: relative;
 }
 
+/* 拖放进入输入区时给出稳定落点，不遮挡既有附件和发送控件。 */
+.reference-composer.is-dragging-input::after {
+  position: absolute;
+  z-index: 8;
+  inset: -8px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--accent);
+  border-radius: 13px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-soft) 88%, var(--surface));
+  content: "松开以添加图片或文本";
+  font-size: 12px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
 /* 历史编辑态固定提示分支语义，避免回填文本与普通新消息混淆。 */
 .composer-editing-context {
   display: grid;
@@ -4106,6 +4212,14 @@ img.message-avatar {
     transform: translateX(0);
   }
 
+  .chat-sidebar.is-swiping {
+    transition: none;
+  }
+
+  .chat-workspace {
+    touch-action: pan-y;
+  }
+
   .sidebar-scrim {
     position: fixed;
     inset: 0;
@@ -4244,6 +4358,14 @@ img.message-avatar {
 
   .chat-sidebar.is-open {
     transform: translateX(0);
+  }
+
+  .chat-sidebar.is-swiping {
+    transition: none;
+  }
+
+  .chat-workspace {
+    touch-action: pan-y;
   }
 
   .sidebar-scrim {
@@ -6381,6 +6503,7 @@ img.message-avatar {
 .scheduled-task-card { display: grid; grid-template-columns: 32px minmax(170px, 1fr) auto auto; align-items: center; gap: 13px; min-width: 0; padding: 15px 18px; background: var(--panel); }
 .scheduled-task-card + .scheduled-task-card { border-top: 1px solid var(--border); }
 .scheduled-task-card:hover { background: var(--surface); }
+.scheduled-task-card.is-target-missing { background: color-mix(in srgb, var(--danger) 5%, var(--panel)); box-shadow: 3px 0 0 color-mix(in srgb, var(--danger) 72%, transparent) inset; }
 .scheduled-task-card__icon { display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border)); border-radius: 8px; color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
 .scheduled-task-card__body { display: grid; min-width: 0; gap: 3px; }
 .scheduled-task-card__body strong { overflow: hidden; color: var(--text-primary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -6390,9 +6513,16 @@ img.message-avatar {
 .scheduled-task-card__actions { display: flex; align-items: center; gap: 3px; }
 .scheduled-task-card__actions button { display: grid; width: 29px; height: 29px; place-items: center; border: 1px solid transparent; border-radius: 7px; color: var(--text-secondary); background: transparent; }
 .scheduled-task-card__actions button:hover { border-color: var(--border); color: var(--text-primary); background: var(--surface-soft); }
+.scheduled-task-card__actions button:disabled { cursor: not-allowed; opacity: .42; }
+.scheduled-task-card__actions button:disabled:hover { border-color: transparent; color: var(--text-secondary); background: transparent; }
 .scheduled-task-card__actions .scheduled-task-card__run { display: inline-flex; width: auto; gap: 5px; padding: 0 9px; font-size: 11px; }
 .scheduled-task-card__actions .is-danger:hover { border-color: color-mix(in srgb, var(--danger) 36%, var(--border)); color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
 .scheduled-task-empty { margin: 0; padding: 30px 18px; color: var(--text-tertiary); font-size: 11px; text-align: center; }
+.scheduled-task-target-missing { display: flex; min-width: 0; align-items: flex-start; gap: 7px; color: var(--danger); }
+.scheduled-task-target-missing > svg { flex: 0 0 auto; margin-top: 1px; }
+.scheduled-task-target-missing > span { display: grid; min-width: 0; gap: 2px; }
+.scheduled-task-card__body .scheduled-task-target-missing strong { color: var(--danger); white-space: normal; }
+.scheduled-task-card__body .scheduled-task-target-missing small { color: color-mix(in srgb, var(--danger) 74%, var(--text-secondary)); white-space: normal; }
 
 .scheduled-task-editor { display: grid; gap: 22px; margin-top: 22px; padding: 20px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); box-shadow: 0 10px 28px rgba(22, 32, 27, .04); }
 .scheduled-task-editor__header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
@@ -6404,6 +6534,7 @@ img.message-avatar {
 .scheduled-task-switch > span::after { position: absolute; top: 3px; left: 3px; width: 9px; height: 9px; border-radius: 50%; background: var(--text-tertiary); content: ""; transition: transform .16s ease, background .16s ease; }
 .scheduled-task-switch input:checked + span { border-color: var(--accent); background: var(--accent); }
 .scheduled-task-switch input:checked + span::after { background: var(--surface); transform: translateX(13px); }
+.scheduled-task-switch:has(input:disabled) { cursor: not-allowed; opacity: .5; }
 .scheduled-task-editor__section { display: grid; gap: 13px; }
 .scheduled-task-editor__section--basics { grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr); align-items: start; }
 .scheduled-task-section-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
@@ -6444,6 +6575,9 @@ img.message-avatar {
 .scheduled-task-check { display: inline-flex; align-items: center; gap: 8px; width: fit-content; color: var(--text-secondary); font-size: 10px; cursor: pointer; }
 .scheduled-task-check input { accent-color: var(--accent); }
 .scheduled-task-session-select { max-width: 460px; }
+.scheduled-task-target-missing--editor { padding: 12px 13px; border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border)); border-radius: 9px; background: color-mix(in srgb, var(--danger) 8%, var(--panel)); }
+.scheduled-task-target-missing--editor strong { color: var(--danger); font-size: 11px; }
+.scheduled-task-target-missing--editor small { color: color-mix(in srgb, var(--danger) 72%, var(--text-secondary)); font-size: 10px; line-height: 1.5; }
 .scheduled-task-session-picker { position: relative; }
 .scheduled-task-session-picker__trigger { display: flex; width: 100%; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; outline: 0; color: var(--text-primary); background: var(--surface); font: inherit; font-size: 10px; text-align: left; }
 .scheduled-task-session-picker__trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -7247,6 +7381,70 @@ a[aria-disabled="true"] {
   width: min(520px, 100%);
   display: grid;
   gap: 16px;
+}
+
+.session-bulk-dialog {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 18px;
+}
+
+.session-bulk-dialog__icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+
+.session-bulk-dialog__icon.is-destructive {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+.session-bulk-dialog header p,
+.session-bulk-dialog__plain-impact {
+  margin-top: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.session-bulk-dialog__task-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 11px;
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-soft) 74%, var(--surface));
+}
+
+.session-bulk-dialog__task-warning.is-destructive {
+  border-width: 2px;
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 6%, transparent);
+}
+
+.session-bulk-dialog__task-warning > svg {
+  margin-top: 1px;
+  flex: 0 0 auto;
+}
+
+.session-bulk-dialog__task-warning strong {
+  font-size: 13px;
+}
+
+.session-bulk-dialog__task-warning p {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .provider-rename-dialog__field {

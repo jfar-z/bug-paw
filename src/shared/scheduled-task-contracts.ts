@@ -4,10 +4,25 @@ export type ScheduledTaskSchedule =
   | { type: "cron"; expression: string; timezone: string }
   | { type: "once"; runAt: string };
 
-/** 定时任务目标会话定义。 */
-export type ScheduledTaskTarget =
+/** 用户可为定时任务选择的目标会话定义。 */
+export type WritableScheduledTaskTarget =
   | { type: "new_session"; archiveAfterCompletion: boolean }
   | { type: "existing_session"; sessionId: string };
+
+/** 会话删除后保留的只读任务目标。 */
+export interface DeletedSessionTaskTarget {
+  type: "deleted_session";
+  sessionId: string;
+  sessionName: string;
+}
+
+/** 定时任务当前持有的目标会话定义。 */
+export type ScheduledTaskTarget = WritableScheduledTaskTarget | DeletedSessionTaskTarget;
+
+/** 判断任务是否因原目标会话删除而不可执行。 */
+export function isDeletedSessionTarget(target: ScheduledTaskTarget): target is DeletedSessionTaskTarget {
+  return target.type === "deleted_session";
+}
 
 /** 定时任务数据。 */
 export interface ScheduledTask {
@@ -24,8 +39,10 @@ export interface ScheduledTask {
   lastRunAt?: string;
 }
 
-/** 创建任务时允许提交的字段。 */
-export type CreateScheduledTaskInput = Pick<ScheduledTask, "agentId" | "name" | "prompt" | "enabled" | "schedule" | "target">;
+/** 创建任务时允许提交的字段；缺失目标只能由服务端删除事务生成。 */
+export type CreateScheduledTaskInput = Pick<ScheduledTask, "agentId" | "name" | "prompt" | "enabled" | "schedule"> & {
+  target: WritableScheduledTaskTarget;
+};
 
 /** 更新任务时允许提交的字段。 */
 export type UpdateScheduledTaskInput = Partial<Omit<CreateScheduledTaskInput, "agentId">>;

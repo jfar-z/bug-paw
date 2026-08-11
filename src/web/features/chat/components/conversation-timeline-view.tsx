@@ -16,6 +16,8 @@ import { agentTurnSpeechText, prepareSpeechSegments } from "../../../speech-text
 import type { ThemePreference } from "../../../theme";
 import { UserAvatar } from "./user-avatar";
 import { MessageSpeechButton } from "./message-speech-button";
+import { MessageCopyButton } from "./message-copy-button";
+import { copyTextForEntry } from "../message-copy";
 
 interface ConversationTimelineViewProps {
   timeline: ConversationEntry[];
@@ -66,9 +68,10 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
                 <AgentReferenceChips references={entry.references} />
                 {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
               </div>
-              {entry.piEntryId && entry.source !== "scheduled" ? <div className="message-actions message-actions--separated user-message-actions" aria-label="用户消息操作">
+              {(copyTextForEntry(entry) || (entry.piEntryId && entry.source !== "scheduled")) ? <div className="message-actions message-actions--separated user-message-actions" aria-label="用户消息操作">
                 {entry.branch?.count && entry.branch.count > 1 ? <><button type="button" aria-label="切换到上一版本" title="切换到上一版本" disabled={props.streaming || props.opening || !entry.branch.previousNavigationEntryId} onClick={() => entry.branch?.previousNavigationEntryId && props.onNavigateHistory?.(entry.branch.previousNavigationEntryId)}><ChevronLeft size={15} aria-hidden="true" /></button><button type="button" aria-label="切换到下一版本" title="切换到下一版本" disabled={props.streaming || props.opening || !entry.branch.nextNavigationEntryId} onClick={() => entry.branch?.nextNavigationEntryId && props.onNavigateHistory?.(entry.branch.nextNavigationEntryId)}><ChevronRight size={15} aria-hidden="true" /></button></> : null}
-                <button type="button" aria-label="重新编辑消息" title="重新编辑消息" disabled={props.streaming || props.opening} onClick={() => props.onEditHistory?.(entry.piEntryId!)}><Pencil size={15} aria-hidden="true" /></button>
+                {entry.piEntryId && entry.source !== "scheduled" ? <button type="button" aria-label="重新编辑消息" title="重新编辑消息" disabled={props.streaming || props.opening} onClick={() => props.onEditHistory?.(entry.piEntryId!)}><Pencil size={15} aria-hidden="true" /></button> : null}
+                {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
               </div> : null}
             </div>
           </article>
@@ -86,9 +89,10 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
                 if (block.type === "files") return props.activeAgentId ? <MessageAttachments key={block.id} files={block.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} /> : null;
                 return <LiveToolCard key={block.id} tool={block} />;
               })}
-              {(entry.sourceUserEntryId || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
+              {(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
                 <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
                   {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
+                  {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
                   {props.speechEnabled && agentTurnSpeechText(entry) ? <MessageSpeechButton
                     active={props.activeSpeechMessageId === entry.id}
                     disabled={speechButtonDisabled(entry, props.streaming, props.activeAgentEntryId)}

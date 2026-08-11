@@ -41,6 +41,39 @@ describe("定时任务执行服务", () => {
     expect(sessionIsPersisted).toHaveBeenCalledWith("writer", "empty-session");
   });
 
+  it("原目标会话已删除时拒绝手动执行", async () => {
+    const database = createTestDatabase();
+    databases.push(database);
+    await createAgentRepository(database).insert({
+      version: 1, id: "writer", name: "Writer", avatar: { kind: "initial", value: "W" }, description: "", status: "active",
+      cwd: "/workspace/writer", allowedTools: [], createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z",
+    });
+    const timestamp = "2026-08-11T00:00:00.000Z";
+    database.write(
+      "INSERT INTO scheduled_tasks(id, agent_id, session_id, task_json, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)",
+      ["missing-target-task", "writer", JSON.stringify({
+        id: "missing-target-task",
+        agentId: "writer",
+        name: "缺失目标",
+        prompt: "不应执行",
+        enabled: false,
+        schedule: { type: "interval", unit: "hour", value: 1 },
+        target: { type: "deleted_session", sessionId: "deleted-session", sessionName: "已删除日报会话" },
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }), timestamp, timestamp],
+    );
+    const startPrompt = vi.fn(async () => ({ status: "completed" }));
+    const service = createScheduledTaskService({
+      store: createScheduledTaskRepository(database),
+      acquireRuntime: async () => ({ runtime: { createSession: async () => ({ id: "unused" }), startPrompt }, release: vi.fn() }),
+    });
+
+    await expect(service.runNow("missing-target-task"))
+      .rejects.toMatchObject({ code: "SCHEDULED_TASK_TARGET_MISSING" });
+    expect(startPrompt).not.toHaveBeenCalled();
+  });
+
   it("在 Agent 空闲后才将新会话任务记录为完成", async () => {
     const store = await createStore();
     const task = await store.createTask({ agentId: "writer", name: "日报", prompt: "整理日报", enabled: true, schedule: { type: "interval", unit: "hour", value: 1 }, target: { type: "new_session", archiveAfterCompletion: false } });

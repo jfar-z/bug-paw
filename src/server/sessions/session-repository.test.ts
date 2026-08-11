@@ -40,23 +40,6 @@ describe("SessionRepository", () => {
     });
   });
 
-  it("删除 Session 与其绑定定时任务在同一事务完成", async () => {
-    const { database, agents, sessions } = createRepositories();
-    await agents.insert(profile("a1"));
-    await sessions.assign("s1", "a1", "2026-08-07T00:00:00.000Z");
-    database.write(
-      "INSERT INTO scheduled_tasks(id, agent_id, session_id, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-      ["t1", "a1", "s1", JSON.stringify({ target: { type: "existing_session", sessionId: "s1" } }), "2026-08-07T00:00:00.000Z", "2026-08-07T00:00:00.000Z"],
-    );
-
-    await expect(sessions.removeWithBoundTasks("s1", false)).rejects.toMatchObject({ code: "SCHEDULED_TASKS_BOUND" });
-    expect(await sessions.find("s1")).toBeDefined();
-    await sessions.removeWithBoundTasks("s1", true);
-
-    expect(await sessions.find("s1")).toBeUndefined();
-    expect(database.read("SELECT id FROM scheduled_tasks WHERE id = ?", ["t1"])).toEqual([]);
-  });
-
   function createRepositories() {
     const database = createTestDatabase();
     databases.push(database);
