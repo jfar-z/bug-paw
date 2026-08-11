@@ -29,7 +29,7 @@ describe("AgentTurnContent", () => {
     const first = screen.getByText("第一段正文");
     const firstActivity = screen.getByRole("button", { name: "展开活动段：已完成 2 项活动" });
     const second = screen.getByText("第二段正文");
-    const secondActivity = screen.getByRole("button", { name: "收起活动段：正在写入 src/app.ts" });
+    const secondActivity = screen.getByRole("button", { name: "收起活动段：写入 src/app.ts" });
     expect(first.compareDocumentPosition(firstActivity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(firstActivity.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(second.compareDocumentPosition(secondActivity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -37,7 +37,7 @@ describe("AgentTurnContent", () => {
     fireEvent.click(screen.getByRole("button", { name: "收起本轮全部活动" }));
     expect(screen.getByText("第一段正文")).toBeVisible();
     expect(screen.getByText("第二段正文")).toBeVisible();
-    expect(screen.getByRole("button", { name: "展开活动段：正在写入 src/app.ts" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "展开活动段：写入 src/app.ts" })).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(screen.getByRole("button", { name: "展开本轮全部活动" }));
     expect(screen.getByRole("button", { name: "收起活动段：已完成 2 项活动" })).toHaveAttribute("aria-expanded", "true");
