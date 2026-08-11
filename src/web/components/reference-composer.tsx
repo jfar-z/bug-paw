@@ -173,6 +173,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
   return (
     <div
       className={`reference-composer${draggingInput ? " is-dragging-input" : ""}`}
+      style={draggingInput ? { outline: "2px dashed var(--accent)", background: "var(--accent-soft)" } : undefined}
       ref={composerRef}
       onDragEnter={(event) => {
         if (disabled || !supportsDrop(event.dataTransfer.types)) return;

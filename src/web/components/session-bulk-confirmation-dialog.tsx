@@ -16,9 +16,9 @@ export function SessionBulkConfirmationDialog({ preview, busy = false, onCancel,
   const titleId = "session-bulk-confirmation-title";
   return (
     <div className="configuration-dialog-backdrop" role="presentation">
-      <section className="configuration-dialog session-bulk-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <section className="configuration-dialog session-bulk-dialog" style={{ width: "min(520px, 100%)", display: "grid", gap: 16 }} role="dialog" aria-modal="true" aria-labelledby={titleId}>
         <header>
-          <span className={deleting ? "session-bulk-dialog__icon is-destructive" : "session-bulk-dialog__icon"}>
+          <span className={deleting ? "session-bulk-dialog__icon is-destructive" : "session-bulk-dialog__icon"} style={{ color: deleting ? "var(--danger)" : "var(--accent-strong)" }}>
             {deleting ? <Trash2 size={20} aria-hidden="true" /> : <Archive size={20} aria-hidden="true" />}
           </span>
           <div>
@@ -26,7 +26,7 @@ export function SessionBulkConfirmationDialog({ preview, busy = false, onCancel,
             <p>确认后将一次性处理已选择的会话。</p>
           </div>
         </header>
-        {preview.tasks.length > 0 ? <div className={`session-bulk-dialog__task-warning${deleting ? " is-destructive" : ""}`} role="alert">
+        {preview.tasks.length > 0 ? <div className={`session-bulk-dialog__task-warning${deleting ? " is-destructive" : ""}`} style={{ display: "flex", gap: 10, padding: 12, border: `${deleting ? 2 : 1}px solid ${deleting ? "var(--danger)" : "var(--accent)"}`, borderRadius: 11, color: deleting ? "var(--danger)" : "var(--accent-strong)", background: deleting ? "color-mix(in srgb, var(--danger) 10%, var(--surface))" : "var(--accent-soft)" }} role="alert">
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
             <strong>检测到 {preview.tasks.length} 个定时任务</strong>
