@@ -122,7 +122,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
     insertAtSelection(withoutImagePlaceholders(event.clipboardData.getData("text/plain")));
   };
 
-  const handleDrop = (event: DragEvent<HTMLTextAreaElement>) => {
+  const handleDrop = (event: DragEvent<HTMLElement>) => {
     dragDepthRef.current = 0;
     setDraggingInput(false);
     if (disabled) return;
@@ -183,6 +183,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
       onDragOver={(event) => {
         if (!disabled && supportsDrop(event.dataTransfer.types)) event.preventDefault();
       }}
+      onDrop={handleDrop}
       onDragLeave={() => {
         dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
         if (dragDepthRef.current === 0) setDraggingInput(false);
@@ -200,7 +201,6 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
           value={text}
           onChange={(event) => updateText(event.target.value)}
           onPaste={handlePaste}
-          onDrop={handleDrop}
           onKeyDown={(event) => {
             if (mode && candidates.length > 0) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -302,7 +302,12 @@ function parentDirectory(path: string): string {
 /** 只移除浏览器为图片剪贴板内容生成的伪文本，不改写真实说明文字。 */
 function withoutImagePlaceholders(text: string): string {
   if (!/\[(?:图片|image)\]/iu.test(text)) return text;
-  return text.replaceAll(/\[(?:图片|image)\]/giu, "").trim();
+  const newline = text.includes("\r\n") ? "\r\n" : "\n";
+  return text
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*\[(?:图片|image)\]\s*$/iu.test(line))
+    .map((line) => line.replaceAll(/\[(?:图片|image)\]/giu, ""))
+    .join(newline);
 }
 
 function supportsDrop(types: readonly string[]): boolean {

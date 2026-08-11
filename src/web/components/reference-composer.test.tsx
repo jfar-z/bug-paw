@@ -120,6 +120,20 @@ describe("ReferenceComposer", () => {
     expect(onFilesInput).toHaveBeenCalledWith([image]);
   });
 
+  it("过滤图片占位行时不裁剪真实文本的空白", () => {
+    const onChange = vi.fn();
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+    render(<ReferenceComposer value="前后" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={onChange} onReferencesChange={vi.fn()} onFilesInput={vi.fn()} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    textbox.setSelectionRange(1, 1);
+
+    fireEvent.paste(textbox, {
+      clipboardData: clipboardData([image], " 说明文字 \n[图片]"),
+    });
+
+    expect(onChange).toHaveBeenCalledWith("前 说明文字 后");
+  });
+
   it("拖入本地图片添加附件，拖入纯文本则插入当前光标", () => {
     const onChange = vi.fn();
     const onFilesInput = vi.fn();
@@ -148,6 +162,27 @@ describe("ReferenceComposer", () => {
 
     expect(onChange).toHaveBeenCalledWith("https://example.com/image.png");
     expect(onFilesInput).not.toHaveBeenCalled();
+  });
+
+  it("在输入组件附件区释放本地图片也会添加附件", () => {
+    const onFilesInput = vi.fn();
+    render(
+      <ReferenceComposer
+        value=""
+        references={[]}
+        disabled={false}
+        loadCatalog={async () => emptyCatalog}
+        onChange={vi.fn()}
+        onReferencesChange={vi.fn()}
+        onFilesInput={onFilesInput}
+        attachmentContent={<div>附件区</div>}
+      />,
+    );
+    const image = new File(["image"], "drop.png", { type: "image/png" });
+
+    fireEvent.drop(screen.getByText("附件区"), { dataTransfer: transferData([image], "") });
+
+    expect(onFilesInput).toHaveBeenCalledWith([image]);
   });
 });
 
