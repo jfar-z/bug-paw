@@ -41,9 +41,46 @@ describe("AgentSystemPromptConfiguration", () => {
     });
 
     expect(prefix).toContain("### Knowledge retrieval policy");
-    expect(prefix).toContain("Search results are discovery excerpts");
+    expect(prefix).toContain("Read the relevant document context");
     expect(prefix).not.toContain("### Web research policy");
     expect(prefix).not.toContain("### Retrieval source coordination");
+  });
+
+  it("知识库读取可用时按证据完整性主动读取上下文", () => {
+    const prefix = AgentSystemPromptConfiguration.buildReplacementPrefix({
+      ...noRetrieval,
+      knowledgeSearch: true,
+      knowledgeRead: true,
+    });
+
+    expect(prefix).toContain("completely and unambiguously");
+    expect(prefix).toContain("supports the narrow claim");
+    expect(prefix).toContain("without waiting for the user to ask");
+    expect(prefix).toContain("summary or conclusion depends");
+    expect(prefix).toContain("on surrounding text");
+  });
+
+  it("联网搜索与读取同时可用时禁止只根据摘要回答事实问题", () => {
+    const prefix = AgentSystemPromptConfiguration.buildReplacementPrefix({
+      ...noRetrieval,
+      webSearch: true,
+      webRead: true,
+    });
+
+    expect(prefix).toContain("Do not answer a factual question from web-search snippets alone");
+    expect(prefix).toContain("without waiting for the user to ask");
+    expect(prefix).toContain("prefer and read a primary or official source");
+    expect(prefix).toContain("candidate links or a search-results list");
+  });
+
+  it("只有联网搜索时不声称能够读取页面", () => {
+    const prefix = AgentSystemPromptConfiguration.buildReplacementPrefix({
+      ...noRetrieval,
+      webSearch: true,
+    });
+
+    expect(prefix).toContain("Search results and snippets are discovery aids");
+    expect(prefix).not.toContain("read at least one relevant source");
   });
 
   it("双来源能力注入协调政策和用户控制边界", () => {

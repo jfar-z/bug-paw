@@ -47,6 +47,20 @@ describe("架构边界检查", () => {
     expect(checkArchitecture(root).map(({ rule }) => rule)).toEqual(["API_ERROR_BOUNDARY"]);
   });
 
+  it("拒绝自定义工具 parameters 根节点使用非 Object 的 TypeBox 构造器", async () => {
+    const root = await fixture({
+      "src/server/bad-any.ts": 'defineTool({ name: "bad", parameters: Type.Any() });',
+      "src/server/bad-intersect.ts": 'defineTool({ name: "bad", parameters: Type.Intersect([Type.Object({})]) });',
+      "src/server/bad-union.ts": 'defineTool({ name: "bad", parameters: Type.Union([Type.Object({})]) });',
+    });
+
+    expect(checkArchitecture(root).map(({ rule }) => rule)).toEqual([
+      "TOOL_PARAMETER_ROOT_SCHEMA",
+      "TOOL_PARAMETER_ROOT_SCHEMA",
+      "TOOL_PARAMETER_ROOT_SCHEMA",
+    ]);
+  });
+
   it("允许 Web 导入 Shared、Repository 使用数据库包装器", async () => {
     const root = await fixture({
       "src/web/good.ts": 'import type { Contract } from "../shared/good";\nexport type Value = Contract;',

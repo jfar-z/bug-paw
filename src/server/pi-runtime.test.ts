@@ -79,6 +79,22 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(loader.getAppendSystemPrompt()).toEqual(["第二版提示词"]);
   });
 
+  it("资源加载器只注册提示词注入扩展", async () => {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+      knowledgeSearch: false,
+      knowledgeRead: false,
+      webSearch: false,
+      webRead: false,
+    });
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions.map(({ path }) => path)).toEqual([
+      "<inline:bug-paw-system-prompt-injection>",
+    ]);
+    expect(loader.getExtensions().errors).toEqual([]);
+  });
+
   it("提示词被外部更新时立即 reload 空闲会话", async () => {
     const session = createSession();
     const refreshSessionContext = vi.fn(async () => undefined);
@@ -104,6 +120,68 @@ describe("PiRuntimeGateway 提示词刷新", () => {
 
     deferred.resolve(undefined);
     await vi.waitFor(() => expect(session.reload).toHaveBeenCalledOnce());
+    gateway.dispose();
+  });
+
+  it("第三次连续空参数工具事件终止当前 Run 并保留会话", async () => {
+    let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
+    let aborted = false;
+    const abort = vi.fn(() => {
+      aborted = true;
+      return Promise.resolve();
+    });
+    const session = createSession(async () => {
+      for (let count = 1; count <= 3; count += 1) {
+        listener({
+          type: "tool_execution_start",
+          toolCallId: `call-${count}`,
+          toolName: "knowledge_manage",
+          args: {},
+        } as never);
+        listener({
+          type: "tool_execution_end",
+          toolCallId: `call-${count}`,
+          toolName: "knowledge_manage",
+          result: { content: [{ type: "text", text: aborted ? "Operation aborted" : "参数校验失败" }] },
+          isError: true,
+        } as never);
+      }
+    });
+    session.subscribe = (next) => {
+      listener = next;
+      return () => undefined;
+    };
+    session.abort = abort;
+    const diagnostics: Array<{ count: number; action: string }> = [];
+    const gateway = createPiRuntimeGateway(createBackend(session), {
+      toolCallCircuitBreakerTools: [{
+        name: "knowledge_manage",
+        label: "Knowledge Manage",
+        description: "测试工具",
+        parameters: {
+          type: "object",
+          properties: { action: { type: "string" } },
+          required: ["action"],
+        },
+        execute: vi.fn(),
+      } as never],
+      onToolCallCircuitBreak: (event) => diagnostics.push(event),
+    });
+    const events: string[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event.type));
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(events).toContain("aborted"));
+
+    expect(abort).toHaveBeenCalledOnce();
+    expect(events).not.toContain("completed");
+    expect(diagnostics.map(({ count, action }) => ({ count, action }))).toEqual([
+      { count: 1, action: "allowed" },
+      { count: 2, action: "allowed" },
+      { count: 3, action: "terminated" },
+    ]);
+    expect((await gateway.openSession("session-1")).id).toBe("session-1");
     gateway.dispose();
   });
 

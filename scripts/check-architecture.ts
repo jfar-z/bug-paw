@@ -55,6 +55,13 @@ function inspectFile(sourceRoot: string, absoluteFile: string): ArchitectureViol
   if (LEGACY_STATE_FILES.some((name) => source.includes(name))) {
     violations.push({ file, rule: "LEGACY_STATE_OWNERSHIP", message: "不得重新引入已由 SQLite 接管的旧 JSON 状态文件" });
   }
+  if (/\bparameters\s*:\s*Type\.(?!Object\b)\w+\s*\(/u.test(source)) {
+    violations.push({
+      file,
+      rule: "TOOL_PARAMETER_ROOT_SCHEMA",
+      message: "自定义工具 parameters 根节点必须使用 Type.Object",
+    });
+  }
   return violations;
 }
 
