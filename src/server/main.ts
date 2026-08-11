@@ -276,7 +276,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           ]),
           onBackgroundError: (error) => {
             backgroundErrors.record(error.code, error.sessionId ? { sessionId: error.sessionId } : undefined);
-            app.log.error(error, "Runtime 检查点写入失败");
+            app.log.error(error, "Runtime 后台任务失败");
+          },
+          onSessionTitleGenerated: (event) => {
+            app.log.info(event, "自动会话标题任务完成");
           },
         });
       },
