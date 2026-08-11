@@ -54,6 +54,7 @@ import { WebResearchConfigService } from "./web-research/web-research-config-ser
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { createWebResearchService } from "./web-research/web-research-service";
 import { createWebOpenTool, createWebSearchTool } from "./web-research/web-research-tools";
+import { ensureWebResearchSkill } from "./web-research/global-skill";
 import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
@@ -342,6 +343,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureKnowledgeBaseSkill(paths.piDir);
+  await ensureWebResearchSkill(paths.piDir);
   await scheduledTasks?.start();
   const composerCatalog = new ComposerCatalogService({
     agents: agentStore,
