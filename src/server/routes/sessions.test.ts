@@ -65,7 +65,7 @@ describe("会话路由的定时任务联动", () => {
     expect(confirmed.statusCode).toBe(204);
     expect(sessionBulk.execute).toHaveBeenCalledWith({
       action: "delete",
-      sessionIds: ["session-1"],
+      target: { mode: "selected", sessionIds: ["session-1"] },
       fingerprint: "fingerprint-1",
     });
     await app.close();
@@ -105,20 +105,20 @@ describe("会话路由的定时任务联动", () => {
     const preview = await app.inject({
       method: "POST",
       url: "/api/sessions/bulk/preview",
-      payload: { action: "archive", sessionIds: ["session-1", "session-2"] },
+      payload: { action: "archive", target: { mode: "selected", sessionIds: ["session-1", "session-2"] } },
     });
     const response = await app.inject({
       method: "POST",
       url: "/api/sessions/bulk",
-      payload: { action: "archive", sessionIds: ["session-1", "session-2"], fingerprint: "fingerprint-1" },
+      payload: { action: "archive", target: { mode: "selected", sessionIds: ["session-1", "session-2"] }, fingerprint: "fingerprint-1" },
     });
 
     expect(preview.statusCode).toBe(200);
-    expect(sessionBulk.preview).toHaveBeenCalledWith("archive", ["session-1", "session-2"]);
+    expect(sessionBulk.preview).toHaveBeenCalledWith("archive", { mode: "selected", sessionIds: ["session-1", "session-2"] });
     expect(response.statusCode).toBe(200);
     expect(sessionBulk.execute).toHaveBeenCalledWith({
       action: "archive",
-      sessionIds: ["session-1", "session-2"],
+      target: { mode: "selected", sessionIds: ["session-1", "session-2"] },
       fingerprint: "fingerprint-1",
     });
     await app.close();
@@ -129,11 +129,11 @@ describe("会话路由的定时任务联动", () => {
     const app = Fastify();
     registerSessionRoutes(app, { authService, runtime: {} as PiRuntimeGateway, sessionBulk });
 
-    const empty = await app.inject({ method: "POST", url: "/api/sessions/bulk/preview", payload: { action: "delete", sessionIds: [] } });
+    const empty = await app.inject({ method: "POST", url: "/api/sessions/bulk/preview", payload: { action: "delete", target: { mode: "selected", sessionIds: [] } } });
     const excessive = await app.inject({
       method: "POST",
       url: "/api/sessions/bulk/preview",
-      payload: { action: "delete", sessionIds: Array.from({ length: 201 }, (_, index) => `session-${index}`) },
+      payload: { action: "delete", target: { mode: "selected", sessionIds: Array.from({ length: 201 }, (_, index) => `session-${index}`) } },
     });
 
     expect(empty.statusCode).toBe(400);
@@ -141,20 +141,66 @@ describe("会话路由的定时任务联动", () => {
     expect(sessionBulk.preview).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it("批量接口接受全部归档恢复与删除目标", async () => {
+    const sessionBulk = bulkServiceDouble();
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime: {} as PiRuntimeGateway, sessionBulk });
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/sessions/bulk/preview",
+      payload: { action: "restore", target: { mode: "all_archived", agentId: "agent-1" } },
+    });
+    const executed = await app.inject({
+      method: "POST",
+      url: "/api/sessions/bulk",
+      payload: { action: "delete", target: { mode: "all_archived", agentId: "agent-1" }, fingerprint: "fingerprint-1" },
+    });
+
+    expect(preview.statusCode).toBe(200);
+    expect(executed.statusCode).toBe(200);
+    expect(sessionBulk.preview).toHaveBeenCalledWith("restore", { mode: "all_archived", agentId: "agent-1" });
+    expect(sessionBulk.execute).toHaveBeenCalledWith({
+      action: "delete",
+      target: { mode: "all_archived", agentId: "agent-1" },
+      fingerprint: "fingerprint-1",
+    });
+    await app.close();
+  });
+
+  it("批量接口拒绝不合法动作范围组合与伪造字段", async () => {
+    const sessionBulk = bulkServiceDouble();
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime: {} as PiRuntimeGateway, sessionBulk });
+    const payloads = [
+      { action: "restore", target: { mode: "selected", sessionIds: ["session-1"] } },
+      { action: "archive", target: { mode: "all_archived", agentId: "agent-1" } },
+      { action: "delete", target: { mode: "all_archived", agentId: "" } },
+      { action: "delete", target: { mode: "all_archived", agentId: "agent-1", sessionIds: ["forged"] } },
+    ];
+
+    for (const payload of payloads) {
+      const response = await app.inject({ method: "POST", url: "/api/sessions/bulk/preview", payload });
+      expect(response.statusCode).toBe(400);
+    }
+    expect(sessionBulk.preview).not.toHaveBeenCalled();
+    await app.close();
+  });
 });
 
 function bulkServiceDouble(overrides: { tasks?: Array<{ id: string; name: string; sessionId: string }> } = {}): SessionBulkService {
   return {
-    preview: vi.fn(async (action, sessionIds) => ({
+    preview: vi.fn(async (action, target) => ({
       action,
-      sessionIds,
-      sessionCount: sessionIds.length,
+      target,
+      sessionCount: target.mode === "selected" ? target.sessionIds.length : 2,
       tasks: overrides.tasks ?? [],
       fingerprint: "fingerprint-1",
     })),
     execute: vi.fn(async (input) => ({
       action: input.action,
-      sessionCount: input.sessionIds.length,
+      sessionCount: input.target.mode === "selected" ? input.target.sessionIds.length : 2,
       affectedTaskCount: overrides.tasks?.length ?? 0,
     })),
   };

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { SessionBulkAction } from "../../shared/session-bulk-contracts";
+import type { SessionBulkAction, SessionBulkTarget } from "../../shared/session-bulk-contracts";
 import type { PiRuntimeGateway } from "../pi-runtime";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
 import type { SessionMetadataStore } from "../session-metadata";
@@ -84,7 +84,7 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     if (!input) return sendApiError(reply, 400, "VALIDATION_FAILED", "批量会话预览参数格式不正确");
     if (!dependencies.sessionBulk) throw new Error("Session 批量应用服务尚未配置");
     try {
-      return reply.send(await dependencies.sessionBulk.preview(input.action, input.sessionIds));
+      return reply.send(await dependencies.sessionBulk.preview(input.action, input.target));
     } catch (error) {
       return sendRuntimeError(reply, error);
     }
@@ -98,7 +98,7 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     try {
       return reply.send(await dependencies.sessionBulk.execute({
         action: input.action,
-        sessionIds: input.sessionIds,
+        target: input.target,
         fingerprint: input.fingerprint,
       }));
     } catch (error) {
@@ -199,14 +199,17 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
     try {
       if (!dependencies.sessionBulk) throw new Error("Session 批量应用服务尚未配置");
-      const preview = await dependencies.sessionBulk.preview("delete", [request.params.id]);
+      const preview = await dependencies.sessionBulk.preview("delete", {
+        mode: "selected",
+        sessionIds: [request.params.id],
+      });
       const confirmed = request.query.confirmBoundTasks === "true" || request.query.deleteScheduledTasks === "true";
       if (preview.tasks.length && !confirmed) {
         return sendApiError(reply, 409, "SCHEDULED_TASKS_BOUND", `会话已绑定 ${preview.tasks.length} 个定时任务，请确认停用任务后删除会话`);
       }
       await dependencies.sessionBulk.execute({
         action: "delete",
-        sessionIds: preview.sessionIds,
+        target: preview.target,
         fingerprint: preview.fingerprint,
       });
       return reply.code(204).send();
@@ -248,16 +251,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** 校验批量接口输入，避免将无界 ID 集合传入数据库。 */
 function readBulkBody(value: unknown, requireFingerprint: boolean): {
   action: SessionBulkAction;
-  sessionIds: string[];
+  target: SessionBulkTarget;
   fingerprint?: string;
 } | undefined {
-  if (!isRecord(value) || (value.action !== "archive" && value.action !== "delete")) return undefined;
-  if (!Array.isArray(value.sessionIds) || value.sessionIds.length === 0 || value.sessionIds.length > 200) return undefined;
-  if (!value.sessionIds.every((id) => typeof id === "string" && id.trim().length > 0)) return undefined;
+  if (!isRecord(value) || !hasOnlyKeys(value, requireFingerprint ? ["action", "target", "fingerprint"] : ["action", "target"])) {
+    return undefined;
+  }
+  if (value.action !== "archive" && value.action !== "restore" && value.action !== "delete") return undefined;
+  const target = readBulkTarget(value.target);
+  if (!target) return undefined;
+  const validCombination = target.mode === "selected"
+    ? value.action === "archive" || value.action === "delete"
+    : value.action === "restore" || value.action === "delete";
+  if (!validCombination) return undefined;
   if (requireFingerprint && (typeof value.fingerprint !== "string" || value.fingerprint.length === 0)) return undefined;
   return {
     action: value.action,
-    sessionIds: value.sessionIds,
+    target,
     ...(typeof value.fingerprint === "string" ? { fingerprint: value.fingerprint } : {}),
   };
+}
+
+/** 解析受限或服务端解析的批量目标，拒绝判别分支中的额外字段。 */
+function readBulkTarget(value: unknown): SessionBulkTarget | undefined {
+  if (!isRecord(value) || typeof value.mode !== "string") return undefined;
+  if (value.mode === "selected") {
+    if (!hasOnlyKeys(value, ["mode", "sessionIds"])) return undefined;
+    if (!Array.isArray(value.sessionIds) || value.sessionIds.length === 0 || value.sessionIds.length > 200) return undefined;
+    if (!value.sessionIds.every((id) => typeof id === "string" && id.trim().length > 0)) return undefined;
+    return { mode: "selected", sessionIds: value.sessionIds };
+  }
+  if (value.mode === "all_archived") {
+    if (!hasOnlyKeys(value, ["mode", "agentId"])) return undefined;
+    if (typeof value.agentId !== "string" || value.agentId.trim().length === 0) return undefined;
+    return { mode: "all_archived", agentId: value.agentId };
+  }
+  return undefined;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]): boolean {
+  const allowed = new Set(allowedKeys);
+  return Object.keys(value).length === allowed.size && Object.keys(value).every((key) => allowed.has(key));
 }

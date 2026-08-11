@@ -6,9 +6,9 @@ import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateS
 import type { WebResearchConfig, WebResearchSettingsDocument } from "../shared/web-research-contracts";
 import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
-import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult } from "../shared/session-bulk-contracts";
+import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
 
-export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult };
+export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
 export interface ServiceStatus {
   initialized: boolean;
@@ -386,13 +386,13 @@ export const api = {
   listSessions: (agentId: string, archived = false) => request<{ sessions: SessionSummary[] }>(
     `/api/sessions?agentId=${encodeURIComponent(agentId)}${archived ? "&archived=true" : ""}`,
   ),
-  previewSessionBulk: (action: SessionBulkAction, sessionIds: string[]) => request<SessionBulkPreview>("/api/sessions/bulk/preview", {
+  previewSessionBulk: (action: SessionBulkAction, target: SessionBulkTarget) => request<SessionBulkPreview>("/api/sessions/bulk/preview", {
     method: "POST",
-    body: JSON.stringify({ action, sessionIds }),
+    body: JSON.stringify({ action, target }),
   }),
-  executeSessionBulk: (action: SessionBulkAction, sessionIds: string[], fingerprint: string) => request<SessionBulkResult>("/api/sessions/bulk", {
+  executeSessionBulk: (action: SessionBulkAction, target: SessionBulkTarget, fingerprint: string) => request<SessionBulkResult>("/api/sessions/bulk", {
     method: "POST",
-    body: JSON.stringify({ action, sessionIds, fingerprint }),
+    body: JSON.stringify({ action, target, fingerprint }),
   }),
   createSession: (agentId: string) => request<SessionSnapshot>("/api/sessions", { method: "POST", body: JSON.stringify({ agentId }) }),
   openSession: (sessionId: string, signal?: AbortSignal) => request<SessionSnapshot>(

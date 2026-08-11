@@ -101,12 +101,19 @@ class FakeRuntime implements PiRuntimeGateway {
 /** 为路由集成测试保留 Runtime 删除断言，批量事务本身由专用测试覆盖。 */
 function createSessionBulkDouble(removeSession: (sessionId: string) => Promise<void>): SessionBulkService {
   return {
-    async preview(action, sessionIds) {
-      return { action, sessionIds, sessionCount: sessionIds.length, tasks: [], fingerprint: "test-fingerprint" };
+    async preview(action, target) {
+      return {
+        action,
+        target,
+        sessionCount: target.mode === "selected" ? target.sessionIds.length : 0,
+        tasks: [],
+        fingerprint: "test-fingerprint",
+      };
     },
     async execute(input) {
-      for (const sessionId of input.sessionIds) await removeSession(sessionId);
-      return { action: input.action, sessionCount: input.sessionIds.length, affectedTaskCount: 0 };
+      const sessionIds = input.target.mode === "selected" ? input.target.sessionIds : [];
+      for (const sessionId of sessionIds) await removeSession(sessionId);
+      return { action: input.action, sessionCount: sessionIds.length, affectedTaskCount: 0 };
     },
   };
 }
