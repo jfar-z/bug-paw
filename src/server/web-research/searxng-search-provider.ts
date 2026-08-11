@@ -100,6 +100,7 @@ export class SearxngSearchProvider implements SearchProvider {
     private readonly baseUrl: string,
     private readonly timeoutMs: number,
     private readonly request: SearchRequest = requestSearxng,
+    private readonly providerId = "searxng",
   ) {}
 
   /** 构造查询并返回归一化搜索结果。 */
@@ -119,7 +120,7 @@ export class SearxngSearchProvider implements SearchProvider {
       return {
         health: "unavailable",
         results: [],
-        failures: [{ provider: "searxng", ...classifyFailure(reason) }],
+        failures: [{ provider: this.providerId, ...classifyFailure(reason) }],
       };
     }
   }
