@@ -23,7 +23,14 @@ export function WebResearchPage() {
     });
   };
   const save = async () => { if (!document || !draft) return; setSaving(true); setMessage(""); try { const next = await api.updateWebResearch(document.revision, draft); setDocument(next); setDraft(next.config); setMessage("已保存，联网工具将在 Runtime 刷新后生效"); } catch (error) { setMessage(error instanceof Error ? error.message : "保存失败"); } finally { setSaving(false); } };
-  const test = async () => { setSaving(true); setMessage(""); try { setMessage((await api.testWebResearch()).message); } catch { setMessage("连接测试失败"); } finally { setSaving(false); } };
+  const test = async () => {
+    const provider = draft?.searchProviders.find((candidate) => candidate.enabled);
+    if (!provider) { setMessage("没有可测试的搜索服务"); return; }
+    setSaving(true); setMessage("");
+    try { setMessage((await api.testWebResearchProvider(provider.id)).message); }
+    catch { setMessage("连接测试失败"); }
+    finally { setSaving(false); }
+  };
   if (!draft) return <main className="configuration-page"><p className="configuration-help">正在读取联网搜索配置…</p></main>;
   return <main className="configuration-page"><header className="configuration-page__heading"><h1>联网搜索</h1><p>只读取公开网页；内网、凭证和危险重定向始终受到服务端保护。</p></header>
     {message ? <p className="configuration-help" role="status">{message}</p> : null}

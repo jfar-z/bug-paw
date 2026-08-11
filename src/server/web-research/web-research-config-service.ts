@@ -31,10 +31,16 @@ export class WebResearchConfigService {
 
   /** 在 revision 匹配时保存完整配置。 */
   async update(input: WebResearchConfig, revision: string): Promise<WebResearchConfigDocument> {
-    const config = normalizeConfig(input, this.managedProviders);
-    await this.validateEgressProfiles(config);
+    const config = await this.validate(input);
     const written = await this.store.write(config, revision);
     return { revision: written.revision, config };
+  }
+
+  /** 供多文件事务在写入前复用完整配置校验。 */
+  async validate(input: WebResearchConfig): Promise<WebResearchConfig> {
+    const config = normalizeConfig(input, this.managedProviders);
+    await this.validateEgressProfiles(config);
+    return config;
   }
 
   /** 把旧单 SearXNG 结构一次性写成多实例结构；新结构重复执行不产生写入。 */

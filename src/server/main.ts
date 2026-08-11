@@ -26,7 +26,7 @@ import { createRunCheckpointStore } from "./runtime/checkpoint-store";
 import { createSessionMetadataStore } from "./session-metadata";
 import { createSessionBulkRepository } from "./sessions/session-bulk-repository";
 import { createSessionBulkService } from "./sessions/session-bulk-service";
-import { recoverPendingTransactions } from "./configuration/config-transaction";
+import { ConfigTransaction, recoverPendingTransactions } from "./configuration/config-transaction";
 import { createAgentService } from "./agents/agent-service";
 import { AgentPromptStore } from "./agents/agent-prompt-store";
 import { createEditOwnPromptsTool } from "./agents/agent-prompt-tool";
@@ -53,6 +53,7 @@ import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool"
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { ManagedSearchProviderRegistry } from "./web-research/managed-search-provider-registry";
+import { WebResearchProviderManagementService } from "./web-research/web-research-provider-management-service";
 import { createWebResearchService } from "./web-research/web-research-service";
 import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
 import { registerWebResearchRoutes } from "./routes/web-research";
@@ -216,7 +217,17 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     process.env.WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS,
   );
   const managedSearchProviders = new ManagedSearchProviderRegistry(process.env.BUG_PAW_MANAGED_SEARCH_AVAILABLE === "true");
-  const webResearchConfigs = new WebResearchConfigService(join(paths.appDir, "web-research.json"), webResearchEgressProfiles, managedSearchProviders);
+  const webResearchConfigPath = join(paths.appDir, "web-research.json");
+  const webResearchAuthPath = join(paths.appDir, "web-research-auth.json");
+  const webResearchConfigs = new WebResearchConfigService(webResearchConfigPath, webResearchEgressProfiles, managedSearchProviders);
+  const webResearchCredentials = new CredentialService(webResearchAuthPath);
+  const webResearchManagement = new WebResearchProviderManagementService({
+    configs: webResearchConfigs,
+    credentials: webResearchCredentials,
+    configPath: webResearchConfigPath,
+    authPath: webResearchAuthPath,
+    transaction: new ConfigTransaction({ rootDir: paths.rootDir, transactionDir: paths.transactionDir }),
+  });
   await webResearchConfigs.migrateLegacyConfig();
   const webResearch = createWebResearchService(webResearchConfigs, webResearchEgressProfiles, undefined, managedSearchProviders);
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
@@ -479,6 +490,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerWebResearchRoutes(app, {
     authService,
     configs: webResearchConfigs,
+    credentials: webResearchCredentials,
+    management: webResearchManagement,
+    managedProviders: managedSearchProviders,
     service: webResearch,
     egressProfiles: webResearchEgressProfiles,
     refreshRuntime: () => runtimeCoordinator.refreshRuntime(),

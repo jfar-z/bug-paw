@@ -166,6 +166,15 @@ export class WebResearchService {
       throw new Error("搜索供应商当前不可用");
     }
   }
+
+  /** 只测试指定已保存实例，不触发路由故障切换。 */
+  async testProvider(providerId: string): Promise<void> {
+    const { config } = await this.dependencies.readConfig();
+    const provider = config.searchProviders.find((candidate) => candidate.id === providerId);
+    if (!provider) throw new Error("搜索服务不存在");
+    const result = await this.dependencies.createSearchProvider({ ...config, searchProviders: [provider] }).search({ query: "BugPaw", count: 1 });
+    if (result.health === "unavailable") throw new Error("搜索供应商当前不可用");
+  }
 }
 
 /** 创建生产环境使用的联网搜索服务。 */

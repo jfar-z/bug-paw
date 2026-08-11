@@ -3,7 +3,7 @@ import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, WebPi
 import type { ChatRunSummary, ComposerCatalog, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
 import type { AgentReference, AgentReferenceInput } from "../shared/agent-reference-contracts";
 import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateScheduledTaskInput } from "../shared/scheduled-task-contracts";
-import type { WebResearchConfig, WebResearchSettingsDocument } from "../shared/web-research-contracts";
+import type { SearchProviderConfig, WebResearchConfig, WebResearchSettingsDocument } from "../shared/web-research-contracts";
 import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
 import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
@@ -38,6 +38,12 @@ export interface UserProfile {
 export interface UserProfileDocument {
   revision: string;
   profile: UserProfile;
+}
+
+/** 搜索凭证写入后返回的脱敏状态。 */
+export interface CredentialWriteResponse {
+  credentialRevision: string;
+  status: { providerId: string; type: "api_key"; configured: true } | null;
 }
 
 export interface ModelSummary {
@@ -253,7 +259,12 @@ export const api = {
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getWebResearch: () => request<WebResearchSettingsDocument>("/api/capabilities/web-research"),
   updateWebResearch: (revision: string, config: WebResearchConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
-  testWebResearch: () => request<{ ok: boolean; message: string }>("/api/capabilities/web-research/test", { method: "POST" }),
+  addWebResearchProvider: (revision: string, provider: SearchProviderConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers", { method: "POST", body: JSON.stringify({ revision, provider }) }),
+  deleteWebResearchProvider: (providerId: string, configRevision: string, credentialRevision: string) => request<void>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}`, { method: "DELETE", body: JSON.stringify({ configRevision, credentialRevision }) }),
+  testWebResearchProvider: (providerId: string) => request<{ ok: boolean; message: string }>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}/test`, { method: "POST" }),
+  getWebResearchProviderCredential: (providerId: string) => request<{ apiKey: string }>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}/credential`),
+  setWebResearchProviderCredential: (providerId: string, revision: string, apiKey: string) => request<CredentialWriteResponse>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}/credential`, { method: "PUT", body: JSON.stringify({ revision, apiKey }) }),
+  deleteWebResearchProviderCredential: (providerId: string, revision: string) => request<CredentialWriteResponse>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}/credential`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getStatus: () => request<ServiceStatus>("/api/status"),
   setup: (input: SetupRequest) =>
     request<SetupResponse>("/api/setup", { method: "POST", body: JSON.stringify(input) }),

@@ -97,3 +97,27 @@ describe("会话批量 API", () => {
     );
   });
 });
+
+describe("联网搜索 Provider API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("编码实例 ID 并使用独立版本发送凭证和删除请求", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      credentialRevision: "credential-2",
+      status: { providerId: "bocha/main", type: "api_key", configured: true },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.setWebResearchProviderCredential("bocha/main", "credential-1", "secret");
+    await api.deleteWebResearchProvider("bocha/main", "config-1", "credential-2");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/v1/capabilities/web-research/providers/bocha%2Fmain/credential", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ revision: "credential-1", apiKey: "secret" }),
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/v1/capabilities/web-research/providers/bocha%2Fmain", expect.objectContaining({
+      method: "DELETE",
+      body: JSON.stringify({ configRevision: "config-1", credentialRevision: "credential-2" }),
+    }));
+  });
+});

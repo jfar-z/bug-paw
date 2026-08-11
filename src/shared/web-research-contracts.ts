@@ -80,7 +80,9 @@ export interface WebResearchConfigDocument {
 /** 配置中心读取的联网搜索设置，附带安全出口摘要。 */
 export interface WebResearchSettingsDocument extends WebResearchConfigDocument {
   egressProfiles: import("./web-research-egress-contracts").WebResearchEgressProfileSummary[];
-  providerTemplates?: SearchProviderTemplate[];
+  providerTemplates: SearchProviderTemplate[];
+  credentials: import("./configuration-contracts").CredentialStatus[];
+  credentialRevision: string;
 }
 
 /** 联网搜索的保守默认策略。 */

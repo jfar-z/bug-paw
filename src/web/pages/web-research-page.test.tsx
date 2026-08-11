@@ -8,12 +8,16 @@ describe("WebResearchPage", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("展示完整的资源与安全限制，并保存修改后的配置", async () => {
+    const config = {
+      ...DEFAULT_WEB_RESEARCH_CONFIG,
+      searchProviders: [{ id: "managed-searxng", name: "内置 SearXNG", type: "searxng" as const, connectionMode: "managed" as const, enabled: true, timeoutMs: 10_000 }],
+    };
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url === "/api/v1/capabilities/web-research" && init?.method === "PATCH") {
         return json({ revision: "r2", config: JSON.parse(String(init.body)) .config });
       }
       if (url === "/api/v1/capabilities/web-research") {
-        return json({ revision: "r1", config: DEFAULT_WEB_RESEARCH_CONFIG });
+        return json({ revision: "r1", credentialRevision: "c1", credentials: [], egressProfiles: [], providerTemplates: [], config });
       }
       return json({});
     });
@@ -32,6 +36,11 @@ describe("WebResearchPage", () => {
     expect(enableToggle).not.toBeNull();
     expect(enableToggle).toHaveClass("configuration-capability-toggle");
     expect(within(enableToggle!).getByRole("checkbox")).toHaveAccessibleName("启用联网搜索");
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/capabilities/web-research/providers/managed-searxng/test",
+      expect.objectContaining({ method: "POST" }),
+    ));
     fireEvent.change(screen.getByRole("spinbutton", { name: "正文最大字符数" }), { target: { value: "30000" } });
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
 
