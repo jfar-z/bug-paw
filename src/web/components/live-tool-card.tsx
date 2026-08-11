@@ -7,8 +7,10 @@ interface LiveToolCardProps {
 }
 
 const statusLabels = {
+  preparing: "准备中",
   running: "执行中",
   completed: "已完成",
+  cancelled: "未执行",
   error: "执行失败",
 } as const;
 

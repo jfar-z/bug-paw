@@ -130,7 +130,7 @@ describe("useSessionStream", () => {
     expect(onTimelineEvent.mock.calls.filter(([event]) => event.type === "text_delta")).toEqual([
       [{ type: "text_delta", delta: "一次" }],
     ]);
-    expect(onTimelineEvent).toHaveBeenLastCalledWith({ type: "generation_finished" });
+    expect(onTimelineEvent).toHaveBeenLastCalledWith({ type: "generation_finished", outcome: "completed" });
     expect(onRunChange).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -196,6 +196,60 @@ describe("useSessionStream", () => {
     }));
 
     expect(onTimelineEvent).toHaveBeenCalledWith({ type: "thinking_finished" });
+  });
+
+  it("转交工具准备阶段并保留运行中止原因", () => {
+    const onTimelineEvent = vi.fn();
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot: vi.fn(),
+      onTimelineEvent,
+      onRunChange: vi.fn(),
+      onError: vi.fn(),
+    }));
+    const source = FakeEventSource.instances[0];
+
+    act(() => {
+      source.emit("tool_preparing", {
+        id: 1,
+        type: "tool_preparing",
+        sessionId: "session-1",
+        runId: "run-1",
+        callId: "call-1",
+        toolName: "write",
+      });
+      source.emit("tool_prepared", {
+        id: 2,
+        type: "tool_prepared",
+        sessionId: "session-1",
+        runId: "run-1",
+        callId: "call-1",
+        toolName: "write",
+        args: { path: "src/app.ts", content: "内容" },
+      });
+      source.emit("aborted", {
+        id: 3,
+        type: "aborted",
+        sessionId: "session-1",
+        runId: "run-1",
+      });
+    });
+
+    expect(onTimelineEvent).toHaveBeenNthCalledWith(1, {
+      type: "tool_preparing",
+      callId: "call-1",
+      toolName: "write",
+    });
+    expect(onTimelineEvent).toHaveBeenNthCalledWith(2, {
+      type: "tool_prepared",
+      callId: "call-1",
+      toolName: "write",
+      args: { path: "src/app.ts", content: "内容" },
+    });
+    expect(onTimelineEvent).toHaveBeenLastCalledWith({
+      type: "generation_finished",
+      outcome: "aborted",
+    });
   });
 
   it("连接错误只报告重连状态而不结束任务", () => {

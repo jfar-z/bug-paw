@@ -210,7 +210,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
       return () => undefined;
     };
     const gateway = createPiRuntimeGateway(createBackend(session));
-    const events: Array<{ type: string; [key: string]: unknown }> = [];
+    const events: Array<{ type: string }> = [];
     await gateway.createSession();
     gateway.subscribe("session-1", (event) => events.push(event));
 
