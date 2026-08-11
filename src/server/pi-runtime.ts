@@ -32,7 +32,7 @@ import {
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
-import { projectSessionMessages } from "./sessions/session-message-projection";
+import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
 
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
@@ -254,7 +254,7 @@ export interface PiRuntimeGateway {
   listSessions(options?: { archived?: boolean }): Promise<SessionSummary[]>;
   createSession(): Promise<SessionSnapshot>;
   openSession(sessionId: string): Promise<SessionSnapshot>;
-  loadHistoryPage(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
+  loadHistoryPage?(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
@@ -284,7 +284,7 @@ export interface PiRuntimeGateway {
 
 export class PiRuntimeError extends Error {
   constructor(
-    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "VERSION_CONFLICT" | "INVALID_EVENT_CURSOR",
+    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID",
     message: string,
   ) {
     super(message);
@@ -771,13 +771,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       const session = requireSession(sessionId);
       const managed = sessionRegistry.peek(sessionId);
       if (!managed || managed.branchToken !== branchToken) {
-        throw new PiRuntimeError("VERSION_CONFLICT", "会话分支已变化，请重新加载");
+        throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化，请重新加载");
       }
       let page: SessionHistorySlice;
       try {
         page = buildHistoryPageBefore(session.messages, branchToken, session.branchLeafId, before);
       } catch {
-        throw new PiRuntimeError("INVALID_EVENT_CURSOR", "历史分页游标无效");
+        throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
       }
       return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
     },
@@ -1494,7 +1494,7 @@ function normalizeSessionEvent(
       type: "tool_updated",
       callId: event.toolCallId,
       toolName: event.toolName,
-      partialResult: event.partialResult,
+      partialResult: projectSessionToolResult(event.partialResult),
     };
   }
   if (event.type === "tool_execution_end") {
@@ -1502,7 +1502,7 @@ function normalizeSessionEvent(
       type: "tool_finished",
       callId: event.toolCallId,
       toolName: event.toolName,
-      result: event.result,
+      result: projectSessionToolResult(event.result),
       isError: event.isError,
     };
   }

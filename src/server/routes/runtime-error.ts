@@ -18,7 +18,7 @@ export function sendRuntimeError(reply: FastifyReply, error: unknown) {
   if (error instanceof PiRuntimeError) {
     const statusCode = error.code === "SESSION_NOT_FOUND" || error.code === "MODEL_NOT_FOUND"
       ? 404
-      : error.code === "INVALID_SESSION_NAME" ? 400 : 409;
+      : error.code === "INVALID_SESSION_NAME" || error.code === "SESSION_HISTORY_CURSOR_INVALID" ? 400 : 409;
     return sendApiError(reply, statusCode, error.code, error.message);
   }
   throw error;

@@ -41,6 +41,15 @@ export function projectSessionMessages(messages: readonly unknown[]): unknown[] 
   });
 }
 
+/** 对实时工具完成事件应用与历史快照相同的展示边界。 */
+export function projectSessionToolResult(result: unknown): unknown {
+  if (!isRecord(result) || !Array.isArray(result.content)) return result;
+  const projected = projectSessionMessages([{ ...result, role: "toolResult" }])[0];
+  if (!isRecord(projected)) return projected;
+  const { role: _role, ...withoutInjectedRole } = projected;
+  return withoutInjectedRole;
+}
+
 function truncatedToolText(originalBytes: number): Record<string, unknown> {
   return {
     type: "text",

@@ -84,9 +84,9 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true });
     expect(latest.messages[1]).toMatchObject({ content: [{ data: "<IMAGE_BASE64>" }] });
 
-    const previous = await gateway.loadHistoryPage("session-1", "user-6", latest.history.branchToken);
+    const previous = await gateway.loadHistoryPage!("session-1", "user-6", latest.history.branchToken);
     expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false });
-    await expect(gateway.loadHistoryPage("session-1", "user-6", "stale-token")).rejects.toMatchObject({ code: "VERSION_CONFLICT" });
+    await expect(gateway.loadHistoryPage!("session-1", "user-6", "stale-token")).rejects.toMatchObject({ code: "SESSION_HISTORY_STALE" });
     gateway.dispose();
   });
 

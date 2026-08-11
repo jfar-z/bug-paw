@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { projectSessionMessages } from "./session-message-projection";
+import { projectSessionMessages, projectSessionToolResult } from "./session-message-projection";
 
 describe("会话消息浏览器投影", () => {
   it("替换图片和超长工具文本但不修改原消息", () => {
@@ -60,5 +60,15 @@ describe("会话消息浏览器投影", () => {
       role: "toolResult",
       content: [{ type: "text", text: "<TOOL_RESULT_TOO_LONG>", truncated: true, originalBytes: 0 }],
     }]);
+  });
+
+  it("实时工具结果复用同一投影且保留结果外层字段", () => {
+    expect(projectSessionToolResult({
+      content: [{ type: "image", data: "aGVsbG8=" }],
+      details: { source: "read" },
+    })).toEqual({
+      content: [{ type: "image", data: "<IMAGE_BASE64>", originalBytes: 8 }],
+      details: { source: "read" },
+    });
   });
 });
