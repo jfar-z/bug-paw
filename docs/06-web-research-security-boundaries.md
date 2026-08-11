@@ -4,7 +4,7 @@
 
 BugPaw 需要让 Agent 能够检索互联网并读取公开网页，同时保持自托管、低资源占用和清晰的权限边界。
 
-当前实现只提供两项只读能力：
+当前实现只向 Agent 提供两项只读能力：
 
 ```text
 web_search：搜索互联网
@@ -18,13 +18,16 @@ web_read：读取公开网页的正文
 ### 组件选择
 
 ```text
-SearXNG                         提供搜索结果
+SearXNG / 博查 / Tavily         提供规范化搜索结果
+SearchProviderRouter            按管理员顺序执行故障切换
 @extractus/article-extractor    在 Node 服务内提取网页正文
 ```
 
-SearXNG 通过其 JSON Search API 返回标题、链接、摘要和引擎状态。BugPaw 先把响应映射为供应商无关的 `healthy`、`degraded` 或 `unavailable` 健康状态，以及稳定的 `rate_limited`、`authentication`、`timeout`、`captcha`、`upstream_error` 失败分类。默认由同一份 Compose 启动内部 `bug-paw-search` 与 `bug-paw-cache` 服务；管理员也可以在能力扩展页改为其他受管实例。两个搜索相关容器均不映射宿主机端口。
+SearXNG、博查 Web Search 与 Tavily Search Adapter 都只映射标题、链接、摘要、来源与可验证时间，并输出供应商无关的 `healthy`、`degraded` 或 `unavailable` 健康状态，以及稳定的 `rate_limited`、`authentication`、`timeout`、`captcha`、`upstream_error` 失败分类。博查不调用 AI Search；Tavily 固定关闭 Answer、原始正文和自动参数。厂商生成答案、追问建议、`nextAction` 与原始错误正文不会进入统一协议。
 
-业务服务只依赖统一搜索供应商接口，不直接依赖 SearXNG 响应结构。未来直接接入搜索 API 服务商时，由新 Adapter 将 HTTP 鉴权、限流、超时和上游错误映射到同一结果协议；工具响应、系统政策和 Run 级断路无需感知供应商类型。
+默认搜索 Compose 启动内部 `bug-paw-search` 与 `bug-paw-cache`。Web 服务通过部署能力注册表解析受管地址，配置文件和页面只保存 `connectionMode=managed`，不回显或要求管理员填写容器名与端口。两个搜索相关容器均不映射宿主机端口。核心部署仍可配置自定义 SearXNG 或直连搜索厂商。
+
+业务服务只依赖统一搜索供应商接口。Router 按配置数组顺序串行尝试启用实例，只在 `unavailable` 时切换；`healthy + []` 是有效空结果，`degraded + results` 是有效部分结果，两者都不会切换厂商或改写查询。一次逻辑搜索不会重复同一实例，同一 Run 会继续跳过已失败实例；厂商 `Retry-After` 尚未到期时，新 Run 也会跳过该实例。
 
 部署前在根目录 `.env` 设置 `SEARXNG_SECRET` 为强随机值。该文件属于部署环境，不应提交到代码仓库，也不得在接口、日志或诊断中回显其值。
 
@@ -61,16 +64,19 @@ SearXNG 与 Node 正文提取器
 
 ### 配置边界
 
-在配置中心的“能力扩展”模块提供“联网搜索”子页，至少包含：
+在配置中心的“能力扩展”模块提供“联网搜索”子页，包含：
 
 - 启用开关；
-- SearXNG 基础地址；
+- 有序的 SearXNG、博查与 Tavily 实例卡片；
+- 实例启停、上移/下移、单实例测试与删除；
+- 自定义 SearXNG 地址、实例级出口和超时；
+- 直连实例 API Key 的按需查看、替换与删除；
 - 每次搜索的最大结果数；
 - 单页最大正文长度；
-- 请求超时。
+- 页面读取出口和超时；
 - 最大重定向数、最大响应体、HTTPS 策略、域名允许名单与允许内容类型。
 
-配置只保存在服务端。若未来接入需要认证的搜索服务，其凭证不得返回前端、写入日志或出现在诊断响应中。
+非敏感路由配置保存在 `/data/app/web-research.json`，API Key 独立保存在 `/data/app/web-research-auth.json`。普通配置、日志、历史、诊断和安全导出均不包含明文；凭证只在管理员主动点击小眼睛时由独立 `no-store` 接口按需返回。
 
 ### 工具输入与输出
 
@@ -84,7 +90,7 @@ SearXNG 与 Node 正文提取器
 
 BugPaw 不自动安装 `web-research` Skill。上述最低路由与核验规则由有效能力快照动态注入系统提示词，用户可以另行安装调研 Skill 组织多轮查询或来源比较。工具结果只提供数据和状态，不能扩大用户指定的来源范围。
 
-当 `web_search` 在某一 Run 首次返回 `SEARCH_PROVIDERS_UNAVAILABLE` 时，隐藏 Runtime Extension 会阻止该 Run 后续 `web_search` 调用，避免改写关键词反复请求造成限流反馈循环。断路不会终止当前任务，不影响 `web_read` 或其他工具；Agent 应使用已有证据说明临时限制。用户下一条消息开始新 Run 后自动恢复一次搜索机会。
+Router 会先在同一次工具调用中完成管理员配置的可用实例回退。只有全部候选都不可用并返回 `SEARCH_PROVIDERS_UNAVAILABLE` 后，隐藏 Runtime Extension 才阻止该 Run 后续 `web_search`，避免改写关键词反复请求造成限流反馈循环。断路不会终止当前任务，不影响 `web_read` 或其他工具；Agent 应使用已有证据说明临时限制。用户下一条消息开始新 Run 后恢复搜索机会，但仍遵守厂商尚未到期的 `Retry-After`。
 
 ### 安全与资源限制
 

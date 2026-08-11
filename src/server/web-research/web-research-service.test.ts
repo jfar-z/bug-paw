@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_WEB_RESEARCH_CONFIG } from "../../shared/web-research-contracts";
+import { SearchRunState } from "./search-run-state";
 import { WebResearchService } from "./web-research-service";
 
 function createService(overrides: Partial<ConstructorParameters<typeof WebResearchService>[0]> = {}) {
   return new WebResearchService({
     readConfig: async () => ({ revision: "r1", config: { ...DEFAULT_WEB_RESEARCH_CONFIG, enabled: true, maxTextLength: 1_000 } }),
-    createSearchProvider: () => ({ search: async () => ({ health: "healthy", results: [], failures: [] }) }),
+    searchProviders: async () => ({ health: "healthy", results: [], failures: [] }),
+    testSearchProvider: async () => ({ health: "healthy", results: [], failures: [] }),
     fetchText: async () => ({ finalUrl: "https://example.com/article", contentType: "text/html", body: "<main>正文</main>" }),
     extract: async () => ({ title: "文章", content: "正文", published: "2026-08-08" }),
     ...overrides,
@@ -16,14 +18,14 @@ function createService(overrides: Partial<ConstructorParameters<typeof WebResear
 describe("联网搜索服务", () => {
   it("规范化 URL、合并搜索引擎并去除重复结果", async () => {
     const service = createService({
-      createSearchProvider: () => ({ search: async () => ({
+      searchProviders: async () => ({
         health: "healthy",
         results: [
           { title: "文档", url: "https://Example.com:443/docs#intro", snippet: "摘要一", source: "brave", publishedAt: "2026-08-10" },
           { title: "文档副本", url: "https://example.com/docs", snippet: "摘要二", source: "bing", publishedAt: "invalid" },
         ],
         failures: [],
-      }) }),
+      }),
     });
 
     await expect(service.search({ query: "BugPaw", count: 2 })).resolves.toEqual({
@@ -46,11 +48,11 @@ describe("联网搜索服务", () => {
 
   it("保留部分供应商结果并标记 degraded", async () => {
     const service = createService({
-      createSearchProvider: () => ({ search: async () => ({
+      searchProviders: async () => ({
         health: "degraded",
         results: [{ title: "可用结果", url: "https://example.com", snippet: "摘要", source: "brave", publishedAt: null }],
         failures: [{ provider: "duckduckgo", category: "captcha", retryable: true }],
-      }) }),
+      }),
     });
 
     const result = await service.search({ query: "BugPaw" });
@@ -61,11 +63,11 @@ describe("联网搜索服务", () => {
 
   it("无结果且供应商故障时保留 unavailable 状态", async () => {
     const service = createService({
-      createSearchProvider: () => ({ search: async () => ({
+      searchProviders: async () => ({
         health: "unavailable",
         results: [],
         failures: [{ provider: "brave", category: "rate_limited", retryable: true }],
-      }) }),
+      }),
     });
 
     const result = await service.search({ query: "BugPaw" });
@@ -74,13 +76,33 @@ describe("联网搜索服务", () => {
     expect(result.metadata).toMatchObject({ providerHealth: "unavailable", failedProviderCount: 1, providerRetryable: true });
   });
 
+  it("回退后的健康空结果保持 empty 语义并透传 Run 状态", async () => {
+    const state = new SearchRunState();
+    let receivedState: SearchRunState | undefined;
+    const service = createService({
+      searchProviders: async (_config, _input, currentState) => {
+        receivedState = currentState;
+        return {
+          health: "healthy",
+          results: [],
+          failures: [{ provider: "primary", category: "timeout", retryable: true }],
+        };
+      },
+    });
+
+    const result = await service.search({ query: "BugPaw" }, state);
+
+    expect(receivedState).toBe(state);
+    expect(result.metadata).toMatchObject({ providerHealth: "healthy", resultCount: 0, failedProviderCount: 1 });
+  });
+
   it("供应商故障且唯一结果被安全过滤时标记 unavailable", async () => {
     const service = createService({
-      createSearchProvider: () => ({ search: async () => ({
+      searchProviders: async () => ({
         health: "degraded",
         results: [{ title: "非法结果", url: "javascript:alert(1)", snippet: "", source: "brave", publishedAt: null }],
         failures: [{ provider: "duckduckgo", category: "captcha", retryable: true }],
-      }) }),
+      }),
     });
 
     const result = await service.search({ query: "BugPaw" });

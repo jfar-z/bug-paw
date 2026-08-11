@@ -66,8 +66,8 @@ export class SafeWebClient {
         ?? (egressProfile.kind === "fake-ip" ? addresses.find((candidate) => isTrustedFakeIp(candidate, egressProfile.fakeIpCidrs)) : undefined);
       if (!address) throw new WebResearchSecurityError("WEB_URL_BLOCKED");
       const response = await (egressProfile.kind === "http-proxy"
-        ? requestThroughProxy(current, egressProfile.proxyUrl, policy.timeoutMs, policy.maxResponseBytes)
-        : this.dependencies.request(current, address, policy.timeoutMs, policy.maxResponseBytes)).catch((error: unknown) => {
+        ? requestThroughProxy(current, egressProfile.proxyUrl, policy.webRead.timeoutMs, policy.maxResponseBytes)
+        : this.dependencies.request(current, address, policy.webRead.timeoutMs, policy.maxResponseBytes)).catch((error: unknown) => {
         if (error instanceof WebResearchSecurityError) throw error;
         throw new WebResearchSecurityError("WEB_FETCH_FAILED");
       });

@@ -4676,12 +4676,10 @@ img.message-avatar {
   color: var(--text-secondary);
   background: transparent;
   text-align: left;
-  transition: 160ms ease color, 160ms ease background;
 }
 
 .configuration-entry:hover {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--surface-hover) 66%, transparent);
+  background: var(--surface-hover);
 }
 
 .configuration-primary-action {
@@ -5137,8 +5135,7 @@ img.message-avatar {
   line-height: 1.5;
 }
 
-.configuration-form-card input,
-.configuration-form-card textarea {
+.configuration-form-card :where(input, textarea) {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border);

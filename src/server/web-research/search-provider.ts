@@ -24,7 +24,8 @@ export interface SearchProviderItem {
 /**
  * 搜索供应商统一结果。
  *
- * 不变量：无失败为 healthy；有失败且有结果为 degraded；有失败且无结果为 unavailable。
+ * Adapter 层遵循：无失败为 healthy；有失败且有结果为 degraded；有失败且无结果为 unavailable。
+ * Router 可在前序实例失败、后序实例健康时保留失败事实，此时最终状态仍为 healthy。
  */
 export interface SearchProviderResult {
   health: SearchProviderHealth;

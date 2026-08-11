@@ -22,6 +22,7 @@ import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
 import { createSearchRunCircuitExtension } from "./web-research/search-run-circuit-extension";
+import { SearchRunState } from "./web-research/search-run-state";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import {
   createToolCallCircuitBreaker,
@@ -44,13 +45,14 @@ export function createWorkspaceResourceLoader(
     webSearch: false,
     webRead: false,
   },
+  searchRunState = new SearchRunState(),
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
     extensionFactories: [
       createAgentSystemPromptInjectionExtension(retrievalCapabilities),
-      ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension()] : []),
+      ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension(searchRunState)] : []),
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
@@ -1052,6 +1054,7 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
+  createSessionTools?: (context: { searchRunState: SearchRunState }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
   refreshAppendSystemPrompt?: () => Promise<string[]>;
@@ -1104,12 +1107,14 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       throw new PiRuntimeError("MODEL_NOT_FOUND", "默认模型不存在或不可用");
     }
     await refreshAppendSystemPrompt();
+    const searchRunState = new SearchRunState();
     const resourceLoader = createWorkspaceResourceLoader(
       options.cwd,
       options.agentDir,
       appendSystemPrompt,
       () => appendSystemPrompt,
       options.retrievalCapabilities,
+      searchRunState,
     );
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
@@ -1124,7 +1129,10 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       thinkingLevel: options.defaultThinkingLevel ?? "medium",
       // 工具白名单必须与 Agent Profile 一致，不能因为工具已注册就自动放行。
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
-      customTools: options.customTools,
+      customTools: [
+        ...(options.customTools ?? []),
+        ...(options.createSessionTools?.({ searchRunState }) ?? []),
+      ],
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({
       name: command.name,
