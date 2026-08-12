@@ -48,6 +48,17 @@ describe("ProviderCreateDialog", () => {
     });
   });
 
+  it("为两组字段预留一致标题高度，使输入控件基线对齐", () => {
+    renderDialog();
+
+    for (const fieldName of ["Provider ID", "显示名称", "Provider 模板", "Base URL"]) {
+      const field = screen.getByLabelText(fieldName);
+      const heading = field.closest("label")?.querySelector(":scope > span");
+      expect(field.closest("label")).toHaveStyle({ alignContent: "start" });
+      expect(heading).toHaveStyle({ minHeight: "40px" });
+    }
+  });
+
   it("按模板更新地址并使用默认协议与认证设置创建 Provider", async () => {
     const fetchMock = installFetch();
     const onCreated = vi.fn();
