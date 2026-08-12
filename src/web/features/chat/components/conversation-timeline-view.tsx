@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight, Clock3, Pencil, RefreshCcw } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { RefCallback, RefObject } from "react";
 
 import type { AgentProfileDocument } from "../../../../shared/agent-contracts";
@@ -17,6 +18,8 @@ import { MessageCopyButton } from "./message-copy-button";
 import { copyTextForEntry } from "../message-copy";
 import { AgentTurnContent } from "./agent-turn-content";
 import type { SessionHistoryLoadState } from "../../../use-session-history";
+
+const SESSION_LOADING_NOTICE_EXIT_DELAY = 160;
 
 interface ConversationTimelineViewProps {
   timeline: ConversationEntry[];
@@ -48,6 +51,26 @@ interface ConversationTimelineViewProps {
 
 /** 渲染会话时间线，保持既有 DOM 顺序、ARIA 与流式块语义。 */
 export function ConversationTimelineView(props: ConversationTimelineViewProps) {
+  const [loadingNoticeVisible, setLoadingNoticeVisible] = useState(props.opening);
+  const [loadingNoticeLeaving, setLoadingNoticeLeaving] = useState(false);
+
+  useEffect(() => {
+    if (props.opening) {
+      setLoadingNoticeVisible(true);
+      setLoadingNoticeLeaving(false);
+      return;
+    }
+    if (!loadingNoticeVisible) return;
+
+    setLoadingNoticeLeaving(true);
+    // 保留提示至离场动画完成，避免切换完成时突兀消失。
+    const exitTimer = setTimeout(
+      () => setLoadingNoticeVisible(false),
+      SESSION_LOADING_NOTICE_EXIT_DELAY,
+    );
+    return () => clearTimeout(exitTimer);
+  }, [loadingNoticeVisible, props.opening]);
+
   return <>
     <MessageNavigator items={props.navigationItems} scrollContainerRef={props.scrollRef} />
     <div className="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable" }}>
@@ -113,7 +136,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
           </article>
         ))}
       </div>
-      {props.opening ? <div className="session-loading-overlay" role="status" aria-label="正在加载会话"><span aria-hidden="true" />正在加载会话…</div> : null}
+      {loadingNoticeVisible ? <div className={`session-loading-notice${loadingNoticeLeaving ? " is-leaving" : ""}`} role="status" aria-label="正在加载会话"><span aria-hidden="true" />正在加载会话…</div> : null}
     </div>
   </>;
 }
