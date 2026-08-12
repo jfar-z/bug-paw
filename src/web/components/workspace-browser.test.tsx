@@ -36,6 +36,18 @@ describe("WorkspaceBrowser", () => {
     expect(checkbox).toBeChecked();
   });
 
+  it("固定选择和操作列，并将不同按钮数量的操作区贴齐右缘", async () => {
+    vi.stubGlobal("fetch", workspaceFetch());
+    renderBrowser();
+
+    const checkbox = await screen.findByRole("checkbox", { name: "选择 docs" });
+    const row = checkbox.closest("tr")!;
+    expect(checkbox.closest("td")).toHaveClass("workspace-entry-select");
+    expect(row.querySelector(".workspace-entry-actions-cell")).toBeInTheDocument();
+    expect(row.querySelector(".workspace-entry-actions")).toHaveClass("workspace-entry-actions");
+    expect(document.querySelector(".workspace-table-wrap th.workspace-entry-select")).toBeInTheDocument();
+  });
+
   it("引用文件时进入父目录、高亮目标并使用覆盖式预览", async () => {
     vi.stubGlobal("fetch", workspaceFetch());
     const { container } = renderBrowser({ mode: "quick", locationRequest: { id: 1, path: "docs/readme.md" } });
