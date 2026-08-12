@@ -1,4 +1,4 @@
-const CACHE_NAME = "bugpaw-shell-v11";
+const CACHE_NAME = "bugpaw-shell-v12";
 const CORE_ASSETS = [
   "/",
   "/knowledge-base",

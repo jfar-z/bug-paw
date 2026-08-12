@@ -8,6 +8,7 @@ describe("ChatSidebar 会话多选", () => {
     render(<ChatSidebar {...baseProps()} />);
 
     expect(screen.getByRole("complementary", { name: "会话历史" })).toHaveStyle({ touchAction: "pan-y" });
+    expect(screen.getByRole("navigation", { name: "会话历史" })).toHaveStyle({ touchAction: "pan-y" });
   });
 
   it("进入多选后显示所有复选框，当前会话不可选择", () => {
