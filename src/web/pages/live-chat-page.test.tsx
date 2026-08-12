@@ -998,7 +998,10 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByText("会话暂不可用")).toBeInTheDocument();
     expect(screen.getByText("打开会话")).toBeInTheDocument();
     expect(screen.getByText("旧会话内容")).toBeInTheDocument();
-    expect(screen.queryByRole("status", { name: "正在加载会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "正在加载会话" })).toHaveClass("is-leaving");
+    await waitFor(() => {
+      expect(screen.queryByRole("status", { name: "正在加载会话" })).not.toBeInTheDocument();
+    });
     expect(screen.getByRole("button", { name: "第二个会话" })).toBeEnabled();
   });
 
