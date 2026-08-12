@@ -56,6 +56,15 @@ describe("WorkbenchShell", () => {
     expect(document.querySelector(".configuration-content")).toBeInTheDocument();
   });
 
+  it("浏览器执行页保留配置导航并使用可滚动的配置内容容器", () => {
+    renderShell({ page: "browser-automation" });
+
+    expect(screen.getByRole("navigation", { name: "配置中心导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "浏览器执行" })).toHaveAttribute("aria-current", "page");
+    expect(document.querySelector(".configuration-content")).toBeInTheDocument();
+    expect(document.querySelector(".workbench-shell")).toHaveClass("is-configuration");
+  });
+
   it.each<AppRoute>([
     { page: "tts" },
     { page: "knowledge-retrieval" },

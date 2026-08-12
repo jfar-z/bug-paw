@@ -30,6 +30,15 @@ describe("浏览器执行配置页", () => {
     expect(screen.getByText("所有公网 HTTPS 站点")).toBeInTheDocument();
   });
 
+  it("数值设置使用标准表单行而非复选框权限网格", async () => {
+    render(<BrowserAutomationPage />);
+    await screen.findByText("所有公网 HTTPS 站点");
+
+    for (const label of ["导航超时（秒）", "全局 Context", "截图数 / Run"]) {
+      expect(screen.getByLabelText(label).closest(".tool-permission-grid")).toBeNull();
+    }
+  });
+
   it("新增精确 Origin、修改开关并保存完整草稿", async () => {
     render(<BrowserAutomationPage />);
     await screen.findByText("所有公网 HTTPS 站点");

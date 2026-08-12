@@ -164,6 +164,7 @@ function isConfigurationRoute(route: AppRoute): boolean {
     "resources",
     "capabilities",
     "web-research",
+    "browser-automation",
     "tts",
     "knowledge-retrieval",
     "configuration-operations",
