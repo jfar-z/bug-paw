@@ -21,7 +21,7 @@
     "start": "tsx src/server/main.ts",
     "build": "npm run build:web",
     "build:container": "npm run build:web && npm run check:bundle",
-    "build:web": "vite build",
+    "build:web": "vite build && node scripts/build-pwa.mjs",
     "typecheck": "tsc --noEmit",
     "check:architecture": "tsx scripts/check-architecture.ts",
     "check:bundle": "node scripts/check-bundle.mjs",
