@@ -52,6 +52,18 @@ export interface ExecuteBrowserCommandRequest {
   command: BrowserCommand;
 }
 
+/** Worker 暂存的、只能读取一次的二进制产物。 */
+export interface BrowserWorkerArtifactHandle {
+  /** 不透明的一次性标识。 */
+  handle: string;
+  /** Worker 识别出的 MIME。 */
+  mediaType: string;
+  /** 产物字节数。 */
+  size: number;
+  /** 浏览器建议的文件名。 */
+  suggestedName?: string;
+}
+
 /** Worker 的 JSON 响应信封。 */
 export type BrowserWorkerResponse<Data = unknown> =
   | { status: "ok"; data: Data }

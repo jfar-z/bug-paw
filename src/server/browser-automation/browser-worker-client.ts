@@ -65,6 +65,27 @@ export class BrowserWorkerClient {
     await this.request("DELETE", `/v1/contexts/${encodeURIComponent(leaseId)}`, undefined, signal);
   }
 
+  /** 读取并消费一次性 Worker 产物，严格执行调用方给出的大小上限。 */
+  async readArtifact(leaseId: string, handle: string, maximumBytes: number, signal?: AbortSignal): Promise<Buffer> {
+    const path = `/v1/contexts/${encodeURIComponent(leaseId)}/artifacts/${encodeURIComponent(handle)}`;
+    const response = await this.fetchSigned("GET", path, "", signal);
+    if (!response.ok) await this.throwResponseError(response);
+    const declaredLength = Number(response.headers.get("content-length") ?? "0");
+    if (!Number.isSafeInteger(declaredLength) || declaredLength < 0 || declaredLength > maximumBytes) {
+      throw new BrowserAutomationError("BROWSER_DOWNLOAD_TOO_LARGE", "浏览器产物超过当前大小限制", false);
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    if (!response.body) throw protocolError();
+    for await (const value of response.body as unknown as AsyncIterable<Uint8Array>) {
+      const chunk = Buffer.from(value);
+      size += chunk.length;
+      if (size > maximumBytes) throw new BrowserAutomationError("BROWSER_DOWNLOAD_TOO_LARGE", "浏览器产物超过当前大小限制", false);
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
   /** 签名并解析一个有界 JSON 请求。 */
   private async request<Data>(method: string, path: string, input?: unknown, signal?: AbortSignal): Promise<Data> {
     const body = input === undefined ? "" : JSON.stringify(input);
@@ -73,24 +94,7 @@ export class BrowserWorkerClient {
     const contentHash = createHash("sha256").update(body).digest("hex");
     const canonical = `${method}\n${path}\n${timestamp}\n${nonce}\n${contentHash}`;
     const signature = createHmac("sha256", this.secret).update(canonical).digest("hex");
-    let response: Response;
-    try {
-      response = await this.fetch(`${this.baseUrl}${path}`, {
-        method,
-        signal,
-        headers: {
-          "content-type": "application/json",
-          "x-bugpaw-timestamp": timestamp,
-          "x-bugpaw-nonce": nonce,
-          "x-bugpaw-content-sha256": contentHash,
-          "x-bugpaw-signature": signature,
-        },
-        ...(body ? { body } : {}),
-      });
-    } catch (error) {
-      if (signal?.aborted) throw signal.reason;
-      throw new BrowserAutomationError("BROWSER_WORKER_UNAVAILABLE", "浏览器执行服务暂时不可用", true);
-    }
+    const response = await this.fetchSigned(method, path, body, signal, { timestamp, nonce, contentHash, signature });
 
     const declaredLength = Number(response.headers.get("content-length") ?? "0");
     if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_RESPONSE_BYTES) throw protocolError();
@@ -112,6 +116,52 @@ export class BrowserWorkerClient {
     }
     if (!response.ok) throw protocolError();
     return payload.data as Data;
+  }
+
+  /** 发送 HMAC 签名请求。 */
+  private async fetchSigned(
+    method: string,
+    path: string,
+    body: string,
+    signal?: AbortSignal,
+    prepared?: { timestamp: string; nonce: string; contentHash: string; signature: string },
+  ): Promise<Response> {
+    const timestamp = prepared?.timestamp ?? String(this.now());
+    const nonce = prepared?.nonce ?? this.nonce();
+    const contentHash = prepared?.contentHash ?? createHash("sha256").update(body).digest("hex");
+    const canonical = `${method}\n${path}\n${timestamp}\n${nonce}\n${contentHash}`;
+    const signature = prepared?.signature ?? createHmac("sha256", this.secret).update(canonical).digest("hex");
+    try {
+      return await this.fetch(`${this.baseUrl}${path}`, {
+        method,
+        signal,
+        headers: {
+          "content-type": "application/json",
+          "x-bugpaw-timestamp": timestamp,
+          "x-bugpaw-nonce": nonce,
+          "x-bugpaw-content-sha256": contentHash,
+          "x-bugpaw-signature": signature,
+        },
+        ...(body ? { body } : {}),
+      });
+    } catch {
+      if (signal?.aborted) throw signal.reason;
+      throw new BrowserAutomationError("BROWSER_WORKER_UNAVAILABLE", "浏览器执行服务暂时不可用", true);
+    }
+  }
+
+  /** 解析产物端点可能返回的 JSON 错误。 */
+  private async throwResponseError(response: Response): Promise<never> {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_JSON_RESPONSE_BYTES) throw protocolError();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      throw protocolError();
+    }
+    if (!isWorkerResponse(payload) || payload.status !== "error") throw protocolError();
+    throw new BrowserAutomationError(normalizeWorkerErrorCode(payload.error.code), payload.error.message, payload.error.retryable);
   }
 }
 

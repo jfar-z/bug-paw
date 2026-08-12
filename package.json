@@ -50,6 +50,7 @@
     "mermaid": "11.16.1",
     "mime": "4.1.0",
     "pdf-parse": "^2.4.5",
+    "playwright": "1.62.1",
     "proper-lockfile": "4.1.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
