@@ -1604,7 +1604,7 @@ p {
 .live-tool-card::before,
 .thinking-card::before {
   position: absolute;
-  top: 13px;
+  top: 9px;
   left: -18.5px;
   width: 6px;
   height: 6px;
