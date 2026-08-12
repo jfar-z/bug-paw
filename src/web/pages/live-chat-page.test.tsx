@@ -8,6 +8,7 @@ import { LiveChatPage } from "./live-chat-page";
 
 type EventListener = (event: MessageEvent) => void;
 const operationLog: string[] = [];
+let regenerateResponse: Promise<Response> | undefined;
 
 class FakeEventSource {
   static readonly OPEN = 1;
@@ -99,6 +100,12 @@ function renderLiveChatPage(element: ReactElement) {
   );
 }
 
+/** 只读取消息气泡，避免用户消息导航中的摘要影响时间线断言。 */
+function messageRowTexts(): string[] {
+  return [...document.querySelectorAll<HTMLElement>(".message-row")]
+    .map((row) => row.textContent ?? "");
+}
+
 function mediaQueryResult(matches: boolean): MediaQueryList {
   return {
     matches,
@@ -116,6 +123,7 @@ beforeEach(() => {
   FakeEventSource.instances = [];
   PageFakeAudio.instances = [];
   operationLog.length = 0;
+  regenerateResponse = undefined;
   window.sessionStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(false)));
@@ -167,6 +175,15 @@ beforeEach(() => {
     if (url === "/api/v1/sessions/session-1") {
       return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
     }
+    if (url === "/api/v1/sessions/session-2") {
+      return new Response(JSON.stringify({
+        id: "session-2",
+        agentId: "default",
+        messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
+        history: { branchToken: "branch-session-2", hasMoreBefore: false, turnCount: 1 },
+        lastEventId: 1,
+      }));
+    }
     if (url === "/api/v1/sessions/archived-1") {
       return new Response(JSON.stringify({ id: "archived-1", agentId: "default", messages: [], lastEventId: 0 }));
     }
@@ -180,6 +197,22 @@ beforeEach(() => {
         history: { branchToken: "branch-b", hasMoreBefore: false, turnCount: 1 },
         lastEventId: 2,
       }));
+    }
+    if (url.endsWith("/regenerate")) {
+      return regenerateResponse ?? Promise.resolve(new Response(JSON.stringify({
+        snapshot: {
+          id: "session-1",
+          messages: [],
+          history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+          lastEventId: 3,
+        },
+        run: {
+          runId: "run-regenerated",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-12T00:00:00.000Z",
+        },
+      })));
     }
     if (url.includes("/branches/") && url.endsWith("/messages")) {
       return new Response(JSON.stringify({
@@ -346,6 +379,149 @@ describe("LiveChatPage 时间线", () => {
     });
     expect(screen.queryByText("正在编辑历史消息")).toBeNull();
     expect(document.querySelector(".message-row.is-editing-source")).toBeNull();
+  });
+
+  it("重新生成期间即使缺少来源消息的快照先到也持续显示该用户消息", async () => {
+    let resolveRegenerate!: (response: Response) => void;
+    regenerateResponse = new Promise((resolve) => { resolveRegenerate = resolve; });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.emit("snapshot", {
+      messages: [
+        { role: "user", content: "需要保留的问题", __piEntryId: "user-source" },
+        { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
+      ],
+      lastEventId: 2,
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成回答" }));
+
+    act(() => source.emit("snapshot", {
+      messages: [],
+      history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+      run: {
+        runId: "run-regenerated",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-12T00:00:00.000Z",
+      },
+      lastEventId: 3,
+    }));
+    expect(messageRowTexts()).toEqual([expect.stringContaining("需要保留的问题"), expect.any(String)]);
+
+    resolveRegenerate(new Response(JSON.stringify({
+      snapshot: {
+        id: "session-1",
+        messages: [],
+        history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+        lastEventId: 3,
+      },
+      run: {
+        runId: "run-regenerated",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-12T00:00:00.000Z",
+      },
+    })));
+    await waitFor(() => expect(messageRowTexts()[0]).toContain("需要保留的问题"));
+
+    act(() => source.emit("run_started", {
+      run: {
+        runId: "run-regenerated",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-12T00:00:00.000Z",
+      },
+    }));
+    act(() => source.emit("text_delta", { delta: "新回答生成中" }));
+    await waitFor(() => expect(screen.getByText("新回答生成中")).toBeInTheDocument());
+    expect(messageRowTexts().filter((text) => text.includes("需要保留的问题"))).toHaveLength(1);
+
+    act(() => source.emit("snapshot", {
+      messages: [
+        { role: "user", content: "需要保留的问题", __piEntryId: "user-regenerated" },
+        { role: "assistant", content: [{ type: "text", text: "最终新回答" }] },
+      ],
+      history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 1 },
+      run: {
+        runId: "run-regenerated",
+        sessionId: "session-1",
+        status: "completed",
+        startedAt: "2026-08-12T00:00:00.000Z",
+        finishedAt: "2026-08-12T00:00:01.000Z",
+      },
+      lastEventId: 6,
+    }));
+
+    await waitFor(() => expect(screen.getByText("最终新回答")).toBeInTheDocument());
+    expect(messageRowTexts().filter((text) => text.includes("需要保留的问题"))).toHaveLength(1);
+    expect(screen.queryByText("旧回答")).not.toBeInTheDocument();
+    const rows = messageRowTexts();
+    expect(rows[0]).toContain("需要保留的问题");
+    expect(rows[1]).toContain("最终新回答");
+  });
+
+  it("重新生成请求失败时保留原时间线并显示统一错误", async () => {
+    regenerateResponse = Promise.resolve(new Response(JSON.stringify({
+      error: { code: "REQUEST_FAILED", message: "重新生成失败" },
+    }), { status: 500 }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [
+        { role: "user", content: "需要保留的问题", __piEntryId: "user-source" },
+        { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
+      ],
+      lastEventId: 2,
+    }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成回答" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("操作未完成");
+    fireEvent.click(screen.getAllByRole("button", { name: "查看错误详情" }).at(-1)!);
+    expect(screen.getByText("重新生成失败")).toBeInTheDocument();
+    expect(messageRowTexts()[0]).toContain("需要保留的问题");
+  });
+
+  it("切换会话后不会把旧会话待确认消息补入新会话", async () => {
+    let resolveRegenerate!: (response: Response) => void;
+    regenerateResponse = new Promise((resolve) => { resolveRegenerate = resolve; });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [
+        { role: "user", content: "旧会话问题", __piEntryId: "user-source" },
+        { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
+      ],
+      lastEventId: 2,
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成回答" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "第二会话已绑定 2 个定时任务" }));
+
+    await waitFor(() => expect(messageRowTexts()[0]).toContain("第二会话问题"));
+    expect(messageRowTexts().some((text) => text.includes("旧会话问题"))).toBe(false);
+
+    await act(async () => {
+      resolveRegenerate(new Response(JSON.stringify({
+        snapshot: {
+          id: "session-1",
+          messages: [{ role: "user", content: "旧会话问题", __piEntryId: "old-regenerated" }],
+          history: { branchToken: "branch-old", hasMoreBefore: false, turnCount: 1 },
+          lastEventId: 3,
+        },
+        run: {
+          runId: "run-old",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-12T00:00:00.000Z",
+        },
+      })));
+      await Promise.resolve();
+    });
+    expect(messageRowTexts()[0]).toContain("第二会话问题");
+    expect(messageRowTexts().some((text) => text.includes("旧会话问题"))).toBe(false);
   });
 
   it("将会话历史与工作台导航拆分为独立入口", async () => {

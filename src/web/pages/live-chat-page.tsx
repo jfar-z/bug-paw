@@ -25,6 +25,11 @@ import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
 import { useSessionHistory } from "../use-session-history";
 import { mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
+import {
+  createPendingUserMessage,
+  reconcilePendingUserMessage,
+  type PendingUserMessage,
+} from "../pending-user-message";
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
@@ -39,11 +44,6 @@ import { PcmStreamAudio } from "../pcm-stream-audio";
 interface LiveChatPageProps {
   theme: ThemePreference;
   userIdentity: IdentityPreview;
-}
-
-interface PendingUserMessage {
-  sessionId: string;
-  entry: UserEntry;
 }
 
 interface AutoSpeechEligibility {
@@ -193,17 +193,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setSession(mergedSnapshot);
     if (next.model) setSelectedModel(next.model);
     const running = next.run?.status === "queued" || next.run?.status === "running";
-    const parsedTimeline = parsePiHistory(mergedSnapshot.messages, running);
-    const pending = pendingUserMessageRef.current;
-    if (pending?.sessionId === next.id) {
-      if (timelineIncludesUserMessage(parsedTimeline, pending.entry)) {
-        pendingUserMessageRef.current = undefined;
-      } else {
-        setTimeline(insertPendingUserMessage(parsedTimeline, pending.entry));
-        return;
-      }
-    }
-    setTimeline(parsedTimeline);
+    const pendingResult = reconcilePendingUserMessage(
+      next.id,
+      parsePiHistory(mergedSnapshot.messages, running),
+      pendingUserMessageRef.current,
+    );
+    pendingUserMessageRef.current = pendingResult.pending;
+    setTimeline(pendingResult.timeline);
   }, [alignAfterNextContentCommit, resumeFollowing]);
 
   const historyLoader = useSessionHistory({
@@ -475,6 +471,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const openConversation = async (sessionId: string) => {
     if (openingSessionRef.current || session?.id === sessionId) return;
     stopSpeech();
+    pendingUserMessageRef.current = undefined;
     setError("");
     setEditingEntryId(undefined);
     setMediaSummaries({});
@@ -705,10 +702,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           previousTurnId: findLastAgentTurnId(timeline),
         }
         : undefined;
-      pendingUserMessageRef.current = {
-        sessionId: activeSession.id,
-        entry: pendingEntry,
-      };
+      pendingUserMessageRef.current = createPendingUserMessage(
+        activeSession.id,
+        pendingEntry,
+        timeline,
+        branchEntryId,
+      );
       setTimeline((current) => reduceTimeline(reduceTimeline(current, {
           type: "user_message",
           id: pendingEntry.id,
@@ -920,12 +919,40 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   /** 重新提交 Pi 保存的原始用户 prompt，创建新的同级分支。 */
   const regenerate = async (entryId: string) => {
     if (!session || streaming || isOpeningSession) return;
+    const targetSessionId = session.id;
+    const sourceEntry = timeline.find((entry): entry is UserEntry => (
+      entry.type === "user" && entry.piEntryId === entryId
+    ));
+    if (!sourceEntry) {
+      setError("找不到重新生成所对应的用户消息。");
+      return;
+    }
+    const pendingEntry: UserEntry = {
+      id: crypto.randomUUID(),
+      type: "user",
+      text: sourceEntry.text,
+      files: sourceEntry.files,
+      references: sourceEntry.references,
+    };
+    pendingUserMessageRef.current = createPendingUserMessage(
+      targetSessionId,
+      pendingEntry,
+      timeline,
+      entryId,
+    );
     try {
       stopSpeech();
-      const result = await api.regenerateSessionBranch(session.id, entryId);
+      const result = await api.regenerateSessionBranch(targetSessionId, entryId);
+      if (sessionIdRef.current !== targetSessionId) return;
+      applySnapshot(result.snapshot, "once");
       setActiveRun(result.run);
       setError("");
     } catch (reason) {
+      if (sessionIdRef.current !== targetSessionId) return;
+      const pending = pendingUserMessageRef.current;
+      if (pending?.sessionId === targetSessionId && pending.entry.id === pendingEntry.id) {
+        pendingUserMessageRef.current = undefined;
+      }
       await reportFailure(reason, "重新生成回答");
     }
   };
@@ -1269,25 +1296,4 @@ function findAgentModel(
  */
 function isSameModel(left: ModelSummary | undefined, right: ModelSummary | undefined): boolean {
   return left?.provider === right?.provider && left?.id === right?.id;
-}
-
-/**
- * 判断服务端快照是否已持久化本次乐观显示的用户消息。
- */
-function timelineIncludesUserMessage(entries: ConversationEntry[], pending: UserEntry): boolean {
-  return entries.some((entry) => entry.type === "user"
-    && entry.text === pending.text
-    && entry.files.length === pending.files.length
-    && entry.files.every((file, index) => file.path === pending.files[index]?.path));
-}
-
-/**
- * 快照暂未包含刚发送的消息时，它只代表本轮发送前的历史。
- * 将乐观用户消息接在末尾，后续 generation_started 才会创建独立的新 Agent 回合。
- */
-function insertPendingUserMessage(
-  entries: ConversationEntry[],
-  pending: UserEntry,
-): ConversationEntry[] {
-  return [...entries, pending];
 }
