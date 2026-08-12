@@ -45,6 +45,22 @@ describe("PiSettingsService", () => {
     expect(JSON.stringify(document)).not.toContain("theme");
   });
 
+  it("读取全局压缩设置时保留 Token 数值", async () => {
+    const files = await fixture();
+    await writeFile(files.globalFile, JSON.stringify({
+      compaction: { reserveTokens: 16_384, keepRecentTokens: 20_000 },
+      branchSummary: { reserveTokens: 8_192 },
+    }), "utf8");
+    const service = new PiSettingsService(files);
+
+    const document = await service.read("global");
+
+    expect(document.own).toEqual({
+      compaction: { reserveTokens: 16_384, keepRecentTokens: 20_000 },
+      branchSummary: { reserveTokens: 8_192 },
+    });
+  });
+
   it("恢复继承只删除 Agent 字段并保留 Pi 未知字段", async () => {
     const files = await fixture();
     await writeFile(files.globalFile, '{"retry":{"provider":{"timeoutMs":30000}}}\n', "utf8");
