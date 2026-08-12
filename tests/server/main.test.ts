@@ -19,6 +19,7 @@ async function createFixture() {
   await mkdir(staticRoot);
   await writeFile(join(staticRoot, "index.html"), "<!doctype html><title>pi agent</title>", "utf8");
   await writeFile(join(staticRoot, "asset.js"), "export {};", "utf8");
+  await writeFile(join(staticRoot, "sw.js"), "self.addEventListener('fetch', () => undefined);", "utf8");
   return { root, staticRoot };
 }
 
@@ -86,6 +87,17 @@ describe("Web 服务装配", () => {
     expect(asset.body).toBe("export {};");
     expect(fallback.body).toContain("<title>pi agent</title>");
     expect(fallback.headers["cache-control"]).toBe("no-cache");
+    await app.close();
+  });
+
+  it("service worker 不使用静态资源的长缓存，确保已安装应用及时更新", async () => {
+    const fixture = await createFixture();
+    const app = await buildServer({ dataRoot: join(fixture.root, "data"), staticRoot: fixture.staticRoot });
+
+    const worker = await app.inject({ method: "GET", url: "/sw.js" });
+
+    expect(worker.statusCode).toBe(200);
+    expect(worker.headers["cache-control"]).toBe("no-cache");
     await app.close();
   });
 

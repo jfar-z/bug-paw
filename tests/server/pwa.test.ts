@@ -55,6 +55,6 @@ describe("PWA 应用壳", () => {
   it("使用新应用壳版本清除已安装 PWA 的旧入口缓存", async () => {
     const source = await readFile("public/sw.js", "utf8");
 
-    expect(source).toContain('const CACHE_NAME = "bugpaw-shell-v10"');
+    expect(source).toContain('const CACHE_NAME = "bugpaw-shell-v11"');
   });
 });
