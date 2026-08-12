@@ -6,14 +6,14 @@ deployment_mode="core"
 dry_run="false"
 for deployment_arg in "$@"; do
   case "$deployment_arg" in
-    core|search|vector|full)
+    core|search|vector|browser|full)
       deployment_mode="$deployment_arg"
       ;;
     --dry-run)
       dry_run="true"
       ;;
     *)
-      printf '用法: %s [core|search|vector|full] [--dry-run]\n' "$0" >&2
+      printf '用法: %s [core|search|vector|browser|full] [--dry-run]\n' "$0" >&2
       exit 2
       ;;
   esac
@@ -31,8 +31,11 @@ case "$deployment_mode" in
   vector)
     compose_args+=(-f compose.vector.yaml)
     ;;
+  browser)
+    compose_args+=(-f compose.browser.yaml)
+    ;;
   full)
-    compose_args+=(-f compose.search.yaml -f compose.vector.yaml)
+    compose_args+=(-f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml)
     ;;
 esac
 
@@ -94,6 +97,32 @@ if [ "$deployment_mode" = "search" ] || [ "$deployment_mode" = "full" ]; then
     mv "$temporary_env" .env
     printf '已为 SearXNG 生成本机部署密钥。\n'
   fi
+fi
+
+if [ "$deployment_mode" = "browser" ] || [ "$deployment_mode" = "full" ]; then
+  browser_data_dir=$(read_env_value "BUG_PAW_DATA_DIR" "./pi-agent-data")
+  case "$browser_data_dir" in
+    /*) ;;
+    *) browser_data_dir="$project_dir/${browser_data_dir#./}" ;;
+  esac
+  browser_app_dir="$browser_data_dir/app"
+  browser_token_file="$browser_app_dir/browser-internal-token"
+  mkdir -p "$browser_app_dir"
+  chmod 700 "$browser_app_dir"
+  if [ ! -s "$browser_token_file" ]; then
+    if ! command -v openssl >/dev/null 2>&1; then
+      printf '浏览器部署需要 openssl 生成内部通信密钥。\n' >&2
+      exit 1
+    fi
+    temporary_token=$(mktemp "$browser_app_dir/.browser-token.XXXXXX")
+    openssl rand -hex 32 > "$temporary_token"
+    chmod 600 "$temporary_token"
+    mv "$temporary_token" "$browser_token_file"
+    printf '已生成浏览器组件内部通信密钥。\n'
+  fi
+  # Playwright Worker 与出口代理统一使用专用 UID 1001。
+  if [ "$(id -u)" = "0" ]; then chown 1001:1001 "$browser_token_file"; fi
+  chmod 600 "$browser_token_file"
 fi
 
 docker compose "${compose_args[@]}" config --quiet

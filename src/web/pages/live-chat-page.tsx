@@ -1,4 +1,4 @@
-import { ChevronDown, CircleStop, Menu, MessageSquarePlus, PencilLine, Send } from "lucide-react";
+import { ChevronDown, CircleStop, FolderOpen, Menu, MessageSquarePlus, PencilLine, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
@@ -11,6 +11,7 @@ import { ReferenceComposer } from "../components/reference-composer";
 import { MediaLightbox } from "../components/media-lightbox";
 import { ArchivedSessionsDialog } from "../components/archived-sessions-dialog";
 import { SessionBulkConfirmationDialog } from "../components/session-bulk-confirmation-dialog";
+import { QuickWorkspaceDrawer } from "../components/quick-workspace-drawer";
 import {
   parsePiHistory,
   reduceTimeline,
@@ -36,7 +37,8 @@ import type { AgentReference } from "../../shared/agent-reference-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
-import { useMobileSidebarSwipe } from "../features/chat/mobile-sidebar-swipe";
+import { useMobileWorkspaceSwipe, type MobileWorkspaceDrawer } from "../features/chat/mobile-workspace-swipe";
+import { classifyWorkspaceLink } from "../workspace-links";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
@@ -109,6 +111,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useViewportScrollLock();
   const { runApiTask, runOptionalApiTask } = useApiTask();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+  const [workspaceLocationRequest, setWorkspaceLocationRequest] = useState<{ id: number; path: string }>();
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const workspaceTriggerRef = useRef<HTMLElement | undefined>(undefined);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
@@ -407,10 +413,29 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     cancelSessionSelection();
     setSidebarOpen(false);
   };
-  const sidebarSwipe = useMobileSidebarSwipe({
-    open: sidebarOpen,
-    onOpen: () => setSidebarOpen(true),
-    onClose: closeSidebar,
+  const closeResources = () => {
+    setResourcesOpen(false);
+    window.setTimeout(() => workspaceTriggerRef.current?.focus(), 0);
+  };
+  /** 普通入口只打开当前目录，避免重放上一次 Markdown 文件定位。 */
+  const openResources = () => {
+    closeSidebar();
+    setWorkspaceLocationRequest(undefined);
+    setWorkspaceMessage("");
+    setResourcesOpen(true);
+  };
+  const openDrawer = (drawer: MobileWorkspaceDrawer) => {
+    if (drawer === "sessions") {
+      setResourcesOpen(false);
+      setSidebarOpen(true);
+    } else {
+      openResources();
+    }
+  };
+  const workspaceSwipe = useMobileWorkspaceSwipe({
+    openDrawer: sidebarOpen ? "sessions" : resourcesOpen ? "resources" : undefined,
+    onOpenDrawer: openDrawer,
+    onCloseDrawer: (drawer) => drawer === "sessions" ? closeSidebar() : closeResources(),
   });
 
   const enterDraft = () => {
@@ -824,6 +849,28 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const activeAgentId = session?.agentId ?? selectedAgentId;
   const activeAgent = agents.find((item) => item.profile.id === activeAgentId);
   const noAvailableAgent = agents.length === 0;
+  useEffect(() => {
+    setWorkspaceLocationRequest(undefined);
+    setWorkspaceMessage("");
+  }, [activeAgentId]);
+  const activateWorkspaceLink = useCallback((href: string): boolean => {
+    const intent = classifyWorkspaceLink(href);
+    if (intent.kind === "passthrough") return false;
+    if (intent.kind === "blocked") {
+      workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+      setWorkspaceLocationRequest(undefined);
+      setWorkspaceMessage(intent.message);
+      closeSidebar();
+      setResourcesOpen(true);
+      return true;
+    }
+    workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    setWorkspaceMessage("");
+    setWorkspaceLocationRequest((current) => ({ id: (current?.id ?? 0) + 1, path: intent.path }));
+    closeSidebar();
+    setResourcesOpen(true);
+    return true;
+  }, []);
 
   useEffect(() => {
     const profile = activeAgent?.profile;
@@ -1035,7 +1082,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const activeAgentEntryId = [...timeline].reverse().find((entry) => entry.type === "agent")?.id;
 
   return (
-    <main className="chat-shell live-chat-shell" {...sidebarSwipe.handlers}>
+    <main className="chat-shell live-chat-shell" {...workspaceSwipe.handlers}>
       <ChatSidebar
         open={sidebarOpen}
         sessions={sessions}
@@ -1050,8 +1097,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         selectionMode={sessionSelectionMode}
         selectedSessionIds={selectedSessionIds}
         bulkBusy={sessionBulkBusy}
-        swiping={sidebarSwipe.swiping}
-        swipeTranslatePercent={sidebarSwipe.translatePercent}
+        swiping={workspaceSwipe.sessionTranslatePercent !== undefined}
+        swipeTranslatePercent={workspaceSwipe.sessionTranslatePercent}
         onClose={closeSidebar}
         onEnterDraft={enterDraft}
         onRefresh={() => void refreshSessions()}
@@ -1096,6 +1143,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               onSelectAgent={(agentId) => void selectAgent(agentId)}
               onSelectModel={(model) => void changeModel(model)}
             />
+            <button type="button" className="icon-button quick-workspace-open-button" aria-label="打开快捷资源管理" title="快捷资源管理" disabled={!activeAgentId} onClick={(event) => { workspaceTriggerRef.current = event.currentTarget; setWorkspaceMessage(""); openDrawer("resources"); }}><FolderOpen size={18} aria-hidden="true" /></button>
             <button
               type="button"
               className="icon-button chat-new-session-button"
@@ -1129,6 +1177,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           onRetryHistory={historyLoader.retry}
           onResolved={registerMediaSummary}
           onPreview={openImagePreview}
+          onWorkspaceLink={activateWorkspaceLink}
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
           editingEntryId={editingEntryId}
@@ -1163,6 +1212,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           <p>Agent 可以在容器权限范围内读取、修改文件和执行命令。</p>
         </footer>
       </section>
+      <QuickWorkspaceDrawer
+        open={resourcesOpen}
+        agentId={activeAgentId}
+        agentName={activeAgent?.profile.name}
+        locationRequest={workspaceLocationRequest}
+        message={workspaceMessage}
+        swiping={workspaceSwipe.resourceTranslatePercent !== undefined}
+        swipeTranslatePercent={workspaceSwipe.resourceTranslatePercent}
+        onClose={closeResources}
+      />
       <ArchivedSessionsDialog
         open={archiveDialogOpen}
         sessions={archivedSessions}

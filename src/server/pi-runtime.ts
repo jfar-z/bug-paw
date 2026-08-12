@@ -321,8 +321,10 @@ interface PiRuntimeGatewayOptions {
   checkpointThrottleMs?: number;
   sessionMetadataStore?: SessionMetadataStore;
   refreshSessionContext?: () => Promise<void>;
-  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
+  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED" | "BROWSER_RUN_CLEANUP_FAILED"; sessionId?: string }) => void;
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
+  onRunStarted?: (run: { runId: string; sessionId: string }) => void;
+  onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
   toolCallCircuitBreakerTools?: readonly ToolDefinition[];
   onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
 }
@@ -563,6 +565,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       ...(session.messages.length === 0 && titleInput?.trim() ? { titleInput: titleInput.trim() } : {}),
     };
     runs.set(sessionId, run);
+    try {
+      options.onRunStarted?.({ runId: run.runId, sessionId: run.sessionId });
+    } catch (error) {
+      runs.delete(sessionId);
+      run.releaseTurn();
+      throw error;
+    }
     recoveredCheckpoints.delete(sessionId);
     publishSequenced(sessionId, { type: "run_started", run: toRunSummary(run) });
     run.completion = executeRun(run, session, text);
@@ -690,6 +699,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: run.error });
     } finally {
       abortRequested.delete(run.sessionId);
+      await options.onRunFinished?.({
+        runId: run.runId,
+        sessionId: run.sessionId,
+        status: run.status === "completed" || run.status === "aborted" ? run.status : "error",
+      }).catch(() => {
+        options.onBackgroundError?.({ code: "BROWSER_RUN_CLEANUP_FAILED", sessionId: run.sessionId });
+      });
       run.releaseTurn();
       await persistCheckpoint(run.sessionId).catch(() => {
         options.onBackgroundError?.({ code: "CHECKPOINT_WRITE_FAILED", sessionId: run.sessionId });
@@ -1097,7 +1113,7 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
-  createSessionTools?: (context: { searchRunState: SearchRunState }) => ToolDefinition[];
+  createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
   refreshAppendSystemPrompt?: () => Promise<string[]>;
@@ -1105,8 +1121,10 @@ interface SdkPiRuntimeOptions {
   checkpointStore?: RunCheckpointStore;
   sessionMetadataStore?: SessionMetadataStore;
   onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
-  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
+  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED" | "BROWSER_RUN_CLEANUP_FAILED"; sessionId?: string }) => void;
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
+  onRunStarted?: (run: { runId: string; sessionId: string }) => void;
+  onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
   stageSessionDeletion?: (sessionId: string, sessionFile: string) => Promise<StagedSessionDeletion>;
 }
 
@@ -1174,7 +1192,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
       customTools: [
         ...(options.customTools ?? []),
-        ...(options.createSessionTools?.({ searchRunState }) ?? []),
+        ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
       ],
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({
@@ -1267,6 +1285,8 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     refreshSessionContext: refreshAppendSystemPrompt,
     onBackgroundError: options.onBackgroundError,
     onSessionTitleGenerated: options.onSessionTitleGenerated,
+    onRunStarted: options.onRunStarted,
+    onRunFinished: options.onRunFinished,
     toolCallCircuitBreakerTools: options.customTools,
     onToolCallCircuitBreak: options.onToolCallCircuitBreak,
   });

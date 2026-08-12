@@ -4,6 +4,38 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.4 - 2026-08-12
+
+### 新增 / Added
+
+- 增加完整的浏览器自动化能力，包括独立 Playwright Worker、受控出口代理、运行租约与公平队列、原子浏览器工具、审计记录、预览产物及权限提示。
+- 增加浏览器执行配置页面、离线只读模式、配置接口与全能力部署组合，并补充安全边界和验收文档。
+- 增加聊天快捷资源管理抽屉，支持安全定位工作目录资源、复用工作区浏览能力，以及 HTML 等文件的页面预览。
+- 增加独立的 Provider 创建弹窗，仅需填写 ID、显示名称、模板与 Base URL；其余配置使用默认值，API Key 在创建后进入设置维护。
+- 增加搜索渠道密钥获取链接，并预装 Skill 创建助手。
+
+- Added end-to-end browser automation with an isolated Playwright worker, controlled egress proxy, fair run leasing, atomic browser tools, audit records, preview artifacts, and permission guidance.
+- Added a browser-execution configuration page, offline read-only behavior, configuration APIs, a full deployment profile, and supporting security and acceptance documentation.
+- Added a quick workspace-resource drawer in chat with safe working-directory links, shared workspace browsing, and page previews for HTML and other supported files.
+- Added a dedicated Provider creation dialog that only requires an ID, display name, template, and Base URL; remaining settings use defaults, while API keys are configured after creation.
+- Added credential-acquisition links for search providers and bundled the Skill Creator assistant.
+
+### 修复 / Fixed
+
+- 修复会话切换加载提示、移动端抽屉快速滑动与滚动区关闭手势，以及刷新后输入区偏移问题。
+- 修复快捷资源抽屉状态残留与入场动画，并统一资源列表选择列、操作列和图标尺寸。
+- 修复浏览器出口代理 Fake-IP 兼容、配置页导航与视觉层级，以及组件测试缺少运行反馈的问题。
+- 修复压缩设置被误判为敏感配置并脱敏的问题，同时补充配置脱敏回归测试。
+- 修复 Provider 创建弹窗的错误反馈、矮屏可达性和两组字段输入控件对齐。
+- 确保已安装的 PWA 能及时发现并应用新版本。
+
+- Fixed session-switch loading feedback, fast mobile drawer gestures, swipe-to-close behavior in scrollable areas, and composer displacement after refresh.
+- Fixed stale state and entrance animation in the quick-resource drawer, and standardized selection columns, action columns, and resource icon sizing.
+- Fixed Fake-IP compatibility in the browser egress proxy, browser-configuration navigation and visual hierarchy, and missing execution feedback in component tests.
+- Fixed compression settings being incorrectly treated as sensitive values, with added redaction regression coverage.
+- Fixed Provider creation error feedback, short-viewport accessibility, and alignment across both field pairs.
+- Ensured installed PWAs promptly discover and apply new versions.
+
 ## 0.1.3 - 2026-08-12
 
 ### 新增 / Added

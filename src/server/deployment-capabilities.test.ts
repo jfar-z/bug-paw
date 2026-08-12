@@ -7,6 +7,7 @@ describe("部署能力配置", () => {
     expect(readDeploymentCapabilities({})).toEqual({
       managedSearchAvailable: false,
       managedEmbeddingAvailable: false,
+      browserAutomationAvailable: false,
     });
   });
 
@@ -14,9 +15,11 @@ describe("部署能力配置", () => {
     expect(readDeploymentCapabilities({
       BUG_PAW_MANAGED_SEARCH_AVAILABLE: "true",
       BUG_PAW_MANAGED_EMBEDDING_AVAILABLE: "TRUE",
+      BUG_PAW_BROWSER_AUTOMATION_AVAILABLE: "true",
     })).toEqual({
       managedSearchAvailable: true,
       managedEmbeddingAvailable: false,
+      browserAutomationAvailable: true,
     });
   });
 });

@@ -1,14 +1,17 @@
-const CACHE_NAME = "bugpaw-shell-v9";
+const CACHE_NAME = "bugpaw-shell-v13";
+const BUILD_ASSETS = __BUGPAW_PRECACHE__;
 const CORE_ASSETS = [
   "/",
   "/knowledge-base",
   "/settings/capabilities/tts",
   "/settings/capabilities/knowledge-retrieval",
+  "/settings/capabilities/browser",
   "/manifest.webmanifest",
   "/brand/bugpaw/bugpaw-paw-favicon.png",
   "/brand/bugpaw/bugpaw-paw-icon-192.png",
   "/brand/bugpaw/bugpaw-paw-icon-512.png",
 ];
+CORE_ASSETS.push(...BUILD_ASSETS);
 const STATIC_DESTINATIONS = new Set(["document", "font", "image", "manifest", "script", "style", "worker"]);
 const NETWORK_FIRST_DESTINATIONS = new Set(["script", "style"]);
 

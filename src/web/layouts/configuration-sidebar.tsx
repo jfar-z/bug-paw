@@ -8,6 +8,7 @@ import {
   History,
   KeyRound,
   LayoutDashboard,
+  MonitorPlay,
   SlidersHorizontal,
   X,
 } from "lucide-react";
@@ -87,6 +88,9 @@ export function ConfigurationSidebar({ route, open, onClose, onNavigate }: Confi
         >
           <Globe2 size={17} aria-hidden="true" />
           <span>联网搜索</span>
+        </button>
+        <button type="button" className={route.page === "browser-automation" ? "is-active" : undefined} aria-current={route.page === "browser-automation" ? "page" : undefined} onClick={() => go({ page: "browser-automation" })}>
+          <MonitorPlay size={17} aria-hidden="true" /><span>浏览器执行</span>
         </button>
         <button type="button" className={route.page === "tts" ? "is-active" : undefined} aria-current={route.page === "tts" ? "page" : undefined} onClick={() => go({ page: "tts" })}>
           <Volume2 size={17} aria-hidden="true" /><span>语音合成</span>

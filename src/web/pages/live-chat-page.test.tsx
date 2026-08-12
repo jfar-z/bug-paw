@@ -167,6 +167,9 @@ beforeEach(() => {
     if (url === "/api/v1/models") {
       return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
     }
+    if (url.includes("/workspace/entries")) {
+      return new Response(JSON.stringify({ entries: [] }));
+    }
     if (url === "/api/v1/sessions/bulk/preview" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as {
         action: "archive" | "restore" | "delete";
@@ -710,6 +713,17 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByLabelText("默认 Agent 头像")).toBeInTheDocument();
   });
 
+  it("将快捷资源入口放在 Agent 选择框与新建会话之间", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    const agentTrigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const resourcesTrigger = screen.getByRole("button", { name: "打开快捷资源管理" });
+    const createTrigger = screen.getByRole("button", { name: "新建会话" });
+
+    expect(agentTrigger.compareDocumentPosition(resourcesTrigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(resourcesTrigger.compareDocumentPosition(createTrigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("触摸长按会话时展开操作菜单且不打开会话", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     const sessionButton = await screen.findByRole("button", { name: "测试" });
@@ -803,7 +817,58 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
-  it("移动端从输入框起划时不触发侧栏手势", async () => {
+  it("移动端内容区左划打开当前 Agent 的快捷资源管理", async () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => mediaQueryResult(query.includes("max-width"))));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^第二会话/ });
+    const workspace = document.querySelector<HTMLElement>(".chat-workspace")!;
+    const resources = document.querySelector<HTMLElement>(".quick-workspace-drawer")!;
+
+    fireEvent.pointerDown(workspace, { pointerType: "touch", pointerId: 7, clientX: 220, clientY: 200 });
+    fireEvent.pointerMove(workspace, { pointerType: "touch", pointerId: 7, clientX: 105, clientY: 205 });
+    fireEvent.pointerUp(workspace, { pointerType: "touch", pointerId: 7, clientX: 105, clientY: 205 });
+
+    expect(resources).toHaveClass("is-open");
+    expect(resources).toHaveTextContent("默认 Agent 的工作目录");
+  });
+
+  it("桌面快捷入口与 Markdown 相对路径共用资源抽屉", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "打开快捷资源管理" }));
+    const resources = screen.getByRole("complementary", { name: "快捷资源管理" });
+    expect(resources).toHaveClass("is-open");
+    fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "[查看说明](docs/readme.md)" }] }],
+    }));
+    fireEvent.click(await screen.findByRole("link", { name: "查看说明" }));
+
+    expect(resources).toHaveClass("is-open");
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("directory=docs"))).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
+    const docsRequestCount = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("directory=docs")).length;
+    fireEvent.click(screen.getByRole("button", { name: "打开快捷资源管理" }));
+    await waitFor(() => expect(resources).toHaveClass("is-open"));
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("directory=docs"))).toHaveLength(docsRequestCount);
+  });
+
+  it("阻止越界本地链接并在资源抽屉反馈", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "[敏感文件](../secret.txt)" }] }],
+    }));
+
+    fireEvent.click(await screen.findByRole("link", { name: "敏感文件" }));
+
+    expect(screen.getByRole("complementary", { name: "快捷资源管理" })).toHaveClass("is-open");
+    expect(screen.getByText("文件路径已越出当前 Agent 工作目录")).toBeInTheDocument();
+  });
+
+  it("移动端从消息输入框横划也能打开侧栏", async () => {
     vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(true)));
     renderLiveChatPage(<LiveChatPage {...props} />);
     const textbox = await screen.findByRole("textbox", { name: "消息内容" });
@@ -813,7 +878,7 @@ describe("LiveChatPage 时间线", () => {
     fireEvent.pointerMove(textbox, { pointerType: "touch", pointerId: 1, clientX: 140, clientY: 202 });
     fireEvent.pointerUp(textbox, { pointerType: "touch", pointerId: 1, clientX: 140, clientY: 202 });
 
-    expect(sidebar).not.toHaveClass("is-open");
+    expect(sidebar).toHaveClass("is-open");
   });
 
   it("为高密度对话布局保留消息列样式钩子", async () => {
@@ -998,7 +1063,10 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByText("会话暂不可用")).toBeInTheDocument();
     expect(screen.getByText("打开会话")).toBeInTheDocument();
     expect(screen.getByText("旧会话内容")).toBeInTheDocument();
-    expect(screen.queryByRole("status", { name: "正在加载会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "正在加载会话" })).toHaveClass("is-leaving");
+    await waitFor(() => {
+      expect(screen.queryByRole("status", { name: "正在加载会话" })).not.toBeInTheDocument();
+    });
     expect(screen.getByRole("button", { name: "第二个会话" })).toBeEnabled();
   });
 

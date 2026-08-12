@@ -113,6 +113,24 @@ function createMetadataStore() {
 }
 
 describe("PiRuntimeGateway", () => {
+  it("向扩展能力通知可信 Run 的开始和完成", async () => {
+    const session = new FakeSession();
+    const onRunStarted = vi.fn();
+    const onRunFinished = vi.fn(async () => undefined);
+    const gateway = createPiRuntimeGateway(createBackend(session), { onRunStarted, onRunFinished });
+    await gateway.createSession();
+
+    const started = await gateway.startPrompt("session-1", "检查页面");
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: started.runId, sessionId: "session-1" });
+    session.finishPrompt();
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith({
+      runId: started.runId,
+      sessionId: "session-1",
+      status: "completed",
+    }));
+    expect(onRunFinished).toHaveBeenCalledTimes(1);
+  });
+
   it("pi 尚未落盘时仍在会话列表返回正在生成的首条消息", async () => {
     const session = new FakeSession();
     const backend = createBackend(session);

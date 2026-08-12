@@ -1,0 +1,81 @@
+services:
+  bug-paw-web:
+    environment:
+      BUG_PAW_BROWSER_AUTOMATION_AVAILABLE: "true"
+      BUG_PAW_BROWSER_WORKER_URL: http://browser-worker:7081
+      BUG_PAW_BROWSER_TOKEN_FILE: /data/app/browser-internal-token
+      BUG_PAW_BROWSER_PREVIEW_ORIGIN: http://bug-paw-web:7080
+    networks:
+      - default
+      - browser-control
+
+  browser-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+      target: worker
+    init: true
+    restart: unless-stopped
+    depends_on:
+      browser-egress-proxy:
+        condition: service_healthy
+    environment:
+      BUG_PAW_BROWSER_TOKEN_FILE: /run/secrets/browser-internal-token
+      BUG_PAW_BROWSER_PROXY_SERVER: http://browser-egress-proxy:7082
+    volumes:
+      - ${BUG_PAW_DATA_DIR:-./pi-agent-data}/app/browser-internal-token:/run/secrets/browser-internal-token:ro
+    networks:
+      - browser-control
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    shm_size: 1gb
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    cpus: ${BUG_PAW_BROWSER_CPUS:-2.0}
+    mem_limit: ${BUG_PAW_BROWSER_MEMORY:-2g}
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(7081,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  browser-egress-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+      target: proxy
+    init: true
+    restart: unless-stopped
+    environment:
+      BUG_PAW_BROWSER_TOKEN_FILE: /run/secrets/browser-internal-token
+      BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS: ${BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS:-}
+    volumes:
+      - ${BUG_PAW_DATA_DIR:-./pi-agent-data}/app/browser-internal-token:/run/secrets/browser-internal-token:ro
+    networks:
+      - browser-control
+      - browser-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    cpus: 0.5
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(7082,'127.0.0.1',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  browser-control:
+    internal: true
+  browser-egress: {}

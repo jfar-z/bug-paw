@@ -1,5 +1,5 @@
 param(
-  [ValidateSet("core", "search", "vector", "full")]
+  [ValidateSet("core", "search", "vector", "browser", "full")]
   [string]$Mode = "core",
   [switch]$DryRun
 )
@@ -14,7 +14,8 @@ $ComposeArguments = @("compose", "--env-file", ".env", "-f", "compose.yaml")
 switch ($Mode) {
   "search" { $ComposeArguments += @("-f", "compose.search.yaml") }
   "vector" { $ComposeArguments += @("-f", "compose.vector.yaml") }
-  "full" { $ComposeArguments += @("-f", "compose.search.yaml", "-f", "compose.vector.yaml") }
+  "browser" { $ComposeArguments += @("-f", "compose.browser.yaml") }
+  "full" { $ComposeArguments += @("-f", "compose.search.yaml", "-f", "compose.vector.yaml", "-f", "compose.browser.yaml") }
 }
 $DeployArguments = $ComposeArguments + @("up", "-d", "--build", "--remove-orphans")
 
@@ -62,6 +63,22 @@ if ($Mode -in @("search", "full")) {
     }
     [System.IO.File]::WriteAllText((Join-Path $ProjectDirectory ".env"), $EnvironmentText, $Utf8NoBom)
     Write-Output "已为 SearXNG 生成本机部署密钥。"
+  }
+}
+
+if ($Mode -in @("browser", "full")) {
+  $EnvironmentText = [System.IO.File]::ReadAllText((Join-Path $ProjectDirectory ".env"), [System.Text.Encoding]::UTF8)
+  $DataMatch = [System.Text.RegularExpressions.Regex]::Match($EnvironmentText, "(?m)^BUG_PAW_DATA_DIR=(.*)$")
+  $DataDirectory = if ($DataMatch.Success -and -not [string]::IsNullOrWhiteSpace($DataMatch.Groups[1].Value)) { $DataMatch.Groups[1].Value.Trim('"', "'") } else { "./pi-agent-data" }
+  if (-not [System.IO.Path]::IsPathRooted($DataDirectory)) { $DataDirectory = Join-Path $ProjectDirectory $DataDirectory }
+  $BrowserAppDirectory = Join-Path $DataDirectory "app"
+  $BrowserTokenFile = Join-Path $BrowserAppDirectory "browser-internal-token"
+  New-Item -ItemType Directory -Force -Path $BrowserAppDirectory | Out-Null
+  if (-not (Test-Path $BrowserTokenFile) -or (Get-Item $BrowserTokenFile).Length -eq 0) {
+    $RandomBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($RandomBytes)
+    [System.IO.File]::WriteAllText($BrowserTokenFile, (-join ($RandomBytes | ForEach-Object { $_.ToString("x2") })) + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Output "已生成浏览器组件内部通信密钥。"
   }
 }
 

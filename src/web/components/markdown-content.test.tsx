@@ -33,6 +33,14 @@ function MermaidWithUnrelatedDraft() {
 }
 
 describe("MarkdownContent", () => {
+  it("允许宿主拦截相对工作目录链接", () => {
+    const onLinkActivate = vi.fn(() => true);
+    render(<MarkdownContent text="[查看文件](docs/readme.md)" onLinkActivate={onLinkActivate} />);
+
+    fireEvent.click(screen.getByRole("link", { name: "查看文件" }));
+
+    expect(onLinkActivate).toHaveBeenCalledWith("docs/readme.md");
+  });
   it("渲染常用 Markdown 与 GFM 结构", () => {
     const text = [
       "# 标题",

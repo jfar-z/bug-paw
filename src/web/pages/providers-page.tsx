@@ -1,9 +1,10 @@
 import { Check, GripVertical, PencilLine, Plus, Save, TestTube2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { ProviderEditorModel, ProviderTemplate } from "../../shared/configuration-contracts";
+import type { ModelConfigDocument, ProviderEditorModel } from "../../shared/configuration-contracts";
 import { api, type DiscoveredModel, type ModelConnectionTestItem, type ModelConnectionTestRequest, type ProvidersDocument } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { KeyValueEditor, type KeyValueRow } from "../components/configuration/key-value-editor";
+import { ProviderCreateDialog } from "../components/configuration/provider-create-dialog";
 import { ProviderRenameDialog } from "../components/configuration/provider-rename-dialog";
 import { SecretInput } from "../components/secret-input";
 import { ThinkingLevelMapEditor } from "../components/configuration/thinking-level-map-editor";
@@ -40,14 +41,6 @@ const compatBooleanFields: Array<{ key: CompatBooleanKey; label: string; help?: 
   { key: "requiresThinkingAsText", label: "推理内容转文本", help: "llama.cpp/Qwen 续聊时可避免回放不兼容的 reasoning_content。" },
   { key: "requiresReasoningContentOnAssistantMessages", label: "Assistant 消息需要 reasoning_content" },
 ];
-
-const templateDefaults: Record<ProviderTemplate, Partial<ProviderNode>> = {
-  "openai-compatible": { api: "openai-completions", baseUrl: "https://api.example.com/v1", authHeader: true },
-  ollama: { api: "openai-completions", baseUrl: "http://localhost:11434/v1", authHeader: false },
-  vllm: { api: "openai-completions", baseUrl: "http://localhost:8000/v1", authHeader: false },
-  "lm-studio": { api: "openai-completions", baseUrl: "http://localhost:1234/v1", authHeader: false },
-  custom: {},
-};
 
 const discoveryApis = new Set(["openai-completions", "openai-responses"]);
 
@@ -164,7 +157,6 @@ export function ProvidersPage() {
   const [document, setDocument] = useState<ProvidersDocument>();
   const [selectedId, setSelectedId] = useState("");
   const [draft, setDraft] = useState<ProviderNode>({});
-  const [template, setTemplate] = useState<ProviderTemplate>("custom");
   const [headers, setHeaders] = useState<KeyValueRow[]>([]);
   const [selectedModelIndex, setSelectedModelIndex] = useState(0);
   const [apiKey, setApiKey] = useState("");
@@ -175,6 +167,7 @@ export function ProvidersPage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<false | "saving" | "testing" | "discovering">(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [draggingProviderId, setDraggingProviderId] = useState<string>();
   const [draggingModelId, setDraggingModelId] = useState<string>();
@@ -209,13 +202,29 @@ export function ProvidersPage() {
     setDraft(node);
     setHeaders(rowsFromHeaders(node.headers));
     setSelectedModelIndex(0);
-    setTemplate("custom");
     setTestResults([]);
     setDiscoveredModels([]);
     setSelectedDiscoveredIds(new Set());
     setApiKey("");
     setApiKeyVisible(false);
     setNotice("");
+  }
+
+  /**
+   * 合并新建接口返回的模型配置，并立即进入新 Provider 的凭证设置区。
+   */
+  function acceptCreatedProvider(providerId: string, updated: ModelConfigDocument) {
+    if (!document) return;
+    const nextDocument: ProvidersDocument = {
+      ...document,
+      ...updated,
+      credentials: document.credentials,
+      credentialRevision: document.credentialRevision,
+    };
+    setDocument(nextDocument);
+    selectProvider(providerId, providerMap(nextDocument));
+    setCreateOpen(false);
+    setNotice("Provider 已创建，请继续配置 API Key");
   }
 
   useEffect(() => {
@@ -311,7 +320,7 @@ export function ProvidersPage() {
   }
 
   async function saveProvider() {
-    if (!document || !selectedId) return;
+    if (!document || !selectedId || !savedProvider) return;
     if (!validProviderId(selectedId)) {
       setError("Provider ID 只能使用字母、数字、点、下划线或连字符，且不能以符号开头或结尾。");
       return;
@@ -326,9 +335,7 @@ export function ProvidersPage() {
     setBusy("saving"); setError(""); setNotice("");
     try {
       const result = await runApiTask(
-        () => savedProvider
-          ? api.saveProvider(selectedId, document.revision, providerDraft)
-          : api.createProvider(selectedId, document.revision, providerDraft),
+        () => api.saveProvider(selectedId, document.revision, providerDraft),
         { operation: "保存 Provider", expected: providerExpected(setError) },
       );
       if (result.status !== "success") return;
@@ -535,17 +542,16 @@ export function ProvidersPage() {
 
   return (
     <div className="configuration-page providers-page">
+      {createOpen ? <ProviderCreateDialog revision={document.revision} online={online} onCreated={acceptCreatedProvider} onClose={() => setCreateOpen(false)} /> : null}
       {renameOpen && selectedId && savedProvider ? <ProviderRenameDialog currentId={selectedId} busy={busy === "saving"} onCancel={() => setRenameOpen(false)} onConfirm={(targetId) => void renameProvider(targetId)} /> : null}
-      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">MODEL RUNTIME</span><h1>模型与凭证</h1><p>整理 Provider、模型与凭证，让 BUG 始终知道该用什么能力；凭证默认隐藏，点击小眼睛可按需查看。</p><p className="configuration-help">所有配置仅保存到磁盘。请到系统诊断刷新核心配置后，才会应用到运行中的 Agent。</p></div><button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => { setSelectedId(""); setDraft({ name: "新 Provider", models: [] }); setHeaders([]); setTestResults([]); setDiscoveredModels([]); setSelectedDiscoveredIds(new Set()); setNotice(""); setError(""); }}><Plus size={16} aria-hidden="true" />新建 Provider</button></header>
+      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">MODEL RUNTIME</span><h1>模型与凭证</h1><p>整理 Provider、模型与凭证，让 BUG 始终知道该用什么能力；凭证默认隐藏，点击小眼睛可按需查看。</p><p className="configuration-help">所有配置仅保存到磁盘。请到系统诊断刷新核心配置后，才会应用到运行中的 Agent。</p></div><button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => { setCreateOpen(true); setNotice(""); setError(""); }}><Plus size={16} aria-hidden="true" />新建 Provider</button></header>
       {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
       {notice ? <p className="configuration-save-notice" role="status"><Check size={14} aria-hidden="true" />{notice}</p> : null}
       <div className="provider-workspace">
         <aside className="provider-list" aria-label="Provider 列表">{ids.map((id) => <button type="button" key={id} className={selectedId === id ? "is-active provider-list__item" : "provider-list__item"} aria-label={`选择或拖动 Provider ${providers[id].name || id} 排序`} draggable={!isDirty && busy === false} onDragStart={() => setDraggingProviderId(id)} onDragEnd={() => setDraggingProviderId(undefined)} onDragOver={(event) => event.preventDefault()} onDrop={() => void moveProvider(id)} onClick={() => selectProvider(id)}><GripVertical className="configuration-sort-handle" size={15} aria-hidden="true" /><span><strong>{providers[id].name || id}</strong><small>{id}</small></span></button>)}</aside>
-        <section className="provider-editor">
+        {savedProvider ? <section className="provider-editor">
           <div className="configuration-form-card provider-form">
             <div className="configuration-section__heading"><div><span>01</span><h2>Provider</h2></div><small>{savedProvider ? selectedId : "未保存"}</small></div>
-            {!savedProvider ? <label><span>Provider ID<small>创建后不可直接编辑；需要变更时使用“改名”迁移引用。</small></span><input aria-label="Provider ID" value={selectedId} onChange={(event) => setSelectedId(event.target.value)} placeholder="例如 my-provider" /></label> : null}
-            <label><span>Provider 模板<small>选择后填入常用默认值</small></span><select aria-label="Provider 模板" value={template} onChange={(event) => { const next = event.target.value as ProviderTemplate; setTemplate(next); setDraft((current) => ({ ...current, ...templateDefaults[next] })); }}><option value="custom">自定义</option><option value="openai-compatible">OpenAI Compatible</option><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="lm-studio">LM Studio</option></select></label>
             <label><span>显示名称</span><input value={draft.name ?? ""} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
             <label><span>Base URL</span><input value={draft.baseUrl ?? ""} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} /></label>
             <label><span>API 协议</span><select value={draft.api ?? "openai-completions"} onChange={(event) => setDraft({ ...draft, api: event.target.value })}><option value="openai-completions">OpenAI Completions</option><option value="openai-responses">OpenAI Responses</option><option value="anthropic-messages">Anthropic Messages</option><option value="google-generative-ai">Google Generative AI</option></select></label>
@@ -569,7 +575,7 @@ export function ProvidersPage() {
           <div className="configuration-form-card provider-form"><div className="configuration-section__heading"><div><span>03</span><h2>连接测试</h2></div></div><div className="configuration-button-row"><button type="button" disabled={!canTestCurrent} title={isDirty ? "请先保存 Provider 后测试" : undefined} onClick={() => selectedModel?.id && void testConnection({ scope: "current", modelId: selectedModel.id })}><TestTube2 size={14} aria-hidden="true" />测试当前模型</button><button type="button" disabled={!canTestAll} title={isDirty ? "请先保存 Provider 后测试" : undefined} onClick={() => void testConnection({ scope: "all" })}><TestTube2 size={14} aria-hidden="true" />测试全部模型</button></div>{isDirty && selectedId ? <p className="configuration-help">请先保存 Provider 后测试</p> : null}{testResults.length ? <ol className="connection-logs">{testResults.map((result) => <li key={result.modelId}>{result.modelName}：{result.ok ? `成功 · ${result.durationMs} ms${result.responsePreview ? ` · ${result.responsePreview}` : ""}` : `失败 · ${result.durationMs} ms · ${result.message ?? "模型请求失败"}`}</li>)}</ol> : null}</div>
           <details className="provider-advanced"><summary>高级 JSON</summary><p>仅编辑当前 Provider 节点；离开编辑框时解析，并仍由核心配置结构校验。</p><textarea key={`${selectedId}-${document.revision}`} aria-label="Provider 高级 JSON" rows={14} defaultValue={advancedJson} onBlur={(event) => { try { const parsed = JSON.parse(event.target.value) as ProviderNode; setDraft(parsed); setHeaders(rowsFromHeaders(parsed.headers)); setError(""); } catch { setError("高级 JSON 格式无效，尚未应用"); } }} /></details>
           <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" disabled={busy !== false || !selectedId || !online} onClick={saveProvider}><Save size={16} aria-hidden="true" />保存 Provider</button>{savedProvider ? <button type="button" className="configuration-secondary-action" aria-label="重命名 Provider" disabled={busy !== false || !online || isDirty} title={isDirty ? "请先保存当前修改后再改名" : undefined} onClick={() => setRenameOpen(true)}><PencilLine size={15} aria-hidden="true" />重命名</button> : null}<button type="button" className="configuration-icon-action" aria-label="删除 Provider" disabled={!ids.includes(selectedId) || !online || testing} onClick={async () => { if (!document) return; const updated = await api.removeProvider(selectedId, document.revision); setDocument({ ...document, ...updated }); setSelectedId(""); }}><Trash2 size={16} aria-hidden="true" /></button></div>
-        </section>
+        </section> : <section className="provider-editor" aria-label="Provider 空状态"><div className="configuration-empty-note"><span>01</span><p><strong>尚未创建 Provider</strong><small>使用页面右上角“新建 Provider”保存基础连接信息后，再配置 API Key 和模型。</small></p></div></section>}
       </div>
     </div>
   );

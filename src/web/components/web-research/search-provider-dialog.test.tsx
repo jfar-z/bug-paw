@@ -101,6 +101,28 @@ describe("SearchProviderDialog", () => {
     expect(screen.queryByLabelText("SearXNG 地址")).not.toBeInTheDocument();
   });
 
+  it("仅为直连搜索渠道提供获取 API Key 的官方链接", () => {
+    installFetch();
+    renderDialog("create");
+
+    expect(screen.queryByRole("link", { name: "博查 获取 API Key（在新标签页打开）" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Tavily 获取 API Key（在新标签页打开）" })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("渠道类型"), { target: { value: "bocha" } });
+    const bochaLink = screen.getByRole("link", { name: "博查 获取 API Key（在新标签页打开）" });
+    expect(bochaLink).toHaveAttribute("href", "https://open.bochaai.com");
+    expect(bochaLink).toHaveAttribute("target", "_blank");
+    expect(bochaLink).toHaveAttribute("rel", "noreferrer");
+    expect(bochaLink.closest(".api-key-field")).toContainElement(screen.getByLabelText("博查 Web Search API Key"));
+
+    fireEvent.change(screen.getByLabelText("渠道类型"), { target: { value: "tavily" } });
+    const tavilyLink = screen.getByRole("link", { name: "Tavily 获取 API Key（在新标签页打开）" });
+    expect(tavilyLink).toHaveAttribute("href", "https://app.tavily.com");
+    expect(tavilyLink).toHaveAttribute("target", "_blank");
+    expect(tavilyLink).toHaveAttribute("rel", "noreferrer");
+    expect(tavilyLink.closest(".api-key-field")).toContainElement(screen.getByLabelText("Tavily Search API Key"));
+  });
+
   it("未保存修改时禁用测试连接，删除使用应用内确认", async () => {
     const fetchMock = installFetch();
     const onDeleted = vi.fn();

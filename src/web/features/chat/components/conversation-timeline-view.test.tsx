@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentTurn, UserEntry } from "../../../conversation-timeline";
 import { ConversationTimelineView } from "./conversation-timeline-view";
@@ -131,6 +131,12 @@ describe("ConversationTimelineView 消息复制", () => {
 });
 
 describe("ConversationTimelineView 历史加载状态", () => {
+  it("消息滚动容器保留纵向滚动并允许页面识别横划", () => {
+    const { container } = render(<ConversationTimelineView {...baseProps()} timeline={[firstTurn]} />);
+
+    expect(container.querySelector(".message-scroll")).toHaveStyle({ touchAction: "pan-y" });
+  });
+
   it("显示克制的加载状态和可触控重试按钮", () => {
     const onRetryHistory = vi.fn();
     const { rerender } = render(
@@ -146,6 +152,24 @@ describe("ConversationTimelineView 历史加载状态", () => {
     />);
     fireEvent.click(screen.getByRole("button", { name: "加载失败，重试" }));
     expect(onRetryHistory).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ConversationTimelineView 会话切换加载提示", () => {
+  it("会话加载完成后先播放退出动画再移除提示", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<ConversationTimelineView {...baseProps()} opening />);
+      expect(screen.getByRole("status", { name: "正在加载会话" })).toBeInTheDocument();
+
+      rerender(<ConversationTimelineView {...baseProps()} opening={false} />);
+      expect(screen.getByRole("status", { name: "正在加载会话" })).toHaveClass("is-leaving");
+
+      act(() => vi.advanceTimersByTime(160));
+      expect(screen.queryByRole("status", { name: "正在加载会话" })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

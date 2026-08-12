@@ -241,12 +241,28 @@ function scrubUrl(value: string): string {
   }
 }
 
-/** 保留式未知字段使用保守分类，任何常见凭证组合名都不允许进入成功响应。 */
+/**
+ * 仅识别约定的凭据字段，避免将 Token 数量等业务字段误判为敏感信息。
+ */
+const SENSITIVE_FIELD_NAMES = new Set([
+  "key",
+  "auth",
+  "authorization",
+  "password",
+  "secret",
+  "credential",
+  "token",
+  "apikey",
+  "accesstoken",
+  "refreshtoken",
+  "idtoken",
+  "bearertoken",
+]);
+
+/** 仅遮蔽明确命名的凭据字段，未知配置字段按原值返回。 */
 export function isSensitiveKey(value: string): boolean {
   const normalized = value.replace(/[^a-z0-9]/giu, "").toLowerCase();
-  return normalized === "key" || normalized === "auth" || normalized.includes("authorization")
-    || normalized.includes("password") || normalized.includes("secret") || normalized.includes("token")
-    || normalized.includes("apikey") || normalized.includes("credential");
+  return SENSITIVE_FIELD_NAMES.has(normalized);
 }
 
 export function hydrateRedacted(candidate: unknown, current: unknown): unknown {
