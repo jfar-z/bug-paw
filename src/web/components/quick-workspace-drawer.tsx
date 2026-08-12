@@ -20,9 +20,11 @@ export function QuickWorkspaceDrawer(props: QuickWorkspaceDrawerProps) {
   const [previewCloseRequest, setPreviewCloseRequest] = useState(0);
   const [reduceMotion, setReduceMotion] = useState(false);
   const drawerRef = useRef<HTMLElement>(null);
-  const style: CSSProperties | undefined = props.swipeTranslatePercent === undefined
-    ? undefined
-    : { transform: `translateX(${props.swipeTranslatePercent}%)` };
+  // 横向触摸由根手势处理器结算关闭，纵向滚动仍保持浏览器原生行为。
+  const drawerStyle: CSSProperties = {
+    touchAction: "pan-y",
+    ...(props.swipeTranslatePercent === undefined ? {} : { transform: `translateX(${props.swipeTranslatePercent}%)` }),
+  };
   useEffect(() => {
     if (!props.open) return;
     const onMobileBackRequest = (event: Event) => {
@@ -45,7 +47,7 @@ export function QuickWorkspaceDrawer(props: QuickWorkspaceDrawerProps) {
   }, [props.open]);
   return <>
     {props.open ? <button type="button" className="sidebar-scrim" style={{ display: "block", position: "fixed", inset: 0, zIndex: 29, border: 0, background: "rgba(8, 12, 9, 0.48)", backdropFilter: "blur(2px)" }} aria-label="点击遮罩关闭快捷资源管理" onClick={props.onClose} /> : null}
-    <aside ref={drawerRef} className={`quick-workspace-drawer${props.open ? " is-open" : ""}${props.swiping || reduceMotion ? " is-swiping" : ""}`} style={style} aria-label="快捷资源管理" aria-hidden={!props.open && !props.swiping} inert={!props.open && !props.swiping ? true : undefined} tabIndex={-1}>
+    <aside ref={drawerRef} className={`quick-workspace-drawer${props.open ? " is-open" : ""}${props.swiping || reduceMotion ? " is-swiping" : ""}`} style={drawerStyle} aria-label="快捷资源管理" aria-hidden={!props.open && !props.swiping} inert={!props.open && !props.swiping ? true : undefined} tabIndex={-1}>
       <header className="workspace-agent-navigation__header">
         <div><span>WORKSPACE · FILES</span><strong>快捷资源管理</strong><small>{props.agentName ? `${props.agentName} 的工作目录` : "当前 Agent 工作目录"}</small></div>
         <button type="button" className="icon-button" aria-label="关闭快捷资源管理" onClick={props.onClose}><X size={18} aria-hidden="true" /></button>

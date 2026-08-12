@@ -67,6 +67,18 @@ describe("移动端工作区双向抽屉手势", () => {
     expect(screen.getByTestId("open-drawer")).toHaveTextContent("none");
   });
 
+  it("打开抽屉后从会话中的可点击区域左划可以关闭", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    render(<SwipeHarness initialDrawer="sessions" />);
+    const action = screen.getByRole("button", { name: "会话操作" });
+
+    fireEvent.pointerDown(action, { pointerType: "touch", pointerId: 12, clientX: 240, clientY: 200 });
+    fireEvent.pointerMove(action, { pointerType: "touch", pointerId: 12, clientX: 130, clientY: 204 });
+    fireEvent.pointerUp(action, { pointerType: "touch", pointerId: 12, clientX: 130, clientY: 204 });
+
+    expect(screen.getByTestId("open-drawer")).toHaveTextContent("none");
+  });
+
   it("排除交互元素、媒体和横向滚动区域，但允许从消息输入框起划", () => {
     const root = document.createElement("section");
     const button = root.appendChild(document.createElement("button"));
@@ -96,14 +108,15 @@ describe("移动端工作区双向抽屉手势", () => {
   });
 });
 
-function SwipeHarness() {
-  const [openDrawer, setOpenDrawer] = useState<MobileWorkspaceDrawer>();
+function SwipeHarness(props: { initialDrawer?: MobileWorkspaceDrawer }) {
+  const [openDrawer, setOpenDrawer] = useState<MobileWorkspaceDrawer | undefined>(props.initialDrawer);
   const swipe = useMobileWorkspaceSwipe({
     openDrawer,
     onOpenDrawer: setOpenDrawer,
     onCloseDrawer: () => setOpenDrawer(undefined),
   });
   return <section data-testid="swipe-surface" {...swipe.handlers}>
+    <button type="button" aria-label="会话操作">会话操作</button>
     <span data-testid="open-drawer">{openDrawer ?? "none"}</span>
     <span data-testid="session-translate">{swipe.sessionTranslatePercent ?? "none"}</span>
     <span data-testid="resource-translate">{swipe.resourceTranslatePercent ?? "none"}</span>

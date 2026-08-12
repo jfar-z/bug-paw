@@ -87,7 +87,8 @@ export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType !== "touch" || !mobileWorkspaceSwipeEnabled()) return;
     const target = event.target instanceof HTMLElement ? event.target : undefined;
-    if (!target || shouldIgnoreWorkspaceSwipe(target, event.currentTarget)) return;
+    // 抽屉打开后需允许从其任何操作区开始关闭手势，横向意图确定前仍不拦截点击。
+    if (!target || (!options.openDrawer && shouldIgnoreWorkspaceSwipe(target, event.currentTarget))) return;
     gestureRef.current = {
       pointerId: event.pointerId,
       x: event.clientX,

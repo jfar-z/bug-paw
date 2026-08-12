@@ -6,6 +6,13 @@ import { QuickWorkspaceDrawer } from "./quick-workspace-drawer";
 import { MOBILE_BACK_REQUEST_EVENT } from "../use-mobile-back-navigation";
 
 describe("QuickWorkspaceDrawer", () => {
+  it("为移动端关闭手势声明纵向触摸操作", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ entries: [] }))));
+    render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><QuickWorkspaceDrawer open agentId="agent-a" onClose={vi.fn()} /></ApiTaskProvider></ErrorToastProvider>);
+
+    expect(screen.getByRole("complementary", { name: "快捷资源管理" })).toHaveStyle({ touchAction: "pan-y" });
+  });
+
   it("固定当前 Agent 并提供关闭入口", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ entries: [] }))));
     const onClose = vi.fn();
