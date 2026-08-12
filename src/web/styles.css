@@ -7346,35 +7346,6 @@ a[aria-disabled="true"] {
   color: var(--text-tertiary);
 }
 
-/* 新建 Provider 只呈现四项基础信息，完整配置留在保存后的设置区。 */
-.provider-create-dialog {
-  width: min(620px, 100%);
-  display: grid;
-  gap: 18px;
-}
-
-.provider-create-dialog > header {
-  justify-content: space-between;
-}
-
-.provider-create-dialog__fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-}
-
-.provider-create-dialog__fields label {
-  grid-template-columns: 1fr;
-  align-content: start;
-  gap: 8px;
-  padding: 14px 0 0;
-}
-
-.provider-create-dialog footer .configuration-button-row {
-  padding-top: 0;
-  border-top: 0;
-}
-
 .conflict-differences {
   margin: 20px 0;
   border-block: 1px solid var(--border);
@@ -7407,10 +7378,6 @@ a[aria-disabled="true"] {
   }
 
   .conflict-difference {
-    grid-template-columns: 1fr;
-  }
-
-  .provider-create-dialog__fields {
     grid-template-columns: 1fr;
   }
 }

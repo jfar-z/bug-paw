@@ -106,8 +106,8 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
 
   return (
     <div className="configuration-dialog-backdrop" role="presentation">
-      <form className="configuration-dialog configuration-form-card provider-create-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-create-title" onSubmit={(event) => void submit(event)}>
-        <header>
+      <form className="configuration-dialog configuration-form-card provider-rename-dialog provider-create-dialog" style={{ width: "min(620px, 100%)" }} role="dialog" aria-modal="true" aria-labelledby="provider-create-title" onSubmit={(event) => void submit(event)}>
+        <header className="configuration-heading-actions">
           <div>
             <span className="configuration-eyebrow">MODEL PROVIDER</span>
             <h2 id="provider-create-title">新建 Provider</h2>
@@ -116,21 +116,18 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
           <button type="button" className="icon-button" aria-label="关闭新建 Provider" disabled={busy} onClick={onClose}><X size={18} aria-hidden="true" /></button>
         </header>
 
-        <div className="provider-create-dialog__fields">
-          <label><span>Provider ID<small>创建后需要通过改名迁移引用</small></span><input aria-label="Provider ID" autoFocus value={draft.id} onChange={(event) => { setDraft((current) => ({ ...current, id: event.target.value })); setError(""); }} placeholder="例如 my-provider" /></label>
-          <label><span>显示名称</span><input aria-label="显示名称" value={draft.name} onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); setError(""); }} placeholder="例如内部模型网关" /></label>
-          <label><span>Provider 模板<small>协议和认证方式使用模板默认值</small></span><select aria-label="Provider 模板" value={draft.template} onChange={(event) => selectTemplate(event.target.value as ProviderTemplate)}><option value="custom">自定义</option><option value="openai-compatible">OpenAI Compatible</option><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="lm-studio">LM Studio</option></select></label>
-          <label><span>Base URL</span><input aria-label="Base URL" inputMode="url" value={draft.baseUrl} onChange={(event) => { setDraft((current) => ({ ...current, baseUrl: event.target.value })); setError(""); }} placeholder="https://models.example.com/v1" /></label>
+        <div className="thinking-protocol-preview">
+          <label style={{ gridTemplateColumns: "1fr" }}><span>Provider ID<small>创建后需要通过改名迁移引用</small></span><input aria-label="Provider ID" autoFocus value={draft.id} onChange={(event) => { setDraft((current) => ({ ...current, id: event.target.value })); setError(""); }} placeholder="例如 my-provider" /></label>
+          <label style={{ gridTemplateColumns: "1fr" }}><span>显示名称</span><input aria-label="显示名称" value={draft.name} onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); setError(""); }} placeholder="例如内部模型网关" /></label>
+          <label style={{ gridTemplateColumns: "1fr" }}><span>Provider 模板<small>协议和认证方式使用模板默认值</small></span><select aria-label="Provider 模板" value={draft.template} onChange={(event) => selectTemplate(event.target.value as ProviderTemplate)}><option value="custom">自定义</option><option value="openai-compatible">OpenAI Compatible</option><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="lm-studio">LM Studio</option></select></label>
+          <label style={{ gridTemplateColumns: "1fr" }}><span>Base URL</span><input aria-label="Base URL" inputMode="url" value={draft.baseUrl} onChange={(event) => { setDraft((current) => ({ ...current, baseUrl: event.target.value })); setError(""); }} placeholder="https://models.example.com/v1" /></label>
         </div>
 
         {validationError ? <p className="configuration-inline-error" role="alert">{validationError}</p> : null}
         {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
         <footer>
-          <span />
-          <div className="configuration-button-row">
-            <button type="button" className="configuration-secondary-action" disabled={busy} onClick={onClose}>取消</button>
-            <button type="submit" className="configuration-primary-action" disabled={!canSubmit}><Plus size={15} aria-hidden="true" />{busy ? "创建中…" : "创建 Provider"}</button>
-          </div>
+          <button type="button" className="configuration-secondary-action" disabled={busy} onClick={onClose}>取消</button>
+          <button type="submit" className="configuration-primary-action" disabled={!canSubmit}><Plus size={15} aria-hidden="true" />{busy ? "创建中…" : "创建 Provider"}</button>
         </footer>
       </form>
     </div>

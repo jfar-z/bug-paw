@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiTaskProvider } from "../api-task-provider";
 import { ErrorToastProvider } from "../error-toast-provider";
@@ -126,7 +126,7 @@ describe("ProvidersPage", () => {
     renderProvidersPage();
 
     expect(await screen.findByDisplayValue("Example")).toBeInTheDocument();
-    expect(screen.getByLabelText("Provider 模板")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Provider 模板")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("X-Test")).toBeInTheDocument();
     expect(screen.getByText("Reasoner")).toBeInTheDocument();
     expect(screen.getByText("已配置 · 点击小眼睛查看")).toBeInTheDocument();
@@ -280,26 +280,77 @@ describe("ProvidersPage", () => {
     expect(screen.getByRole("button", { name: "发现模型" })).toBeDisabled();
   });
 
-  it("新建 Provider 要求填写自定义 ID，并提示到系统诊断刷新核心配置", async () => {
+  it("打开并取消新建 Provider 弹窗时保留当前已选配置", async () => {
+    const provider = { name: "Example", baseUrl: "https://api.example.com/v1", api: "openai-completions", models: [] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      revision: "r1",
+      credentialRevision: "c1",
+      credentials: [],
+      diagnostics: [],
+      value: { providers: { example: provider } },
+    }), { status: 200 })));
+    renderProvidersPage();
+
+    expect(await screen.findByDisplayValue("Example")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建 Provider" }));
+
+    expect(screen.getByRole("dialog", { name: "新建 Provider" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Example")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog", { name: "新建 Provider" })).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Example")).toBeInTheDocument();
+  });
+
+  it("没有已保存 Provider 时不展示无法保存的 API Key 输入", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      revision: "r1",
+      credentialRevision: "c1",
+      credentials: [],
+      diagnostics: [],
+      value: { providers: {} },
+    }), { status: 200 })));
+    renderProvidersPage();
+
+    expect(await screen.findByText("尚未创建 Provider")).toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "新建 Provider" }));
+    expect(screen.getByRole("dialog", { name: "新建 Provider" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+  });
+
+  it("创建成功后自动选中新 Provider 并可立即保存 API Key", async () => {
+    const example = { name: "Example", baseUrl: "https://api.example.com/v1", api: "openai-completions", models: [] };
+    const created = { name: "Created", baseUrl: "https://created.example.test/v1", api: "openai-completions", authHeader: true, models: [] };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/v1/providers" && init?.method === "POST") {
-        const body = JSON.parse(String(init.body)) as { id: string; provider: { name: string } };
-        return new Response(JSON.stringify({ revision: "r2", diagnostics: [], value: { providers: { [body.id]: body.provider } } }), { status: 200 });
+      const url = String(input);
+      if (url === "/api/v1/providers" && init?.method === "POST") {
+        return new Response(JSON.stringify({ revision: "r2", diagnostics: [], value: { providers: { example, created } } }), { status: 200 });
       }
-      return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: {} } }), { status: 200 });
+      if (url === "/api/v1/providers/created/credential" && init?.method === "PUT") {
+        return new Response(JSON.stringify({ credentialRevision: "c2", status: { providerId: "created", type: "api_key", configured: true } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
     renderProvidersPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "新建 Provider" }));
-    fireEvent.change(screen.getByLabelText("Provider ID"), { target: { value: "my-provider" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+    const dialog = screen.getByRole("dialog", { name: "新建 Provider" });
+    fireEvent.change(within(dialog).getByLabelText("Provider ID"), { target: { value: "created" } });
+    fireEvent.change(within(dialog).getByLabelText("显示名称"), { target: { value: "Created" } });
+    fireEvent.change(within(dialog).getByLabelText("Base URL"), { target: { value: "https://created.example.test/v1" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "创建 Provider" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/providers", expect.objectContaining({
-      method: "POST",
-      body: expect.stringContaining('"id":"my-provider"'),
+    expect(await screen.findByText("Provider 已创建，请继续配置 API Key")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "新建 Provider" })).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("Created")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "test-provider-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存凭证" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/providers/created/credential", expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ revision: "c1", apiKey: "test-provider-key" }),
     })));
-    expect(screen.getAllByText(/系统诊断.*刷新核心配置/).length).toBeGreaterThan(0);
   });
 
   it("保存兼容字段并在自动模式移除该字段，同时保留高级字段", async () => {
