@@ -16,6 +16,8 @@ export function BrowserAutomationPage() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string }>();
   const [offline, setOffline] = useState(false);
 
   useEffect(() => {
@@ -67,6 +69,19 @@ export function BrowserAutomationPage() {
     } catch { setError("请输入不含路径、查询或通配符的精确 HTTP(S) Origin"); }
   };
 
+  const testBrowserComponent = async () => {
+    if (testing || offline || !browserOnline || !document.deployment.available) return;
+    setTesting(true);
+    setTestResult(undefined);
+    try {
+      setTestResult(await api.testBrowserAutomation());
+    } catch {
+      setTestResult({ ok: false, message: "浏览器组件测试失败" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return <main className="configuration-page browser-automation-page">
     <header className="configuration-page__heading"><h1>浏览器执行</h1><p>由现有 Agent 直接控制隔离的 Playwright；第一期支持只读游览、静态页面验证、截图与文件下载。</p></header>
     {offline ? <p className="configuration-save-notice" role="status">离线只读 · 显示上次保存的本地快照，测试与保存已暂停。</p> : null}
@@ -74,7 +89,8 @@ export function BrowserAutomationPage() {
 
     <BrowserSettingsSection index={1} title="服务状态" description="不显示 Context 或 Agent 身份">
       <label className="configuration-capability-toggle"><span>启用浏览器执行<small>启用后，仍只有获得对应工具权限的 Agent 可以调用。</small></span><input aria-label="启用浏览器执行" type="checkbox" checked={draft.enabled} onChange={(event) => patch({ enabled: event.target.checked })} /></label>
-      <div className="configuration-button-row"><span>{document.deployment.workerAvailable ? "Worker 可用" : "Worker 不可用"}</span><span>{document.deployment.activeContexts} 个活动 Context</span><span>{document.deployment.queuedRequests} 个排队任务</span><button type="button" className="configuration-secondary-action" disabled={offline || !browserOnline || !document.deployment.available} onClick={() => void api.testBrowserAutomation().then((result) => setNotice(result.message)).catch(() => setError("浏览器组件测试失败"))}><ServerCog size={16} aria-hidden="true" />测试浏览器组件</button></div>
+      <div className="configuration-button-row"><span>{document.deployment.workerAvailable ? "Worker 可用" : "Worker 不可用"}</span><span>{document.deployment.activeContexts} 个活动 Context</span><span>{document.deployment.queuedRequests} 个排队任务</span><button type="button" className="configuration-secondary-action" disabled={testing || offline || !browserOnline || !document.deployment.available} onClick={() => void testBrowserComponent()}><ServerCog size={16} aria-hidden="true" />{testing ? "测试中…" : "测试浏览器组件"}</button></div>
+      {testing ? <p className="configuration-save-notice" role="status">正在检查 Browser Worker…</p> : testResult ? <p className={testResult.ok ? "configuration-save-notice" : "configuration-inline-error"} role={testResult.ok ? "status" : "alert"}>{testResult.message}</p> : null}
     </BrowserSettingsSection>
 
     <BrowserSettingsSection index={2} title="公开浏览范围" description="固定 HTTPS；空清单允许全部公网站点">

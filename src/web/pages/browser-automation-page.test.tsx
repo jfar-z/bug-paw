@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_BROWSER_AUTOMATION_CONFIG, type BrowserAutomationSettingsDocument } from "../../shared/browser-automation-contracts";
@@ -51,6 +51,56 @@ describe("浏览器执行配置页", () => {
     for (const label of ["允许文本输入", "允许表单提交", "允许文件上传", "允许读取剪贴板", "允许写入剪贴板"]) {
       expect(screen.getByLabelText(label).closest("label")).toHaveClass("configuration-capability-toggle");
     }
+  });
+
+  it("测试期间在服务状态区域显示进度并阻止重复点击", async () => {
+    let resolveTest: ((response: Response) => void) | undefined;
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input).endsWith("/test")) return new Promise<Response>((resolve) => { resolveTest = resolve; });
+      return json(settings());
+    });
+    render(<BrowserAutomationPage />);
+    const serviceSection = (await screen.findByRole("heading", { name: "服务状态" })).closest("section")!;
+
+    fireEvent.click(within(serviceSection).getByRole("button", { name: "测试浏览器组件" }));
+
+    expect(within(serviceSection).getByRole("button", { name: "测试中…" })).toBeDisabled();
+    expect(within(serviceSection).getByRole("status")).toHaveTextContent("正在检查 Browser Worker…");
+    resolveTest?.(json({ ok: true, message: "浏览器组件可用" }));
+  });
+
+  it("在服务状态区域原地展示组件测试成功结果", async () => {
+    render(<BrowserAutomationPage />);
+    const serviceSection = (await screen.findByRole("heading", { name: "服务状态" })).closest("section")!;
+
+    fireEvent.click(within(serviceSection).getByRole("button", { name: "测试浏览器组件" }));
+
+    expect(await within(serviceSection).findByRole("status")).toHaveTextContent("浏览器组件可用");
+  });
+
+  it("将组件健康检查的业务失败原地展示为错误", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => String(input).endsWith("/test")
+      ? json({ ok: false, message: "浏览器组件当前不可用" })
+      : json(settings()));
+    render(<BrowserAutomationPage />);
+    const serviceSection = (await screen.findByRole("heading", { name: "服务状态" })).closest("section")!;
+
+    fireEvent.click(within(serviceSection).getByRole("button", { name: "测试浏览器组件" }));
+
+    expect(await within(serviceSection).findByRole("alert")).toHaveTextContent("浏览器组件当前不可用");
+  });
+
+  it("将组件健康检查的请求异常原地展示为错误", async () => {
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      if (String(input).endsWith("/test")) throw new Error("network error");
+      return json(settings());
+    });
+    render(<BrowserAutomationPage />);
+    const serviceSection = (await screen.findByRole("heading", { name: "服务状态" })).closest("section")!;
+
+    fireEvent.click(within(serviceSection).getByRole("button", { name: "测试浏览器组件" }));
+
+    expect(await within(serviceSection).findByRole("alert")).toHaveTextContent("浏览器组件测试失败");
   });
 
   it("新增精确 Origin、修改开关并保存完整草稿", async () => {
