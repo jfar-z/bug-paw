@@ -2,6 +2,7 @@ import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import type {
   BrowserCommand,
+  BrowserWorkerUpload,
   BrowserWorkerResponse,
   CreateBrowserContextRequest,
 } from "../../shared/browser-worker-protocol";
@@ -86,6 +87,17 @@ export class BrowserWorkerClient {
     return Buffer.concat(chunks);
   }
 
+  /** 把主服务已校验的工作区文件复制到 Worker 私有临时目录。 */
+  async uploadFile(leaseId: string, name: string, mediaType: string, content: Buffer, maximumBytes: number, signal?: AbortSignal): Promise<BrowserWorkerUpload> {
+    if (content.byteLength > maximumBytes) throw new BrowserAutomationError("BROWSER_DOWNLOAD_TOO_LARGE", "上传文件超过当前大小限制", false);
+    const path = `/v1/contexts/${encodeURIComponent(leaseId)}/uploads`;
+    const response = await this.fetchSigned("POST", path, content, signal, undefined, {
+      "x-bugpaw-file-name": encodeURIComponent(name),
+      "x-bugpaw-media-type": mediaType,
+    });
+    return this.parseJsonResponse<BrowserWorkerUpload>(response);
+  }
+
   /** 签名并解析一个有界 JSON 请求。 */
   private async request<Data>(method: string, path: string, input?: unknown, signal?: AbortSignal): Promise<Data> {
     const body = input === undefined ? "" : JSON.stringify(input);
@@ -122,9 +134,10 @@ export class BrowserWorkerClient {
   private async fetchSigned(
     method: string,
     path: string,
-    body: string,
+    body: string | Buffer,
     signal?: AbortSignal,
     prepared?: { timestamp: string; nonce: string; contentHash: string; signature: string },
+    extraHeaders: Record<string, string> = {},
   ): Promise<Response> {
     const timestamp = prepared?.timestamp ?? String(this.now());
     const nonce = prepared?.nonce ?? this.nonce();
@@ -141,13 +154,28 @@ export class BrowserWorkerClient {
           "x-bugpaw-nonce": nonce,
           "x-bugpaw-content-sha256": contentHash,
           "x-bugpaw-signature": signature,
+          ...extraHeaders,
         },
-        ...(body ? { body } : {}),
+        ...(body.length > 0 ? { body: body as BodyInit } : {}),
       });
     } catch {
       if (signal?.aborted) throw signal.reason;
       throw new BrowserAutomationError("BROWSER_WORKER_UNAVAILABLE", "浏览器执行服务暂时不可用", true);
     }
+  }
+
+  /** 解析普通 Worker JSON 信封。 */
+  private async parseJsonResponse<Data>(response: Response): Promise<Data> {
+    const declaredLength = Number(response.headers.get("content-length") ?? "0");
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_RESPONSE_BYTES) throw protocolError();
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_JSON_RESPONSE_BYTES) throw protocolError();
+    let payload: unknown;
+    try { payload = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw protocolError(); }
+    if (!isWorkerResponse(payload)) throw protocolError();
+    if (payload.status === "error") throw new BrowserAutomationError(normalizeWorkerErrorCode(payload.error.code), payload.error.message, payload.error.retryable);
+    if (!response.ok) throw protocolError();
+    return payload.data as Data;
   }
 
   /** 解析产物端点可能返回的 JSON 错误。 */

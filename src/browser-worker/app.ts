@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { BrowserCommand, BrowserWorkerArtifactHandle, CreateBrowserContextRequest } from "../shared/browser-worker-protocol";
 
 const MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 /** Worker App 管理的单个 Context 接口。 */
 export interface WorkerBrowserSession {
@@ -33,6 +34,19 @@ interface StoredArtifact extends BrowserWorkerArtifactHandle {
   leaseId: string;
 }
 
+interface StoredUpload {
+  /** 主服务持有的不透明句柄。 */
+  handle: string;
+  /** 所属租约。 */
+  leaseId: string;
+  /** Worker 私有路径。 */
+  path: string;
+  /** 安全展示名称。 */
+  name: string;
+  /** 文件 MIME。 */
+  mediaType: string;
+}
+
 /** Worker 内部 HTTP 服务依赖。 */
 export interface BrowserWorkerAppOptions {
   /** HMAC 内部通信密钥。 */
@@ -47,6 +61,7 @@ export interface BrowserWorkerAppOptions {
 export function createBrowserWorkerApp(options: BrowserWorkerAppOptions) {
   const sessions = new Map<string, WorkerBrowserSession>();
   const artifacts = new Map<string, StoredArtifact>();
+  const uploads = new Map<string, StoredUpload>();
   const nonces = new Map<string, number>();
   let artifactRoot: Promise<string> | undefined;
   const now = options.now ?? Date.now;
@@ -69,12 +84,29 @@ export function createBrowserWorkerApp(options: BrowserWorkerAppOptions) {
       sendJson(response, 200, { status: "ok", data: { status: "ok", contexts: sessions.size } });
       return;
     }
-    const body = await readBody(request);
+    const uploadMatch = request.url?.match(/^\/v1\/contexts\/([^/]+)\/uploads$/u);
+    const body = await readBody(request, uploadMatch ? MAX_UPLOAD_BYTES : MAX_REQUEST_BYTES);
     if (!hasAuthHeaders(request)) {
       sendJson(response, 401, { status: "error", error: { code: "BROWSER_WORKER_PROTOCOL_INVALID", message: "内部请求未认证", retryable: false } });
       return;
     }
     authenticate(request, body, now(), nonces, options.secret);
+    if (request.method === "POST" && uploadMatch) {
+      const leaseId = decodeURIComponent(uploadMatch[1]!);
+      if (!sessions.has(leaseId)) throw workerError("BROWSER_CONTEXT_NOT_OPEN", "Browser Context 不存在或已经关闭");
+      const name = decodeURIComponent(singleHeader(request, "x-bugpaw-file-name"));
+      const mediaType = singleHeader(request, "x-bugpaw-media-type");
+      if (!name || name.includes("/") || name.includes("\\") || name.includes("\0") || !/^[\w!#$&^_.+/-]+$/u.test(mediaType)) {
+        throw workerError("BROWSER_WORKER_PROTOCOL_INVALID", "上传文件元数据无效");
+      }
+      artifactRoot ??= mkdtemp(join(tmpdir(), "bugpaw-browser-worker-"));
+      const handle = randomUUID();
+      const path = join(await artifactRoot, randomUUID());
+      await writeFile(path, body, { mode: 0o600, flag: "wx" });
+      uploads.set(handle, { handle, leaseId, path, name, mediaType });
+      sendJson(response, 200, { status: "ok", data: { handle, name, mediaType } });
+      return;
+    }
     const value = body.length > 0 ? JSON.parse(body.toString("utf8")) as unknown : undefined;
     if (request.method === "POST" && request.url === "/v1/contexts") {
       const input = requireContextInput(value);
@@ -110,6 +142,7 @@ export function createBrowserWorkerApp(options: BrowserWorkerAppOptions) {
       sessions.delete(leaseId);
       await session?.close();
       await removeLeaseArtifacts(leaseId, artifacts);
+      await removeLeaseUploads(leaseId, uploads);
       sendJson(response, 200, { status: "ok", data: {} });
       return;
     }
@@ -118,7 +151,8 @@ export function createBrowserWorkerApp(options: BrowserWorkerAppOptions) {
     if (request.method !== "POST" || !request.url?.endsWith("/commands") || !isRecord(value) || value.leaseId !== leaseId || !isRecord(value.command)) {
       throw workerError("BROWSER_WORKER_PROTOCOL_INVALID", "浏览器命令格式无效");
     }
-    const result = await session.execute(requireBrowserCommand(value.command));
+    const command = requireBrowserCommand(value.command);
+    const result = await session.execute(resolveUploadHandles(command, leaseId, uploads));
     const binary = binaryArtifact(result);
     if (!binary) {
       sendJson(response, 200, { status: "ok", data: result });
@@ -145,6 +179,7 @@ export function createBrowserWorkerApp(options: BrowserWorkerAppOptions) {
     sessions.forEach((session) => void session.close());
     sessions.clear();
     artifacts.clear();
+    uploads.clear();
     if (artifactRoot) void artifactRoot.then((root) => rm(root, { recursive: true, force: true }));
   });
   return server;
@@ -177,16 +212,40 @@ async function removeLeaseArtifacts(leaseId: string, artifacts: Map<string, Stor
 }
 
 /** 读取有界请求体。 */
-async function readBody(request: IncomingMessage): Promise<Buffer> {
+async function readBody(request: IncomingMessage, maximumBytes = MAX_REQUEST_BYTES): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const value of request) {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
     size += chunk.length;
-    if (size > MAX_REQUEST_BYTES) throw workerError("BROWSER_WORKER_PROTOCOL_INVALID", "内部请求体过大");
+    if (size > maximumBytes) throw workerError("BROWSER_WORKER_PROTOCOL_INVALID", "内部请求体过大");
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
+}
+
+/** 把不透明上传句柄替换为当前租约的 Worker 私有路径。 */
+function resolveUploadHandles(command: BrowserCommand, leaseId: string, uploads: Map<string, StoredUpload>): BrowserCommand {
+  if (command.type !== "upload") return command;
+  return {
+    ...command,
+    files: command.files.map((file) => {
+      const upload = uploads.get(file.handle);
+      if (!upload || upload.leaseId !== leaseId || upload.name !== file.name || upload.mediaType !== file.mediaType) {
+        throw workerError("BROWSER_WORKER_PROTOCOL_INVALID", "上传文件句柄无效");
+      }
+      return { ...file, handle: upload.path };
+    }),
+  };
+}
+
+/** Context 关闭时删除全部上传副本。 */
+async function removeLeaseUploads(leaseId: string, uploads: Map<string, StoredUpload>): Promise<void> {
+  const matches = [...uploads.values()].filter((upload) => upload.leaseId === leaseId);
+  for (const upload of matches) {
+    uploads.delete(upload.handle);
+    await unlink(upload.path).catch(() => undefined);
+  }
 }
 
 /** 校验时间、nonce、正文哈希和 HMAC。 */

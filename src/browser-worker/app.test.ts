@@ -86,6 +86,25 @@ describe("浏览器 Worker API", () => {
     });
   });
 
+  it("上传内容复制到 Worker 私有临时文件并随 Context 清理", async () => {
+    let receivedHandle = "";
+    const session: WorkerBrowserSession = {
+      execute: vi.fn(async (command) => {
+        if (command.type === "upload") receivedHandle = command.files[0]!.handle;
+        return {};
+      }),
+      close: vi.fn(async () => undefined),
+    };
+    const { baseUrl } = await startWorker(async () => session);
+    const client = workerClient(baseUrl, () => crypto.randomUUID());
+    await client.createContext(contextInput());
+    const upload = await client.uploadFile("lease-a", "fixture.txt", "text/plain", Buffer.from("upload-content"), 100);
+    await client.execute("lease-a", { type: "upload", ref: "g1-e1", files: [upload] });
+    expect(upload).toMatchObject({ name: "fixture.txt", mediaType: "text/plain" });
+    expect(receivedHandle).not.toContain("fixture.txt");
+    expect(receivedHandle).not.toBe(upload.handle);
+  });
+
   async function startWorker(createSession: () => Promise<WorkerBrowserSession> = async () => ({ execute: async () => ({}), close: async () => undefined })) {
     const server = createBrowserWorkerApp({ secret: "test-secret", createSession, now: () => 1_700_000_000_000 });
     server.listen(0, "127.0.0.1");

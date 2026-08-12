@@ -3,7 +3,7 @@ import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
-import { access, mkdir, rename, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createDataPaths, type DataPaths } from "./paths";
@@ -90,6 +90,19 @@ import { AgentLifecycleGate } from "./core/agent-lifecycle-gate";
 import { DurableDeletionCoordinator } from "./core/durable-deletion";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { readDeploymentCapabilities } from "./deployment-capabilities";
+import { BrowserConfigService } from "./browser-automation/browser-config-service";
+import { BrowserWorkerClient } from "./browser-automation/browser-worker-client";
+import { BrowserResourcePool } from "./browser-automation/browser-resource-pool";
+import { BrowserRunRegistry } from "./browser-automation/browser-run-registry";
+import { BrowserPreviewService } from "./browser-automation/browser-preview-service";
+import { BrowserAuditRepository } from "./browser-automation/browser-audit-repository";
+import { BrowserAutomationService } from "./browser-automation/browser-automation-service";
+import { createBrowserTools } from "./browser-automation/browser-tools";
+import { resolveBrowserCapabilities } from "./browser-automation/browser-capabilities";
+import { registerBrowserAutomationRoutes } from "./routes/browser-automation";
+import { registerBrowserPreviewRoutes } from "./routes/browser-preview";
+import { AgentSystemPromptConfiguration } from "./agent-system-prompt-configuration";
+import { BrowserArtifactService } from "./browser-automation/browser-artifact-service";
 
 export interface BuildServerOptions {
   dataRoot?: string;
@@ -236,6 +249,37 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     managedSearchProviders,
     webResearchCredentials,
   );
+  const browserConfigs = new BrowserConfigService(join(paths.appDir, "browser-automation.json"));
+  const browserPreview = new BrowserPreviewService({
+    internalOrigin: process.env.BUG_PAW_BROWSER_PREVIEW_ORIGIN ?? "http://bug-paw-web:7080",
+  });
+  const browserAudit = new BrowserAuditRepository(applicationDatabase);
+  const browserRuns = new BrowserRunRegistry();
+  let browserPool: BrowserResourcePool | undefined;
+  let browserAutomation: BrowserAutomationService | undefined;
+  let browserWorker: BrowserWorkerClient | undefined;
+  if (deploymentCapabilities.browserAutomationAvailable) {
+    const tokenPath = process.env.BUG_PAW_BROWSER_TOKEN_FILE;
+    const workerUrl = process.env.BUG_PAW_BROWSER_WORKER_URL;
+    if (!tokenPath || !workerUrl) throw new Error("浏览器部署缺少内部通信配置");
+    const secret = (await readFile(tokenPath, "utf8")).trim();
+    if (!secret) throw new Error("浏览器内部通信密钥为空");
+    browserWorker = new BrowserWorkerClient({ baseUrl: workerUrl, secret });
+    const initialBrowserConfig = (await browserConfigs.read()).config;
+    const browserArtifacts = new BrowserArtifactService(initialBrowserConfig.artifacts);
+    browserPool = new BrowserResourcePool(initialBrowserConfig.pool, {
+      closeContext: (leaseId) => browserWorker!.closeContext(leaseId),
+    });
+    browserAutomation = new BrowserAutomationService({
+      deploymentAvailable: true,
+      readConfig: async () => (await browserConfigs.read()).config,
+      runRegistry: browserRuns,
+      pool: browserPool,
+      worker: browserWorker,
+      preview: browserPreview,
+      artifacts: browserArtifacts,
+    });
+  }
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
   const ttsSynthesis = new TtsSynthesisService(ttsConfigs);
   await recoverPendingProviderRenames(paths, models, agentStore);
@@ -273,6 +317,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           allowedTools: profile.profile.allowedTools,
           webResearchEnabled: webResearchConfig.enabled,
         });
+        const browserConfig = (await browserConfigs.read()).config;
+        const browserCapabilities = resolveBrowserCapabilities({
+          allowedTools: profile.profile.allowedTools,
+          enabled: browserConfig.enabled,
+          deploymentAvailable: deploymentCapabilities.browserAutomationAvailable,
+        });
         return createSdkPiRuntimeGateway({
           cwd,
           agentDir: paths.piDir,
@@ -294,11 +344,22 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
-          createSessionTools: ({ searchRunState }) => retrievalCapabilities.webSearch
-            ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
-            : [],
-          appendSystemPrompt: await readInstructionPrompts(),
-          refreshAppendSystemPrompt: readInstructionPrompts,
+          createSessionTools: ({ searchRunState, sessionId }) => [
+            ...(retrievalCapabilities.webSearch
+              ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
+              : []),
+            ...(browserAutomation
+              ? createBrowserTools({ sessionId }, browserAutomation).filter((tool) => browserCapabilities.toolNames.includes(tool.name as never))
+              : []),
+          ],
+          appendSystemPrompt: [
+            ...await readInstructionPrompts(),
+            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
+          ],
+          refreshAppendSystemPrompt: async () => [
+            ...await readInstructionPrompts(),
+            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
+          ],
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
@@ -315,6 +376,19 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           },
           onSessionTitleGenerated: (event) => {
             app.log.info(event, "自动会话标题任务完成");
+          },
+          onRunStarted: ({ runId, sessionId }) => {
+            browserRuns.begin({ agentId, sessionId, runId, cwd });
+          },
+          onRunFinished: async ({ runId, sessionId, status }) => {
+            try {
+              await browserAutomation?.finishRun(runId, status === "completed" ? "run_completed" : status === "aborted" ? "run_aborted" : "run_error");
+              browserPreview.revokeRun(runId);
+              browserRuns.end(sessionId, runId);
+            } catch {
+              browserRuns.end(sessionId, runId);
+              throw new Error("浏览器 Run 清理失败");
+            }
           },
         });
       },
@@ -520,6 +594,36 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     configs: embeddingConfigs,
     rebuildAll: () => knowledgeBases.rebuildSemanticIndex(),
   });
+  registerBrowserPreviewRoutes(app, browserPreview);
+  registerBrowserAutomationRoutes(app, {
+    authService,
+    configs: browserConfigs,
+    deploymentAvailable: deploymentCapabilities.browserAutomationAvailable,
+    status: async () => {
+      const pool = browserPool?.status() ?? { activeContexts: 0, queuedRequests: 0 };
+      if (!browserWorker) return { workerAvailable: false, chromiumReady: false, ...pool };
+      try {
+        await browserWorker.health();
+        return { workerAvailable: true, chromiumReady: true, ...pool };
+      } catch {
+        return { workerAvailable: false, chromiumReady: false, ...pool, lastFailureAt: new Date().toISOString(), lastFailureCode: "BROWSER_WORKER_UNAVAILABLE" };
+      }
+    },
+    test: async () => {
+      try {
+        await browserWorker?.health();
+        return { ok: Boolean(browserWorker), message: browserWorker ? "浏览器组件可用" : "当前部署未包含浏览器执行组件" };
+      } catch { return { ok: false, message: "浏览器组件当前不可用" }; }
+    },
+    audit: browserAudit,
+    onConfigUpdated: async (previous, current) => {
+      if (browserPool) {
+        await browserPool.reconfigure(current.pool);
+        if (previous.enabled && !current.enabled) await browserPool.disable();
+      }
+      await runtimeCoordinator.refreshRuntime();
+    },
+  });
   const resourceTasks = new ResourceTaskManager();
   registerResourceRoutes(app, {
     authService,
@@ -545,6 +649,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   app.addHook("onClose", async () => {
+    await browserPool?.close();
     const schedulerDrained = await scheduledTasks.stopAndDrain(5_000);
     const resourcesDrained = await resourceTasks.stopAndDrain(5_000);
     await runtimeCoordinator.dispose();

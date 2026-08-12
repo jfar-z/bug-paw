@@ -1,7 +1,7 @@
 import { defineTool, type AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { BrowserCommand, BrowserWorkerUpload } from "../../shared/browser-worker-protocol";
+import type { BrowserCommand } from "../../shared/browser-worker-protocol";
 import { BrowserAutomationError } from "./browser-error";
 import type { BrowserQueueUpdate } from "./browser-resource-pool";
 import type { BrowserToolContext } from "./browser-automation-service";
@@ -16,6 +16,7 @@ export type BrowserToolName = typeof BROWSER_TOOL_NAMES[number];
 interface BrowserToolService {
   execute(context: BrowserToolContext, command: BrowserCommand, signal: AbortSignal, onQueueUpdate?: (update: BrowserQueueUpdate) => void): Promise<unknown>;
   open?(context: BrowserToolContext, input: { url?: string; path?: string; newPage?: boolean }, signal: AbortSignal, onQueueUpdate?: (update: BrowserQueueUpdate) => void): Promise<unknown>;
+  upload?(context: BrowserToolContext, input: { pageId?: string; ref: string; paths: string[] }, signal: AbortSignal, onQueueUpdate?: (update: BrowserQueueUpdate) => void): Promise<unknown>;
 }
 
 /** 创建由当前 Session 身份闭包限定的九个原子 Pi 工具。 */
@@ -35,7 +36,7 @@ export function createBrowserTools(context: BrowserToolContext, service: Browser
     defineTool({ name: "browser_download", label: "下载浏览器文件", description: "下载 HTTPS URL，或点击快照元素触发下载并保存到工作区浏览产物目录。", parameters: Type.Object({ pageId: Type.Optional(Type.String()), url: Type.Optional(Type.String({ maxLength: 2_048 })), ref: Type.Optional(Type.String()) }, { additionalProperties: false }), async execute(_id, params, signal, onUpdate) { if ((params.url ? 1 : 0) + (params.ref ? 1 : 0) !== 1) return toolError(new BrowserAutomationError("BROWSER_WORKER_PROTOCOL_INVALID", "browser_download 必须且只能提供 url 或 ref", false)); return run({ type: "download", ...(params.pageId ? { pageId: params.pageId } : {}), source: params.url ? { kind: "url", url: params.url } : { kind: "element", ref: params.ref! } })(_id, params, signal, onUpdate); } }),
     defineTool({ name: "browser_input", label: "输入浏览器文本", description: "仅在管理员授权的精确 Origin 向普通文本字段输入；密码、密钥、支付等永远拒绝。", parameters: Type.Object({ pageId: Type.Optional(Type.String()), ref: Type.String(), text: Type.String({ maxLength: 100_000 }) }, { additionalProperties: false }), execute: (_id, params, signal, onUpdate) => run({ type: "input", ...params })(_id, params, signal, onUpdate) }),
     defineTool({ name: "browser_submit", label: "提交浏览器表单", description: "仅在管理员单独授权的精确 Origin 提交普通表单。", parameters: refSchema(), execute: (_id, params, signal, onUpdate) => run({ type: "submit", ref: params.ref, ...(params.pageId ? { pageId: params.pageId } : {}) })(_id, params, signal, onUpdate) }),
-    defineTool({ name: "browser_upload", label: "上传工作区文件", description: "仅在管理员授权的精确 Origin 上传当前 Agent 工作区文件。", parameters: Type.Object({ pageId: Type.Optional(Type.String()), ref: Type.String(), paths: Type.Array(Type.String({ minLength: 1, maxLength: 1_024 }), { minItems: 1, maxItems: 10 }) }, { additionalProperties: false }), execute: (_id, params, signal, onUpdate) => run({ type: "upload", ref: params.ref, ...(params.pageId ? { pageId: params.pageId } : {}), files: params.paths.map((path): BrowserWorkerUpload => ({ handle: path, name: path, mediaType: "application/octet-stream" })) })(_id, params, signal, onUpdate) }),
+    defineTool({ name: "browser_upload", label: "上传工作区文件", description: "仅在管理员授权的精确 Origin 上传当前 Agent 工作区文件。", parameters: Type.Object({ pageId: Type.Optional(Type.String()), ref: Type.String(), paths: Type.Array(Type.String({ minLength: 1, maxLength: 1_024 }), { minItems: 1, maxItems: 10 }) }, { additionalProperties: false }), async execute(_id, params, signal, onUpdate) { try { if (!service.upload) throw new BrowserAutomationError("BROWSER_DEPLOYMENT_UNAVAILABLE", "上传服务当前不可用", false); const data = await service.upload(context, params, signal ?? new AbortController().signal, queuePublisher(onUpdate)); return toolResult({ status: "ok", data }); } catch (error) { return toolError(error); } } }),
   ];
 }
 

@@ -152,6 +152,16 @@ export class BrowserResourcePool {
     await Promise.all([...this.active.keys()].map((id) => this.release(id, "service_shutdown")));
   }
 
+  /** 能力关闭时清空队列与 Context，但允许之后重新启用同一资源池。 */
+  async disable(): Promise<void> {
+    const error = new BrowserAutomationError("BROWSER_CAPABILITY_DISABLED", "浏览器能力已经关闭", false);
+    this.queue.splice(0).forEach((entry) => {
+      this.cleanupQueued(entry);
+      entry.reject(error);
+    });
+    await Promise.all([...this.active.keys()].map((id) => this.release(id, "capability_disabled")));
+  }
+
   /** 创建活动租约。 */
   private grant(agentId: string, runId: string): BrowserLease {
     const id = this.id();

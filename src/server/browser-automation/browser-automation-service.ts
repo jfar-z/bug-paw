@@ -1,6 +1,10 @@
 import type { BrowserAutomationConfig } from "../../shared/browser-automation-contracts";
-import type { BrowserCommand, CreateBrowserContextRequest } from "../../shared/browser-worker-protocol";
+import type { BrowserCommand, BrowserWorkerUpload, CreateBrowserContextRequest } from "../../shared/browser-worker-protocol";
 import { isAbsolute, posix } from "node:path";
+import { basename, resolve, sep } from "node:path";
+import { lstat, readFile, realpath } from "node:fs/promises";
+import mime from "mime";
+import { Readable } from "node:stream";
 import type { BrowserLease, BrowserQueueUpdate } from "./browser-resource-pool";
 import { BrowserAutomationError, browserPolicyError } from "./browser-error";
 
@@ -25,9 +29,15 @@ interface BrowserAutomationDependencies {
     execute<Data>(leaseId: string, command: BrowserCommand, signal?: AbortSignal): Promise<Data>;
     closeContext(leaseId: string, signal?: AbortSignal): Promise<void>;
     readArtifact(leaseId: string, handle: string, maximumBytes: number, signal?: AbortSignal): Promise<Buffer>;
+    uploadFile(leaseId: string, name: string, mediaType: string, content: Buffer, maximumBytes: number, signal?: AbortSignal): Promise<BrowserWorkerUpload>;
   };
   /** 签发工作区静态站点预览。 */
   preview: { authorize(input: { cwd: string; runId: string; entryPath: string }): Promise<{ url: string }> };
+  /** 主服务工作区产物保存边界。 */
+  artifacts: {
+    saveScreenshot(input: { cwd: string; runId: string; format: "png" | "jpeg"; content: Buffer }): Promise<unknown>;
+    saveDownload(input: { cwd: string; runId: string; originalName: string; mediaType: string; sourceUrl: string; stream: Readable }): Promise<unknown>;
+  };
 }
 
 interface ActiveBrowserRun {
@@ -91,7 +101,43 @@ export class BrowserAutomationService {
     } else {
       this.assertInteraction(command, active, config);
     }
-    return this.dependencies.worker.execute(active.lease.id, command, signal);
+    const result = await this.dependencies.worker.execute<unknown>(active.lease.id, command, signal);
+    if ((command.type !== "screenshot" && command.type !== "download") || !isArtifactResult(result)) return result;
+    const maximum = command.type === "download" ? config.artifacts.maxDownloadBytes : 50 * 1024 * 1024;
+    const content = await this.dependencies.worker.readArtifact(active.lease.id, result.artifact.handle, maximum, signal);
+    if (command.type === "screenshot") {
+      return this.dependencies.artifacts.saveScreenshot({ cwd: identity.cwd, runId: identity.runId, format: command.format, content });
+    }
+    const originalName = result.artifact.suggestedName ?? "download.bin";
+    const mediaType = result.artifact.mediaType === "application/octet-stream"
+      ? mime.getType(originalName) ?? result.artifact.mediaType
+      : result.artifact.mediaType;
+    const sourceUrl = command.source.kind === "url" ? command.source.url : active.origin ?? "unknown";
+    return this.dependencies.artifacts.saveDownload({ cwd: identity.cwd, runId: identity.runId, originalName, mediaType, sourceUrl, stream: Readable.from(content) });
+  }
+
+  /** 校验并复制当前工作区文件后执行上传。 */
+  async upload(
+    context: BrowserToolContext,
+    input: { pageId?: string; ref: string; paths: string[] },
+    signal: AbortSignal,
+    onQueueUpdate?: (update: BrowserQueueUpdate) => void,
+  ): Promise<unknown> {
+    const config = await this.requireAvailable();
+    const identity = this.dependencies.runRegistry.requireCurrent(context.sessionId);
+    const active = await this.ensureContext(identity, config, signal, onQueueUpdate);
+    this.assertInteraction({ type: "upload", ref: input.ref, files: [] }, active, config);
+    const files: BrowserWorkerUpload[] = [];
+    for (const path of input.paths) {
+      const file = await readWorkspaceUpload(identity.cwd, path);
+      files.push(await this.dependencies.worker.uploadFile(active.lease.id, file.name, file.mediaType, file.content, 20 * 1024 * 1024, signal));
+    }
+    return this.dependencies.worker.execute(active.lease.id, {
+      type: "upload",
+      ref: input.ref,
+      ...(input.pageId ? { pageId: input.pageId } : {}),
+      files,
+    }, signal);
   }
 
   /** Run 结束时释放 Context；不存在时保持幂等。 */
@@ -162,4 +208,35 @@ export class BrowserAutomationService {
     const code = command.type === "input" ? "BROWSER_TEXT_INPUT_DISABLED" : command.type === "submit" ? "BROWSER_FORM_SUBMIT_DISABLED" : "BROWSER_UPLOAD_DISABLED";
     if (!policy[setting]) throw browserPolicyError(code, { operation: command.type, origin: active.origin, requiredSetting: setting, scope: active.localPreview ? "local_preview" : "trusted_ui_origin" });
   }
+}
+
+/** 读取无符号链接、严格位于工作区内的上传文件。 */
+async function readWorkspaceUpload(cwdInput: string, path: string): Promise<{ name: string; mediaType: string; content: Buffer }> {
+  if (!path || path.includes("\0") || path.includes("\\") || isAbsolute(path)) throw outsideUploadError();
+  const cwd = await realpath(cwdInput);
+  const target = resolve(cwd, path);
+  if (target !== cwd && !target.startsWith(`${cwd}${sep}`)) throw outsideUploadError();
+  try {
+    const info = await lstat(target);
+    const actual = await realpath(target);
+    if (!info.isFile() || info.isSymbolicLink() || actual !== target || info.size > 20 * 1024 * 1024) throw outsideUploadError();
+    return { name: basename(target), mediaType: mime.getType(target) ?? "application/octet-stream", content: await readFile(target) };
+  } catch (error) {
+    if (error instanceof BrowserAutomationError) throw error;
+    throw outsideUploadError();
+  }
+}
+
+function outsideUploadError(): BrowserAutomationError {
+  return new BrowserAutomationError("BROWSER_LOCAL_FILE_OUTSIDE_WORKSPACE", "上传文件不在当前 Agent 工作目录或不是普通文件", false);
+}
+
+/** 判断 Worker 结果是否仅包含一次性产物句柄。 */
+function isArtifactResult(value: unknown): value is { artifact: { handle: string; mediaType: string; size: number; suggestedName?: string } } {
+  if (typeof value !== "object" || value === null || !("artifact" in value)) return false;
+  const artifact = (value as { artifact?: unknown }).artifact;
+  return typeof artifact === "object" && artifact !== null
+    && typeof (artifact as { handle?: unknown }).handle === "string"
+    && typeof (artifact as { mediaType?: unknown }).mediaType === "string"
+    && typeof (artifact as { size?: unknown }).size === "number";
 }

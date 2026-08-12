@@ -1113,7 +1113,7 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
-  createSessionTools?: (context: { searchRunState: SearchRunState }) => ToolDefinition[];
+  createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
   refreshAppendSystemPrompt?: () => Promise<string[]>;
@@ -1192,7 +1192,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
       customTools: [
         ...(options.customTools ?? []),
-        ...(options.createSessionTools?.({ searchRunState }) ?? []),
+        ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
       ],
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({

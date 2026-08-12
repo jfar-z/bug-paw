@@ -57,20 +57,47 @@ describe("浏览器策略编排服务", () => {
       .rejects.toMatchObject({ code: "BROWSER_LOCAL_FILE_OUTSIDE_WORKSPACE" });
   });
 
+  it("上传只读取工作区文件并把 Worker 临时句柄交给命令", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "browser-service-"));
+    roots.push(cwd);
+    await writeFile(join(cwd, "fixture.txt"), "upload-content", "utf8");
+    const trusted = [{ origin: "https://example.com", allowTextInput: false, allowFormSubmit: false, allowFileUpload: true, grantedPermissions: [] }];
+    const fixture = await createFixture({ trustedOrigins: trusted });
+    await fixture.service.execute(context(), openUrl(), signal());
+    await fixture.service.upload(context(), { ref: "g1-e1", paths: ["fixture.txt"] }, signal());
+    expect(fixture.worker.uploadFile).toHaveBeenCalledWith("lease-a", "fixture.txt", "text/plain", expect.any(Buffer), expect.any(Number), expect.any(AbortSignal));
+    expect(fixture.worker.execute).toHaveBeenLastCalledWith("lease-a", expect.objectContaining({ type: "upload", files: [expect.objectContaining({ handle: "upload-a" })] }), expect.any(AbortSignal));
+  });
+
+  it("截图通过一次性句柄读取并由主服务保存相对路径", async () => {
+    const fixture = await createFixture();
+    fixture.worker.execute.mockResolvedValueOnce({ artifact: { handle: "artifact-a", mediaType: "image/png", size: 3 } });
+    fixture.worker.readArtifact.mockResolvedValueOnce(Buffer.from("png"));
+    const result = await fixture.service.execute(context(), { type: "screenshot", mode: "viewport", format: "png" }, signal());
+    expect(fixture.worker.readArtifact).toHaveBeenCalledWith("lease-a", "artifact-a", expect.any(Number), expect.any(AbortSignal));
+    expect(fixture.artifacts.saveScreenshot).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-a", format: "png", content: Buffer.from("png") }));
+    expect(result).toMatchObject({ path: "browser-artifacts/capture.png" });
+  });
+
   async function createFixture(overrides: Partial<typeof DEFAULT_BROWSER_AUTOMATION_CONFIG> = {}) {
     const cwd = roots.at(-1) ?? await mkdtemp(join(tmpdir(), "browser-service-"));
     if (!roots.includes(cwd)) roots.push(cwd);
     const config = { ...DEFAULT_BROWSER_AUTOMATION_CONFIG, ...overrides, enabled: true };
     const worker = {
       createContext: vi.fn(async () => ({ contextId: "lease-a" })),
-      execute: vi.fn(async (_leaseId: string, command: { type: string }) => command.type === "open"
+      execute: vi.fn(async (_leaseId: string, command: { type: string }): Promise<unknown> => command.type === "open"
         ? { pageId: "page-1", url: "https://example.com/", title: "Example" }
         : { title: "Example", url: "https://example.com/" }),
       closeContext: vi.fn(async () => undefined),
       readArtifact: vi.fn(),
+      uploadFile: vi.fn(async (_leaseId: string, name: string, mediaType: string) => ({ handle: "upload-a", name, mediaType })),
     };
     const pool = { acquire: vi.fn(async () => lease()) };
     const preview = { authorize: vi.fn(async () => ({ url: "http://preview.internal/token/index.html" })) };
+    const artifacts = {
+      saveScreenshot: vi.fn(async () => ({ path: "browser-artifacts/capture.png", mediaType: "image/png", size: 3, sha256: "a".repeat(64) })),
+      saveDownload: vi.fn(),
+    };
     const service = new BrowserAutomationService({
       deploymentAvailable: true,
       readConfig: vi.fn(async () => config),
@@ -78,8 +105,9 @@ describe("浏览器策略编排服务", () => {
       pool,
       worker,
       preview,
+      artifacts,
     } as never);
-    return { service, worker, pool, preview };
+    return { service, worker, pool, preview, artifacts };
   }
 });
 
