@@ -39,6 +39,15 @@ describe("ProviderCreateDialog", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("限制弹窗高度并允许矮屏设备滚动到操作按钮", () => {
+    renderDialog();
+
+    expect(screen.getByRole("dialog", { name: "新建 Provider" })).toHaveStyle({
+      maxHeight: "calc(100dvh - 40px)",
+      overflowY: "auto",
+    });
+  });
+
   it("按模板更新地址并使用默认协议与认证设置创建 Provider", async () => {
     const fetchMock = installFetch();
     const onCreated = vi.fn();
@@ -117,10 +126,11 @@ describe("ProviderCreateDialog", () => {
   });
 
   it.each([
-    ["PROVIDER_ID_EXISTS", "Provider ID 已存在"],
-    ["VERSION_CONFLICT", "配置文件已被修改"],
-  ])("%s 时保留弹窗和创建草稿", async (code, message) => {
-    vi.stubGlobal("fetch", vi.fn(async () => json({ error: { code, message } }, 409)));
+    ["PROVIDER_ID_EXISTS", "Provider ID 已存在", 409],
+    ["VERSION_CONFLICT", "配置文件已被修改", 409],
+    ["MODEL_SCHEMA_INVALID", "模型配置未通过 Pi 校验", 422],
+  ])("%s 时保留弹窗和创建草稿", async (code, message, status) => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ error: { code, message } }, status)));
     const onCreated = vi.fn();
     const onClose = vi.fn();
     renderDialog({ onCreated, onClose });

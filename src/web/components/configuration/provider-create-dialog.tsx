@@ -48,6 +48,7 @@ function providerCreateExpected(setError: (message: string) => void): ApiTaskPol
     VERSION_CONFLICT: show,
     PROVIDER_ID_EXISTS: show,
     PROVIDER_INVALID: show,
+    MODEL_SCHEMA_INVALID: show,
     INVALID_PROVIDER_ID: show,
     INVALID_PROVIDER_REQUEST: show,
     INVALID_PROVIDER_BASE_URL: show,
@@ -106,7 +107,7 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
 
   return (
     <div className="configuration-dialog-backdrop" role="presentation">
-      <form className="configuration-dialog configuration-form-card provider-rename-dialog provider-create-dialog" style={{ width: "min(620px, 100%)" }} role="dialog" aria-modal="true" aria-labelledby="provider-create-title" onSubmit={(event) => void submit(event)}>
+      <form className="configuration-dialog configuration-form-card provider-rename-dialog provider-create-dialog" style={{ width: "min(620px, 100%)", maxHeight: "calc(100dvh - 40px)", overflowY: "auto", overscrollBehavior: "contain" }} role="dialog" aria-modal="true" aria-labelledby="provider-create-title" onSubmit={(event) => void submit(event)}>
         <header className="configuration-heading-actions">
           <div>
             <span className="configuration-eyebrow">MODEL PROVIDER</span>
