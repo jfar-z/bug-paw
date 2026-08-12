@@ -39,11 +39,17 @@ describe("BugPaw SQLite", () => {
     expect(database.read<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
       { version: 1 },
       { version: 2 },
+      { version: 3 },
     ]);
     database.close();
 
     const reopened = openDatabase(path);
     expect(reopened.read<{ value: string }>("SELECT value FROM app_meta WHERE key = ?", ["persisted"])).toEqual([{ value: "yes" }]);
+    expect(reopened.read<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+    ]);
     reopened.close();
   });
 
@@ -82,6 +88,7 @@ describe("BugPaw SQLite", () => {
     expect(database.read<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
       { version: 1 },
       { version: 2 },
+      { version: 3 },
     ]);
     database.close();
   });
