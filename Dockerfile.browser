@@ -1,0 +1,25 @@
+FROM node:24.19.0-bookworm-slim AS source
+
+WORKDIR /app
+ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY src ./src
+
+FROM mcr.microsoft.com/playwright:v1.62.1-noble AS worker
+ENV NODE_ENV=production
+ENV PORT=7081
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+WORKDIR /app
+COPY --from=source /app /app
+USER pwuser
+CMD ["node", "--import", "tsx", "src/browser-worker/main.ts"]
+
+FROM node:24.19.0-bookworm-slim AS proxy
+ENV NODE_ENV=production
+ENV PORT=7082
+WORKDIR /app
+COPY --from=source /app /app
+USER node
+CMD ["node", "--import", "tsx", "src/browser-egress/main.ts"]
