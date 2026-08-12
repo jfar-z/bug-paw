@@ -1,4 +1,4 @@
-import { Download, X } from "lucide-react";
+import { ChevronLeft, Download, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { WorkspaceEntry, WorkspaceTextPreview } from "../../shared/contracts";
 import { api, workspaceFileUrl } from "../api";
@@ -7,13 +7,14 @@ import { useApiTask } from "../api-task-provider";
 interface WorkspaceFilePreviewProps {
   agentId: string;
   entry: WorkspaceEntry;
+  mode: "side" | "overlay";
   onClose: () => void;
 }
 
 /**
  * 在资源管理页中按文件类型展示只读媒体或文本预览。
  */
-export function WorkspaceFilePreview({ agentId, entry, onClose }: WorkspaceFilePreviewProps) {
+export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: WorkspaceFilePreviewProps) {
   const { runApiTask } = useApiTask();
   const [text, setText] = useState<WorkspaceTextPreview>();
   const [error, setError] = useState("");
@@ -41,8 +42,8 @@ export function WorkspaceFilePreview({ agentId, entry, onClose }: WorkspaceFileP
     return () => { active = false; };
   }, [agentId, entry.path, mediaType, runApiTask]);
 
-  return <aside className="workspace-file-preview" aria-label={`${entry.name} 预览`}>
-    <header><div><span>PREVIEW</span><strong>{entry.name}</strong></div><button type="button" className="icon-button" aria-label="关闭预览" onClick={onClose}><X size={18} aria-hidden="true" /></button></header>
+  return <aside className={`workspace-file-preview workspace-file-preview--${mode}`} aria-label={`${entry.name} 预览`}>
+    <header><div><span>PREVIEW</span><strong>{entry.name}</strong></div><button type="button" className="icon-button" aria-label={mode === "overlay" ? "返回文件列表" : "关闭预览"} onClick={onClose}>{mode === "overlay" ? <ChevronLeft size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button></header>
     <div className="workspace-file-preview__body">
       {mediaType.startsWith("image/") ? <img src={source} alt={entry.name} /> : null}
       {mediaType.startsWith("video/") ? <video src={source} controls /> : null}
