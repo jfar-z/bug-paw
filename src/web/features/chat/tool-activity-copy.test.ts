@@ -14,6 +14,16 @@ describe("工具活动文案", () => {
     expect(toolActivityCopy(tool("write", "running", { path: "src/app.ts" }))).toBe("写入 src/app.ts");
   });
 
+  it("在参数生成阶段显示自定义动作与已知目标", () => {
+    const writing = { ...tool("write", "parameterizing"), parameterPath: "src/app.ts", parameterBytes: 4608 };
+
+    expect(toolActivityCopy(writing)).toBe("正在编写 src/app.ts");
+    expect(toolActivityCopy(tool("edit", "parameterizing"))).toBe("正在拟定文件修改");
+    expect(toolActivityCopy(tool("bash", "parameterizing"))).toBe("正在组织命令");
+    expect(toolActivityCopy(tool("read", "parameterizing"))).toBe("正在确定读取目标");
+    expect(toolActivityCopy(tool("custom_tool", "parameterizing"))).toBe("正在生成调用参数");
+  });
+
   it("为编辑、命令、读取和自定义工具生成阶段准确文案", () => {
     expect(toolActivityCopy(tool("edit", "preparing", { path: "src/app.ts" }))).toBe("拟定对 src/app.ts 的修改");
     expect(toolActivityCopy(tool("edit", "running", { path: "src/app.ts" }))).toBe("修改 src/app.ts");
@@ -30,6 +40,7 @@ describe("工具活动文案", () => {
 
   it("将生命周期状态与动作文案分离", () => {
     expect(toolStatusCopy(tool("write", "preparing"))).toBe("准备中");
+    expect(toolStatusCopy(tool("write", "parameterizing"))).toBe("参数生成中");
     expect(toolStatusCopy(tool("write", "running"))).toBe("执行中");
     expect(toolStatusCopy(tool("write", "completed"))).toBe("已完成");
     expect(toolStatusCopy(tool("write", "error"))).toBe("失败");

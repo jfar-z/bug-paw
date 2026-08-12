@@ -9,13 +9,21 @@ export function toolTargetPath(args: unknown): string | undefined {
 
 /** 根据工具与目标生成不重复生命周期状态的动作文案。 */
 export function toolActivityCopy(tool: ToolBlock): string {
-  const path = toolTargetPath(tool.args);
+  const path = tool.parameterPath ?? toolTargetPath(tool.args);
   if (tool.status === "preparing") {
     if (tool.name === "write") return path ? `编写 ${path}` : "编写文件内容";
     if (tool.name === "edit") return path ? `拟定对 ${path} 的修改` : "拟定文件修改";
     if (tool.name === "bash") return "组织命令";
     if (tool.name === "read") return path ? `确定读取 ${path}` : "确定读取目标";
     return `生成 ${tool.name} 的调用参数`;
+  }
+
+  if (tool.status === "parameterizing") {
+    if (tool.name === "write") return path ? `正在编写 ${path}` : "正在编写文件内容";
+    if (tool.name === "edit") return path ? `正在拟定对 ${path} 的修改` : "正在拟定文件修改";
+    if (tool.name === "bash") return "正在组织命令";
+    if (tool.name === "read") return path ? `正在确定读取 ${path}` : "正在确定读取目标";
+    return "正在生成调用参数";
   }
 
   if (tool.name === "write") return path ? `写入 ${path}` : "写入文件";
@@ -28,6 +36,7 @@ export function toolActivityCopy(tool: ToolBlock): string {
 /** 将工具生命周期映射为右侧的简短状态文案。 */
 export function toolStatusCopy(tool: ToolBlock): string {
   if (tool.status === "preparing") return "准备中";
+  if (tool.status === "parameterizing") return "参数生成中";
   if (tool.status === "running") return "执行中";
   if (tool.status === "error") return "失败";
   if (tool.status === "cancelled") return "未执行";

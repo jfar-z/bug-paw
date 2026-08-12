@@ -55,7 +55,7 @@ export function activityGroupAutomaticExpanded(
   return blocks.some(isFailedTool)
     || blocks.some((block) => block.type === "thinking"
       ? block.streaming
-      : block.status === "preparing" || block.status === "running")
+      : block.status === "preparing" || block.status === "parameterizing" || block.status === "running")
     || (trailing && turnStreaming);
 }
 
@@ -64,7 +64,7 @@ function activityGroupSummary(blocks: readonly ActivityBlock[]): string {
   if (failures > 0) return `${blocks.length} 项活动 · ${failures} 项失败`;
   const active = [...blocks].reverse().find((block) => block.type === "thinking"
     ? block.streaming
-    : block.status === "preparing" || block.status === "running");
+    : block.status === "preparing" || block.status === "parameterizing" || block.status === "running");
   if (active?.type === "thinking") return "正在思考";
   if (active?.type === "tool") return toolActivityCopy(active);
   return `已完成 ${blocks.length} 项活动`;

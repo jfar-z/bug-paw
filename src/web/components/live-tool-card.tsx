@@ -14,7 +14,7 @@ interface LiveToolCardProps {
 export function LiveToolCard({ tool }: LiveToolCardProps) {
   const [expanded, setExpanded] = useState(false);
   const output = tool.status === "running" ? tool.partialResult : tool.result;
-  const active = tool.status === "preparing" || tool.status === "running";
+  const active = tool.status === "preparing" || tool.status === "parameterizing" || tool.status === "running";
   const statusIcon = active
     ? <LoaderCircle className="spinner" size={14} aria-hidden="true" />
     : tool.status === "error"
@@ -45,13 +45,38 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
 
       <CollapsibleRegion expanded={expanded} className="live-tool-card__collapse">
         <div className="live-tool-card__details">
-          <ToolDetail title="入参" value={tool.args} />
-          <ToolDetail title="结果" value={output} />
+          {tool.status === "parameterizing"
+            ? <ToolParameterProgress tool={tool} />
+            : <>
+              <ToolDetail title="入参" value={tool.args} />
+              <ToolDetail title="结果" value={output} />
+            </>}
           {hasToolDetailValue(tool.details) && <ToolDetail title="详情" value={tool.details} />}
         </div>
       </CollapsibleRegion>
     </section>
   );
+}
+
+/** 展示不含原始参数的生成进度，避免大内容撑开工具详情。 */
+function ToolParameterProgress({ tool }: { tool: ToolBlock }) {
+  const bytes = tool.parameterBytes ?? 0;
+  const path = tool.parameterPath;
+
+  return (
+    <section className="live-tool-card__detail">
+      <h4 style={{ margin: "0 0 6px", fontSize: 10, fontWeight: 600 }}>参数生成</h4>
+      <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5 }}>参数生成中 · 已生成 {formatGeneratedBytes(bytes)}</p>
+      {path && <p style={{ margin: "4px 0 0", fontSize: 12, lineHeight: 1.5, overflowWrap: "anywhere" }}>目标：{path}</p>}
+    </section>
+  );
+}
+
+/** 将累计参数字节数格式化为便于快速扫读的单位。 */
+function formatGeneratedBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kilobytes = bytes / 1024;
+  return `${Number(kilobytes.toFixed(kilobytes < 10 ? 1 : 0))} KB`;
 }
 
 /** 判断可选详情是否包含值得展示的信息。 */

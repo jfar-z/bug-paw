@@ -232,8 +232,18 @@ describe("useSessionStream", () => {
         toolName: "write",
         args: { path: "src/app.ts", content: "内容" },
       });
-      source.emit("aborted", {
+      source.emit("tool_parameters_streaming", {
         id: 3,
+        type: "tool_parameters_streaming",
+        sessionId: "session-1",
+        runId: "run-1",
+        callId: "call-1",
+        toolName: "write",
+        generatedBytes: 4608,
+        path: "src/app.ts",
+      });
+      source.emit("aborted", {
+        id: 4,
         type: "aborted",
         sessionId: "session-1",
         runId: "run-1",
@@ -250,6 +260,13 @@ describe("useSessionStream", () => {
       callId: "call-1",
       toolName: "write",
       args: { path: "src/app.ts", content: "内容" },
+    });
+    expect(onTimelineEvent).toHaveBeenNthCalledWith(3, {
+      type: "tool_parameters_streaming",
+      callId: "call-1",
+      toolName: "write",
+      generatedBytes: 4608,
+      path: "src/app.ts",
     });
     expect(onTimelineEvent).toHaveBeenLastCalledWith({
       type: "generation_finished",
