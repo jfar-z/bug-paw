@@ -27,6 +27,7 @@ const AgentsPage = lazy(() => import("./pages/agents-page").then((module) => ({ 
 const ConfigurationOverviewPage = lazy(() => import("./pages/configuration-overview-page").then((module) => ({ default: module.ConfigurationOverviewPage })));
 const CapabilitiesPage = lazy(() => import("./pages/capabilities-page").then((module) => ({ default: module.CapabilitiesPage })));
 const WebResearchPage = lazy(() => import("./pages/web-research-page").then((module) => ({ default: module.WebResearchPage })));
+const BrowserAutomationPage = lazy(() => import("./pages/browser-automation-page").then((module) => ({ default: module.BrowserAutomationPage })));
 const TtsPage = lazy(() => import("./pages/tts-page").then((module) => ({ default: module.TtsPage })));
 const KnowledgeRetrievalPage = lazy(() => import("./pages/knowledge-retrieval-page").then((module) => ({ default: module.KnowledgeRetrievalPage })));
 const ProvidersPage = lazy(() => import("./pages/providers-page").then((module) => ({ default: module.ProvidersPage })));
@@ -141,6 +142,8 @@ export function App() {
         return <CapabilitiesPage onNavigate={navigateTo} />;
     case "web-research":
       return <WebResearchPage />;
+    case "browser-automation":
+      return <BrowserAutomationPage />;
     case "tts":
       return <TtsPage />;
     case "knowledge-retrieval":

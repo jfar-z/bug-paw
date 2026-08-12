@@ -27,7 +27,9 @@ describe("工作台路由", () => {
     });
     expect(parseRoute("/settings/providers")).toEqual({ page: "providers" });
     expect(parseRoute("/settings/capabilities/web-research")).toEqual({ page: "web-research" });
+    expect(parseRoute("/settings/capabilities/browser")).toEqual({ page: "browser-automation" });
     expect(routePath({ page: "capabilities" })).toBe("/settings/capabilities");
+    expect(routePath({ page: "browser-automation" })).toBe("/settings/capabilities/browser");
   });
 
   it("未知路径回退到对话页", () => {

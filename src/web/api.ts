@@ -13,6 +13,7 @@ import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contrac
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
 import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
+import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument } from "../shared/browser-automation-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -249,6 +250,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const api = {
+  getBrowserAutomation: () => request<BrowserAutomationSettingsDocument>("/api/capabilities/browser"),
+  updateBrowserAutomation: (revision: string, config: BrowserAutomationConfig) => request<BrowserAutomationSettingsDocument>("/api/capabilities/browser", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
+  testBrowserAutomation: () => request<{ ok: boolean; message: string }>("/api/capabilities/browser/test", { method: "POST" }),
   getKnowledgeRetrieval: () => request<EmbeddingSettingsDocument>("/api/capabilities/knowledge-retrieval"),
   updateKnowledgeRetrieval: (revision: string, config: EmbeddingConfigInput) => request<EmbeddingSettingsDocument>("/api/capabilities/knowledge-retrieval", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   getKnowledgeRetrievalCredential: () => request<{ apiKey: string }>("/api/capabilities/knowledge-retrieval/credential"),

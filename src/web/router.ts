@@ -8,6 +8,7 @@ export type AppRoute =
   | { page: "configuration-overview" }
   | { page: "capabilities" }
   | { page: "web-research" }
+  | { page: "browser-automation" }
   | { page: "tts" }
   | { page: "knowledge-retrieval" }
   | { page: "agents"; onboarding?: "create" }
@@ -35,6 +36,7 @@ export function parseRoute(pathname: string, search = ""): AppRoute {
   }
   if (normalized === "/settings/capabilities") return { page: "capabilities" };
   if (normalized === "/settings/capabilities/web-research") return { page: "web-research" };
+  if (normalized === "/settings/capabilities/browser") return { page: "browser-automation" };
   if (normalized === "/settings/capabilities/tts") return { page: "tts" };
   if (normalized === "/settings/capabilities/knowledge-retrieval") return { page: "knowledge-retrieval" };
   if (normalized === "/settings/agents") {
@@ -81,6 +83,8 @@ export function routePath(route: AppRoute): string {
       return "/settings/capabilities";
     case "web-research":
       return "/settings/capabilities/web-research";
+    case "browser-automation":
+      return "/settings/capabilities/browser";
     case "tts":
       return "/settings/capabilities/tts";
     case "knowledge-retrieval":
