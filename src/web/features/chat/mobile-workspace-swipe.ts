@@ -42,8 +42,10 @@ interface SwipeGesture {
 /** 统一协调移动端左侧会话与右侧资源抽屉的跟手手势。 */
 export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
   const gestureRef = useRef<SwipeGesture | undefined>(undefined);
+  const optionsRef = useRef(options);
   const [sessionTranslatePercent, setSessionTranslatePercent] = useState<number>();
   const [resourceTranslatePercent, setResourceTranslatePercent] = useState<number>();
+  optionsRef.current = options;
 
   const clearGesture = (pointerId?: number) => {
     const gesture = gestureRef.current;
@@ -59,7 +61,28 @@ export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
     setResourceTranslatePercent(undefined);
   };
 
-  useEffect(() => () => clearGesture(), []);
+  const finishGesture = (pointerId: number, clientX: number, clientY: number) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== pointerId) return;
+    updateDistance(gesture, clientX, clientY);
+    const decision = resolveWorkspaceSwipe(optionsRef.current.openDrawer, gesture.dx, gesture.dy);
+    clearGesture(pointerId);
+    if (decision?.action === "open") optionsRef.current.onOpenDrawer(decision.drawer);
+    if (decision?.action === "close") optionsRef.current.onCloseDrawer(decision.drawer);
+  };
+
+  useEffect(() => {
+    // 指针捕获并非所有移动浏览器都可靠，窗口级监听保证松手一定能够结算手势。
+    const finish = (event: PointerEvent) => finishGesture(event.pointerId, event.clientX, event.clientY);
+    const cancel = (event: PointerEvent) => clearGesture(event.pointerId);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
+    return () => {
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+      clearGesture();
+    };
+  }, []);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType !== "touch" || !mobileWorkspaceSwipeEnabled()) return;
@@ -86,8 +109,14 @@ export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
     if (!drawer) return;
     gesture.drawer = drawer;
     if (!gesture.capturedBy) {
-      event.currentTarget.setPointerCapture?.(event.pointerId);
-      gesture.capturedBy = event.currentTarget;
+      try {
+        if (event.currentTarget.setPointerCapture) {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          gesture.capturedBy = event.currentTarget;
+        }
+      } catch {
+        // 捕获失败时继续依赖窗口级结束监听，避免手势停留在半开状态。
+      }
     }
     event.preventDefault();
     const progress = Math.min(1, directionalDistance(options.openDrawer, drawer, gesture.dx) / drawerGestureWidth());
@@ -103,13 +132,7 @@ export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
   };
 
   const onPointerEnd = (event: ReactPointerEvent<HTMLElement>) => {
-    const gesture = gestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    updateDistance(gesture, event.clientX, event.clientY);
-    const decision = resolveWorkspaceSwipe(options.openDrawer, gesture.dx, gesture.dy);
-    clearGesture(event.pointerId);
-    if (decision?.action === "open") options.onOpenDrawer(decision.drawer);
-    if (decision?.action === "close") options.onCloseDrawer(decision.drawer);
+    finishGesture(event.pointerId, event.clientX, event.clientY);
   };
 
   return {

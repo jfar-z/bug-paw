@@ -41,6 +41,19 @@ describe("移动端工作区双向抽屉手势", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
+  it("指针在手势区域外释放时仍完成已经开始的滑动", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    render(<SwipeHarness />);
+    const surface = screen.getByTestId("swipe-surface");
+    Object.assign(surface, { setPointerCapture: undefined });
+
+    fireEvent.pointerDown(surface, { pointerType: "touch", pointerId: 9, clientX: 20, clientY: 200 });
+    fireEvent.pointerMove(surface, { pointerType: "touch", pointerId: 9, clientX: 120, clientY: 204 });
+    fireEvent.pointerUp(window, { pointerType: "touch", pointerId: 9, clientX: 120, clientY: 204 });
+
+    expect(screen.getByTestId("open-drawer")).toHaveTextContent("sessions");
+  });
+
   it("pointercancel 只清理手势且不切换抽屉", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
     render(<SwipeHarness />);

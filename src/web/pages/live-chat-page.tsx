@@ -1134,7 +1134,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
             <div className="chat-title"><strong>{session ? "Agent 对话" : "新对话"}</strong><span>pi SDK · 实时连接</span></div>
           </div>
           <div className="chat-header__actions">
-            <button type="button" className="icon-button quick-workspace-open-button" aria-label="打开快捷资源管理" title="快捷资源管理" disabled={!activeAgentId} onClick={(event) => { workspaceTriggerRef.current = event.currentTarget; setWorkspaceMessage(""); openDrawer("resources"); }}><FolderOpen size={18} aria-hidden="true" /></button>
             <AgentModelMenu
               agents={agents}
               selectedAgentId={activeAgentId}
@@ -1144,6 +1143,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               onSelectAgent={(agentId) => void selectAgent(agentId)}
               onSelectModel={(model) => void changeModel(model)}
             />
+            <button type="button" className="icon-button quick-workspace-open-button" aria-label="打开快捷资源管理" title="快捷资源管理" disabled={!activeAgentId} onClick={(event) => { workspaceTriggerRef.current = event.currentTarget; setWorkspaceMessage(""); openDrawer("resources"); }}><FolderOpen size={18} aria-hidden="true" /></button>
             <button
               type="button"
               className="icon-button chat-new-session-button"
