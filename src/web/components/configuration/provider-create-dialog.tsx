@@ -28,7 +28,13 @@ const providerTemplateDefaults: Record<ProviderTemplate, { api: string; baseUrl:
 
 /** 统一双列字段标题区高度，避免说明文字造成输入控件基线错位。 */
 const providerCreateFieldHeadingStyle = {
-  minHeight: "36px",
+  minHeight: "40px",
+} satisfies CSSProperties;
+
+/** 禁止不同控件高度触发 Grid 自动轨道拉伸，确保输入控件从同一基线开始。 */
+const providerCreateFieldStyle = {
+  alignContent: "start",
+  gridTemplateColumns: "1fr",
 } satisfies CSSProperties;
 
 /** 校验 Pi Provider 标识，避免创建后再进入改名流程修正。 */
@@ -123,10 +129,10 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
         </header>
 
         <div className="thinking-protocol-preview">
-          <label style={{ gridTemplateColumns: "1fr" }}><span style={providerCreateFieldHeadingStyle}>Provider ID<small>创建后需要通过改名迁移引用</small></span><input aria-label="Provider ID" autoFocus value={draft.id} onChange={(event) => { setDraft((current) => ({ ...current, id: event.target.value })); setError(""); }} placeholder="例如 my-provider" /></label>
-          <label style={{ gridTemplateColumns: "1fr" }}><span style={providerCreateFieldHeadingStyle}>显示名称</span><input aria-label="显示名称" value={draft.name} onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); setError(""); }} placeholder="例如内部模型网关" /></label>
-          <label style={{ gridTemplateColumns: "1fr" }}><span style={providerCreateFieldHeadingStyle}>Provider 模板<small>协议和认证方式使用模板默认值</small></span><select aria-label="Provider 模板" value={draft.template} onChange={(event) => selectTemplate(event.target.value as ProviderTemplate)}><option value="custom">自定义</option><option value="openai-compatible">OpenAI Compatible</option><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="lm-studio">LM Studio</option></select></label>
-          <label style={{ gridTemplateColumns: "1fr" }}><span style={providerCreateFieldHeadingStyle}>Base URL</span><input aria-label="Base URL" inputMode="url" value={draft.baseUrl} onChange={(event) => { setDraft((current) => ({ ...current, baseUrl: event.target.value })); setError(""); }} placeholder="https://models.example.com/v1" /></label>
+          <label style={providerCreateFieldStyle}><span style={providerCreateFieldHeadingStyle}>Provider ID<small>创建后需要通过改名迁移引用</small></span><input aria-label="Provider ID" autoFocus value={draft.id} onChange={(event) => { setDraft((current) => ({ ...current, id: event.target.value })); setError(""); }} placeholder="例如 my-provider" /></label>
+          <label style={providerCreateFieldStyle}><span style={providerCreateFieldHeadingStyle}>显示名称</span><input aria-label="显示名称" value={draft.name} onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); setError(""); }} placeholder="例如内部模型网关" /></label>
+          <label style={providerCreateFieldStyle}><span style={providerCreateFieldHeadingStyle}>Provider 模板<small>协议和认证方式使用模板默认值</small></span><select aria-label="Provider 模板" value={draft.template} onChange={(event) => selectTemplate(event.target.value as ProviderTemplate)}><option value="custom">自定义</option><option value="openai-compatible">OpenAI Compatible</option><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="lm-studio">LM Studio</option></select></label>
+          <label style={providerCreateFieldStyle}><span style={providerCreateFieldHeadingStyle}>Base URL</span><input aria-label="Base URL" inputMode="url" value={draft.baseUrl} onChange={(event) => { setDraft((current) => ({ ...current, baseUrl: event.target.value })); setError(""); }} placeholder="https://models.example.com/v1" /></label>
         </div>
 
         {validationError ? <p className="configuration-inline-error" role="alert">{validationError}</p> : null}

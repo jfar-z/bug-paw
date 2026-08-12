@@ -54,7 +54,8 @@ describe("ProviderCreateDialog", () => {
     for (const fieldName of ["Provider ID", "显示名称", "Provider 模板", "Base URL"]) {
       const field = screen.getByLabelText(fieldName);
       const heading = field.closest("label")?.querySelector(":scope > span");
-      expect(heading).toHaveStyle({ minHeight: "36px" });
+      expect(field.closest("label")).toHaveStyle({ alignContent: "start" });
+      expect(heading).toHaveStyle({ minHeight: "40px" });
     }
   });
 
