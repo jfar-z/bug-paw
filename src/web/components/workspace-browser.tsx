@@ -246,7 +246,7 @@ function workspaceEntryIcon(entry: WorkspaceEntry): LucideIcon {
 
 function WorkspaceEntryIcon({ entry }: { entry: WorkspaceEntry }) {
   const Icon = workspaceEntryIcon(entry);
-  return <Icon size={17} aria-hidden="true" />;
+  return <Icon size={17} style={{ flexShrink: 0 }} aria-hidden="true" />;
 }
 
 function formatFileSize(size: number): string {

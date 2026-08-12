@@ -48,6 +48,17 @@ describe("WorkspaceBrowser", () => {
     expect(document.querySelector(".workspace-table-wrap th.workspace-entry-select")).toBeInTheDocument();
   });
 
+  it("为目录和文件图标保留固定且不可收缩的布局契约", async () => {
+    vi.stubGlobal("fetch", workspaceFetch());
+    const { container } = renderBrowser();
+
+    await screen.findByRole("button", { name: "进入 docs" });
+
+    const icons = container.querySelectorAll<SVGElement>(".workspace-entry-name > svg");
+    expect(icons).toHaveLength(2);
+    icons.forEach((icon) => expect(icon).toHaveStyle({ flexShrink: "0" }));
+  });
+
   it("引用文件时进入父目录、高亮目标并使用覆盖式预览", async () => {
     vi.stubGlobal("fetch", workspaceFetch());
     const { container } = renderBrowser({ mode: "quick", locationRequest: { id: 1, path: "docs/readme.md" } });
