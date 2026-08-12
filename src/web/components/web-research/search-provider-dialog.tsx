@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Trash2, X } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 
 import type {
@@ -12,6 +12,12 @@ import { useApiTask } from "../../api-task-provider";
 import { webResearchExpected } from "../../web-research-error-policy";
 import { ConfirmationDialog } from "../configuration/confirmation-dialog";
 import { SecretInput } from "../secret-input";
+
+/** 直连搜索服务的官方 API Key 获取入口。 */
+const API_KEY_PORTALS = {
+  bocha: { href: "https://open.bochaai.com", label: "博查" },
+  tavily: { href: "https://app.tavily.com", label: "Tavily" },
+} as const;
 
 interface SearchProviderDialogProps {
   mode: "create" | "edit";
@@ -39,6 +45,9 @@ export function SearchProviderDialog(props: SearchProviderDialogProps) {
   const [busy, setBusy] = useState(false);
   const configured = hasCredential(props.document, draft.id);
   const needsCredential = draft.type !== "searxng";
+  const apiKeyPortal = draft.type === "bocha" || draft.type === "tavily"
+    ? API_KEY_PORTALS[draft.type]
+    : undefined;
   const finalCredentialAvailable = needsCredential
     ? credential.action === "replace" ? Boolean(credential.apiKey) : credential.action === "keep" && configured
     : true;
@@ -167,7 +176,13 @@ export function SearchProviderDialog(props: SearchProviderDialogProps) {
         {props.mode === "create" ? <label><span>渠道类型</span><select aria-label="渠道类型" value={templateId} onChange={(event) => selectTemplate(event.target.value)}>{templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : null}
         <label><span>实例名称</span><input aria-label="实例名称" autoFocus value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} /></label>
         {draft.connectionMode === "custom" ? <label><span>SearXNG 地址</span><input aria-label="SearXNG 地址" placeholder="https://search.example.com" value={draft.baseUrl ?? ""} onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))} /></label> : null}
-        {needsCredential ? <label><span>API Key<small>{configured && credential.action !== "remove" ? "已保存；小眼睛按需读取" : "尚未配置"}</small></span><SecretInput aria-label={`${draft.name} API Key`} autoComplete="new-password" placeholder={configured ? "已配置" : "请输入 API Key"} value={secretValue} visible={secretVisible} onVisibilityChange={(visible) => void toggleSecret(visible)} onChange={(event) => changeSecret(event.target.value)} /></label> : null}
+        {needsCredential ? <label>
+          <span>API Key<small>{configured && credential.action !== "remove" ? "已保存；小眼睛按需读取" : "尚未配置"}</small></span>
+          <span className="api-key-field">
+            <SecretInput aria-label={`${draft.name} API Key`} autoComplete="new-password" placeholder={configured ? "已配置" : "请输入 API Key"} value={secretValue} visible={secretVisible} onVisibilityChange={(visible) => void toggleSecret(visible)} onChange={(event) => changeSecret(event.target.value)} />
+            {apiKeyPortal ? <small className="configuration-help"><a href={apiKeyPortal.href} target="_blank" rel="noreferrer" aria-label={`${apiKeyPortal.label} 获取 API Key（在新标签页打开）`}>获取 API Key<ExternalLink size={13} aria-hidden="true" /></a></small> : null}
+          </span>
+        </label> : null}
         {needsCredential && configured ? <div className="configuration-button-row"><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" onClick={() => { setCredential({ action: "remove" }); setDraft((current) => ({ ...current, enabled: false })); clearSecret(); }}>{credential.action === "remove" ? "已标记移除凭证" : "移除已保存凭证"}</button></div> : null}
         <label className="configuration-capability-toggle"><span>立即参与路由<small>启用后会按列表顺序参与故障切换。</small></span><input type="checkbox" aria-label="立即参与路由" checked={draft.enabled} disabled={needsCredential && !finalCredentialAvailable} onChange={(event) => setDraft((current) => ({ ...current, enabled: event.target.checked }))} /></label>
 
