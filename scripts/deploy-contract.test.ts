@@ -42,6 +42,15 @@ describe("部署脚本模式选择", () => {
     expect(deployScript).toContain('chown 1001:1001 "$browser_token_file"');
   });
 
+  it("Fake-IP 信任范围只传给实际执行地址校验的出口代理", async () => {
+    const compose = await readFile(resolve("compose.browser.yaml"), "utf8");
+    const worker = compose.match(/\n  browser-worker:\n[\s\S]*?(?=\n  browser-egress-proxy:)/u)?.[0] ?? "";
+    const proxy = compose.match(/\n  browser-egress-proxy:\n[\s\S]*?(?=\nnetworks:)/u)?.[0] ?? "";
+
+    expect(worker).not.toContain("BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS");
+    expect(proxy).toContain("BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS");
+  });
+
   it("不指定模式时使用核心部署", () => {
     const output = execFileSync("bash", [script, "--dry-run"], { encoding: "utf8" });
 
