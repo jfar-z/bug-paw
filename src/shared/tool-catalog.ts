@@ -34,10 +34,21 @@ export const SYSTEM_TOOL_CATALOG: ToolCatalogItem[] = [
 export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
   { name: "web_search", description: "搜索互联网并返回可引用来源", source: "capability", highRisk: false },
   { name: "web_read", description: "读取公开网页正文", source: "capability", highRisk: false },
+  { name: "browser_open", description: "打开公网 HTTPS 或工作区静态 HTML", source: "capability", highRisk: false },
+  { name: "browser_snapshot", description: "读取浏览器页面及稳定元素引用", source: "capability", highRisk: false },
+  { name: "browser_click", description: "点击浏览器中的普通交互元素", source: "capability", highRisk: false },
+  { name: "browser_scroll", description: "按受控方向和距离滚动页面", source: "capability", highRisk: false },
+  { name: "browser_screenshot", description: "截取页面并保存到工作区", source: "capability", highRisk: false },
+  { name: "browser_download", description: "下载允许类型的网页文件", source: "capability", highRisk: false },
+  { name: "browser_input", description: "在受信任 UI 中输入普通文本", source: "capability", highRisk: true },
+  { name: "browser_submit", description: "在受信任 UI 中提交普通表单", source: "capability", highRisk: true },
+  { name: "browser_upload", description: "向受信任 UI 上传工作区文件", source: "capability", highRisk: true },
 ];
 
 /** 新建 Agent 的默认权限，保持现有开箱即用的能力。 */
-export const DEFAULT_AGENT_TOOL_NAMES = [...BUILTIN_TOOL_CATALOG, ...SYSTEM_TOOL_CATALOG, ...CAPABILITY_TOOL_CATALOG].map(({ name }) => name);
+export const DEFAULT_AGENT_TOOL_NAMES = [...BUILTIN_TOOL_CATALOG, ...SYSTEM_TOOL_CATALOG, ...CAPABILITY_TOOL_CATALOG]
+  .filter(({ name }) => !["browser_input", "browser_submit", "browser_upload"].includes(name))
+  .map(({ name }) => name);
 
 /**
  * 历史 Agent 升级时需要补齐的系统工具权限。

@@ -1,0 +1,89 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { DEFAULT_BROWSER_AUTOMATION_CONFIG } from "../../shared/browser-automation-contracts";
+import { BrowserAutomationService } from "./browser-automation-service";
+
+/** 服务端在每次原子操作前重新执行权限与 Origin 策略。 */
+describe("浏览器策略编排服务", () => {
+  const roots: string[] = [];
+  afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
+
+  it("阻塞等待资源并创建一次 Run Context", async () => {
+    const fixture = await createFixture();
+    const onQueueUpdate = vi.fn();
+    fixture.pool.acquire.mockImplementation(async (...args: unknown[]) => {
+      const { onQueueUpdate: publish } = args[0] as { onQueueUpdate?: (update: { position: number; queued: number }) => void };
+      publish?.({ position: 2, queued: 3 });
+      return lease();
+    });
+    await fixture.service.execute({ sessionId: "session-a" }, openUrl(), new AbortController().signal, onQueueUpdate);
+    expect(onQueueUpdate).toHaveBeenCalledWith({ position: 2, queued: 3 });
+    expect(fixture.worker.createContext).toHaveBeenCalledOnce();
+    await fixture.service.execute({ sessionId: "session-a" }, { type: "snapshot", maxCharacters: 2_000 }, new AbortController().signal);
+    expect(fixture.worker.createContext).toHaveBeenCalledOnce();
+  });
+
+  it("公开游览仅允许 HTTPS 和配置的域名", async () => {
+    const fixture = await createFixture({
+      publicBrowsing: { ...DEFAULT_BROWSER_AUTOMATION_CONFIG.publicBrowsing, allowedDomains: ["example.com"] },
+    });
+    await expect(fixture.service.execute(context(), { type: "open", target: { kind: "url", url: "http://example.com" }, newPage: false }, signal()))
+      .rejects.toMatchObject({ code: "BROWSER_PRIVATE_NETWORK_BLOCKED" });
+    await expect(fixture.service.execute(context(), { type: "open", target: { kind: "url", url: "https://other.example" }, newPage: false }, signal()))
+      .rejects.toMatchObject({ code: "BROWSER_PRIVATE_NETWORK_BLOCKED" });
+  });
+
+  it("文本输入必须是精确受信任 Origin 且开关已启用", async () => {
+    const fixture = await createFixture();
+    await fixture.service.execute(context(), openUrl(), signal());
+    await expect(fixture.service.execute(context(), { type: "input", ref: "g1-e1", text: "hello" }, signal()))
+      .rejects.toMatchObject({
+        code: "BROWSER_ORIGIN_NOT_TRUSTED",
+        permission: { settingsPath: "/settings/capabilities/browser", requiredSetting: "trustedOrigins" },
+      });
+  });
+
+  it("本地 HTML 转换为内部预览且拒绝越界路径", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "browser-service-"));
+    roots.push(cwd);
+    await writeFile(join(cwd, "index.html"), "<!doctype html>", "utf8");
+    const fixture = await createFixture();
+    await fixture.service.open({ sessionId: "session-a" }, { path: "index.html", newPage: false }, signal());
+    expect(fixture.preview.authorize).toHaveBeenCalledWith({ cwd, runId: "run-a", entryPath: "index.html" });
+    await expect(fixture.service.open({ sessionId: "session-a" }, { path: "../outside.html", newPage: false }, signal()))
+      .rejects.toMatchObject({ code: "BROWSER_LOCAL_FILE_OUTSIDE_WORKSPACE" });
+  });
+
+  async function createFixture(overrides: Partial<typeof DEFAULT_BROWSER_AUTOMATION_CONFIG> = {}) {
+    const cwd = roots.at(-1) ?? await mkdtemp(join(tmpdir(), "browser-service-"));
+    if (!roots.includes(cwd)) roots.push(cwd);
+    const config = { ...DEFAULT_BROWSER_AUTOMATION_CONFIG, ...overrides, enabled: true };
+    const worker = {
+      createContext: vi.fn(async () => ({ contextId: "lease-a" })),
+      execute: vi.fn(async (_leaseId: string, command: { type: string }) => command.type === "open"
+        ? { pageId: "page-1", url: "https://example.com/", title: "Example" }
+        : { title: "Example", url: "https://example.com/" }),
+      closeContext: vi.fn(async () => undefined),
+      readArtifact: vi.fn(),
+    };
+    const pool = { acquire: vi.fn(async () => lease()) };
+    const preview = { authorize: vi.fn(async () => ({ url: "http://preview.internal/token/index.html" })) };
+    const service = new BrowserAutomationService({
+      deploymentAvailable: true,
+      readConfig: vi.fn(async () => config),
+      runRegistry: { requireCurrent: vi.fn(() => ({ agentId: "agent-a", sessionId: "session-a", runId: "run-a", cwd })) },
+      pool,
+      worker,
+      preview,
+    } as never);
+    return { service, worker, pool, preview };
+  }
+});
+
+function context() { return { sessionId: "session-a" }; }
+function signal() { return new AbortController().signal; }
+function openUrl() { return { type: "open", target: { kind: "url", url: "https://example.com" }, newPage: false } as const; }
+function lease() { return { id: "lease-a", agentId: "agent-a", runId: "run-a", acquiredAt: Date.now(), heartbeat: vi.fn(), release: vi.fn(async () => undefined) }; }
