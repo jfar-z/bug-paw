@@ -14,7 +14,8 @@ describe("WorkspaceFilePreview", () => {
 
     const overlay = renderPreview("overlay");
     expect(overlay.container.querySelector(".workspace-file-preview--overlay")).toBeInTheDocument();
-    expect(overlay.container.querySelector(".workspace-file-preview--overlay")).toHaveStyle({ width: "100%", minWidth: 0, height: "100%" });
+    expect(overlay.container.querySelector(".workspace-file-preview--overlay")).toHaveStyle({ width: "100%", minWidth: 0, height: "100%", touchAction: "pan-y" });
+    expect(overlay.container.querySelector(".workspace-file-preview__body")).toHaveStyle({ touchAction: "pan-y" });
     expect(screen.getByRole("button", { name: "返回文件列表" })).toBeInTheDocument();
   });
 });

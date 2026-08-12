@@ -44,6 +44,15 @@ describe("WorkspaceBrowser", () => {
     expect(container.querySelector("tr.is-reference-target")).toHaveTextContent("readme.md");
     expect(screen.queryByText("搜索当前 Agent 的全部文件")).not.toBeInTheDocument();
   });
+
+  it("快捷资源管理的滚动区保留横划关闭手势", async () => {
+    vi.stubGlobal("fetch", workspaceFetch());
+    const { container } = renderBrowser({ mode: "quick" });
+
+    await screen.findByRole("button", { name: "进入 docs" });
+    expect(container.querySelector(".workspace-browser--quick")).toHaveStyle({ touchAction: "pan-y" });
+    expect(container.querySelector(".workspace-table-wrap")).toHaveStyle({ touchAction: "pan-y" });
+  });
 });
 
 function renderBrowser(props: Partial<Parameters<typeof WorkspaceBrowser>[0]> = {}) {
