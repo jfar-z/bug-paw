@@ -30,12 +30,26 @@ describe("浏览器执行配置页", () => {
     expect(screen.getByText("所有公网 HTTPS 站点")).toBeInTheDocument();
   });
 
-  it("数值设置使用标准表单行而非复选框权限网格", async () => {
+  it("使用配置中心标准表单结构并移除嵌套卡片", async () => {
+    const { container } = render(<BrowserAutomationPage />);
+    await screen.findByText("所有公网 HTTPS 站点");
+
+    expect(container.querySelectorAll(".configuration-form-card")).toHaveLength(6);
+    expect(container.querySelector(".settings-section")).toBeNull();
+    expect(container.querySelector(".configuration-empty-note")).toBeNull();
+    expect(container.querySelector(".configuration-create-panel")).toBeNull();
+    expect(container.querySelector(".tool-permission-grid")).toBeNull();
+  });
+
+  it("数值设置与权限开关使用标准表单行", async () => {
     render(<BrowserAutomationPage />);
     await screen.findByText("所有公网 HTTPS 站点");
 
     for (const label of ["导航超时（秒）", "全局 Context", "截图数 / Run"]) {
       expect(screen.getByLabelText(label).closest(".tool-permission-grid")).toBeNull();
+    }
+    for (const label of ["允许文本输入", "允许表单提交", "允许文件上传", "允许读取剪贴板", "允许写入剪贴板"]) {
+      expect(screen.getByLabelText(label).closest("label")).toHaveClass("configuration-capability-toggle");
     }
   });
 
