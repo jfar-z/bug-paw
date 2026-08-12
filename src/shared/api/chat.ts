@@ -105,6 +105,14 @@ export const SessionEventSchema = Type.Union([
   }),
   StrictObject({
     ...EventIdentity,
+    type: Type.Literal("tool_parameters_streaming"),
+    callId: Type.String({ minLength: 1 }),
+    toolName: Type.String({ minLength: 1 }),
+    generatedBytes: Type.Integer({ minimum: 1 }),
+    path: Type.Optional(Type.String({ minLength: 1 })),
+  }),
+  StrictObject({
+    ...EventIdentity,
     type: Type.Literal("tool_prepared"),
     callId: Type.String({ minLength: 1 }),
     toolName: Type.String({ minLength: 1 }),

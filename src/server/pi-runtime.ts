@@ -184,6 +184,7 @@ export type ChatEvent = ChatEventBase & (
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
   | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
   | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
@@ -202,6 +203,7 @@ type UnsequencedChatEvent =
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
   | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
   | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
@@ -298,6 +300,12 @@ interface ManagedSession {
   toolCallCircuitBreaker: ToolCallCircuitBreaker;
   unsubscribe: () => void;
   dispose(): void;
+}
+
+interface ToolParameterProgress {
+  generatedBytes: number;
+  lastPublishedBytes: number;
+  lastPublishedAt: number;
 }
 
 interface ManagedRun extends ChatRunSummary {
@@ -413,6 +421,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       options.toolCallCircuitBreakerTools ?? [],
       options.onToolCallCircuitBreak,
     );
+    const toolParameterProgress = new Map<string, ToolParameterProgress>();
     const unsubscribe = session.subscribe((event) => {
       if (event.type === "tool_execution_start") {
         const model = toModelSummary(session.model);
@@ -429,7 +438,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           void session.abort().catch(() => undefined);
         }
       }
-      const normalized = normalizeSessionEvent(session.sessionId, event);
+      const normalized = normalizeSessionEvent(session.sessionId, event, toolParameterProgress);
       if (normalized) publishSequenced(session.sessionId, normalized);
     });
     return {
@@ -439,6 +448,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       unsubscribe,
       dispose() {
         unsubscribe();
+        toolParameterProgress.clear();
         session.dispose();
       },
     };
@@ -1452,6 +1462,7 @@ function toModelSummary(value: unknown): ModelSummary | undefined {
 function normalizeSessionEvent(
   _sessionId: string,
   event: AgentSessionEvent,
+  toolParameterProgress?: Map<string, ToolParameterProgress>,
 ): UnsequencedChatEvent | undefined {
   if (event.type === "message_update") {
     if (event.assistantMessageEvent.type === "toolcall_start") {
@@ -1463,6 +1474,7 @@ function normalizeSessionEvent(
       } : undefined;
     }
     if (event.assistantMessageEvent.type === "toolcall_end") {
+      toolParameterProgress?.delete(event.assistantMessageEvent.toolCall.id);
       return {
         type: "tool_prepared",
         callId: event.assistantMessageEvent.toolCall.id,
@@ -1470,7 +1482,32 @@ function normalizeSessionEvent(
         args: event.assistantMessageEvent.toolCall.arguments,
       };
     }
-    // 大型 write/edit 参数增量不进入 SSE，避免重复序列化和浏览器重渲染。
+    if (event.assistantMessageEvent.type === "toolcall_delta") {
+      const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
+      if (!toolCall || !toolParameterProgress) return undefined;
+      const now = Date.now();
+      const progress = toolParameterProgress.get(toolCall.id) ?? {
+        generatedBytes: 0,
+        lastPublishedBytes: 0,
+        lastPublishedAt: 0,
+      };
+      progress.generatedBytes += Buffer.byteLength(event.assistantMessageEvent.delta);
+      const shouldPublish = progress.lastPublishedBytes === 0
+        || progress.generatedBytes - progress.lastPublishedBytes >= 512
+        || now - progress.lastPublishedAt >= 500;
+      toolParameterProgress.set(toolCall.id, progress);
+      if (!shouldPublish) return undefined;
+      progress.lastPublishedBytes = progress.generatedBytes;
+      progress.lastPublishedAt = now;
+      const path = extractToolPath(toolCall.args);
+      return {
+        type: "tool_parameters_streaming",
+        callId: toolCall.id,
+        toolName: toolCall.name,
+        generatedBytes: progress.generatedBytes,
+        ...(path ? { path } : {}),
+      };
+    }
     if (event.assistantMessageEvent.type === "text_delta") {
       return { type: "text_delta", delta: event.assistantMessageEvent.delta };
     }
@@ -1482,6 +1519,7 @@ function normalizeSessionEvent(
     }
   }
   if (event.type === "tool_execution_start") {
+    toolParameterProgress?.delete(event.toolCallId);
     return {
       type: "tool_started",
       callId: event.toolCallId,
@@ -1510,12 +1548,18 @@ function normalizeSessionEvent(
 }
 
 /** 从 Pi 的累计 Assistant 消息中读取刚开始生成的工具调用身份。 */
-function readStreamingToolCall(message: unknown, contentIndex: number): { id: string; name: string } | undefined {
+function readStreamingToolCall(message: unknown, contentIndex: number): { id: string; name: string; args: Record<string, unknown> } | undefined {
   if (!isRecord(message) || !Array.isArray(message.content)) return undefined;
   const block = message.content[contentIndex];
   if (!isRecord(block) || block.type !== "toolCall") return undefined;
   if (typeof block.id !== "string" || !block.id || typeof block.name !== "string" || !block.name) return undefined;
-  return { id: block.id, name: block.name };
+  return { id: block.id, name: block.name, args: isRecord(block.arguments) ? block.arguments : {} };
+}
+
+/** 从部分参数中提取可安全展示的文件目标，绝不转发正文或命令内容。 */
+function extractToolPath(args: Record<string, unknown>): string | undefined {
+  const path = typeof args.path === "string" && args.path ? args.path : args.file_path;
+  return typeof path === "string" && path ? path : undefined;
 }
 
 /**
