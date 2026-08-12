@@ -868,7 +868,7 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByText("文件路径已越出当前 Agent 工作目录")).toBeInTheDocument();
   });
 
-  it("移动端从输入框起划时不触发侧栏手势", async () => {
+  it("移动端从消息输入框横划也能打开侧栏", async () => {
     vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(true)));
     renderLiveChatPage(<LiveChatPage {...props} />);
     const textbox = await screen.findByRole("textbox", { name: "消息内容" });
@@ -878,7 +878,7 @@ describe("LiveChatPage 时间线", () => {
     fireEvent.pointerMove(textbox, { pointerType: "touch", pointerId: 1, clientX: 140, clientY: 202 });
     fireEvent.pointerUp(textbox, { pointerType: "touch", pointerId: 1, clientX: 140, clientY: 202 });
 
-    expect(sidebar).not.toHaveClass("is-open");
+    expect(sidebar).toHaveClass("is-open");
   });
 
   it("为高密度对话布局保留消息列样式钩子", async () => {

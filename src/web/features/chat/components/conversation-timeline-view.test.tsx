@@ -131,6 +131,12 @@ describe("ConversationTimelineView 消息复制", () => {
 });
 
 describe("ConversationTimelineView 历史加载状态", () => {
+  it("消息滚动容器保留纵向滚动并允许页面识别横划", () => {
+    const { container } = render(<ConversationTimelineView {...baseProps()} timeline={[firstTurn]} />);
+
+    expect(container.querySelector(".message-scroll")).toHaveStyle({ touchAction: "pan-y" });
+  });
+
   it("显示克制的加载状态和可触控重试按钮", () => {
     const onRetryHistory = vi.fn();
     const { rerender } = render(
