@@ -1605,7 +1605,7 @@ p {
 .thinking-card::before {
   position: absolute;
   top: 13px;
-  left: -18px;
+  left: -18.5px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -1628,7 +1628,7 @@ p {
   display: grid;
   width: 100%;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: 7px;
   padding: 4px 2px;
   border: 0;
