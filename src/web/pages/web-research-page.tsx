@@ -1,35 +1,152 @@
+import { Save } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { WebResearchConfig, WebResearchSettingsDocument } from "../../shared/web-research-contracts";
-import { api } from "../api";
-import { useOnlineStatus } from "../use-online-status";
 
-/** 呈现联网搜索的连接、安全与资源配置。 */
+import type { SearchProviderConfig, WebResearchConfig, WebResearchGlobalConfig, WebResearchSettingsDocument } from "../../shared/web-research-contracts";
+import { api } from "../api";
+import { useApiTask } from "../api-task-provider";
+import { ConflictDialog, type ConfigurationDifference } from "../components/configuration/conflict-dialog";
+import { GlobalSearchPolicyPanel } from "../components/web-research/global-search-policy-panel";
+import { SearchProviderDialog } from "../components/web-research/search-provider-dialog";
+import { SearchProviderList } from "../components/web-research/search-provider-list";
+import { useOnlineStatus } from "../use-online-status";
+import { webResearchExpected } from "../web-research-error-policy";
+
+type ProviderDialogState =
+  | { mode: "create" }
+  | { mode: "edit"; provider: SearchProviderConfig };
+
+interface GlobalConflictState {
+  latest: WebResearchSettingsDocument;
+  differences: ConfigurationDifference[];
+}
+
+/** 协调服务状态、渠道事务和全局策略三个互不覆盖的配置作用域。 */
 export function WebResearchPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [document, setDocument] = useState<WebResearchSettingsDocument>();
-  const [draft, setDraft] = useState<WebResearchConfig>();
-  const [message, setMessage] = useState("");
-  const [saving, setSaving] = useState(false);
-  useEffect(() => { api.getWebResearch().then((next) => { setDocument(next); setDraft(next.config); }).catch(() => setMessage("无法读取联网搜索配置")); }, []);
-  const update = <Key extends keyof WebResearchConfig>(key: Key, value: WebResearchConfig[Key]) => setDraft((current) => current ? { ...current, [key]: value } : current);
-  const updateContentType = (contentType: "text/html" | "text/plain", enabled: boolean) => {
-    setDraft((current) => {
-      if (!current) return current;
-      const allowedContentTypes = enabled
-        ? [...new Set([...current.allowedContentTypes, contentType])]
-        : current.allowedContentTypes.filter((type) => type !== contentType);
-      // 至少保留一种文本格式，避免提交后被服务端拒绝。
-      return allowedContentTypes.length > 0 ? { ...current, allowedContentTypes } : current;
+  const [globalDraft, setGlobalDraft] = useState<WebResearchGlobalConfig>();
+  const [dialog, setDialog] = useState<ProviderDialogState>();
+  const [globalError, setGlobalError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [savingGlobal, setSavingGlobal] = useState(false);
+  const [conflict, setConflict] = useState<GlobalConflictState>();
+
+  useEffect(() => {
+    let active = true;
+    void runApiTask(api.getWebResearch, { operation: "加载联网搜索配置" }).then((result) => {
+      if (result.status !== "success") return;
+      const next = result.data;
+      if (!active) return;
+      setDocument(next);
+      setGlobalDraft(globalConfigOf(next.config));
     });
+    return () => { active = false; };
+  }, [runApiTask]);
+
+  const saveGlobal = async (revision = document?.revision) => {
+    if (!document || !globalDraft || !revision) return;
+    setSavingGlobal(true);
+    setGlobalError("");
+    setNotice("");
+    try {
+      const result = await runApiTask(
+        () => api.updateWebResearchGlobal(revision, globalDraft),
+        {
+          operation: "保存联网搜索全局设置",
+          expected: {
+            ...webResearchExpected(setGlobalError),
+            VERSION_CONFLICT: async () => {
+              const latest = await api.getWebResearch();
+              setConflict({ latest, differences: collectDifferences(globalDraft, globalConfigOf(latest.config)) });
+            },
+          },
+        },
+      );
+      if (result.status !== "success") return;
+      const next = result.data;
+      setDocument(next);
+      setGlobalDraft(globalConfigOf(next.config));
+      setConflict(undefined);
+      setNotice("全局设置已保存");
+    } finally {
+      setSavingGlobal(false);
+    }
   };
-  const save = async () => { if (!document || !draft) return; setSaving(true); setMessage(""); try { const next = await api.updateWebResearch(document.revision, draft); setDocument(next); setDraft(next.config); setMessage("已保存，联网工具将在 Runtime 刷新后生效"); } catch (error) { setMessage(error instanceof Error ? error.message : "保存失败"); } finally { setSaving(false); } };
-  const test = async () => { setSaving(true); setMessage(""); try { setMessage((await api.testWebResearch()).message); } catch { setMessage("连接测试失败"); } finally { setSaving(false); } };
-  if (!draft) return <main className="configuration-page"><p className="configuration-help">正在读取联网搜索配置…</p></main>;
-  return <main className="configuration-page"><header className="configuration-page__heading"><h1>联网搜索</h1><p>只读取公开网页；内网、凭证和危险重定向始终受到服务端保护。</p></header>
-    {message ? <p className="configuration-help" role="status">{message}</p> : null}
-    <section className="configuration-form-card"><h2>连接设置</h2><label className="configuration-capability-toggle"><span>启用联网搜索<small>启用后，已授权 Agent 才能使用工具。</small></span><input aria-label="启用联网搜索" type="checkbox" checked={draft.enabled} onChange={(event) => update("enabled", event.target.checked)} /></label><label><span>SearXNG 地址</span><input aria-label="SearXNG 地址" value={draft.searxngBaseUrl} onChange={(event) => update("searxngBaseUrl", event.target.value)} /></label><label><span>联网出口<small>出口地址、网段和凭证由部署环境管理。</small></span><select aria-label="联网出口" value={draft.egressProfileId} onChange={(event) => update("egressProfileId", event.target.value)}>{(document?.egressProfiles ?? [{ id: "direct", label: "直接访问" }]).map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}</select></label></section>
-    <section className="configuration-form-card"><h2>资源限制</h2><label><span>最大结果数</span><input aria-label="最大结果数" type="number" min={1} max={20} value={draft.maxResults} onChange={(event) => update("maxResults", Number(event.target.value))} /></label><label><span>正文最大字符数<small>提取后的正文会在此长度处截断。</small></span><input aria-label="正文最大字符数" type="number" min={1000} max={100000} value={draft.maxTextLength} onChange={(event) => update("maxTextLength", Number(event.target.value))} /></label><label><span>请求超时（毫秒）</span><input aria-label="请求超时" type="number" min={1000} max={60000} value={draft.timeoutMs} onChange={(event) => update("timeoutMs", Number(event.target.value))} /></label><label><span>最大重定向次数</span><input aria-label="最大重定向次数" type="number" min={0} max={10} value={draft.maxRedirects} onChange={(event) => update("maxRedirects", Number(event.target.value))} /></label><label><span>最大响应大小（MiB）<small>超过此大小的响应会被中止读取。</small></span><input aria-label="最大响应大小" type="number" min={0.0625} max={10} step={0.25} value={draft.maxResponseBytes / (1024 * 1024)} onChange={(event) => update("maxResponseBytes", Math.round(Number(event.target.value) * 1024 * 1024))} /></label></section>
-    <section className="configuration-form-card"><h2>安全策略</h2><label><span>仅允许 HTTPS<small>关闭后才允许读取普通 HTTP 公开网页。</small></span><input aria-label="仅允许 HTTPS" type="checkbox" checked={draft.httpsOnly} onChange={(event) => update("httpsOnly", event.target.checked)} /></label><label><span>域名允许名单<small>每行一个域名；留空允许所有满足安全策略的公开网站。</small></span><textarea aria-label="域名允许名单" value={draft.allowedDomains.join("\n")} onChange={(event) => update("allowedDomains", event.target.value.split("\n").map((value) => value.trim()).filter(Boolean))} /></label><label><span>允许 HTML 正文</span><input aria-label="允许 HTML 正文" type="checkbox" checked={draft.allowedContentTypes.includes("text/html")} onChange={(event) => updateContentType("text/html", event.target.checked)} /></label><label><span>允许纯文本</span><input aria-label="允许纯文本" type="checkbox" checked={draft.allowedContentTypes.includes("text/plain")} onChange={(event) => updateContentType("text/plain", event.target.checked)} /></label></section>
-    <div className="configuration-save-bar"><button type="button" className="configuration-secondary-action" onClick={() => void test()} disabled={!online || saving}>测试连接</button><button type="button" className="configuration-primary-action" onClick={() => void save()} disabled={!online || saving}>{saving ? "处理中…" : "保存更改"}</button></div>
+
+  const reloadAfterDelete = async () => {
+    const result = await runApiTask(api.getWebResearch, { operation: "删除渠道后刷新联网搜索配置" });
+    if (result.status === "success") {
+      const next = result.data;
+      setDocument(next);
+      setNotice("渠道已删除");
+    }
+  };
+
+  if (!document || !globalDraft) {
+    return <main className="configuration-page"><p className={globalError ? "configuration-inline-error" : "configuration-help"}>{globalError || "正在读取联网搜索配置…"}</p></main>;
+  }
+
+  const enabledProviders = document.config.searchProviders.filter((provider) => provider.enabled);
+  const missingCredential = enabledProviders.find((provider) => provider.type !== "searxng" && !hasCredential(document, provider.id));
+  const noEnabledProvider = enabledProviders.length === 0;
+  const blocked = globalDraft.enabled && (noEnabledProvider || Boolean(missingCredential));
+  const dirty = JSON.stringify(globalDraft) !== JSON.stringify(globalConfigOf(document.config));
+
+  return <main className="configuration-page web-research-page">
+    {conflict ? <ConflictDialog differences={conflict.differences} onReload={() => {
+      setDocument(conflict.latest);
+      setGlobalDraft(globalConfigOf(conflict.latest.config));
+      setConflict(undefined);
+    }} onReapply={() => void saveGlobal(conflict.latest.revision)} /> : null}
+    <header className="configuration-page__heading"><h1>联网搜索</h1><p>统一管理服务可用性、渠道故障切换顺序，以及适用于全部渠道的检索策略。</p></header>
+
+    <section className="configuration-form-card">
+      <div className="configuration-section__heading"><div><span>01</span><h2>服务状态</h2></div><small>{enabledProviders.length} 个已启用渠道</small></div>
+      <label className="configuration-capability-toggle"><span>启用联网搜索<small>启用后，已授权 Agent 才能使用联网工具。</small></span><input aria-label="启用联网搜索" type="checkbox" checked={globalDraft.enabled} onChange={(event) => { setGlobalDraft({ ...globalDraft, enabled: event.target.checked }); setGlobalError(""); setNotice(""); }} /></label>
+      {globalDraft.enabled && noEnabledProvider ? <p className="configuration-inline-error" role="alert">至少启用一个搜索渠道后才能保存。</p> : null}
+      {globalDraft.enabled && missingCredential ? <p className="configuration-inline-error" role="alert">“{missingCredential.name}”缺少 API Key，请配置凭证或停用该渠道。</p> : null}
+    </section>
+
+    <SearchProviderList document={document} online={online} onAdd={() => { setDialog({ mode: "create" }); setNotice(""); }} onConfigure={(provider) => { setDialog({ mode: "edit", provider }); setNotice(""); }} onDocumentChange={(next) => { setDocument(next); setNotice(""); }} />
+    <GlobalSearchPolicyPanel value={globalDraft} egressProfiles={document.egressProfiles} error={globalError} onChange={(next) => { setGlobalDraft(next); setGlobalError(""); setNotice(""); }} />
+
+    {notice ? <p className="configuration-help" role="status">{notice}</p> : null}
+    <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" disabled={!online || savingGlobal || !dirty || blocked} onClick={() => void saveGlobal()}><Save size={16} aria-hidden="true" />{savingGlobal ? "保存中…" : "保存全局设置"}</button></div>
+
+    {dialog ? <SearchProviderDialog
+      mode={dialog.mode}
+      document={document}
+      provider={dialog.mode === "edit" ? dialog.provider : undefined}
+      online={online}
+      onSaved={(next) => { setDocument(next); setDialog(undefined); setNotice(dialog.mode === "create" ? "渠道已添加" : "渠道已保存"); }}
+      onDeleted={() => { setDialog(undefined); void reloadAfterDelete(); }}
+      onClose={() => setDialog(undefined)}
+    /> : null}
   </main>;
+}
+
+/** 从持久化配置中明确剔除渠道列表，建立全局保存边界。 */
+function globalConfigOf(config: WebResearchConfig): WebResearchGlobalConfig {
+  return {
+    enabled: config.enabled,
+    webRead: { ...config.webRead },
+    maxResults: config.maxResults,
+    maxTextLength: config.maxTextLength,
+    maxRedirects: config.maxRedirects,
+    maxResponseBytes: config.maxResponseBytes,
+    httpsOnly: config.httpsOnly,
+    allowedDomains: [...config.allowedDomains],
+    allowedContentTypes: [...config.allowedContentTypes],
+  };
+}
+
+function hasCredential(document: WebResearchSettingsDocument, providerId: string): boolean {
+  return document.credentials.some((status) => status.providerId === providerId && status.configured);
+}
+
+function collectDifferences(local: WebResearchGlobalConfig, disk: WebResearchGlobalConfig): ConfigurationDifference[] {
+  return (Object.keys(local) as Array<keyof WebResearchGlobalConfig>)
+    .filter((field) => JSON.stringify(local[field]) !== JSON.stringify(disk[field]))
+    .map((field) => ({ field, local: local[field], disk: disk[field] }));
 }

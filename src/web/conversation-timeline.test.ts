@@ -46,7 +46,7 @@ describe("对话时间线", () => {
       { type: "thinking_delta", delta: "，再调用工具" },
       { type: "tool_started", callId: "tool-1", toolName: "read", args: { path: "AGENTS.md" } },
       { type: "text_delta", delta: "已读取配置。" },
-      { type: "generation_finished" },
+      { type: "generation_finished", outcome: "completed" },
     ]);
 
     const turn = entries[0] as AgentTurn;
@@ -83,13 +83,46 @@ describe("对话时间线", () => {
       { type: "text_delta", delta: "继续" },
       { type: "tool_started", callId: "tool-1", toolName: "bash", args: { cmd: "pwd" } },
       { type: "tool_started", callId: "tool-1", toolName: "bash", args: { cmd: "pwd -P" } },
-      { type: "generation_finished" },
+      { type: "generation_finished", outcome: "completed" },
     ]);
 
     const turn = entries[0] as AgentTurn;
     expect(turn.blocks).toHaveLength(2);
     expect(turn.blocks[0]).toMatchObject({ type: "markdown", text: "第一段继续", streaming: false });
     expect(turn.blocks[1]).toMatchObject({ type: "tool", args: { cmd: "pwd -P" } });
+  });
+
+  it("按调用标识合并工具准备、执行和完成阶段", () => {
+    const entries = reduceEvents([
+      { type: "tool_preparing", callId: "call-1", toolName: "write" },
+      { type: "tool_parameters_streaming", callId: "call-1", toolName: "write", generatedBytes: 4608, path: "src/app.ts" },
+      { type: "tool_prepared", callId: "call-1", toolName: "write", args: { path: "src/app.ts", content: "内容" } },
+      { type: "tool_started", callId: "call-1", toolName: "write", args: { path: "src/app.ts", content: "内容" } },
+      { type: "tool_finished", callId: "call-1", toolName: "write", result: "ok", isError: false },
+    ]);
+
+    const turn = entries[0] as AgentTurn;
+    expect(turn.blocks).toHaveLength(1);
+    expect(turn.blocks[0]).toMatchObject({
+      callId: "call-1",
+      status: "completed",
+      parameterBytes: 4608,
+      parameterPath: "src/app.ts",
+      args: { path: "src/app.ts", content: "内容" },
+      result: "ok",
+    });
+  });
+
+  it("运行在工具执行前中止时将准备项标记为未执行", () => {
+    const entries = reduceEvents([
+      { type: "tool_preparing", callId: "call-2", toolName: "edit" },
+      { type: "tool_parameters_streaming", callId: "call-2", toolName: "edit", generatedBytes: 512 },
+      { type: "generation_finished", outcome: "aborted" },
+    ]);
+
+    expect(entries[0]).toMatchObject({
+      blocks: [{ callId: "call-2", status: "cancelled" }],
+    });
   });
 
   it("连续文本增量保持流式 Markdown 块标识稳定", () => {
@@ -317,7 +350,7 @@ describe("对话时间线", () => {
     const entries = reduceEvents([
       { type: "text_delta", delta: '<pi_agent_files version="1">\n{"files":[{"path":"outputs/a.png"}]}\n' },
       { type: "text_delta", delta: "</pi_agent_files>" },
-      { type: "generation_finished" },
+      { type: "generation_finished", outcome: "completed" },
     ]);
 
     const turn = entries[0] as AgentTurn;

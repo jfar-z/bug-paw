@@ -36,12 +36,54 @@ describe("BugPaw SQLite", () => {
     runMigrations(database);
     runMigrations(database);
     database.write("INSERT INTO app_meta(key, value) VALUES (?, ?)", ["persisted", "yes"]);
-    expect(database.read<{ version: number }>("SELECT version FROM schema_migrations")).toEqual([{ version: 1 }]);
+    expect(database.read<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
+      { version: 1 },
+      { version: 2 },
+    ]);
     database.close();
 
     const reopened = openDatabase(path);
     expect(reopened.read<{ value: string }>("SELECT value FROM app_meta WHERE key = ?", ["persisted"])).toEqual([{ value: "yes" }]);
     reopened.close();
+  });
+
+  it("迁移检索工具权限名称并清除旧名称", () => {
+    const database = openDatabase(":memory:");
+    runMigrations(database, { throughVersion: 1 });
+    const profile = {
+      version: 1,
+      id: "agent-a",
+      name: "Agent A",
+      avatar: { kind: "initial", value: "A" },
+      description: "",
+      status: "active",
+      cwd: "/tmp/agent-a",
+      instructions: { role: "", behavior: "", rules: "", user: "" },
+      allowedTools: ["read", "search_knowledge", "get_knowledge_document", "manage_knowledge_base", "web_search", "web_open"],
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+    };
+    database.write(
+      "INSERT INTO agents(id, cwd, profile_json, sort_order, revision, created_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)",
+      [profile.id, profile.cwd, JSON.stringify(profile), profile.createdAt, profile.updatedAt],
+    );
+
+    runMigrations(database);
+
+    const row = database.readOne<{ profile_json: string }>("SELECT profile_json FROM agents WHERE id = ?", [profile.id]);
+    expect(JSON.parse(row!.profile_json).allowedTools).toEqual([
+      "read",
+      "knowledge_search",
+      "knowledge_read",
+      "knowledge_manage",
+      "web_search",
+      "web_read",
+    ]);
+    expect(database.read<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
+      { version: 1 },
+      { version: 2 },
+    ]);
+    database.close();
   });
 
   it("启用外键、WAL 和五秒 busy timeout", async () => {

@@ -21,6 +21,18 @@ import { CheckpointWriter } from "./runtime/checkpoint-writer";
 import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
+import { createSearchRunCircuitExtension } from "./web-research/search-run-circuit-extension";
+import { SearchRunState } from "./web-research/search-run-state";
+import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
+import {
+  createToolCallCircuitBreaker,
+  type ToolCallCircuitBreaker,
+  type ToolCallCircuitBreakerDiagnostic,
+} from "./retrieval/tool-call-circuit-breaker";
+import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
+import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
+import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
+import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
 
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
@@ -30,11 +42,21 @@ export function createWorkspaceResourceLoader(
   agentDir: string,
   additionalPrompts: string[] = [],
   currentAdditionalPrompts?: () => string[],
+  retrievalCapabilities: EffectiveRetrievalCapabilities = {
+    knowledgeSearch: false,
+    knowledgeRead: false,
+    webSearch: false,
+    webRead: false,
+  },
+  searchRunState = new SearchRunState(),
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
-    extensionFactories: [createAgentSystemPromptInjectionExtension()],
+    extensionFactories: [
+      createAgentSystemPromptInjectionExtension(retrievalCapabilities),
+      ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension(searchRunState)] : []),
+    ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
     // 提示词文件可在会话存活期间更新，reload 时从闭包读取最新快照。
@@ -48,6 +70,67 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+}
+
+type ThinkingLevel = NonNullable<AgentProfile["defaultThinkingLevel"]>;
+
+/**
+ * 标题请求使用的已解析模型与统一思考参数。
+ */
+export interface TitleGenerationRequest {
+  model: unknown;
+  reasoning: ThinkingLevel;
+}
+
+/**
+ * 读取 Pi 全局范围的默认模型，不采纳 Agent 工作目录的项目设置覆盖。
+ *
+ * @param settingsManager Pi 设置管理器
+ */
+export function getGlobalDefaultModel(settingsManager: { getGlobalSettings(): { defaultProvider?: unknown; defaultModel?: unknown } }): { provider: string; id: string } | undefined {
+  const settings = settingsManager.getGlobalSettings();
+  if (typeof settings.defaultProvider !== "string" || typeof settings.defaultModel !== "string") return undefined;
+  if (!settings.defaultProvider.trim() || !settings.defaultModel.trim()) return undefined;
+  return { provider: settings.defaultProvider, id: settings.defaultModel };
+}
+
+/**
+ * 根据 Agent 标题策略解析本次会话应使用的模型和思考等级。
+ *
+ * @param sessionModel 会话当前实际模型
+ * @param titleGeneration Agent 标题生成策略
+ * @param defaultThinkingLevel Agent 思考级别
+ * @param systemDefaultModel Pi 全局默认模型
+ * @param findModel 从当前运行时获取可用模型
+ */
+export function resolveTitleGenerationRequest(
+  sessionModel: unknown,
+  titleGeneration: TitleGenerationConfig | undefined,
+  defaultThinkingLevel: AgentProfile["defaultThinkingLevel"] | undefined,
+  systemDefaultModel: { provider: string; id: string } | undefined,
+  findModel: (provider: string, modelId: string) => unknown,
+): TitleGenerationRequest | undefined {
+  const modelSource = titleGeneration?.modelSource ?? "session";
+  const selection = modelSource === "custom"
+    ? titleGeneration?.model
+    : modelSource === "system-default"
+      ? systemDefaultModel
+      : undefined;
+  const model = modelSource === "session"
+    ? sessionModel
+    : selection ? findModel(selection.provider, selection.id) : undefined;
+  if (!model) return undefined;
+  const requestedThinking = titleGeneration?.thinkingEnabled ? defaultThinkingLevel ?? "medium" : "off";
+  return { model, reasoning: supportsReasoning(model) ? requestedThinking : "off" };
+}
+
+/**
+ * 判断 Pi 模型是否声明支持统一思考参数。
+ *
+ * @param model Pi 运行时模型
+ */
+function supportsReasoning(model: unknown): boolean {
+  return typeof model === "object" && model !== null && (model as { reasoning?: unknown }).reasoning === true;
 }
 
 /** SDK 在当前 Agent 上实际可执行的斜杠命令安全摘要。 */
@@ -70,6 +153,7 @@ export interface SessionSummary {
 export interface SessionSnapshot {
   id: string;
   messages: unknown[];
+  history: SessionHistoryPage;
   model?: ModelSummary;
   run?: ChatRunSummary;
   lastEventId: number;
@@ -91,7 +175,7 @@ interface ChatEventBase {
 }
 
 export type ChatEvent = ChatEventBase & (
-  | { type: "snapshot"; messages: unknown[]; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
   | { type: "projection_required"; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "run_started"; run: ChatRunSummary }
@@ -99,6 +183,9 @@ export type ChatEvent = ChatEventBase & (
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
+  | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
+  | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
@@ -108,12 +195,16 @@ export type ChatEvent = ChatEventBase & (
 );
 
 type UnsequencedChatEvent =
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
+  | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
+  | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
@@ -125,6 +216,7 @@ export interface PiSessionAdapter {
   readonly sessionId: string;
   readonly sessionFile: string | undefined;
   readonly messages: unknown[];
+  readonly branchLeafId?: string;
   readonly streamingMessage?: unknown;
   readonly model: unknown;
   readonly isStreaming: boolean;
@@ -134,6 +226,10 @@ export interface PiSessionAdapter {
   abort(): Promise<void>;
   setModel(model: unknown): Promise<void>;
   setSessionName(name: string): void;
+  /** 跳转 Pi 会话树中的节点，供历史消息编辑和分支切换使用。 */
+  navigateTree?(entryId: string): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
+  /** 只读取得指定用户消息，不能改变当前会话叶子。 */
+  readMessage?(entryId: string): string | undefined;
   dispose(): void;
 }
 
@@ -160,8 +256,11 @@ export interface PiRuntimeGateway {
   listSessions(options?: { archived?: boolean }): Promise<SessionSummary[]>;
   createSession(): Promise<SessionSnapshot>;
   openSession(sessionId: string): Promise<SessionSnapshot>;
+  loadHistoryPage?(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
+  navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
+  readSessionMessage?(sessionId: string, entryId: string): Promise<string | undefined>;
   abort(sessionId: string): Promise<void>;
   abortAll(): Promise<number>;
   setModel(sessionId: string, provider: string, modelId: string): Promise<void>;
@@ -187,7 +286,7 @@ export interface PiRuntimeGateway {
 
 export class PiRuntimeError extends Error {
   constructor(
-    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME",
+    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID",
     message: string,
   ) {
     super(message);
@@ -197,8 +296,16 @@ export class PiRuntimeError extends Error {
 
 interface ManagedSession {
   session: PiSessionAdapter;
+  branchToken: string;
+  toolCallCircuitBreaker: ToolCallCircuitBreaker;
   unsubscribe: () => void;
   dispose(): void;
+}
+
+interface ToolParameterProgress {
+  generatedBytes: number;
+  lastPublishedBytes: number;
+  lastPublishedAt: number;
 }
 
 interface ManagedRun extends ChatRunSummary {
@@ -214,7 +321,10 @@ interface PiRuntimeGatewayOptions {
   checkpointThrottleMs?: number;
   sessionMetadataStore?: SessionMetadataStore;
   refreshSessionContext?: () => Promise<void>;
-  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED"; sessionId?: string }) => void;
+  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
+  onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
+  toolCallCircuitBreakerTools?: readonly ToolDefinition[];
+  onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
 }
 
 /**
@@ -231,6 +341,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const idleListeners = new Set<() => void>();
   const pendingPromptReloads = new Set<string>();
   const deletingSessions = new Set<string>();
+  const manuallyRenamedSessions = new Set<string>();
+  const backgroundTitleTasks = new Set<Promise<void>>();
+  const sessionIdleWaiters = new Map<string, Set<() => void>>();
+  let disposed = false;
   const sessionMutations = new KeyedMutex();
   const maxEvents = options.maxEvents ?? SYSTEM_LIMITS.eventJournalEntries;
   const maxEventBytes = options.maxEventBytes ?? SYSTEM_LIMITS.eventJournalBytes;
@@ -266,9 +380,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     return created;
   }
 
-  function publishSequenced(sessionId: string, event: UnsequencedChatEvent): ChatEvent {
+  function publishSequenced(
+    sessionId: string,
+    event: UnsequencedChatEvent,
+    options: { associateCurrentRun?: boolean } = {},
+  ): ChatEvent {
     const journal = eventLog(sessionId);
-    const runId = runs.get(sessionId)?.runId;
+    const runId = options.associateCurrentRun === false ? undefined : runs.get(sessionId)?.runId;
     const fits = (candidate: UnsequencedChatEvent) => serializedBytes({
       ...candidate,
       sessionId,
@@ -299,15 +417,38 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   function manageSession(session: PiSessionAdapter): ManagedSession {
+    const toolCallCircuitBreaker = createToolCallCircuitBreaker(
+      options.toolCallCircuitBreakerTools ?? [],
+      options.onToolCallCircuitBreak,
+    );
+    const toolParameterProgress = new Map<string, ToolParameterProgress>();
     const unsubscribe = session.subscribe((event) => {
-      const normalized = normalizeSessionEvent(session.sessionId, event);
+      if (event.type === "tool_execution_start") {
+        const model = toModelSummary(session.model);
+        const decision = toolCallCircuitBreaker.observe({
+          sessionId: session.sessionId,
+          ...(model?.provider ? { provider: model.provider } : {}),
+          ...(model?.id ? { model: model.id } : {}),
+          toolName: event.toolName,
+          args: event.args,
+        });
+        if (decision.terminate && runs.has(session.sessionId)) {
+          // SDK 会等待该事件监听器；同步调用 abort 可在随后参数校验和业务执行前中止本 Run。
+          abortRequested.add(session.sessionId);
+          void session.abort().catch(() => undefined);
+        }
+      }
+      const normalized = normalizeSessionEvent(session.sessionId, event, toolParameterProgress);
       if (normalized) publishSequenced(session.sessionId, normalized);
     });
     return {
       session,
+      branchToken: randomUUID(),
+      toolCallCircuitBreaker,
       unsubscribe,
       dispose() {
         unsubscribe();
+        toolParameterProgress.clear();
         session.dispose();
       },
     };
@@ -347,9 +488,30 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     return run ? toRunSummary(run) : checkpointRun(recoveredCheckpoints.get(sessionId));
   }
 
-  function snapshotMessages(sessionId: string, session: PiSessionAdapter): unknown[] {
+  function snapshotMessages(sessionId: string, session: PiSessionAdapter): SessionHistorySlice {
     // Pi Session JSONL 是消息历史的唯一事实源；检查点只恢复活动 Run 元数据。
-    return liveSessionMessages(session);
+    const managed = sessionRegistry.peek(sessionId);
+    if (!managed || managed.session !== session) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
+    const page = buildLatestHistoryPage(liveSessionMessages(session), managed.branchToken, session.branchLeafId);
+    return { ...page, messages: projectSessionMessages(page.messages) };
+  }
+
+  /**
+   * 在生成结束后推送权威快照，使浏览器立即获得 Pi 写入后的稳定节点 ID。
+   *
+   * 快照的游标预先指向即将写入 Journal 的事件 ID，避免客户端重复消费该快照。
+   */
+  function publishSessionSnapshot(sessionId: string, session: PiSessionAdapter, run?: ChatRunSummary): void {
+    const nextEventId = lastEventId(sessionId) + 1;
+    const page = snapshotMessages(sessionId, session);
+    publishSequenced(sessionId, {
+      type: "snapshot",
+      messages: page.messages,
+      history: page.history,
+      model: toModelSummary(session.model),
+      run,
+      lastEventId: nextEventId,
+    });
   }
 
   function checkpointProjection(sessionId: string): { sessionId: string; version: number; checkpoint: RunCheckpoint } | undefined {
@@ -384,11 +546,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   function beginRun(sessionId: string, text: string, titleInput?: string): ManagedRun {
+    const managed = sessionRegistry.peek(sessionId);
     const session = requireSession(sessionId);
     if (runs.has(sessionId) || session.isStreaming) {
       throw new PiRuntimeError("SESSION_BUSY", "会话正在生成中");
     }
     const releaseTurn = sessionRegistry.startTurn(sessionId);
+    managed?.toolCallCircuitBreaker.reset();
     const run = {
       runId: randomUUID(),
       sessionId,
@@ -402,6 +566,12 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     recoveredCheckpoints.delete(sessionId);
     publishSequenced(sessionId, { type: "run_started", run: toRunSummary(run) });
     run.completion = executeRun(run, session, text);
+    void Promise.resolve().then(() => {
+      // Pi 已在 prompt 启动阶段写入用户节点后，立即把稳定节点 ID 同步给在线客户端。
+      if (runs.get(sessionId) === run && run.status === "running") {
+        publishSessionSnapshot(sessionId, session, toRunSummary(run));
+      }
+    });
     return run;
   }
 
@@ -429,23 +599,84 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     await Promise.all(sessionRegistry.ids().map((sessionId) => reloadPromptContextForSession(sessionId)));
   }
 
+  /** 在当前会话的活动 Run 结束后唤醒等待中的后台附属任务。 */
+  function notifySessionIdle(sessionId: string): void {
+    const waiters = sessionIdleWaiters.get(sessionId);
+    sessionIdleWaiters.delete(sessionId);
+    waiters?.forEach((resolve) => resolve());
+  }
+
+  /** 等待会话停止流式输出，避免后台任务与新的 Run 并发写入 Pi 会话文件。 */
+  function waitForSessionIdle(sessionId: string, session: PiSessionAdapter): Promise<void> {
+    if (!runs.has(sessionId) && !session.isStreaming) return Promise.resolve();
+    return new Promise((resolve) => {
+      const waiters = sessionIdleWaiters.get(sessionId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      sessionIdleWaiters.set(sessionId, waiters);
+    });
+  }
+
+  /**
+   * 在主 Run 已完成后生成首轮标题，避免附属模型请求阻塞对话完成事件。
+   */
+  function scheduleSessionTitle(run: ManagedRun, session: PiSessionAdapter): void {
+    if (!run.titleInput || !backend.generateSessionTitle) return;
+    const sessionId = run.sessionId;
+    const userText = run.titleInput;
+    const assistantText = extractAssistantText(session.messages);
+    const model = session.model;
+    const startedAt = Date.now();
+    let status: "renamed" | "empty" | "skipped" | "failed" = "empty";
+    const task = Promise.resolve()
+      .then(async () => {
+        const title = await backend.generateSessionTitle!(model, userText, assistantText);
+        const sessionName = normalizeGeneratedSessionName(title);
+        if (!sessionName || !isValidSessionName(sessionName)) return;
+        while (!disposed && !deletingSessions.has(sessionId) && !manuallyRenamedSessions.has(sessionId)) {
+          await waitForSessionIdle(sessionId, session);
+          const applied = await sessionMutations.run(sessionId, async () => {
+            if (runs.has(sessionId) || session.isStreaming) return false;
+            if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) return false;
+            session.setSessionName(sessionName);
+            publishSequenced(sessionId, { type: "session_renamed", name: sessionName }, { associateCurrentRun: false });
+            return true;
+          });
+          if (applied) {
+            status = "renamed";
+            return;
+          }
+        }
+        status = "skipped";
+      })
+      .catch(() => {
+        if (disposed) {
+          status = "skipped";
+          return;
+        }
+        status = "failed";
+        options.onBackgroundError?.({ code: "SESSION_TITLE_GENERATION_FAILED", sessionId });
+      })
+      .finally(() => {
+        backgroundTitleTasks.delete(task);
+        if (!disposed) {
+          options.onSessionTitleGenerated?.({ sessionId, elapsedMs: Date.now() - startedAt, status });
+        }
+      });
+    backgroundTitleTasks.add(task);
+  }
+
   async function executeRun(run: ManagedRun, session: PiSessionAdapter, text: string): Promise<void> {
     try {
       await session.prompt(text);
       run.status = abortRequested.has(run.sessionId) ? "aborted" : "completed";
       run.finishedAt = new Date().toISOString();
-      if (run.status === "completed" && run.titleInput && backend.generateSessionTitle) {
-        try {
-          const title = await backend.generateSessionTitle(session.model, run.titleInput, extractAssistantText(session.messages));
-          if (title && isValidSessionName(title)) {
-            session.setSessionName(title);
-            publishSequenced(run.sessionId, { type: "session_renamed", name: title });
-          }
-        } catch {
-          // 标题是附属体验，模型或持久化失败不得影响原对话结果。
-        }
+      if (run.status === "completed") {
+        publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
       }
       publishSequenced(run.sessionId, { type: run.status });
+      if (run.status === "completed") {
+        scheduleSessionTitle(run, session);
+      }
     } catch (error) {
       if (abortRequested.has(run.sessionId)) {
         run.status = "aborted";
@@ -464,6 +695,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         options.onBackgroundError?.({ code: "CHECKPOINT_WRITE_FAILED", sessionId: run.sessionId });
       });
       runs.delete(run.sessionId);
+      notifySessionIdle(run.sessionId);
       if (pendingPromptReloads.has(run.sessionId)) {
         await reloadPromptContextForSession(run.sessionId).catch(() => undefined);
       }
@@ -545,6 +777,21 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       }
     },
 
+    async loadHistoryPage(sessionId, before, branchToken) {
+      const session = requireSession(sessionId);
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed || managed.branchToken !== branchToken) {
+        throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化，请重新加载");
+      }
+      let page: SessionHistorySlice;
+      try {
+        page = buildHistoryPageBefore(session.messages, branchToken, session.branchLeafId, before);
+      } catch {
+        throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
+      }
+      return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
+    },
+
     async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
         const pendingReload = reloadPendingPromptContext(sessionId);
@@ -570,6 +817,28 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         return beginRun(sessionId, text);
       });
       await run.completion;
+    },
+    async navigateTree(sessionId, entryId) {
+      const session = requireSession(sessionId);
+      requireIdleSession(sessionId);
+      if (!session.navigateTree) {
+        throw new PiRuntimeError("SESSION_NOT_FOUND", "当前 Pi 会话不支持分支导航");
+      }
+      const result = await session.navigateTree(entryId);
+      if (result.cancelled || result.aborted) {
+        throw new PiRuntimeError("SESSION_NOT_FOUND", "会话分支切换失败");
+      }
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
+      managed.branchToken = randomUUID();
+      return {
+        snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
+        editorText: result.editorText,
+      };
+    },
+    async readSessionMessage(sessionId, entryId) {
+      const session = requireSession(sessionId);
+      return session.readMessage?.(entryId);
     },
 
     abort: (sessionId) => abortSession(sessionId),
@@ -611,6 +880,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           handle.release();
         }
         session.setSessionName(sanitized);
+        manuallyRenamedSessions.add(sessionId);
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) pendingSessionSummaries.set(sessionId, { ...summary, name: sanitized });
       });
@@ -740,11 +1010,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             lastEventId: replay.latestId,
           });
         } else {
+          const page = snapshotMessages(sessionId, session);
           const snapshot: ChatEvent = {
             type: "snapshot",
             id: lastEventId(sessionId),
             sessionId,
-            messages: snapshotMessages(sessionId, session),
+            messages: page.messages,
+            history: page.history,
             model: toModelSummary(session.model),
             run: currentRunSummary(sessionId),
             lastEventId: lastEventId(sessionId),
@@ -794,6 +1066,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     drain: drainCheckpoints,
 
     dispose() {
+      disposed = true;
       sessionRegistry.dispose();
       listeners.clear();
       subscriptionTerminators.clear();
@@ -803,6 +1076,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       abortRequested.clear();
       pendingPromptReloads.clear();
       deletingSessions.clear();
+      manuallyRenamedSessions.clear();
+      backgroundTitleTasks.clear();
+      sessionIdleWaiters.forEach((waiters) => waiters.forEach((resolve) => resolve()));
+      sessionIdleWaiters.clear();
       // 兼容直接调用 dispose 的旧调用方；Supervisor 会先显式 await drain。
       void drainCheckpoints().catch(() => undefined);
       idleListeners.clear();
@@ -816,14 +1093,20 @@ interface SdkPiRuntimeOptions {
   provider?: StoredProviderConfig;
   modelRuntime?: ModelRuntime;
   defaultModel?: { provider: string; id: string };
+  defaultThinkingLevel?: AgentProfile["defaultThinkingLevel"];
+  titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
+  createSessionTools?: (context: { searchRunState: SearchRunState }) => ToolDefinition[];
+  retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
   refreshAppendSystemPrompt?: () => Promise<string[]>;
   sessionDir?: string;
   checkpointStore?: RunCheckpointStore;
   sessionMetadataStore?: SessionMetadataStore;
-  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED"; sessionId?: string }) => void;
+  onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
+  onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED"; sessionId?: string }) => void;
+  onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   stageSessionDeletion?: (sessionId: string, sessionFile: string) => Promise<StagedSessionDeletion>;
 }
 
@@ -836,8 +1119,9 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       authPath: join(options.agentDir, "auth.json"),
       modelsPath: join(options.agentDir, "models.json"),
       allowModelNetwork: false,
-    });
+  });
   const settingsManager = SettingsManager.create(options.cwd, options.agentDir);
+  const systemDefaultModel = getGlobalDefaultModel(settingsManager);
   const providerId = options.defaultModel?.provider
     ?? (options.provider ? configureProvider(modelRuntime, options.provider) : settingsManager.getDefaultProvider());
   const defaultModel = options.defaultModel?.id ?? options.provider?.defaultModel ?? settingsManager.getDefaultModel();
@@ -866,11 +1150,14 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       throw new PiRuntimeError("MODEL_NOT_FOUND", "默认模型不存在或不可用");
     }
     await refreshAppendSystemPrompt();
+    const searchRunState = new SearchRunState();
     const resourceLoader = createWorkspaceResourceLoader(
       options.cwd,
       options.agentDir,
       appendSystemPrompt,
       () => appendSystemPrompt,
+      options.retrievalCapabilities,
+      searchRunState,
     );
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
@@ -881,9 +1168,14 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       settingsManager,
       sessionManager,
       resourceLoader,
+      // Agent 配置必须传入 SDK，避免推理模型回退到 Pi 的 medium 默认值。
+      thinkingLevel: options.defaultThinkingLevel ?? "medium",
       // 工具白名单必须与 Agent Profile 一致，不能因为工具已注册就自动放行。
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
-      customTools: options.customTools,
+      customTools: [
+        ...(options.customTools ?? []),
+        ...(options.createSessionTools?.({ searchRunState }) ?? []),
+      ],
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({
       name: command.name,
@@ -929,16 +1221,23 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     findModel: (provider, modelId) => modelRuntime.getModel(provider, modelId),
     async generateSessionTitle(model, userText, assistantText) {
       if (!assistantText.trim()) return undefined;
-      try {
-        const response = await modelRuntime.completeSimple(model as never, {
-          messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
-        }, { reasoning: "off", maxTokens: 15, maxRetries: 0, timeoutMs: 15_000 } as never);
-        if (response.stopReason === "error" || response.stopReason === "aborted") return undefined;
-        const text = response.content.find((item) => item.type === "text");
-        return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
-      } catch {
-        return undefined;
+      const titleRequest = resolveTitleGenerationRequest(
+        model,
+        options.titleGeneration,
+        options.defaultThinkingLevel,
+        systemDefaultModel,
+        (provider, modelId) => modelRuntime.getModel(provider, modelId),
+      );
+      if (!titleRequest) return undefined;
+      const response = await modelRuntime.completeSimple(titleRequest.model as never, {
+        messages: [{ role: "user", content: `请根据以下用户问题和回答生成一个简洁的中文会话标题。只输出标题，不要解释、引号或 Markdown。\n\n用户问题：${userText}\n\n回答：${assistantText}`, timestamp: Date.now() }],
+      }, { reasoning: titleRequest.reasoning, maxRetries: 0, timeoutMs: 15_000 } as never);
+      if (response.stopReason === "error" || response.stopReason === "aborted") {
+        // 标题模型失败由网关统一记录，不向客户端暴露上游错误详情。
+        throw new Error("会话标题生成失败");
       }
+      const text = response.content.find((item) => item.type === "text");
+      return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
     },
     async deleteSession(sessionId) {
       const sessionInfo = (await SessionManager.list(options.cwd, sessionDir)).find((session) => session.id === sessionId);
@@ -967,6 +1266,9 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     sessionMetadataStore: options.sessionMetadataStore,
     refreshSessionContext: refreshAppendSystemPrompt,
     onBackgroundError: options.onBackgroundError,
+    onSessionTitleGenerated: options.onSessionTitleGenerated,
+    toolCallCircuitBreakerTools: options.customTools,
+    onToolCallCircuitBreak: options.onToolCallCircuitBreak,
   });
 }
 
@@ -990,7 +1292,20 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
       return session.sessionFile;
     },
     get messages() {
-      return session.messages;
+      const branchNavigation = createBranchNavigation(session.sessionManager.getEntries() as unknown[]);
+      return session.sessionManager.getBranch().flatMap((entry) => {
+        if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return [];
+        // 为 Web 端保留 Pi 节点 ID，历史编辑与重新生成必须以该稳定 ID 定位。
+        const message = entry.message as unknown as Record<string, unknown>;
+        return [{
+          ...message,
+          __piEntryId: entry.id,
+          ...(message.role === "user" && branchNavigation.get(entry.id) ? { __piBranch: branchNavigation.get(entry.id) } : {}),
+        }];
+      });
+    },
+    get branchLeafId() {
+      return session.sessionManager.getLeafId() ?? undefined;
     },
     get streamingMessage() {
       return session.state.streamingMessage;
@@ -1007,8 +1322,61 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     abort: () => session.abort(),
     setModel: (model) => session.setModel(model as Parameters<AgentSession["setModel"]>[0]),
     setSessionName: (name) => session.setSessionName(name),
+    navigateTree: (entryId) => session.navigateTree(entryId, { summarize: false }),
+    readMessage: (entryId) => {
+      const entry = session.sessionManager.getEntries().find((candidate) => candidate.id === entryId);
+      if (entry?.type !== "message" || entry.message.role !== "user") return undefined;
+      const content = entry.message.content;
+      if (typeof content === "string") return content;
+      return content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    },
     dispose: () => session.dispose(),
   };
+}
+
+/**
+ * 根据 Pi 追加式 entry 列表计算同一父节点下用户消息的版本切换信息。
+ */
+function createBranchNavigation(entries: unknown[]): Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string }> {
+  const records = entries.flatMap((entry, index) => isRecord(entry) && typeof entry.id === "string"
+    ? [{ id: entry.id, parentId: typeof entry.parentId === "string" ? entry.parentId : undefined, index, entry }]
+    : []);
+  const children = new Map<string, string[]>();
+  const positions = new Map(records.map((record) => [record.id, record.index]));
+  records.forEach((record) => {
+    if (!record.parentId) return;
+    const siblings = children.get(record.parentId) ?? [];
+    siblings.push(record.id);
+    children.set(record.parentId, siblings);
+  });
+  const latestLeaf = (entryId: string): string => {
+    const descendants = children.get(entryId) ?? [];
+    if (descendants.length === 0) return entryId;
+    return descendants
+      .map((childId) => latestLeaf(childId))
+      .reduce((latest, candidate) => (positions.get(candidate)! > positions.get(latest)! ? candidate : latest));
+  };
+  const groups = new Map<string, Array<{ id: string; navigationEntryId: string }>>();
+  for (const record of records) {
+    const entry = record.entry;
+    if (entry.type !== "message" || !isRecord(entry.message) || entry.message.role !== "user") continue;
+    const parentId = record.parentId ?? "__root__";
+    const group = groups.get(parentId) ?? [];
+    group.push({ id: record.id, navigationEntryId: latestLeaf(record.id) });
+    groups.set(parentId, group);
+  }
+  const result = new Map<string, { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string }>();
+  for (const group of groups.values()) {
+    group.forEach((entry, index) => result.set(entry.id, {
+      index,
+      count: group.length,
+      ...(group[index - 1] ? { previousEntryId: group[index - 1].id } : {}),
+      ...(group[index + 1] ? { nextEntryId: group[index + 1].id } : {}),
+      ...(group[index - 1] ? { previousNavigationEntryId: group[index - 1].navigationEntryId } : {}),
+      ...(group[index + 1] ? { nextNavigationEntryId: group[index + 1].navigationEntryId } : {}),
+    }));
+  }
+  return result;
 }
 
 /**
@@ -1049,13 +1417,14 @@ function configureProvider(modelRuntime: ModelRuntime, provider: StoredProviderC
 
 function snapshotSession(
   session: PiSessionAdapter,
-  messages: unknown[],
+  page: SessionHistorySlice,
   run: ChatRunSummary | undefined,
   lastEventId: number,
 ): SessionSnapshot {
   return {
     id: session.sessionId,
-    messages,
+    messages: page.messages,
+    history: page.history,
     model: toModelSummary(session.model),
     run,
     lastEventId,
@@ -1093,8 +1462,52 @@ function toModelSummary(value: unknown): ModelSummary | undefined {
 function normalizeSessionEvent(
   _sessionId: string,
   event: AgentSessionEvent,
+  toolParameterProgress?: Map<string, ToolParameterProgress>,
 ): UnsequencedChatEvent | undefined {
   if (event.type === "message_update") {
+    if (event.assistantMessageEvent.type === "toolcall_start") {
+      const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
+      return toolCall ? {
+        type: "tool_preparing",
+        callId: toolCall.id,
+        toolName: toolCall.name,
+      } : undefined;
+    }
+    if (event.assistantMessageEvent.type === "toolcall_end") {
+      toolParameterProgress?.delete(event.assistantMessageEvent.toolCall.id);
+      return {
+        type: "tool_prepared",
+        callId: event.assistantMessageEvent.toolCall.id,
+        toolName: event.assistantMessageEvent.toolCall.name,
+        args: event.assistantMessageEvent.toolCall.arguments,
+      };
+    }
+    if (event.assistantMessageEvent.type === "toolcall_delta") {
+      const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
+      if (!toolCall || !toolParameterProgress) return undefined;
+      const now = Date.now();
+      const progress = toolParameterProgress.get(toolCall.id) ?? {
+        generatedBytes: 0,
+        lastPublishedBytes: 0,
+        lastPublishedAt: 0,
+      };
+      progress.generatedBytes += Buffer.byteLength(event.assistantMessageEvent.delta);
+      const shouldPublish = progress.lastPublishedBytes === 0
+        || progress.generatedBytes - progress.lastPublishedBytes >= 512
+        || now - progress.lastPublishedAt >= 500;
+      toolParameterProgress.set(toolCall.id, progress);
+      if (!shouldPublish) return undefined;
+      progress.lastPublishedBytes = progress.generatedBytes;
+      progress.lastPublishedAt = now;
+      const path = extractToolPath(toolCall.args);
+      return {
+        type: "tool_parameters_streaming",
+        callId: toolCall.id,
+        toolName: toolCall.name,
+        generatedBytes: progress.generatedBytes,
+        ...(path ? { path } : {}),
+      };
+    }
     if (event.assistantMessageEvent.type === "text_delta") {
       return { type: "text_delta", delta: event.assistantMessageEvent.delta };
     }
@@ -1106,6 +1519,7 @@ function normalizeSessionEvent(
     }
   }
   if (event.type === "tool_execution_start") {
+    toolParameterProgress?.delete(event.toolCallId);
     return {
       type: "tool_started",
       callId: event.toolCallId,
@@ -1118,7 +1532,7 @@ function normalizeSessionEvent(
       type: "tool_updated",
       callId: event.toolCallId,
       toolName: event.toolName,
-      partialResult: event.partialResult,
+      partialResult: projectSessionToolResult(event.partialResult),
     };
   }
   if (event.type === "tool_execution_end") {
@@ -1126,11 +1540,26 @@ function normalizeSessionEvent(
       type: "tool_finished",
       callId: event.toolCallId,
       toolName: event.toolName,
-      result: event.result,
+      result: projectSessionToolResult(event.result),
       isError: event.isError,
     };
   }
   return undefined;
+}
+
+/** 从 Pi 的累计 Assistant 消息中读取刚开始生成的工具调用身份。 */
+function readStreamingToolCall(message: unknown, contentIndex: number): { id: string; name: string; args: Record<string, unknown> } | undefined {
+  if (!isRecord(message) || !Array.isArray(message.content)) return undefined;
+  const block = message.content[contentIndex];
+  if (!isRecord(block) || block.type !== "toolCall") return undefined;
+  if (typeof block.id !== "string" || !block.id || typeof block.name !== "string" || !block.name) return undefined;
+  return { id: block.id, name: block.name, args: isRecord(block.arguments) ? block.arguments : {} };
+}
+
+/** 从部分参数中提取可安全展示的文件目标，绝不转发正文或命令内容。 */
+function extractToolPath(args: Record<string, unknown>): string | undefined {
+  const path = typeof args.path === "string" && args.path ? args.path : args.file_path;
+  return typeof path === "string" && path ? path : undefined;
 }
 
 /**
@@ -1158,6 +1587,12 @@ function isValidSessionName(name: string): boolean {
   return Boolean(name) && [...name].length <= 120;
 }
 
+/** 自动标题最多保留五十个字符，避免模型忽略格式要求时占满会话列表。 */
+function normalizeGeneratedSessionName(name: string | undefined): string | undefined {
+  const normalized = name?.trim();
+  return normalized ? [...normalized].slice(0, 50).join("") : undefined;
+}
+
 /** 把单个实时事件限制在客户端与 Journal 都能承受的硬上限内。 */
 function boundRealtimeEvent(
   event: UnsequencedChatEvent,
@@ -1173,6 +1608,12 @@ function boundRealtimeEvent(
       return fitRealtimeText(event.delta, (delta) => ({ ...event, delta }), fits);
     case "error":
       return fitRealtimeText(event.message, (message) => ({ ...event, message }), fits);
+    case "tool_preparing":
+      candidate = { ...event, callId: truncateIdentifier(event.callId), toolName: truncateIdentifier(event.toolName) };
+      break;
+    case "tool_prepared":
+      candidate = { ...event, callId: truncateIdentifier(event.callId), toolName: truncateIdentifier(event.toolName), args: truncated };
+      break;
     case "tool_started":
       candidate = { ...event, callId: truncateIdentifier(event.callId), toolName: truncateIdentifier(event.toolName), args: truncated };
       break;

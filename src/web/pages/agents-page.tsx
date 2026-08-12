@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { AgentProfile, AgentProfileDocument } from "../../shared/agent-contracts";
 import { api } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import type { AppRoute } from "../router";
 import { useOnlineStatus } from "../use-online-status";
 
@@ -38,6 +39,7 @@ function suggestedDirectorySuffix(name: string): string {
  * 展示真实 Agent 列表，并提供轻量的新建入口。
  */
 export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPageProps) {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -51,18 +53,17 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
 
   useEffect(() => {
     let active = true;
-    api.listAgents()
-      .then(({ agents: loaded }) => {
+    void runApiTask(api.listAgents, { operation: "加载 Agent 列表" })
+      .then((result) => {
+        if (result.status !== "success") return;
+        const loaded = result.data.agents;
         if (active) {
           setAgents(loaded);
           setCreateOpen(openCreateOnEmpty && loaded.length === 0);
         }
-      })
-      .catch(() => {
-        if (active) setError("暂时无法刷新 Agent 列表。");
       });
     return () => { active = false; };
-  }, []);
+  }, [openCreateOnEmpty, runApiTask]);
 
   function resetCreateForm() {
     setName("");
@@ -105,14 +106,14 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
     setSubmitting(true);
     setError("");
     try {
-      const created = await api.createAgent({
-        name: normalizedName,
-        ...(directoryMode === "custom" ? { cwd: `/data/${normalizedCwd}` } : {}),
-      });
-      setAgents((current) => [...current, created]);
-      resetCreateForm();
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "创建 Agent 失败");
+      const result = await runApiTask(
+        () => api.createAgent({ name: normalizedName, ...(directoryMode === "custom" ? { cwd: `/data/${normalizedCwd}` } : {}) }),
+        { operation: "创建 Agent", expected: agentExpected(setError) },
+      );
+      if (result.status === "success") {
+        setAgents((current) => [...current, result.data]);
+        resetCreateForm();
+      }
     } finally {
       setSubmitting(false);
     }
@@ -133,12 +134,12 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
     setAgents(next);
     setDraggingId(undefined);
     setError("");
-    try {
-      setAgents((await api.reorderAgents(next.map(({ profile }) => profile.id))).agents);
-    } catch (requestError) {
-      setAgents(current);
-      setError(requestError instanceof Error ? requestError.message : "保存 Agent 排序失败");
-    }
+    const result = await runApiTask(
+      () => api.reorderAgents(next.map(({ profile }) => profile.id)),
+      { operation: "保存 Agent 排序", expected: agentExpected(setError) },
+    );
+    if (result.status === "success") setAgents(result.data.agents);
+    else setAgents(current);
   }
 
   return (
@@ -222,4 +223,26 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
       ) : null}
     </div>
   );
+}
+
+/** 将 Agent 编辑和工作目录校验错误保留在当前表单。 */
+function agentExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    AGENT_INVALID: show,
+    AGENT_NOT_FOUND: show,
+    AGENT_ARCHIVED: show,
+    INVALID_AGENT_NAME: show,
+    INVALID_AGENT_ORDER: show,
+    VERSION_CONFLICT: show,
+    AGENT_HAS_SESSIONS: show,
+    AGENT_REMOVAL_IN_PROGRESS: show,
+    DELETE_OPTIONS_REQUIRED: show,
+    WORKSPACE_IN_USE: show,
+    WORKSPACE_OUTSIDE_DATA: show,
+    WORKSPACE_PI_CONFLICT: show,
+    WORKSPACE_NOT_ABSOLUTE: show,
+    WORKSPACE_ROOT_FORBIDDEN: show,
+    WORKSPACE_NOT_DIRECTORY: show,
+  };
 }

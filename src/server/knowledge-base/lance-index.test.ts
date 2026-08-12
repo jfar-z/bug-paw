@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { connect } from "@lancedb/lancedb";
 
 import { createKnowledgeLanceIndex } from "./lance-index";
 
@@ -40,14 +41,14 @@ describe("KnowledgeLanceIndex", () => {
     roots.push(root);
     const index = createKnowledgeLanceIndex(root);
     await index.upsertChunks("base-a", [
-      { chunkId: "chunk-2", documentId: "document-a", index: 1, text: "第二段", page: 2 },
-      { chunkId: "chunk-1", documentId: "document-a", index: 0, text: "第一段", page: 1 },
+      { chunkId: "chunk-2", documentId: "document-a", index: 1, text: "第二段", page: 2, section: "审批" },
+      { chunkId: "chunk-1", documentId: "document-a", index: 0, text: "第一段", page: 1, section: null },
       { chunkId: "chunk-other", documentId: "document-b", index: 0, text: "其他资料", page: 1 },
     ]);
 
     await expect(index.listDocumentChunks!("base-a", "document-a")).resolves.toEqual([
-      { chunkId: "chunk-1", documentId: "document-a", index: 0, text: "第一段", page: 1 },
-      { chunkId: "chunk-2", documentId: "document-a", index: 1, text: "第二段", page: 2 },
+      { chunkId: "chunk-1", documentId: "document-a", index: 0, text: "第一段", page: 1, section: null },
+      { chunkId: "chunk-2", documentId: "document-a", index: 1, text: "第二段", page: 2, section: "审批" },
     ]);
 
     await index.removeDocument("base-a", "document-a");
@@ -65,6 +66,34 @@ describe("KnowledgeLanceIndex", () => {
 
     expect(await index.searchVectors!("base-a", [0.9, 0.1], 1)).toEqual([
       expect.objectContaining({ chunkId: "chunk-1", documentId: "document-a" }),
+    ]);
+  });
+
+  it("为存量索引补充章节列后继续写入", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-knowledge-legacy-lance-"));
+    roots.push(root);
+    const connection = await connect(join(root, "base-a"));
+    await connection.createTable("chunks", [{
+      chunkId: "legacy",
+      documentId: "document-a",
+      index: 0,
+      text: "旧切片",
+      page: 1,
+    }]);
+    const index = createKnowledgeLanceIndex(root);
+
+    await index.upsertChunks("base-a", [{
+      chunkId: "new",
+      documentId: "document-a",
+      index: 1,
+      text: "新切片",
+      page: 2,
+      section: "新章节",
+    }]);
+
+    await expect(index.listDocumentChunks!("base-a", "document-a")).resolves.toEqual([
+      { chunkId: "legacy", documentId: "document-a", index: 0, text: "旧切片", page: 1, section: null },
+      { chunkId: "new", documentId: "document-a", index: 1, text: "新切片", page: 2, section: "新章节" },
     ]);
   });
 });

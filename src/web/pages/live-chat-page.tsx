@@ -1,14 +1,16 @@
-import { ChevronDown, CircleStop, Menu, MessageSquarePlus, Send } from "lucide-react";
+import { ChevronDown, CircleStop, Menu, MessageSquarePlus, PencilLine, Send } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
-import { api, type ModelSummary, type SessionSnapshot, type SessionSummary } from "../api";
+import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionBulkTarget, type SessionSnapshot, type SessionSummary } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { AgentModelMenu } from "../components/agent-model-menu";
-import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem } from "../components/attachment-picker";
+import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem, validateAttachmentSelection } from "../components/attachment-picker";
 import { ReferenceComposer } from "../components/reference-composer";
 import { MediaLightbox } from "../components/media-lightbox";
 import { ArchivedSessionsDialog } from "../components/archived-sessions-dialog";
+import { SessionBulkConfirmationDialog } from "../components/session-bulk-confirmation-dialog";
 import {
   parsePiHistory,
   reduceTimeline,
@@ -21,12 +23,20 @@ import type { ThemePreference } from "../theme";
 import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
+import { useSessionHistory } from "../use-session-history";
+import { mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
+import {
+  createPendingUserMessage,
+  reconcilePendingUserMessage,
+  type PendingUserMessage,
+} from "../pending-user-message";
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
+import { useMobileSidebarSwipe } from "../features/chat/mobile-sidebar-swipe";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
@@ -34,11 +44,6 @@ import { PcmStreamAudio } from "../pcm-stream-audio";
 interface LiveChatPageProps {
   theme: ThemePreference;
   userIdentity: IdentityPreview;
-}
-
-interface PendingUserMessage {
-  sessionId: string;
-  entry: UserEntry;
 }
 
 interface AutoSpeechEligibility {
@@ -66,15 +71,51 @@ const SELECTED_AGENT_STORAGE_KEY = "pi-agent-web.selected-agent-id";
 const SESSION_LONG_PRESS_DURATION_MS = 450;
 const SESSION_SCROLLBAR_HIDE_DELAY_MS = 700;
 
+/** 将聊天、会话、模型和附件的可恢复业务错误保留在编辑器附近。 */
+function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_MESSAGE: show,
+    INVALID_ATTACHMENT: show,
+    INVALID_REFERENCE: show,
+    UNKNOWN_COMMAND: show,
+    SESSION_BUSY: show,
+    SESSION_NOT_FOUND: show,
+    SESSION_AGENT_CONFLICT: show,
+    AGENT_ARCHIVED: show,
+    INVALID_SESSION_NAME: show,
+    SCHEDULED_TASKS_BOUND: show,
+    SESSION_BULK_PREVIEW_STALE: show,
+    SESSION_AGENT_MISSING: show,
+    OPERATION_ABORTED: show,
+    RUNTIME_GENERATION_RETIRED: show,
+    CLIENT_TOO_SLOW: show,
+    VALIDATION_FAILED: show,
+    INVALID_MODEL: show,
+    MODEL_NOT_FOUND: show,
+    PROVIDER_NOT_FOUND: show,
+    MODEL_RUNTIME_UNAVAILABLE: show,
+    EMPTY_UPLOAD: show,
+    ATTACHMENT_TOO_LARGE: show,
+    TOO_MANY_ATTACHMENTS: show,
+    AGENT_NOT_FOUND: show,
+  };
+}
+
 /**
  * 接入真实会话 API 与 SSE 的第一版对话工作台。
  */
 export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useViewportScrollLock();
+  const { runApiTask, runOptionalApiTask } = useApiTask();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
+  const [sessionBulkPreview, setSessionBulkPreview] = useState<SessionBulkPreview>();
+  const [sessionBulkBusy, setSessionBulkBusy] = useState(false);
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
@@ -86,10 +127,19 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [mediaSummaries, setMediaSummaries] = useState<Record<string, WorkspaceFileSummary>>({});
   const [previewImage, setPreviewImage] = useState<WorkspaceFileSummary>();
   const [draft, setDraft] = useState("");
+  /** 正在编辑的历史用户消息；仅在实际发送时用于创建 Pi 分支。 */
+  const [editingEntryId, setEditingEntryId] = useState<string>();
   const [draftReferences, setDraftReferences] = useState<AgentReference[]>([]);
   const [activeRun, setActiveRun] = useState<ChatRunSummary>();
   const [error, setError] = useState("");
+  const reportFailure = useCallback((reason: unknown, operation: string) => runApiTask(
+    async () => { throw reason; },
+    { operation, expected: chatExpected(setError) },
+  ), [runApiTask]);
   const [attachmentItems, setAttachmentItems] = useState<AttachmentUploadItem[]>([]);
+  const editingEntry = editingEntryId
+    ? timeline.find((entry): entry is UserEntry => entry.type === "user" && entry.piEntryId === editingEntryId)
+    : undefined;
   const [profileIdentity, setProfileIdentity] = useState<IdentityPreview>(userIdentity);
   const [profileRevision, setProfileRevision] = useState<string>();
   const [profileOpen, setProfileOpen] = useState(false);
@@ -110,15 +160,18 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const selectedAgentIdRef = useRef<string | undefined>(selectedAgentId);
   const sessionIdRef = useRef<string | undefined>(session?.id);
+  const sessionSnapshotRef = useRef<SessionSnapshot | undefined>(session);
   const autoSpeechEligibilityRef = useRef<AutoSpeechEligibility | undefined>(undefined);
   const speechControllerRef = useRef<SpeechControllerEntry | undefined>(undefined);
   const [speechState, setSpeechState] = useState<SpeechPlaybackState>({ phase: "idle" });
   selectedAgentIdRef.current = selectedAgentId;
   sessionIdRef.current = session?.id;
+  sessionSnapshotRef.current = session;
   const {
     scrollContainerRef: messageScrollRef,
     contentRef: messageContentRef,
     resumeFollowing,
+    pauseFollowing,
     alignAfterNextContentCommit,
   } = useMessageAutofollow(timeline);
 
@@ -134,21 +187,43 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
       resumeFollowing();
     }
-    setSession(next);
+    const reconciled = reconcileSnapshotMessages(sessionSnapshotRef.current, next);
+    const mergedSnapshot = { ...next, messages: reconciled.messages };
+    sessionSnapshotRef.current = mergedSnapshot;
+    setSession(mergedSnapshot);
     if (next.model) setSelectedModel(next.model);
     const running = next.run?.status === "queued" || next.run?.status === "running";
-    const parsedTimeline = parsePiHistory(next.messages, running);
-    const pending = pendingUserMessageRef.current;
-    if (pending?.sessionId === next.id) {
-      if (timelineIncludesUserMessage(parsedTimeline, pending.entry)) {
-        pendingUserMessageRef.current = undefined;
-      } else {
-        setTimeline(insertPendingUserMessage(parsedTimeline, pending.entry));
-        return;
-      }
-    }
-    setTimeline(parsedTimeline);
+    const pendingResult = reconcilePendingUserMessage(
+      next.id,
+      parsePiHistory(mergedSnapshot.messages, running),
+      pendingUserMessageRef.current,
+    );
+    pendingUserMessageRef.current = pendingResult.pending;
+    setTimeline(pendingResult.timeline);
   }, [alignAfterNextContentCommit, resumeFollowing]);
+
+  const historyLoader = useSessionHistory({
+    snapshot: session,
+    scrollRef: messageScrollRef,
+    onBeforePrepend: pauseFollowing,
+    onPrepend: (page) => {
+      setSession((current) => {
+        if (!current || current.id !== page.sessionId || current.history.branchToken !== page.history.branchToken) return current;
+        const messages = mergeOlderHistory(current.messages, page.messages);
+        const merged = { ...current, messages, history: page.history };
+        sessionSnapshotRef.current = merged;
+        const pendingResult = reconcilePendingUserMessage(
+          current.id,
+          parsePiHistory(messages, current.run?.status === "queued" || current.run?.status === "running"),
+          pendingUserMessageRef.current,
+        );
+        pendingUserMessageRef.current = pendingResult.pending;
+        setTimeline(pendingResult.timeline);
+        return merged;
+      });
+    },
+    onError: (reason) => { void reportFailure(reason, "加载更早消息"); },
+  });
 
   const stream = useSessionStream({
     sessionId: session?.id,
@@ -164,6 +239,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       sessionSyncRef.current?.notify();
     },
     onError: setError,
+    onUnexpectedError: (reason) => void reportFailure(reason, "恢复会话实时连接"),
   });
 
   const registerMediaSummary = useCallback((summary: WorkspaceFileSummary) => {
@@ -177,6 +253,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   }, [registerMediaSummary]);
   const streaming = activeRun?.status === "queued" || activeRun?.status === "running";
   const isOpeningSession = openingSessionId !== undefined;
+  // 连接状态独立于业务错误，重连成功后提示会自然撤销且不会误清其他错误。
+  const composerError = error || (stream.reconnecting ? "实时连接暂时中断，浏览器会自动重连。" : "");
 
   /** 获取当前 Agent 的唯一播放控制器，切换 Agent 时销毁旧实例。 */
   const ensureSpeechController = useCallback((agentId: string): StreamingTtsController => {
@@ -199,14 +277,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       onStateChange: setSpeechState,
       onError: (reason) => {
         const blocked = reason instanceof DOMException && reason.name === "NotAllowedError";
-        setError(blocked
-          ? "浏览器阻止了自动播放，请先与页面交互后重试。"
-          : "语音合成服务暂时不可用。");
+        if (blocked) {
+          setError("浏览器阻止了自动播放，请先与页面交互后重试。");
+          return;
+        }
+        void reportFailure(reason, "播放语音");
       },
     });
     speechControllerRef.current = { agentId, controller };
     return controller;
-  }, []);
+  }, [reportFailure]);
 
   /** 清除自动播放资格并同步停止当前音频与待处理队列。 */
   const stopSpeech = useCallback(() => {
@@ -223,11 +303,20 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useEffect(() => {
     let active = true;
     const generation = ++agentSelectionGenerationRef.current;
-    Promise.all([api.listAgents(), api.listModels(), api.getGlobalSettings().catch(() => undefined)])
-      .then(async ([agentResult, modelResult, globalSettings]) => {
+    const globalSettingsTask = runOptionalApiTask(
+      () => api.getGlobalSettings(),
+      {
+        operation: "加载全局默认模型",
+        fallbackReason: "全局默认模型是聊天初始化的可选配置",
+        fallback: () => undefined,
+      },
+    );
+    Promise.all([api.listAgents(), api.listModels(), globalSettingsTask])
+      .then(async ([agentResult, modelResult, globalSettingsResult]) => {
         if (!active || generation !== agentSelectionGenerationRef.current) {
           return;
         }
+        const globalSettings = globalSettingsResult.status === "success" ? globalSettingsResult.data : undefined;
         const defaultProvider = globalSettings?.effective?.defaultProvider;
         const defaultModel = globalSettings?.effective?.defaultModel;
         const inheritedModel = defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined;
@@ -257,13 +346,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       })
       .catch((reason: unknown) => {
         if (active && generation === agentSelectionGenerationRef.current) {
-          setError(reason instanceof Error ? reason.message : "加载工作台失败。");
+          void reportFailure(reason, "加载聊天工作台");
         }
       });
     return () => {
       active = false;
     };
-  }, [applySnapshot]);
+  }, [applySnapshot, reportFailure, runOptionalApiTask]);
 
   useEffect(() => {
     let active = true;
@@ -273,10 +362,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setProfileIdentity(toIdentityPreview(document.profile));
       setProfileDisplayName(document.profile.displayName);
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : "个人资料加载失败。");
+      if (active) void reportFailure(reason, "加载个人资料");
     });
     return () => { active = false; };
-  }, []);
+  }, [reportFailure]);
 
   useEffect(() => {
     let active = true;
@@ -284,11 +373,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (selectedAgentId) {
         void api.listSessions(selectedAgentId)
           .then((result) => { if (active) setSessions(result.sessions); })
-          .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "会话列表同步失败。"); });
+          .catch((reason: unknown) => { if (active) void reportFailure(reason, "同步会话列表"); });
         if (archiveDialogOpen) {
           void api.listSessions(selectedAgentId, true)
             .then((result) => { if (active) setArchivedSessions(result.sessions); })
-            .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "归档会话同步失败。"); });
+            .catch((reason: unknown) => { if (active) void reportFailure(reason, "同步归档会话"); });
         }
       }
     });
@@ -297,7 +386,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       active = false;
       sync.close();
     };
-  }, [archiveDialogOpen, selectedAgentId]);
+  }, [archiveDialogOpen, reportFailure, selectedAgentId]);
 
   const createConversation = async (agentId: string) => {
     setError("");
@@ -306,10 +395,29 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     return created;
   };
 
+  /** 退出批量模式并清理尚未执行的确认预览。 */
+  const cancelSessionSelection = () => {
+    setSessionSelectionMode(false);
+    setSelectedSessionIds([]);
+    setSessionBulkPreview(undefined);
+  };
+
+  /** 统一所有侧栏关闭入口，保证选择不会跨抽屉生命周期残留。 */
+  const closeSidebar = () => {
+    cancelSessionSelection();
+    setSidebarOpen(false);
+  };
+  const sidebarSwipe = useMobileSidebarSwipe({
+    open: sidebarOpen,
+    onOpen: () => setSidebarOpen(true),
+    onClose: closeSidebar,
+  });
+
   const enterDraft = () => {
     stopSpeech();
     stream.close();
     setSession(undefined);
+    setEditingEntryId(undefined);
     setTimeline([]);
     setMediaSummaries({});
     setPreviewImage(undefined);
@@ -319,7 +427,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setAttachmentItems([]);
     setError("");
     pendingUserMessageRef.current = undefined;
-    setSidebarOpen(false);
+    closeSidebar();
   };
 
   const clearSessionLongPress = () => {
@@ -369,16 +477,18 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const openConversation = async (sessionId: string) => {
     if (openingSessionRef.current || session?.id === sessionId) return;
     stopSpeech();
+    pendingUserMessageRef.current = undefined;
     setError("");
+    setEditingEntryId(undefined);
     setMediaSummaries({});
     setPreviewImage(undefined);
     openingSessionRef.current = sessionId;
     setOpeningSessionId(sessionId);
     try {
       applySnapshot(await api.openSession(sessionId), "once");
-      setSidebarOpen(false);
+      closeSidebar();
     } catch (reason) {
-      setError(reason instanceof Error ? `加载会话失败：${reason.message}` : "加载会话失败。");
+      await reportFailure(reason, "打开会话");
     } finally {
       openingSessionRef.current = undefined;
       setOpeningSessionId(undefined);
@@ -405,7 +515,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         }
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "刷新会话列表失败。");
+      await reportFailure(reason, "刷新会话列表");
     } finally {
       setRefreshingSessions(false);
     }
@@ -417,7 +527,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话重命名失败。");
+      await reportFailure(reason, "重命名会话");
     }
   };
 
@@ -430,13 +540,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话归档失败。");
+      await reportFailure(reason, "归档会话");
     }
   };
 
-  const deleteConversation = async (sessionId: string, archived = false, deleteScheduledTasks = false) => {
+  const deleteConversation = async (sessionId: string, archived = false, confirmBoundTasks = false) => {
     try {
-      await api.deleteSession(sessionId, deleteScheduledTasks);
+      await api.deleteSession(sessionId, confirmBoundTasks);
       if (archived) {
         setArchivedSessions((current) => current.filter((item) => item.id !== sessionId));
       } else {
@@ -447,7 +557,77 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话删除失败。");
+      await reportFailure(reason, "删除会话");
+    }
+  };
+
+  /** 从会话菜单进入多选，触发会话可操作时默认选中。 */
+  const enterSessionSelection = (sessionId: string) => {
+    const selectable = !(streaming && session?.id === sessionId);
+    setSessionSelectionMode(true);
+    setSelectedSessionIds(selectable ? [sessionId] : []);
+    setSessionBulkPreview(undefined);
+  };
+
+  const toggleSessionSelection = (sessionId: string) => {
+    if (streaming && session?.id === sessionId) return;
+    setSelectedSessionIds((current) => current.includes(sessionId)
+      ? current.filter((id) => id !== sessionId)
+      : [...current, sessionId]);
+  };
+
+  /** 请求服务端稳定预览后才展示批量操作二次确认。 */
+  const previewSessionBulk = async (action: SessionBulkAction, target?: SessionBulkTarget) => {
+    const resolvedTarget = target ?? { mode: "selected", sessionIds: selectedSessionIds };
+    if ((resolvedTarget.mode === "selected" && resolvedTarget.sessionIds.length === 0) || sessionBulkBusy) return;
+    setSessionBulkBusy(true);
+    setSessionBulkPreview(undefined);
+    setError("");
+    try {
+      setSessionBulkPreview(await api.previewSessionBulk(action, resolvedTarget));
+    } catch (reason) {
+      await reportFailure(reason, "预览会话批量操作");
+    } finally {
+      setSessionBulkBusy(false);
+    }
+  };
+
+  /** 使用预览指纹提交原子批量操作，并同步刷新本地会话列表。 */
+  const executeSessionBulk = async () => {
+    const preview = sessionBulkPreview;
+    if (!preview || sessionBulkBusy) return;
+    setSessionBulkBusy(true);
+    setError("");
+    try {
+      const activeArchivedSession = preview.target.mode === "all_archived"
+        && Boolean(session?.id && archivedSessions.some((item) => item.id === session.id));
+      await api.executeSessionBulk(preview.action, preview.target, preview.fingerprint);
+      if (preview.target.mode === "all_archived") {
+        if (!selectedAgentId) return;
+        const [normal, archived] = await Promise.all([
+          api.listSessions(selectedAgentId),
+          api.listSessions(selectedAgentId, true),
+        ]);
+        setSessions(normal.sessions);
+        setArchivedSessions(archived.sessions);
+        setSessionBulkPreview(undefined);
+        sessionSyncRef.current?.notify();
+        if (preview.action === "delete" && activeArchivedSession) enterDraft();
+        return;
+      }
+      const removedIds = new Set(preview.target.sessionIds);
+      setSessions((current) => current.filter((item) => !removedIds.has(item.id)));
+      sessionSyncRef.current?.notify();
+      if (session?.id && removedIds.has(session.id)) {
+        enterDraft();
+      } else {
+        cancelSessionSelection();
+      }
+    } catch (reason) {
+      setSessionBulkPreview(undefined);
+      await reportFailure(reason, "执行会话批量操作");
+    } finally {
+      setSessionBulkBusy(false);
     }
   };
 
@@ -458,7 +638,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       const result = await api.listSessions(selectedAgentId, true);
       setArchivedSessions(result.sessions);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "归档会话加载失败。");
+      await reportFailure(reason, "加载归档会话");
     }
   };
 
@@ -471,7 +651,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setArchivedSessions(archived.sessions);
       sessionSyncRef.current?.notify();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "会话恢复失败。");
+      await reportFailure(reason, "恢复会话");
     }
   };
 
@@ -488,9 +668,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if ((!text && files.length === 0 && references.length === 0) || streaming || attachmentBusy || !selectedAgentId || !selectedModel) {
       return;
     }
+    const branchEntryId = editingEntryId;
     const previousAttachmentItems = attachmentItems;
     try {
       stopSpeech();
+      // 分支请求尚未返回前即退出编辑态，避免来源消息持续显示“编辑中”。
+      if (branchEntryId) setEditingEntryId(undefined);
       const wasDraft = !session;
       const activeSession = session ?? await createConversation(selectedAgentId);
       if (wasDraft && !isSameModel(activeSession.model, selectedModel)) {
@@ -525,7 +708,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           previousTurnId: findLastAgentTurnId(timeline),
         }
         : undefined;
-      pendingUserMessageRef.current = { sessionId: activeSession.id, entry: pendingEntry };
+      pendingUserMessageRef.current = createPendingUserMessage(
+        activeSession.id,
+        pendingEntry,
+        timeline,
+        branchEntryId,
+      );
       setTimeline((current) => reduceTimeline(reduceTimeline(current, {
           type: "user_message",
           id: pendingEntry.id,
@@ -542,16 +730,24 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           messageCount: 1,
         }, ...current.filter((item) => item.id !== activeSession.id)]);
       }
-      setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
+      if (branchEntryId) {
+        const result = await api.sendBranchMessage(activeSession.id, branchEntryId, text, files.map((file) => file.path), draftReferences);
+        // 分支发送立刻以服务端导航快照替换旧路径，同时保留本地待发送气泡。
+        applySnapshot(result.snapshot, "once");
+        setActiveRun(result.run);
+      } else {
+        setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
+      }
     } catch (reason) {
       autoSpeechEligibilityRef.current = undefined;
       pendingUserMessageRef.current = undefined;
       setActiveRun(undefined);
-      setTimeline((current) => reduceTimeline(current, { type: "generation_finished" }));
+      setTimeline((current) => reduceTimeline(current, { type: "generation_finished", outcome: "error" }));
       setDraft(text);
       setDraftReferences(draftReferences);
       setAttachmentItems(previousAttachmentItems);
-      setError(reason instanceof Error ? reason.message : "消息发送失败。");
+      if (branchEntryId) setEditingEntryId(branchEntryId);
+      await reportFailure(reason, branchEntryId ? "编辑并重新发送消息" : "发送消息");
     }
   };
 
@@ -574,12 +770,25 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }));
     } catch (reason) {
       if (selectedAgentIdRef.current !== selectedAgentId) return;
-      const message = reason instanceof Error ? reason.message : "附件上传失败。";
+      const outcome = await reportFailure(reason, "上传聊天附件");
+      const message = outcome.status === "handled" && reason instanceof Error
+        ? reason.message
+        : "附件上传失败，请检查文件后重试。";
       setAttachmentItems((current) => current.map((item) => localItems.some((local) => local.localId === item.localId)
         ? { ...item, status: "error", error: message }
         : item));
       setError(message);
     }
+  };
+
+  /** 让文件选择、粘贴和拖放共享相同的数量与大小限制。 */
+  const queueAttachmentFiles = (files: File[]) => {
+    const validationError = validateAttachmentSelection(attachmentItems.length, files);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    void uploadFiles(files);
   };
 
   const abort = async () => {
@@ -588,7 +797,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       await api.abort(session.id);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "停止生成失败。");
+      await reportFailure(reason, "停止消息生成");
     }
   };
 
@@ -608,7 +817,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setSession((current) => current?.id === targetSessionId ? { ...current, model } : current);
     } catch (reason) {
       if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
-      setError(reason instanceof Error ? reason.message : "切换模型失败。");
+      await reportFailure(reason, "切换会话模型");
     }
   };
 
@@ -679,6 +888,98 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     controller.update(turn.id, text, true);
   };
 
+  /** 将 Pi 历史用户消息还原到现有编辑器，协议文本由服务端在返回前拆解。 */
+  const editHistory = async (entryId: string) => {
+    if (!session || streaming || isOpeningSession) return;
+    try {
+      stopSpeech();
+      const result = await api.editSessionBranch(session.id, entryId);
+      setEditingEntryId(entryId);
+      setDraft(result.draft.text);
+      setDraftReferences(result.draft.references);
+      setAttachmentItems(result.draft.filePaths.map((path) => {
+        const missing = result.draft.missingFilePaths.includes(path);
+        const name = path.split("/").at(-1) ?? path;
+        return {
+          localId: `history-${path}`,
+          file: new File([], name),
+          status: missing ? "missing" as const : "uploaded" as const,
+          ...(missing ? { error: `已失效：${path}` } : { workspaceFile: { path, name, mediaType: "application/octet-stream", size: 0, modifiedAt: "" } }),
+        };
+      }));
+      setError(result.draft.missingFilePaths.length > 0 ? `历史附件已失效：${result.draft.missingFilePaths.join("、")}` : "");
+    } catch (reason) {
+      await reportFailure(reason, "编辑历史消息");
+    }
+  };
+
+  /** 退出历史消息编辑态，避免回填草稿被误认为一条普通新消息。 */
+  const cancelEditing = () => {
+    setEditingEntryId(undefined);
+    setDraft("");
+    setDraftReferences([]);
+    setAttachmentItems([]);
+    setError("");
+  };
+
+  /** 重新提交 Pi 保存的原始用户 prompt，创建新的同级分支。 */
+  const regenerate = async (entryId: string) => {
+    if (!session || streaming || isOpeningSession) return;
+    const targetSessionId = session.id;
+    const sourceEntry = timeline.find((entry): entry is UserEntry => (
+      entry.type === "user" && entry.piEntryId === entryId
+    ));
+    if (!sourceEntry) {
+      setError("找不到重新生成所对应的用户消息。");
+      return;
+    }
+    const pendingEntry: UserEntry = {
+      id: crypto.randomUUID(),
+      type: "user",
+      text: sourceEntry.text,
+      files: sourceEntry.files,
+      references: sourceEntry.references,
+    };
+    pendingUserMessageRef.current = createPendingUserMessage(
+      targetSessionId,
+      pendingEntry,
+      timeline,
+      entryId,
+    );
+    try {
+      stopSpeech();
+      const result = await api.regenerateSessionBranch(targetSessionId, entryId);
+      if (sessionIdRef.current !== targetSessionId) return;
+      applySnapshot(result.snapshot, "once");
+      setActiveRun(result.run);
+      setError("");
+    } catch (reason) {
+      if (sessionIdRef.current !== targetSessionId) return;
+      const pending = pendingUserMessageRef.current;
+      if (pending?.sessionId === targetSessionId && pending.entry.id === pendingEntry.id) {
+        pendingUserMessageRef.current = undefined;
+      }
+      await reportFailure(reason, "重新生成回答");
+    }
+  };
+
+  /** 切换到历史分支的可渲染叶节点，不触发编辑草稿回填。 */
+  const navigateHistory = async (entryId: string) => {
+    if (!session || streaming || isOpeningSession) return;
+    try {
+      stopSpeech();
+      const snapshot = await api.navigateSessionBranch(session.id, entryId);
+      setEditingEntryId(undefined);
+      setDraft("");
+      setDraftReferences([]);
+      setAttachmentItems([]);
+      setError("");
+      applySnapshot(snapshot, "once");
+    } catch (reason) {
+      await reportFailure(reason, "切换会话分支");
+    }
+  };
+
   const selectAgent = async (agentId: string) => {
     if (streaming || isOpeningSession) return;
     const generation = ++agentSelectionGenerationRef.current;
@@ -692,7 +993,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (generation === agentSelectionGenerationRef.current) setSessions(result.sessions);
     } catch (reason) {
       if (generation === agentSelectionGenerationRef.current) {
-        setError(reason instanceof Error ? reason.message : "加载 Agent 会话失败。");
+        await reportFailure(reason, "切换 Agent");
       }
     }
   };
@@ -706,7 +1007,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setProfileIdentity(toIdentityPreview(document.profile));
       setProfileDisplayName(document.profile.displayName);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存个人资料失败。");
+      await reportFailure(reason, "保存个人资料");
     } finally {
       setProfileSaving(false);
     }
@@ -720,7 +1021,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setProfileRevision(document.revision);
       setProfileIdentity(toIdentityPreview(document.profile));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "上传头像失败。");
+      await reportFailure(reason, "上传个人头像");
     } finally {
       setProfileSaving(false);
     }
@@ -734,7 +1035,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const activeAgentEntryId = [...timeline].reverse().find((entry) => entry.type === "agent")?.id;
 
   return (
-    <main className="chat-shell live-chat-shell">
+    <main className="chat-shell live-chat-shell" {...sidebarSwipe.handlers}>
       <ChatSidebar
         open={sidebarOpen}
         sessions={sessions}
@@ -746,7 +1047,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         refreshing={refreshingSessions}
         profileIdentity={profileIdentity}
         actionsOpenRequest={sessionActionsOpenRequest}
-        onClose={() => setSidebarOpen(false)}
+        selectionMode={sessionSelectionMode}
+        selectedSessionIds={selectedSessionIds}
+        bulkBusy={sessionBulkBusy}
+        swiping={sidebarSwipe.swiping}
+        swipeTranslatePercent={sidebarSwipe.translatePercent}
+        onClose={closeSidebar}
         onEnterDraft={enterDraft}
         onRefresh={() => void refreshSessions()}
         onScroll={showSessionNavScrollbar}
@@ -760,7 +1066,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onOpen={(sessionId) => void openConversation(sessionId)}
         onRename={(sessionId, name) => void renameConversation(sessionId, name)}
         onArchive={(sessionId) => void archiveConversation(sessionId)}
-        onDelete={(sessionId, deleteScheduledTasks) => void deleteConversation(sessionId, false, deleteScheduledTasks)}
+        onDelete={(sessionId, confirmBoundTasks) => void deleteConversation(sessionId, false, confirmBoundTasks)}
+        onEnterSelection={enterSessionSelection}
+        onToggleSelection={toggleSessionSelection}
+        onCancelSelection={cancelSessionSelection}
+        onBulkArchive={() => void previewSessionBulk("archive")}
+        onBulkDelete={() => void previewSessionBulk("delete")}
         onShowArchived={() => void showArchivedSessions()}
         onEditProfile={() => setProfileOpen(true)}
       />
@@ -770,7 +1081,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           <div className="chat-header__left">
             <button type="button" className="icon-button mobile-menu" aria-label="打开会话历史" onClick={() => setSidebarOpen(true)}><Menu size={19} /></button>
             <button type="button" className="chat-workbench-switcher" aria-label="打开工作台导航" onClick={() => {
-              setSidebarOpen(false);
+              closeSidebar();
               window.dispatchEvent(new Event(WORKBENCH_NAVIGATION_TOGGLE_EVENT));
             }}><span>工作台</span><ChevronDown size={14} aria-hidden="true" /></button>
             <div className="chat-title"><strong>{session ? "Agent 对话" : "新对话"}</strong><span>pi SDK · 实时连接</span></div>
@@ -813,14 +1124,21 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           activeSpeechMessageId={speechState.messageId}
           scrollRef={messageScrollRef}
           contentRef={messageContentRef}
+          historyState={historyLoader.state}
+          historySentinelRef={historyLoader.sentinelRef}
+          onRetryHistory={historyLoader.retry}
           onResolved={registerMediaSummary}
           onPreview={openImagePreview}
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
+          editingEntryId={editingEntryId}
+          onEditHistory={(entryId) => void editHistory(entryId)}
+          onNavigateHistory={(entryId) => void navigateHistory(entryId)}
+          onRegenerate={(entryId) => void regenerate(entryId)}
         />
 
         <footer className="composer-dock">
-          {error && <p className="live-chat-error" role="alert">{error}</p>}
+          {composerError && <p className="live-chat-error" role="alert">{composerError}</p>}
           <div className="composer">
             <ReferenceComposer
               value={draft}
@@ -829,11 +1147,17 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               loadCatalog={() => selectedAgentId ? api.getComposerCatalog(selectedAgentId) : Promise.resolve({ skills: [], commands: [], knowledgeBases: [], workspaceEntries: [] })}
               onChange={setDraft}
               onReferencesChange={setDraftReferences}
+              onFilesInput={queueAttachmentFiles}
               onSubmit={() => void send()}
               onCatalogError={setError}
-              attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={(files) => void uploadFiles(files)} onError={setError} />}
-              attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={(files) => void uploadFiles(files)} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
-              bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
+              editingContext={editingEntryId ? <div className="composer-editing-context" role="status">
+                <div className="composer-editing-context__heading"><PencilLine size={15} aria-hidden="true" /><span><strong>正在编辑历史消息</strong><small>发送后将创建新分支，原消息不会改动。</small></span></div>
+                <p title={editingEntry?.text || draft}>{editingEntry?.text || draft || "历史消息"}</p>
+                <button type="button" onClick={cancelEditing}>取消编辑</button>
+              </div> : undefined}
+              attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={queueAttachmentFiles} onError={setError} />}
+              attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
+              bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
             />
           </div>
           <p>Agent 可以在容器权限范围内读取、修改文件和执行命令。</p>
@@ -842,11 +1166,20 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       <ArchivedSessionsDialog
         open={archiveDialogOpen}
         sessions={archivedSessions}
+        busy={sessionBulkBusy}
         onClose={() => setArchiveDialogOpen(false)}
         onOpen={openArchivedConversation}
         onRestore={restoreConversation}
         onDelete={(sessionId) => deleteConversation(sessionId, true)}
+        onRestoreAll={() => selectedAgentId && void previewSessionBulk("restore", { mode: "all_archived", agentId: selectedAgentId })}
+        onDeleteAll={() => selectedAgentId && void previewSessionBulk("delete", { mode: "all_archived", agentId: selectedAgentId })}
       />
+      {sessionBulkPreview ? <SessionBulkConfirmationDialog
+        preview={sessionBulkPreview}
+        busy={sessionBulkBusy}
+        onCancel={() => setSessionBulkPreview(undefined)}
+        onConfirm={() => void executeSessionBulk()}
+      /> : null}
       {previewImage ? <MediaLightbox item={previewImage} images={collectTimelineImages(timeline, mediaSummaries)} agentId={activeAgentId} onClose={() => setPreviewImage(undefined)} /> : null}
       <ProfileDialog
         open={profileOpen}
@@ -969,25 +1302,4 @@ function findAgentModel(
  */
 function isSameModel(left: ModelSummary | undefined, right: ModelSummary | undefined): boolean {
   return left?.provider === right?.provider && left?.id === right?.id;
-}
-
-/**
- * 判断服务端快照是否已持久化本次乐观显示的用户消息。
- */
-function timelineIncludesUserMessage(entries: ConversationEntry[], pending: UserEntry): boolean {
-  return entries.some((entry) => entry.type === "user"
-    && entry.text === pending.text
-    && entry.files.length === pending.files.length
-    && entry.files.every((file, index) => file.path === pending.files[index]?.path));
-}
-
-/**
- * 在快照暂未包含刚发送的消息时，将其置于首个新 Agent 回复之前以保持对话顺序。
- */
-function insertPendingUserMessage(entries: ConversationEntry[], pending: UserEntry): ConversationEntry[] {
-  const lastAgentIndex = entries.findLastIndex((entry) => entry.type === "agent");
-  if (lastAgentIndex < 0) {
-    return [...entries, pending];
-  }
-  return [...entries.slice(0, lastAgentIndex), pending, ...entries.slice(lastAgentIndex)];
 }

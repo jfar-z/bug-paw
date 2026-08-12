@@ -1,4 +1,4 @@
-import type { AgentInstructions, AgentProfile, CreateAgentInput } from "../../shared/agent-contracts";
+import type { AgentInstructions, AgentProfile, CreateAgentInput, TitleGenerationConfig } from "../../shared/agent-contracts";
 import { DEFAULT_AGENT_TOOL_NAMES } from "../../shared/tool-catalog";
 
 /**
@@ -65,6 +65,7 @@ export function createAgentProfile(id: string, cwd: string, input: CreateAgentIn
     cwd,
     defaultModel: input.defaultModel,
     defaultThinkingLevel: input.defaultThinkingLevel,
+    ...(input.titleGeneration ? { titleGeneration: normalizeTitleGeneration(input.titleGeneration) } : {}),
     ...(input.ttsProfileId ? {
       ttsProfileId: input.ttsProfileId,
       ...(ttsVoice ? { ttsVoice } : {}),
@@ -92,11 +93,44 @@ export function assertAgentProfile(value: unknown): asserts value is AgentProfil
     typeof (value as Partial<AgentProfile>).id !== "string" ||
     typeof (value as Partial<AgentProfile>).cwd !== "string" ||
     typeof (value as Partial<AgentProfile>).name !== "string" ||
+    !isTitleGenerationConfig((value as Partial<AgentProfile>).titleGeneration) ||
     ((value as Partial<AgentProfile>).ttsVoice !== undefined
       && typeof (value as Partial<AgentProfile>).ttsVoice !== "string")
   ) {
     throw new TypeError("Agent Profile 格式无效");
   }
+}
+
+/**
+ * 规范化标题生成策略，避免非单独模型策略残留无效模型引用。
+ *
+ * @param value 标题生成策略
+ */
+export function normalizeTitleGeneration(value: TitleGenerationConfig): TitleGenerationConfig {
+  if (value.modelSource === "custom" && (!value.model?.provider.trim() || !value.model.id.trim())) {
+    throw new TypeError("单独标题模型不能为空");
+  }
+  return {
+    modelSource: value.modelSource,
+    ...(value.modelSource === "custom" ? { model: { provider: value.model!.provider, id: value.model!.id } } : {}),
+    thinkingEnabled: value.thinkingEnabled === true,
+  };
+}
+
+/**
+ * 判断持久化的标题生成策略是否具有可接受结构。
+ *
+ * @param value 未知持久化字段
+ */
+function isTitleGenerationConfig(value: unknown): value is TitleGenerationConfig | undefined {
+  if (value === undefined) return true;
+  if (typeof value !== "object" || value === null) return false;
+  const source = value as Partial<TitleGenerationConfig>;
+  if (source.modelSource !== "session" && source.modelSource !== "system-default" && source.modelSource !== "custom") return false;
+  if (typeof source.thinkingEnabled !== "boolean") return false;
+  if (source.modelSource !== "custom") return source.model === undefined;
+  return typeof source.model?.provider === "string" && source.model.provider.trim().length > 0
+    && typeof source.model.id === "string" && source.model.id.trim().length > 0;
 }
 
 /**

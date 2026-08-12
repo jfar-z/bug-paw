@@ -2,6 +2,7 @@ import { Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { TtsProfileInput, TtsProfileSummary } from "../../shared/tts-contracts";
 import { api } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
 import { useOnlineStatus } from "../use-online-status";
 
@@ -10,6 +11,7 @@ const CACHE_KEY = "pi-agent:tts-cache";
 
 /** 配置多个 OpenAI 兼容的语音合成接口。 */
 export function TtsPage() {
+  const { runApiTask, runOptionalApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [profiles, setProfiles] = useState<TtsProfileSummary[]>([]);
   const [revision, setRevision] = useState("");
@@ -21,42 +23,68 @@ export function TtsPage() {
   useEffect(() => {
     const cached = readCache();
     if (cached) { setProfiles(cached.profiles); setRevision(cached.revision); if (cached.profiles[0]) select(cached.profiles[0]); }
-    void api.getTtsProfiles().then((document) => {
-      setProfiles(document.profiles); setRevision(document.revision); if (document.profiles[0]) select(document.profiles[0]);
-      window.localStorage.setItem(CACHE_KEY, JSON.stringify(document));
-    }).catch(() => setMessage(cached ? "正在显示上次缓存的配置；离线时不能保存。" : "无法读取语音配置"));
-  }, []);
+    void (async () => {
+      const result = cached
+        ? await runOptionalApiTask(api.getTtsProfiles, {
+            operation: "加载语音配置",
+            fallbackReason: "正在显示上次缓存的配置；离线时不能保存。",
+            fallback: () => cached,
+          })
+        : await runApiTask(api.getTtsProfiles, { operation: "加载语音配置" });
+      if (result.status === "success" || result.status === "fallback") {
+        const document = result.data;
+        setProfiles(document.profiles); setRevision(document.revision); if (document.profiles[0]) select(document.profiles[0]);
+        if (result.status === "success") window.localStorage.setItem(CACHE_KEY, JSON.stringify(document));
+        else setMessage(result.reason);
+      }
+    })();
+  }, [runApiTask, runOptionalApiTask]);
   const select = (profile: TtsProfileSummary) => { setSelected(profile); setDraft({ name: profile.name, baseUrl: profile.baseUrl, model: profile.model, voice: profile.voice, responseFormat: profile.responseFormat, apiKey: "" }); setApiKeyVisible(false); };
   const update = <K extends keyof TtsProfileInput>(key: K, value: TtsProfileInput[K]) => setDraft((current) => ({ ...current, [key]: value }));
   const toggleApiKeyVisibility = async () => {
     if (apiKeyVisible) { setApiKeyVisible(false); return; }
-    try {
-      if (selected?.hasApiKey && !draft.apiKey) {
-        const value = await api.getTtsProfileCredential(selected.id);
-        update("apiKey", value.apiKey);
-      }
+    const result = await runApiTask(async () => {
+      if (!selected?.hasApiKey || draft.apiKey) return undefined;
+      return api.getTtsProfileCredential(selected.id);
+    }, { operation: "读取语音 API Key", expected: ttsExpected(setMessage) });
+    if (result.status === "success") {
+      if (result.data) update("apiKey", result.data.apiKey);
       setApiKeyVisible(true);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 API Key"); }
+    }
   };
   const save = async () => {
     if (!online) return;
     setSaving(true); setMessage("");
     try {
-      const result = selected ? await api.updateTtsProfile(selected.id, revision, draft) : await api.createTtsProfile(draft);
+      const result = await runApiTask(
+        () => selected ? api.updateTtsProfile(selected.id, revision, draft) : api.createTtsProfile(draft),
+        { operation: "保存语音配置", expected: ttsExpected(setMessage) },
+      );
+      if (result.status !== "success") return;
       const next = await api.getTtsProfiles();
       setProfiles(next.profiles); setRevision(next.revision); window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
       const current = next.profiles.find((profile) => profile.id === selected?.id) ?? next.profiles.at(-1);
       if (current) select(current);
       setMessage("已保存语音配置");
-      void result;
-    } catch (error) { setMessage(error instanceof Error ? error.message : "保存失败"); }
+      void result.data;
+    } catch (error) {
+      await runApiTask(async () => { throw error; }, { operation: "刷新语音配置" });
+    }
     finally { setSaving(false); }
   };
   const remove = async () => {
     if (!selected || !online) return;
     setSaving(true); setMessage("");
-    try { await api.deleteTtsProfile(selected.id, revision); const next = await api.getTtsProfiles(); setProfiles(next.profiles); setRevision(next.revision); window.localStorage.setItem(CACHE_KEY, JSON.stringify(next)); setSelected(undefined); setDraft(emptyDraft()); setMessage("已删除语音配置"); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "删除失败"); }
+    try {
+      const result = await runApiTask(
+        () => api.deleteTtsProfile(selected.id, revision),
+        { operation: "删除语音配置", expected: ttsExpected(setMessage) },
+      );
+      if (result.status !== "success") return;
+      const next = await api.getTtsProfiles(); setProfiles(next.profiles); setRevision(next.revision); window.localStorage.setItem(CACHE_KEY, JSON.stringify(next)); setSelected(undefined); setDraft(emptyDraft()); setMessage("已删除语音配置");
+    } catch (error) {
+      await runApiTask(async () => { throw error; }, { operation: "刷新语音配置" });
+    }
     finally { setSaving(false); }
   };
   return <main className="configuration-page"><header className="configuration-page__heading"><h1>语音合成</h1><p>管理 OpenAI Speech 兼容接口。密钥默认隐藏，点击小眼睛可按需查看。</p></header>
@@ -73,6 +101,17 @@ export function TtsPage() {
     </section>
     <div className="configuration-save-bar"><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online || saving} onClick={() => void remove()}><Trash2 size={15} />删除</button><button type="button" className="configuration-primary-action" disabled={!online || saving} onClick={() => void save()}><Save size={16} />{saving ? "保存中…" : "保存配置"}</button></div>
   </main>;
+}
+
+/** 将语音配置的可恢复业务错误保留在当前表单中。 */
+function ttsExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setMessage(error.message);
+  return {
+    VERSION_CONFLICT: show,
+    VALIDATION_FAILED: show,
+    CREDENTIAL_NOT_FOUND: show,
+    MODEL_IN_USE: show,
+  };
 }
 
 /** 只缓存脱敏后的配置摘要，确保离线页不会落地密钥。 */

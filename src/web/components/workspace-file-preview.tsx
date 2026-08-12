@@ -2,6 +2,7 @@ import { Download, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { WorkspaceEntry, WorkspaceTextPreview } from "../../shared/contracts";
 import { api, workspaceFileUrl } from "../api";
+import { useApiTask } from "../api-task-provider";
 
 interface WorkspaceFilePreviewProps {
   agentId: string;
@@ -13,6 +14,7 @@ interface WorkspaceFilePreviewProps {
  * 在资源管理页中按文件类型展示只读媒体或文本预览。
  */
 export function WorkspaceFilePreview({ agentId, entry, onClose }: WorkspaceFilePreviewProps) {
+  const { runApiTask } = useApiTask();
   const [text, setText] = useState<WorkspaceTextPreview>();
   const [error, setError] = useState("");
   const mediaType = entry.mediaType ?? "application/octet-stream";
@@ -25,11 +27,19 @@ export function WorkspaceFilePreview({ agentId, entry, onClose }: WorkspaceFileP
     setError("");
     api.getWorkspaceText(agentId, entry.path).then((content) => {
       if (active) setText(content);
-    }).catch((reason) => {
-      if (active) setError(reason instanceof Error ? reason.message : "当前文件无法预览");
+    }).catch(async (reason) => {
+      if (!active) return;
+      await runApiTask(async () => { throw reason; }, {
+        operation: "预览工作区文件",
+        expected: {
+          TEXT_PREVIEW_UNAVAILABLE: (error) => setError(error.message),
+          FILE_NOT_FOUND: (error) => setError(error.message),
+          INVALID_PATH: (error) => setError(error.message),
+        },
+      });
     });
     return () => { active = false; };
-  }, [agentId, entry.path, mediaType]);
+  }, [agentId, entry.path, mediaType, runApiTask]);
 
   return <aside className="workspace-file-preview" aria-label={`${entry.name} 预览`}>
     <header><div><span>PREVIEW</span><strong>{entry.name}</strong></div><button type="button" className="icon-button" aria-label="关闭预览" onClick={onClose}><X size={18} aria-hidden="true" /></button></header>

@@ -112,7 +112,10 @@ export class ProviderRenameService {
     try {
       await this.transaction.execute(changes);
       for (const change of agentChanges) {
-        await this.agents.update(change.before.id, { defaultModel: change.after.defaultModel }, change.revision);
+        await this.agents.update(change.before.id, {
+          defaultModel: change.after.defaultModel,
+          titleGeneration: change.after.titleGeneration,
+        }, change.revision);
       }
       await rm(manifestPath, { force: true });
     } catch (error) {
@@ -162,14 +165,21 @@ export class ProviderRenameService {
     changes.push({ path, expectedRevision: loaded.revision, nextContent: serialize(next), sensitive: true });
   }
 
-  /** 迁移引用该 Provider 的 Agent Profile 默认模型。 */
+  /** 迁移引用该 Provider 的 Agent Profile 模型配置。 */
   private async collectAgentChanges(sourceId: string, targetId: string): Promise<Array<{ before: AgentProfile; after: AgentProfile; revision: string }>> {
     const changes: Array<{ before: AgentProfile; after: AgentProfile; revision: string }> = [];
     for (const document of await this.agents.list()) {
-      if (document.profile.defaultModel?.provider !== sourceId) continue;
+      const defaultModelChanged = document.profile.defaultModel?.provider === sourceId;
+      const titleModelChanged = document.profile.titleGeneration?.modelSource === "custom"
+        && document.profile.titleGeneration.model?.provider === sourceId;
+      if (!defaultModelChanged && !titleModelChanged) continue;
       const next: AgentProfile = {
         ...document.profile,
-        defaultModel: { ...document.profile.defaultModel, provider: targetId },
+        ...(defaultModelChanged ? { defaultModel: { ...document.profile.defaultModel!, provider: targetId } } : {}),
+        ...(titleModelChanged ? { titleGeneration: {
+          ...document.profile.titleGeneration!,
+          model: { ...document.profile.titleGeneration!.model!, provider: targetId },
+        } } : {}),
         updatedAt: new Date().toISOString(),
       };
       changes.push({ before: document.profile, after: next, revision: document.revision });
@@ -262,9 +272,16 @@ async function recoverProviderRenameManifest(
   const to = targetExists ? manifest.targetId : manifest.sourceId;
   for (const agentId of manifest.agentIds) {
     const current = await agents.get(agentId);
-    if (!current || current.profile.defaultModel?.provider !== from) continue;
+    const defaultModelChanged = current?.profile.defaultModel?.provider === from;
+    const titleModelChanged = current?.profile.titleGeneration?.modelSource === "custom"
+      && current.profile.titleGeneration.model?.provider === from;
+    if (!current || (!defaultModelChanged && !titleModelChanged)) continue;
     await agents.update(agentId, {
-      defaultModel: { ...current.profile.defaultModel, provider: to },
+      ...(defaultModelChanged ? { defaultModel: { ...current.profile.defaultModel!, provider: to } } : {}),
+      ...(titleModelChanged ? { titleGeneration: {
+        ...current.profile.titleGeneration!,
+        model: { ...current.profile.titleGeneration!.model!, provider: to },
+      } } : {}),
     }, current.revision);
   }
   await rm(manifestPath, { force: true });

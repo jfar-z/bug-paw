@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { SessionHistoryPageSchema } from "../session-history-contracts";
 
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -48,6 +49,7 @@ export const SessionProjectionSchema = StrictObject({
   projectionVersion: Type.Integer({ minimum: 0 }),
   lastEventId: Type.Integer({ minimum: 0 }),
   messages: Type.Array(Type.Unknown()),
+  history: SessionHistoryPageSchema,
   model: Type.Optional(ModelSummarySchema),
   run: Type.Optional(ChatRunSummarySchema),
 });
@@ -64,6 +66,7 @@ export const SessionSnapshotEventSchema = StrictObject({
   sessionId: Type.String({ minLength: 1 }),
   type: Type.Literal("snapshot"),
   messages: Type.Array(Type.Unknown()),
+  history: SessionHistoryPageSchema,
   model: Type.Optional(ModelSummarySchema),
   run: Type.Optional(ChatRunSummarySchema),
   lastEventId: Type.Integer({ minimum: 0 }),
@@ -88,7 +91,33 @@ export const SessionEventSchema = Type.Union([
   StrictObject({ ...EventIdentity, type: Type.Literal("text_delta"), delta: Type.String() }),
   StrictObject({ ...EventIdentity, type: Type.Literal("thinking_delta"), delta: Type.String() }),
   StrictObject({ ...EventIdentity, type: Type.Literal("thinking_finished") }),
-  StrictObject({ ...EventIdentity, type: Type.Literal("session_renamed"), name: Type.String({ minLength: 1, maxLength: 120 }) }),
+  StrictObject({
+    id: Type.Integer({ minimum: 1 }),
+    sessionId: Type.String({ minLength: 1 }),
+    type: Type.Literal("session_renamed"),
+    name: Type.String({ minLength: 1, maxLength: 120 }),
+  }),
+  StrictObject({
+    ...EventIdentity,
+    type: Type.Literal("tool_preparing"),
+    callId: Type.String({ minLength: 1 }),
+    toolName: Type.String({ minLength: 1 }),
+  }),
+  StrictObject({
+    ...EventIdentity,
+    type: Type.Literal("tool_parameters_streaming"),
+    callId: Type.String({ minLength: 1 }),
+    toolName: Type.String({ minLength: 1 }),
+    generatedBytes: Type.Integer({ minimum: 1 }),
+    path: Type.Optional(Type.String({ minLength: 1 })),
+  }),
+  StrictObject({
+    ...EventIdentity,
+    type: Type.Literal("tool_prepared"),
+    callId: Type.String({ minLength: 1 }),
+    toolName: Type.String({ minLength: 1 }),
+    args: Type.Unknown(),
+  }),
   StrictObject({
     ...EventIdentity,
     type: Type.Literal("tool_started"),

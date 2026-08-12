@@ -16,11 +16,19 @@ describe("createAgentProfile", () => {
       "grep",
       "find",
       "ls",
+      "knowledge_search",
+      "knowledge_read",
+      "knowledge_manage",
+      "scheduled_tasks",
+      "edit_own_prompts",
+      "web_search",
+      "web_read",
+    ]));
+    expect(profile.allowedTools).not.toEqual(expect.arrayContaining([
       "search_knowledge",
       "get_knowledge_document",
       "manage_knowledge_base",
-      "scheduled_tasks",
-      "edit_own_prompts",
+      "web_open",
     ]));
   });
 
@@ -34,5 +42,22 @@ describe("createAgentProfile", () => {
     }, "2026-08-07T00:00:00.000Z");
 
     expect(profile).toMatchObject({ ttsProfileId: "voice-a", ttsVoice: "Cherry", ttsAutoPlay: true, ttsStreamPlayback: true });
+  });
+
+  it("新建 Agent 保留标题生成策略", () => {
+    const profile = createAgentProfile("agent-1", "/data/workspace/agents/agent-1", {
+      name: "标题 Agent",
+      titleGeneration: {
+        modelSource: "custom",
+        model: { provider: "OpenAI", id: "gpt-title" },
+        thinkingEnabled: true,
+      },
+    }, "2026-08-10T00:00:00.000Z");
+
+    expect(profile.titleGeneration).toEqual({
+      modelSource: "custom",
+      model: { provider: "OpenAI", id: "gpt-title" },
+      thinkingEnabled: true,
+    });
   });
 });

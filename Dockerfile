@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24.19.0-bookworm-slim AS source
 
 WORKDIR /app
 # LanceDB 的 ONNX 依赖默认下载 CUDA 二进制；本服务使用 CPU 索引，跳过该可选下载。
@@ -12,9 +12,15 @@ COPY src ./src
 COPY tests ./tests
 COPY scripts ./scripts
 COPY config ./config
+
+# 显式验证目标供贡献者和发布流程按需执行，不阻塞默认快速部署。
+FROM source AS verify
 RUN npm run verify
 
-FROM node:24-bookworm-slim AS runtime
+FROM source AS build
+RUN npm run build:container
+
+FROM node:24.19.0-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV PORT=7080

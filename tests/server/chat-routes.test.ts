@@ -16,6 +16,7 @@ import { registerSessionRoutes } from "../../src/server/routes/sessions";
 import { registerSetupRoutes } from "../../src/server/routes/setup";
 import type { WorkspaceFileInfo, WorkspaceFileService } from "../../src/server/attachments";
 import type { RuntimeSupervisor } from "../../src/server/runtime/runtime-supervisor";
+import type { ChatApplicationService } from "../../src/server/chat/chat-service";
 import { createSessionMetadataStore } from "../../src/server/session-metadata";
 import type { AgentReferenceResolver } from "../../src/server/agent-references";
 import { openDatabase } from "../../src/server/database/database";
@@ -23,6 +24,7 @@ import { runMigrations } from "../../src/server/database/migrator";
 import { createIdentityRepository } from "../../src/server/identity/identity-repository";
 import { createAgentRepository } from "../../src/server/agents/agent-repository";
 import { createSessionRepository } from "../../src/server/sessions/session-repository";
+import type { SessionBulkService } from "../../src/server/sessions/session-bulk-service";
 
 const apps: FastifyInstance[] = [];
 const temporaryRoots: string[] = [];
@@ -96,7 +98,32 @@ class FakeRuntime implements PiRuntimeGateway {
   }
 }
 
-async function createTestApp(runtime = new FakeRuntime(), workspaceFiles?: WorkspaceFileService, referenceResolver?: AgentReferenceResolver) {
+/** 为路由集成测试保留 Runtime 删除断言，批量事务本身由专用测试覆盖。 */
+function createSessionBulkDouble(removeSession: (sessionId: string) => Promise<void>): SessionBulkService {
+  return {
+    async preview(action, target) {
+      return {
+        action,
+        target,
+        sessionCount: target.mode === "selected" ? target.sessionIds.length : 0,
+        tasks: [],
+        fingerprint: "test-fingerprint",
+      };
+    },
+    async execute(input) {
+      const sessionIds = input.target.mode === "selected" ? input.target.sessionIds : [];
+      for (const sessionId of sessionIds) await removeSession(sessionId);
+      return { action: input.action, sessionCount: sessionIds.length, affectedTaskCount: 0 };
+    },
+  };
+}
+
+async function createTestApp(
+  runtime = new FakeRuntime(),
+  workspaceFiles?: WorkspaceFileService,
+  referenceResolver?: AgentReferenceResolver,
+  chatService?: Pick<ChatApplicationService, "startBranchTurn">,
+) {
   const root = await mkdtemp(join(tmpdir(), "pi-agent-chat-routes-"));
   temporaryRoots.push(root);
   const paths = await createDataPaths(root);
@@ -107,8 +134,8 @@ async function createTestApp(runtime = new FakeRuntime(), workspaceFiles?: Works
   registerSetupRoutes(app, { paths });
   registerAuthRoutes(app, { authService });
   registerModelRoutes(app, { authService, runtime });
-  registerSessionRoutes(app, { authService, runtime, deleteSession: (sessionId) => runtime.deleteSession(sessionId) });
-  registerChatRoutes(app, { authService, runtime, workspaceFiles, referenceResolver, heartbeatMs: 50 });
+  registerSessionRoutes(app, { authService, runtime, sessionBulk: createSessionBulkDouble((sessionId) => runtime.deleteSession(sessionId)) });
+  registerChatRoutes(app, { authService, runtime, workspaceFiles, referenceResolver, chatService: chatService as ChatApplicationService | undefined, heartbeatMs: 50 });
   await app.ready();
   return { app, runtime };
 }
@@ -137,6 +164,47 @@ afterEach(async () => {
 });
 
 describe("对话 API", () => {
+  it("编辑后的发送仅在确认提交时调用会话树分支服务", async () => {
+    const startBranchTurn = vi.fn(async () => ({
+      runId: "run-branch",
+      sessionId: "session-1",
+      status: "running" as const,
+      startedAt: "2026-08-10T00:00:00.000Z",
+    }));
+    const { app } = await createTestApp(new FakeRuntime(), undefined, undefined, { startBranchTurn });
+    const authCookie = await initializeAndLogin(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/sessions/session-1/branches/user-old/messages",
+      headers: { cookie: authCookie },
+      payload: { text: "修改后的问题", filePaths: [], references: [] },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(startBranchTurn).toHaveBeenCalledWith("session-1", "user-old", {
+      text: "修改后的问题",
+      filePaths: [],
+      references: [],
+    });
+  });
+
+  it("版本切换调用会话树导航服务并返回目标分支快照", async () => {
+    const navigateHistory = vi.fn(async () => ({ id: "session-1", messages: [], lastEventId: 4 }));
+    const { app } = await createTestApp(new FakeRuntime(), undefined, undefined, { navigateHistory } as never);
+    const authCookie = await initializeAndLogin(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/sessions/session-1/branches/assistant-branch-leaf/navigate",
+      headers: { cookie: authCookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ id: "session-1", messages: [], lastEventId: 4 });
+    expect(navigateHistory).toHaveBeenCalledWith("session-1", "assistant-branch-leaf");
+  });
+
   it("支持会话重命名、归档、恢复、归档列表和删除", async () => {
     const { app, runtime } = await createTestApp();
     const authCookie = await initializeAndLogin(app);
@@ -265,7 +333,7 @@ describe("对话 API", () => {
       authService,
       runtimeSupervisor,
       sessionMetadata,
-      deleteSession: async (sessionId) => {
+      sessionBulk: createSessionBulkDouble(async (sessionId) => {
         const agentId = await sessionMetadata.getAgentId(sessionId);
         const lease = await runtimeSupervisor.acquire(agentId!);
         try {
@@ -273,7 +341,7 @@ describe("对话 API", () => {
         } finally {
           lease.release();
         }
-      },
+      }),
     });
     registerChatRoutes(app, { authService, runtimeSupervisor, sessionMetadata });
     await app.ready();

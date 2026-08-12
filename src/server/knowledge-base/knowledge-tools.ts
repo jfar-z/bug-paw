@@ -1,16 +1,31 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { KnowledgeDocument, KnowledgeBaseSummary, KnowledgeUpload } from "./knowledge-base-service";
-import type { KnowledgeIndexSearchResult } from "./lance-index";
 import { SYSTEM_LIMITS } from "../core/limits";
+import {
+  emptyResponse,
+  errorResponse,
+  okResponse,
+  partialResponse,
+  toPiToolResult,
+  type ToolWarning,
+} from "../retrieval/tool-response";
+import type {
+  KnowledgeBaseSummary,
+  KnowledgeDocument,
+  KnowledgeReadInput,
+  KnowledgeReadServiceResult,
+  KnowledgeSearchInput,
+  KnowledgeSearchServiceResult,
+  KnowledgeUpload,
+} from "./knowledge-base-service";
 
 interface KnowledgeSearchService {
-  searchForAgent(agentId: string, input: { query: string; knowledgeBaseId?: string; limit?: number }): Promise<KnowledgeIndexSearchResult[]>;
+  searchForAgent(agentId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchServiceResult>;
 }
 
-interface KnowledgeDocumentService {
-  getDocumentForAgent(agentId: string, documentId: string): Promise<KnowledgeDocument>;
+interface KnowledgeReadService {
+  readForAgent(agentId: string, input: KnowledgeReadInput): Promise<KnowledgeReadServiceResult>;
 }
 
 interface KnowledgeBaseManagementService {
@@ -35,100 +50,132 @@ const SUPPORTED_MEDIA_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 ]);
 
-/**
- * 创建只检索当前 Agent 已绑定知识库的 Pi SDK 工具。
- *
- * @param agentId 当前 Pi Runtime 所属 Agent
- * @param service 知识库检索应用服务
- */
-export function createSearchKnowledgeTool(agentId: string, service: KnowledgeSearchService) {
+/** 创建只检索当前 Agent 授权知识库的工具。 */
+export function createKnowledgeSearchTool(agentId: string, service: KnowledgeSearchService) {
   return defineTool({
-    name: "search_knowledge",
+    name: "knowledge_search",
     label: "检索知识库",
-    description: "按关键词检索当前 Agent 已绑定的知识库，并返回命中文本片段和资料 ID。",
-    promptSnippet: "需要从已绑定知识库查找依据时，使用 search_knowledge。",
+    description: "检索当前 Agent 可访问的知识库并返回带资料与切片位置的结果。",
     parameters: Type.Object({
-      query: Type.String({ minLength: 1 }),
-      knowledgeBaseId: Type.Optional(Type.String({ minLength: 1 })),
+      query: Type.String({ minLength: 1, maxLength: 500 }),
+      knowledgeBaseIds: Type.Optional(Type.Array(
+        Type.String({ minLength: 1 }),
+        { minItems: 1, maxItems: 20, uniqueItems: true },
+      )),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
-    }),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       try {
-        return success(await service.searchForAgent(agentId, params));
+        const result = await service.searchForAgent(agentId, params);
+        if (result.metadata.resultCount === 0) {
+          return toPiToolResult(emptyResponse(result.data, result.metadata));
+        }
+        if (result.warnings.length > 0) {
+          return toPiToolResult(partialResponse(result.data, result.metadata, result.warnings));
+        }
+        return toPiToolResult(okResponse(result.data, result.metadata));
       } catch (error) {
-        return failure(error instanceof Error ? error.message : "知识库检索失败");
+        return toPiToolResult(errorResponse(
+          "KNOWLEDGE_SEARCH_FAILED",
+          errorMessage(error, "知识库检索失败"),
+          false,
+        ));
       }
     },
   });
 }
 
-/**
- * 创建只读取当前 Agent 可访问单份资料的 Pi SDK 工具。
- *
- * @param agentId 当前 Pi Runtime 所属 Agent
- * @param service 知识库资料应用服务
- */
-export function createGetKnowledgeDocumentTool(agentId: string, service: KnowledgeDocumentService) {
+/** 创建读取知识库命中上下文或整篇正文片段的工具。 */
+export function createKnowledgeReadTool(agentId: string, service: KnowledgeReadService) {
   return defineTool({
-    name: "get_knowledge_document",
-    label: "查看知识库资料",
-    description: "根据资料 ID 查看当前 Agent 已绑定知识库中的单份资料详情与可提取正文。",
-    promptSnippet: "检索结果需要更多上下文时，使用 get_knowledge_document 读取资料详情。",
-    parameters: Type.Object({ documentId: Type.String({ minLength: 1 }) }),
+    name: "knowledge_read",
+    label: "读取知识库资料",
+    description: "读取知识库命中切片周围的上下文，或按偏移量读取资料正文。",
+    parameters: Type.Object({
+      mode: Type.Union([Type.Literal("around_chunk"), Type.Literal("document")]),
+      documentId: Type.String({ minLength: 1 }),
+      anchorChunkId: Type.Optional(Type.String({ minLength: 1 })),
+      beforeChunks: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+      afterChunks: Type.Optional(Type.Integer({ minimum: 0, maximum: 10 })),
+      offset: Type.Optional(Type.Integer({ minimum: 0 })),
+      maxCharacters: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       try {
-        return success(await service.getDocumentForAgent(agentId, params.documentId));
+        const input = validateKnowledgeReadInput(params);
+        const result = await service.readForAgent(agentId, input);
+        const warnings: ToolWarning[] = [...result.warnings];
+        if (result.metadata.truncated && !warnings.some(({ code }) => code === "CONTENT_TRUNCATED")) {
+          warnings.push({ code: "CONTENT_TRUNCATED", message: "返回正文已按字符上限截断" });
+        }
+        if (warnings.length > 0) {
+          return toPiToolResult(partialResponse(result.data, result.metadata, warnings));
+        }
+        return toPiToolResult(okResponse(result.data, result.metadata));
       } catch (error) {
-        return failure(error instanceof Error ? error.message : "读取知识库资料失败");
+        return toPiToolResult(errorResponse(
+          "KNOWLEDGE_READ_FAILED",
+          errorMessage(error, "读取知识库资料失败"),
+          false,
+        ));
       }
     },
   });
 }
 
-/**
- * 汇集当前 Agent 已绑定知识库的管理操作，避免为低频操作长期注册多份工具 schema。
- *
- * @param agentId 当前 Pi Runtime 所属 Agent
- * @param service 受 Agent 作用域约束的知识库管理服务
- * @param files 当前 Agent 工作区资料读取能力
- */
-export function createManageKnowledgeBaseTool(agentId: string, service: KnowledgeBaseManagementService, files: KnowledgeWorkspaceFileReader) {
+/** 创建当前 Agent 作用域内的知识库管理工具。 */
+export function createKnowledgeManageTool(
+  agentId: string,
+  service: KnowledgeBaseManagementService,
+  files: KnowledgeWorkspaceFileReader,
+) {
   return defineTool({
-    name: "manage_knowledge_base",
+    name: "knowledge_manage",
     label: "管理知识库",
-    description: "列出、创建、编辑、导入或删除当前 Agent 已绑定的知识库和资料。删除知识库会清理全部资料、索引和所有 Agent 绑定。",
-    promptSnippet: "需要管理知识库时，使用 manage_knowledge_base；删除知识库前必须先用 action=list 确认 ID。",
+    description: "列出、创建、更新、导入或删除当前 Agent 可管理的知识库与资料。",
     parameters: Type.Object({
       action: Type.Union([
-        Type.Literal("list"),
-        Type.Literal("create"),
-        Type.Literal("modify_knowladge_base"),
+        Type.Literal("list_bases"),
+        Type.Literal("create_base"),
+        Type.Literal("update_base"),
         Type.Literal("upload_documents"),
-        Type.Literal("delete_base"),
         Type.Literal("delete_document"),
+        Type.Literal("delete_base"),
       ]),
       knowledgeBaseId: Type.Optional(Type.String({ minLength: 1 })),
       name: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
       description: Type.Optional(Type.String({ maxLength: 300 })),
       paths: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 10 })),
       documentId: Type.Optional(Type.String({ minLength: 1 })),
-    }),
+    }, { additionalProperties: false }),
     async execute(_toolCallId, params) {
       try {
-        if (params.action === "list") return success(await service.listBasesForAgent(agentId));
-        if (params.action === "create") {
-          return success(await service.createBaseForAgent(agentId, { name: requiredName(params.name), ...(params.description !== undefined ? { description: params.description } : {}) }));
+        if (params.action === "list_bases") {
+          return toPiToolResult(okResponse(
+            { knowledgeBases: await service.listBasesForAgent(agentId) },
+            { action: params.action },
+          ));
         }
-        const knowledgeBaseId = requiredValue(params.knowledgeBaseId, "请提供 knowledgeBaseId");
-        if (params.action === "modify_knowladge_base") {
-          if (params.name === undefined && params.description === undefined) throw new Error("至少提供名称或说明");
-          return success(await service.updateBaseForAgent(agentId, knowledgeBaseId, {
-            ...(params.name !== undefined ? { name: requiredName(params.name) } : {}),
+        if (params.action === "create_base") {
+          if (params.name === undefined) throw new TypeError("create_base 操作必须提供 name");
+          const knowledgeBase = await service.createBaseForAgent(agentId, {
+            name: params.name.trim(),
             ...(params.description !== undefined ? { description: params.description } : {}),
-          }));
+          });
+          return toPiToolResult(okResponse({ knowledgeBase }, { action: params.action }));
+        }
+        if (params.action === "update_base") {
+          if (params.knowledgeBaseId === undefined) throw new TypeError("update_base 操作必须提供 knowledgeBaseId");
+          if (params.name === undefined && params.description === undefined) throw new Error("至少提供名称或说明");
+          const knowledgeBase = await service.updateBaseForAgent(agentId, params.knowledgeBaseId, {
+            ...(params.name !== undefined ? { name: params.name.trim() } : {}),
+            ...(params.description !== undefined ? { description: params.description } : {}),
+          });
+          return toPiToolResult(okResponse({ knowledgeBase }, { action: params.action }));
         }
         if (params.action === "upload_documents") {
-          if (!Array.isArray(params.paths) || params.paths.length === 0) throw new Error("至少提供一份工作区资料");
+          if (params.knowledgeBaseId === undefined) throw new TypeError("upload_documents 操作必须提供 knowledgeBaseId");
+          if (params.paths === undefined) throw new TypeError("upload_documents 操作必须提供 paths");
           const documents: KnowledgeDocument[] = [];
           let totalBytes = 0;
           for (const path of params.paths) {
@@ -136,44 +183,74 @@ export function createManageKnowledgeBaseTool(agentId: string, service: Knowledg
             if (!SUPPORTED_MEDIA_TYPES.has(upload.mediaType)) throw new Error("仅支持 TXT、Markdown、PDF 与 DOCX 文件");
             totalBytes += upload.content?.byteLength ?? 0;
             if (totalBytes > SYSTEM_LIMITS.knowledgeUploadBytes) throw new Error("单次导入资料总量不能超过 50 MB");
-            // 顺序读取并立即解析，避免 Agent tool 在进入 Service 栅栏前持有 10 份大 Buffer。
-            documents.push(...await service.uploadDocumentsForAgent(agentId, knowledgeBaseId, [upload]));
+            // 顺序读取并立即解析，避免在进入 Service 栅栏前同时持有多份大文件。
+            documents.push(...await service.uploadDocumentsForAgent(agentId, params.knowledgeBaseId, [upload]));
           }
-          return success({ knowledgeBaseId, documents });
+          return toPiToolResult(okResponse(
+            { knowledgeBaseId: params.knowledgeBaseId, documents },
+            { action: params.action },
+          ));
         }
         if (params.action === "delete_document") {
-          const documentId = requiredValue(params.documentId, "请提供 documentId");
-          await service.removeDocumentForAgent(agentId, knowledgeBaseId, documentId);
-          return success({ knowledgeBaseId, documentId, deleted: true });
+          if (params.knowledgeBaseId === undefined) throw new TypeError("delete_document 操作必须提供 knowledgeBaseId");
+          if (params.documentId === undefined) throw new TypeError("delete_document 操作必须提供 documentId");
+          await service.removeDocumentForAgent(agentId, params.knowledgeBaseId, params.documentId);
+          return toPiToolResult(okResponse({
+            knowledgeBaseId: params.knowledgeBaseId,
+            documentId: params.documentId,
+            deleted: true,
+          }, { action: params.action }));
         }
-        await service.removeBaseForAgent(agentId, knowledgeBaseId);
-        return success({ knowledgeBaseId, deleted: true, scope: "knowledge_base_with_documents_indexes_and_bindings" });
+        if (params.knowledgeBaseId === undefined) throw new TypeError("delete_base 操作必须提供 knowledgeBaseId");
+        await service.removeBaseForAgent(agentId, params.knowledgeBaseId);
+        return toPiToolResult(okResponse({
+          knowledgeBaseId: params.knowledgeBaseId,
+          deleted: true,
+          scope: "knowledge_base_with_documents_indexes_and_bindings",
+        }, { action: params.action }));
       } catch (error) {
-        return failure(error instanceof Error ? error.message : "管理知识库失败");
+        return toPiToolResult(errorResponse(
+          "KNOWLEDGE_MANAGE_FAILED",
+          errorMessage(error, "管理知识库失败"),
+          false,
+        ));
       }
     },
   });
 }
 
-/** 返回非空的名称字段。 */
-function requiredName(value: string | undefined): string {
-  const name = value?.trim();
-  if (!name) throw new Error("请提供知识库名称");
-  return name;
+/** 在业务读取前校验 mode 对应的条件字段，并收窄为服务层输入。 */
+function validateKnowledgeReadInput(params: {
+  mode: "around_chunk" | "document";
+  documentId: string;
+  anchorChunkId?: string;
+  beforeChunks?: number;
+  afterChunks?: number;
+  offset?: number;
+  maxCharacters?: number;
+}): KnowledgeReadInput {
+  if (params.mode === "around_chunk") {
+    if (params.anchorChunkId === undefined) {
+      throw new TypeError("around_chunk 模式必须提供 anchorChunkId");
+    }
+    return {
+      mode: params.mode,
+      documentId: params.documentId,
+      anchorChunkId: params.anchorChunkId,
+      ...(params.beforeChunks !== undefined ? { beforeChunks: params.beforeChunks } : {}),
+      ...(params.afterChunks !== undefined ? { afterChunks: params.afterChunks } : {}),
+      ...(params.maxCharacters !== undefined ? { maxCharacters: params.maxCharacters } : {}),
+    };
+  }
+  return {
+    mode: params.mode,
+    documentId: params.documentId,
+    ...(params.offset !== undefined ? { offset: params.offset } : {}),
+    ...(params.maxCharacters !== undefined ? { maxCharacters: params.maxCharacters } : {}),
+  };
 }
 
-/** 返回 action 所需的非空字符串字段。 */
-function requiredValue(value: string | undefined, message: string): string {
-  if (!value?.trim()) throw new Error(message);
-  return value;
-}
-
-/** 返回提供给 Pi 模型的结构化成功结果。 */
-function success(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} };
-}
-
-/** 返回可供 Pi 模型纠正参数的失败结果。 */
-function failure(message: string) {
-  return { content: [{ type: "text" as const, text: message }], details: {} };
+/** 将受控业务错误转换为工具可见消息。 */
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }

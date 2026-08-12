@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { ProvidersPage } from "./providers-page";
+
+function renderProvidersPage() {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><ProvidersPage /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("ProvidersPage", () => {
   it("通过应用内对话框改名 Provider 并提交引用迁移", async () => {
@@ -12,7 +18,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "重命名 Provider" }));
     const dialog = screen.getByRole("dialog", { name: "重命名 Provider" });
@@ -43,7 +49,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { first, second } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     const firstProvider = await screen.findByRole("button", { name: "选择或拖动 Provider First 排序" });
     const secondProvider = screen.getByRole("button", { name: "选择或拖动 Provider Second 排序" });
@@ -86,7 +92,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     fireEvent.change(await screen.findByLabelText("上下文窗口"), { target: { value: "200000" } });
     fireEvent.change(screen.getByLabelText("最大返回 Token"), { target: { value: "16000" } });
@@ -117,7 +123,7 @@ describe("ProvidersPage", () => {
       }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     expect(await screen.findByDisplayValue("Example")).toBeInTheDocument();
     expect(screen.getByLabelText("Provider 模板")).toBeInTheDocument();
@@ -153,7 +159,7 @@ describe("ProvidersPage", () => {
       }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     const name = await screen.findByDisplayValue("Example");
     fireEvent.change(name, { target: { value: "Example Updated" } });
@@ -183,7 +189,7 @@ describe("ProvidersPage", () => {
       },
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     expect(await screen.findByRole("button", { name: "测试当前模型" })).toBeEnabled();
     expect(screen.queryByText("请先保存 Provider 后测试")).not.toBeInTheDocument();
@@ -216,7 +222,7 @@ describe("ProvidersPage", () => {
       }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     const apiKey = await screen.findByLabelText("API Key");
     expect(apiKey.closest(".configuration-form-card")?.textContent).toContain("01");
@@ -239,7 +245,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [{ providerId: "example", type: "api_key", configured: true }], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     await screen.findByLabelText("API Key");
     fireEvent.click(screen.getByRole("button", { name: "显示API Key" }));
@@ -267,7 +273,7 @@ describe("ProvidersPage", () => {
       },
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     expect(await screen.findByRole("button", { name: "发现模型" })).toBeEnabled();
     fireEvent.change(screen.getByDisplayValue("Example"), { target: { value: "Changed" } });
@@ -283,7 +289,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: {} } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     fireEvent.click(await screen.findByRole("button", { name: "新建 Provider" }));
     fireEvent.change(screen.getByLabelText("Provider ID"), { target: { value: "my-provider" } });
@@ -319,7 +325,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     fireEvent.change(await screen.findByLabelText("推理内容转文本"), { target: { value: "on" } });
     fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
@@ -350,7 +356,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     expect(await screen.findByLabelText("文本输入")).toBeChecked();
     expect(screen.getByLabelText("文本输入")).toBeDisabled();
@@ -379,7 +385,7 @@ describe("ProvidersPage", () => {
       return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<ProvidersPage />);
+    renderProvidersPage();
 
     expect(await screen.findByLabelText("图片输入")).toBeChecked();
     fireEvent.click(screen.getByLabelText("图片输入"));
@@ -387,5 +393,109 @@ describe("ProvidersPage", () => {
 
     await waitFor(() => expect(savedBodies).toHaveLength(1));
     expect(savedBodies[0].provider.models[0].input).toEqual(["text"]);
+  });
+
+  it("仅为推理模型展示思考协议，并预览 Qwen Chat Template 参数", async () => {
+    const provider = {
+      name: "Example",
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      models: [{ id: "reasoner", name: "Reasoner", reasoning: false, thinkingLevelMap: {}, compat: {} }],
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      revision: "r1",
+      credentialRevision: "c1",
+      credentials: [],
+      diagnostics: [],
+      value: { providers: { example: provider } },
+    }), { status: 200 })));
+    renderProvidersPage();
+
+    const reasoning = await screen.findByRole("checkbox", { name: "推理模型" });
+    expect(screen.queryByLabelText("思考协议")).not.toBeInTheDocument();
+
+    fireEvent.click(reasoning);
+    fireEvent.change(screen.getByLabelText("思考协议"), { target: { value: "qwen-chat-template" } });
+
+    expect(screen.getByText("开启思考")).toBeInTheDocument();
+    expect(screen.getByText("关闭思考")).toBeInTheDocument();
+    expect(screen.getAllByText(/chat_template_kwargs/u)).toHaveLength(2);
+    expect(screen.getByText(/"enable_thinking": true/u)).toBeInTheDocument();
+    expect(screen.getByText(/"enable_thinking": false/u)).toBeInTheDocument();
+  });
+
+  it("思考协议切回自动时仅移除 thinkingFormat", async () => {
+    const provider = {
+      name: "Example",
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      models: [{
+        id: "reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        thinkingLevelMap: {},
+        compat: { thinkingFormat: "qwen", customFutureOption: "keep" },
+      }],
+    };
+    const savedBodies: Array<{ provider: typeof provider }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/providers/example" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { provider: typeof provider };
+        savedBodies.push(body);
+        return new Response(JSON.stringify({ revision: "r2", diagnostics: [], value: { providers: { example: body.provider } } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderProvidersPage();
+
+    fireEvent.change(await screen.findByLabelText("思考协议"), { target: { value: "auto" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+
+    await waitFor(() => expect(savedBodies).toHaveLength(1));
+    expect(savedBodies[0].provider.models[0].compat).toEqual({ customFutureOption: "keep" });
+  });
+
+  it("保存思考协议时保留其他兼容字段", async () => {
+    const provider = {
+      name: "Example",
+      baseUrl: "https://api.example.com/v1",
+      api: "openai-completions",
+      models: [{
+        id: "reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        thinkingLevelMap: {},
+        compat: { customFutureOption: "keep" },
+      }],
+    };
+    const savedBodies: Array<{ provider: typeof provider }> = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/v1/providers/example" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { provider: typeof provider };
+        savedBodies.push(body);
+        return new Response(JSON.stringify({ revision: "r2", diagnostics: [], value: { providers: { example: body.provider } } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ revision: "r1", credentialRevision: "c1", credentials: [], diagnostics: [], value: { providers: { example: provider } } }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderProvidersPage();
+
+    fireEvent.change(await screen.findByLabelText("思考协议"), { target: { value: "qwen-chat-template" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+
+    await waitFor(() => expect(savedBodies).toHaveLength(1));
+    expect(savedBodies[0].provider.models[0].compat).toEqual({
+      customFutureOption: "keep",
+      thinkingFormat: "qwen-chat-template",
+    });
+  });
+
+  it("Provider 加载发生意外错误时显示全局 Toast", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("provider network secret"); }));
+    renderProvidersPage();
+
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
+    expect(screen.queryByText("provider network secret")).not.toBeInTheDocument();
   });
 });

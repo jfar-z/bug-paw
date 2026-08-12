@@ -4,6 +4,56 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.3 - 2026-08-12
+
+### 新增 / Added
+
+- 增加会话树分支导航、历史消息编辑、回答重新生成、附件回填与分支版本切换。
+- 增加长会话历史分页和向上加载能力，并保持加载前后的滚动位置。
+- 增加会话多选、批量归档，以及已归档会话的全部恢复与全部删除流程；关联定时任务时提供强化确认。
+- 增加粘贴、拖放上传、消息纯文本复制和移动端会话侧栏滑动手势。
+- 增加标题模型来源配置、思考协议参数预览，以及后台自动生成和实时同步会话标题。
+- 增加知识库混合检索、上下文读取、统一检索工具响应协议和动态检索路由策略。
+- 增加博查与 Tavily 搜索渠道、多实例凭证管理、搜索服务路由、冷却和运行内断路能力。
+- 增加联网搜索配置弹窗、作用域说明、已配置渠道管理和配置导入迁移界面。
+- 增加按事件顺序展示的思考与工具活动轨迹，包括参数生成进度、运行状态、分组、折叠和中止结果。
+- 增加统一的前端接口错误分发、意外错误提示和可展开错误详情。
+- 增加可选容器构建验证流程。
+
+- Added session-tree branch navigation, historical-message editing, response regeneration, attachment restoration, and branch-version switching.
+- Added paginated loading for long conversation histories while preserving the scroll position.
+- Added multi-select session archiving and restore/delete-all workflows for archived sessions, with reinforced confirmation for linked scheduled tasks.
+- Added paste and drag-and-drop uploads, plain-text message copying, and mobile sidebar swipe gestures.
+- Added title-model source configuration, thinking-protocol previews, and background session-title generation with realtime synchronization.
+- Added hybrid knowledge retrieval, contextual reads, a unified retrieval-tool response protocol, and dynamic retrieval routing policies.
+- Added Bocha and Tavily search providers, multi-instance credential management, provider routing, cooldowns, and in-run circuit breaking.
+- Added web-research configuration dialogs, scope guidance, configured-provider management, and configuration migration interfaces.
+- Added event-ordered thinking and tool activity timelines with argument-generation progress, runtime states, grouping, collapsing, and cancellation outcomes.
+- Added unified frontend API-error dispatch, unexpected-error toasts, and expandable error details.
+- Added an optional container-build verification workflow.
+
+### 修复 / Fixed
+
+- 修复流式生成、分支发送和历史消息编辑过程中用户消息与 Agent 回答的顺序问题。
+- 修复重新生成期间来源用户消息短暂消失，并统一普通发送、编辑发送、快照恢复和历史分页的消息连续性规则。
+- 修复会话标题后台生成的并发、销毁日志和列表刷新问题。
+- 修复实时连接恢复后中断提示残留，以及旧快照覆盖新会话状态的问题。
+- 修复工具活动的状态语义、错误与中止展示、参数流式进度和活动卡片对齐。
+- 修复联网搜索空结果重复重试、冷却期限和重复空参数工具调用。
+- 修复归档批量确认弹窗层级、会话菜单底部遮挡和聊天内容溢出。
+- 修复普通代码块无法自动换行，同时保持图表源码横向滚动。
+- 修复用户消息操作区宽度、气泡底部留白和思考内容关闭状态。
+
+- Fixed user-message and Agent-response ordering during streaming generation, branch sends, and historical-message editing.
+- Fixed the source user message disappearing during regeneration, and unified continuity rules across normal sends, edited sends, snapshot recovery, and history pagination.
+- Fixed concurrency, teardown logging, and list-refresh issues in background session-title generation.
+- Fixed stale interruption notices after realtime reconnection and old snapshots overwriting newer session state.
+- Fixed tool-activity state semantics, error and cancellation displays, streamed argument progress, and activity-card alignment.
+- Fixed repeated retries on empty web-search results, cooldown handling, and duplicate empty-argument tool calls.
+- Fixed archived-session confirmation layering, bottom-clipped session menus, and chat-content overflow.
+- Fixed wrapping for ordinary code blocks while preserving horizontal scrolling for diagram source.
+- Fixed user-action widths, extra bubble spacing, and thinking-content disabled states.
+
 ## 0.1.2 - 2026-08-10
 
 ### 新增 / Added

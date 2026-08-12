@@ -1,21 +1,22 @@
-import { Clock3 } from "lucide-react";
-import type { RefObject } from "react";
+import { ChevronLeft, ChevronRight, Clock3, Pencil, RefreshCcw } from "lucide-react";
+import type { RefCallback, RefObject } from "react";
 
 import type { AgentProfileDocument } from "../../../../shared/agent-contracts";
 import type { WorkspaceFileSummary } from "../../../../shared/contracts";
 import { AgentAvatar } from "../../../components/agent-avatar";
 import { AgentReferenceChips } from "../../../components/agent-reference-chips";
-import { LiveToolCard } from "../../../components/live-tool-card";
-import { MarkdownContent } from "../../../components/markdown-content";
 import { MessageAttachments } from "../../../components/message-attachments";
 import { MessageNavigator } from "../../../components/message-navigator";
-import { ThinkingCard } from "../../../components/thinking-card";
 import type { AgentTurn, ConversationEntry } from "../../../conversation-timeline";
 import type { IdentityPreview } from "../../../pages/chat-page";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../../../speech-text";
 import type { ThemePreference } from "../../../theme";
 import { UserAvatar } from "./user-avatar";
 import { MessageSpeechButton } from "./message-speech-button";
+import { MessageCopyButton } from "./message-copy-button";
+import { copyTextForEntry } from "../message-copy";
+import { AgentTurnContent } from "./agent-turn-content";
+import type { SessionHistoryLoadState } from "../../../use-session-history";
 
 interface ConversationTimelineViewProps {
   timeline: ConversationEntry[];
@@ -32,10 +33,17 @@ interface ConversationTimelineViewProps {
   activeSpeechMessageId?: string;
   scrollRef: RefObject<HTMLDivElement | null>;
   contentRef: RefObject<HTMLDivElement | null>;
+  historyState?: SessionHistoryLoadState;
+  historySentinelRef?: RefCallback<HTMLDivElement>;
+  onRetryHistory?(): void;
   onResolved(summary: WorkspaceFileSummary): void;
   onPreview(summary: WorkspaceFileSummary): void;
   onCreateAgent(): void;
   onToggleSpeech(turn: AgentTurn): void;
+  editingEntryId?: string;
+  onEditHistory?(entryId: string): void;
+  onNavigateHistory?(entryId: string): void;
+  onRegenerate?(entryId: string): void;
 }
 
 /** 渲染会话时间线，保持既有 DOM 顺序、ARIA 与流式块语义。 */
@@ -44,21 +52,34 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
     <MessageNavigator items={props.navigationItems} scrollContainerRef={props.scrollRef} />
     <div className="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable" }}>
       <div className="message-column message-column--compact-end" ref={props.contentRef}>
+        {props.timeline.length > 0 ? <div ref={props.historySentinelRef} className="session-history-sentinel" aria-live="polite">
+          {props.historyState === "loading" ? <span role="status">正在加载更早消息…</span> : null}
+          {props.historyState === "error" ? <button type="button" onClick={props.onRetryHistory}>加载失败，重试</button> : null}
+          {props.historyState === "complete" ? <span>已加载全部消息</span> : null}
+        </div> : null}
         {props.timeline.length === 0 && <div className="session-intro">
           {props.activeAgent ? <AgentAvatar agent={props.activeAgent} className="agent-orbit session-intro__agent-avatar" label={`${props.activeAgent.profile.name} 头像`} /> : <span className="agent-orbit">?</span>}
           <h1>{props.activeAgent?.profile.name ?? "从这里开始协作。"}</h1>
           {props.noAvailableAgent ? <><p>请先在 Agent 管理中创建 Agent，再开始对话。</p><button type="button" className="configuration-primary-action session-intro__create-agent" onClick={props.onCreateAgent}>创建 Agent</button></> : <p>{props.activeAgent?.profile.description?.trim() || `准备好后，向 ${props.activeAgent?.profile.name ?? "你的 Agent"} 发出第一条消息，开始推进你的工作。`}</p>}
         </div>}
         {props.timeline.map((entry) => entry.type === "user" ? (
-          <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}`} id={userMessageDomId(entry.id)} key={entry.id}>
+          <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}${props.editingEntryId && entry.piEntryId === props.editingEntryId ? " is-editing-source" : ""}`} id={userMessageDomId(entry.id)} key={entry.id}>
             <div className="message-meta">
               <strong>{entry.source === "scheduled" ? "定时任务" : props.profileIdentity.displayName}</strong>
               {entry.source === "scheduled" ? <span className="message-avatar is-scheduled-avatar" aria-label="定时任务消息"><Clock3 size={15} aria-hidden="true" /></span> : <UserAvatar identity={props.profileIdentity} className="message-avatar is-user-avatar" />}
             </div>
-            <div className="message-content">
-              {entry.text && <p>{entry.text}</p>}
-              <AgentReferenceChips references={entry.references} />
-              {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
+            <div className="user-message-body">
+              {props.editingEntryId && entry.piEntryId === props.editingEntryId ? <span className="user-message-editing-label">编辑中</span> : null}
+              <div className="message-content">
+                {entry.text && <p>{entry.text}</p>}
+                <AgentReferenceChips references={entry.references} />
+                {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
+              </div>
+              {(copyTextForEntry(entry) || (entry.piEntryId && entry.source !== "scheduled")) ? <div className="message-actions message-actions--separated user-message-actions" aria-label="用户消息操作">
+                {entry.branch?.count && entry.branch.count > 1 ? <><button type="button" aria-label="切换到上一版本" title="切换到上一版本" disabled={props.streaming || props.opening || !entry.branch.previousNavigationEntryId} onClick={() => entry.branch?.previousNavigationEntryId && props.onNavigateHistory?.(entry.branch.previousNavigationEntryId)}><ChevronLeft size={15} aria-hidden="true" /></button><button type="button" aria-label="切换到下一版本" title="切换到下一版本" disabled={props.streaming || props.opening || !entry.branch.nextNavigationEntryId} onClick={() => entry.branch?.nextNavigationEntryId && props.onNavigateHistory?.(entry.branch.nextNavigationEntryId)}><ChevronRight size={15} aria-hidden="true" /></button></> : null}
+                {entry.piEntryId && entry.source !== "scheduled" ? <button type="button" aria-label="重新编辑消息" title="重新编辑消息" disabled={props.streaming || props.opening} onClick={() => props.onEditHistory?.(entry.piEntryId!)}><Pencil size={15} aria-hidden="true" /></button> : null}
+                {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
+              </div> : null}
             </div>
           </article>
         ) : (
@@ -69,19 +90,23 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               {props.streaming && entry.id === props.activeAgentEntryId && <span className="agent-run-indicator" aria-label="Agent 正在处理" />}
             </div>
             <div className="message-content">
-              {entry.blocks.map((block) => {
-                if (block.type === "markdown") return <MarkdownContent key={block.id} text={block.text} streaming={block.streaming} revealStart={block.revealStart} revealPhase={block.revealPhase} theme={props.theme} />;
-                if (block.type === "thinking") return <ThinkingCard key={block.id} thinking={block} />;
-                if (block.type === "files") return props.activeAgentId ? <MessageAttachments key={block.id} files={block.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} /> : null;
-                return <LiveToolCard key={block.id} tool={block} />;
-              })}
-              {props.speechEnabled && agentTurnSpeechText(entry) ? (
+              <AgentTurnContent
+                turn={entry}
+                streaming={props.streaming && entry.id === props.activeAgentEntryId}
+                activeAgentId={props.activeAgentId}
+                theme={props.theme}
+                onResolved={props.onResolved}
+                onPreview={props.onPreview}
+              />
+              {(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
                 <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
-                  <MessageSpeechButton
+                  {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
+                  {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
+                  {props.speechEnabled && agentTurnSpeechText(entry) ? <MessageSpeechButton
                     active={props.activeSpeechMessageId === entry.id}
                     disabled={speechButtonDisabled(entry, props.streaming, props.activeAgentEntryId)}
                     onToggle={() => props.onToggleSpeech(entry)}
-                  />
+                  /> : null}
                 </div>
               ) : null}
             </div>

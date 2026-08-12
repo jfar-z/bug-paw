@@ -8,6 +8,8 @@ export interface UserEntry {
   files: WorkspaceFileRef[];
   references: AgentReference[];
   source?: "scheduled";
+  piEntryId?: string;
+  branch?: { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string };
 }
 
 export interface MarkdownBlock {
@@ -40,10 +42,12 @@ export interface ToolBlock {
   callId: string;
   name: string;
   args: unknown;
+  parameterBytes?: number;
+  parameterPath?: string;
   partialResult?: unknown;
   result?: unknown;
   details?: unknown;
-  status: "running" | "completed" | "error";
+  status: "preparing" | "parameterizing" | "running" | "completed" | "cancelled" | "error";
 }
 
 export type AgentBlock = MarkdownBlock | ThinkingBlock | FileBlock | ToolBlock;
@@ -52,6 +56,7 @@ export interface AgentTurn {
   id: string;
   type: "agent";
   blocks: AgentBlock[];
+  sourceUserEntryId?: string;
 }
 
 export type ConversationEntry = UserEntry | AgentTurn;
@@ -62,10 +67,13 @@ export type TimelineEvent =
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
+  | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
+  | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
-  | { type: "generation_finished" };
+  | { type: "generation_finished"; outcome: "completed" | "aborted" | "error" };
 
 /**
  * 将实时事件归并到单一有序时间线，文件与工具更新保持原始位置。
@@ -151,7 +159,13 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
     const turn = entries[turnIndex] as AgentTurn;
     return replaceTurn(entries, turnIndex, {
       ...turn,
-      blocks: turn.blocks.map((block) => block.type === "markdown" || block.type === "thinking" ? { ...block, streaming: false } : block),
+      blocks: turn.blocks.map((block) => {
+        if (block.type === "markdown" || block.type === "thinking") return { ...block, streaming: false };
+        if (block.type === "tool" && (block.status === "preparing" || block.status === "parameterizing") && event.outcome !== "completed") {
+          return { ...block, status: "cancelled" };
+        }
+        return block;
+      }),
     });
   }
 
@@ -176,6 +190,7 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
   let entries: ConversationEntry[] = [];
   const tools = new Map<string, { turnIndex: number; blockIndex: number }>();
 
+  let sourceUserEntryId: string | undefined;
   messages.forEach((message, messageIndex) => {
     if (!isRecord(message) || typeof message.role !== "string") {
       return;
@@ -183,11 +198,14 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
     if (message.role === "user") {
       const parsed = parseUserContext(extractContentText(message.content));
       if (parsed.text || parsed.files.length > 0 || parsed.references.length > 0) {
+        sourceUserEntryId = typeof message.__piEntryId === "string" ? message.__piEntryId : undefined;
         entries = [...entries, {
           id: `history-user-${messageIndex}`,
           type: "user",
           ...parsed,
           ...(parsed.text.startsWith("这是定时任务发出的消息") ? { source: "scheduled" as const } : {}),
+          ...(sourceUserEntryId ? { piEntryId: sourceUserEntryId } : {}),
+          ...(isBranchNavigation(message.__piBranch) ? { branch: message.__piBranch } : {}),
         }];
       }
       return;
@@ -223,7 +241,7 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
           tools.set(part.id, { turnIndex: ensured.turnIndex, blockIndex });
         }
       });
-      entries = replaceTurn(entries, ensured.turnIndex, { ...turn, blocks });
+      entries = replaceTurn(entries, ensured.turnIndex, { ...turn, blocks, ...(sourceUserEntryId ? { sourceUserEntryId } : {}) });
       return;
     }
     if (message.role === "toolResult" && typeof message.toolCallId === "string") {
@@ -490,7 +508,7 @@ function createToolFromEvent(
     callId: event.callId,
     name: event.toolName,
     args: undefined,
-    status: "running",
+    status: event.type === "tool_preparing" || event.type === "tool_prepared" ? "preparing" : event.type === "tool_parameters_streaming" ? "parameterizing" : "running",
   }, event);
 }
 
@@ -498,6 +516,21 @@ function updateToolFromEvent(
   tool: ToolBlock,
   event: ToolTimelineEvent,
 ): ToolBlock {
+  if (event.type === "tool_preparing") {
+    return { ...tool, name: event.toolName, status: tool.status === "preparing" ? "preparing" : tool.status };
+  }
+  if (event.type === "tool_parameters_streaming") {
+    return {
+      ...tool,
+      name: event.toolName,
+      parameterBytes: event.generatedBytes,
+      ...(event.path ? { parameterPath: event.path } : {}),
+      status: tool.status === "preparing" || tool.status === "parameterizing" ? "parameterizing" : tool.status,
+    };
+  }
+  if (event.type === "tool_prepared") {
+    return { ...tool, name: event.toolName, args: event.args, status: tool.status === "preparing" ? "preparing" : tool.status };
+  }
   if (event.type === "tool_started") {
     return { ...tool, name: event.toolName, args: event.args, status: "running" };
   }
@@ -516,7 +549,7 @@ function updateToolFromEvent(
 }
 
 type ToolTimelineEvent = Extract<TimelineEvent, {
-  type: "tool_started" | "tool_updated" | "tool_finished";
+  type: "tool_preparing" | "tool_parameters_streaming" | "tool_prepared" | "tool_started" | "tool_updated" | "tool_finished";
 }>;
 
 function extractContentText(content: unknown): string {
@@ -552,6 +585,20 @@ function normalizeToolPayload(payload: unknown): { value: unknown; details?: unk
 function createId(prefix: string, entries: ConversationEntry[]): string {
   const blockCount = entries.reduce((count, entry) => count + (entry.type === "agent" ? entry.blocks.length : 0), 0);
   return `${prefix}-${entries.length}-${blockCount}`;
+}
+
+function isBranchNavigation(value: unknown): value is { index: number; count: number; previousEntryId?: string; nextEntryId?: string; previousNavigationEntryId?: string; nextNavigationEntryId?: string } {
+  return isRecord(value)
+    && typeof value.index === "number"
+    && typeof value.count === "number"
+    && Number.isInteger(value.index)
+    && Number.isInteger(value.count)
+    && value.index >= 0
+    && value.count > 0
+    && (value.previousEntryId === undefined || typeof value.previousEntryId === "string")
+    && (value.nextEntryId === undefined || typeof value.nextEntryId === "string")
+    && (value.previousNavigationEntryId === undefined || typeof value.previousNavigationEntryId === "string")
+    && (value.nextNavigationEntryId === undefined || typeof value.nextNavigationEntryId === "string");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

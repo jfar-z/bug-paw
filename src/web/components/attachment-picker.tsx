@@ -5,7 +5,7 @@ import type { WorkspaceFileSummary } from "../../shared/contracts";
 export interface AttachmentUploadItem {
   localId: string;
   file: File;
-  status: "uploading" | "uploaded" | "error";
+  status: "uploading" | "uploaded" | "error" | "missing";
   workspaceFile?: WorkspaceFileSummary;
   error?: string;
 }
@@ -69,13 +69,9 @@ export function AttachmentPickerButton({
     if (files.length === 0) {
       return;
     }
-    if (items.length + files.length > maxFiles) {
-      onError(`单次消息最多添加 ${maxFiles} 个附件。`);
-      return;
-    }
-    const oversized = files.find((file) => file.size > maxFileSize);
-    if (oversized) {
-      onError(`${oversized.name} 超过单文件大小限制。`);
+    const validationError = validateAttachmentSelection(items.length, files, maxFiles, maxFileSize);
+    if (validationError) {
+      onError(validationError);
       return;
     }
     onFilesSelected(files);
@@ -90,6 +86,18 @@ export function AttachmentPickerButton({
   );
 }
 
+/** 统一校验文件选择、剪贴板与拖放入口的附件边界。 */
+export function validateAttachmentSelection(
+  currentCount: number,
+  files: File[],
+  maxFiles = 5,
+  maxFileSize = 100 * 1024 * 1024,
+): string | undefined {
+  if (currentCount + files.length > maxFiles) return `单次消息最多添加 ${maxFiles} 个附件。`;
+  const oversized = files.find((file) => file.size > maxFileSize);
+  return oversized ? `${oversized.name} 超过单文件大小限制。` : undefined;
+}
+
 function statusText(item: AttachmentUploadItem): string {
   if (item.status === "uploading") {
     return "上传中";
@@ -97,6 +105,7 @@ function statusText(item: AttachmentUploadItem): string {
   if (item.status === "error") {
     return item.error ?? "上传失败";
   }
+  if (item.status === "missing") return item.error ?? "历史附件已失效";
   return formatFileSize(item.file.size);
 }
 

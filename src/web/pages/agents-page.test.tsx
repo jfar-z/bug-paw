@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { AgentsPage } from "./agents-page";
+
+function renderAgentsPage(onNavigate: Parameters<typeof AgentsPage>[0]["onNavigate"], openCreateOnEmpty = false) {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><AgentsPage onNavigate={onNavigate} openCreateOnEmpty={openCreateOnEmpty} /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("AgentsPage", () => {
   it("读取真实 Agent 数据并创建新 Agent", async () => {
@@ -12,7 +18,7 @@ describe("AgentsPage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const onNavigate = vi.fn();
-    render(<AgentsPage onNavigate={onNavigate} />);
+    renderAgentsPage(onNavigate);
 
     expect(await screen.findByText("真实 Agent")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "新建 Agent" }));
@@ -36,7 +42,7 @@ describe("AgentsPage", () => {
   it("首启进入空列表时自动打开创建 Agent 提示", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ agents: [] }), { status: 200 })));
 
-    render(<AgentsPage onNavigate={vi.fn()} openCreateOnEmpty />);
+    renderAgentsPage(vi.fn(), true);
 
     expect(await screen.findByText("请先创建 Agent 后再开始对话。")).toHaveClass("configuration-create-panel__onboarding");
     expect(screen.getByLabelText("Agent 名称")).toHaveFocus();
@@ -54,7 +60,7 @@ describe("AgentsPage", () => {
       return new Response(JSON.stringify({ agents }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentsPage onNavigate={vi.fn()} />);
+    renderAgentsPage(vi.fn());
 
     const first = await screen.findByRole("button", { name: "打开First；可拖动排序" });
     const second = screen.getByRole("button", { name: "打开Second；可拖动排序" });
@@ -72,12 +78,12 @@ describe("AgentsPage", () => {
     ]);
   });
 
-  it("读取失败时不伪造默认 Agent", async () => {
+  it("读取意外失败时显示 Toast 且不伪造默认 Agent", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new Error("network"))));
 
-    render(<AgentsPage onNavigate={vi.fn()} />);
+    renderAgentsPage(vi.fn());
 
-    expect(await screen.findByText("暂时无法刷新 Agent 列表。")).toBeInTheDocument();
+    expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
     expect(screen.queryByText("默认 Agent")).not.toBeInTheDocument();
   });
 });

@@ -54,11 +54,11 @@ describe("AgentStore", () => {
     const { store } = await fixture();
     const created = await store.create({ name: "历史 Agent", allowedTools: ["read"] });
 
-    await store.ensureSystemToolPermissions(["search_knowledge", "scheduled_tasks"]);
+    await store.ensureSystemToolPermissions(["knowledge_search", "scheduled_tasks"]);
 
     expect((await store.get(created.profile.id))?.profile.allowedTools).toEqual([
       "read",
-      "search_knowledge",
+      "knowledge_search",
       "scheduled_tasks",
     ]);
   });
@@ -266,6 +266,21 @@ describe("AgentStore", () => {
     await writeFile(outside, "outside", "utf8");
     await symlink(outside, join(source.profile.cwd, "outside-link.txt"));
     await expect(store.clone(source.profile.id, { name: "复制克隆", copyWorkspace: true })).rejects.toThrow("符号链接");
+  });
+
+  it("更新和克隆时保留标题生成策略，并允许清除", async () => {
+    const { store } = await fixture();
+    const created = await store.create({ name: "标题 Agent", titleGeneration: {
+      modelSource: "custom",
+      model: { provider: "OpenAI", id: "gpt-title" },
+      thinkingEnabled: true,
+    } });
+
+    const cloned = await store.clone(created.profile.id, { name: "标题副本" });
+    expect(cloned.profile.titleGeneration).toEqual(created.profile.titleGeneration);
+
+    const cleared = await store.update(created.profile.id, { titleGeneration: null }, created.revision);
+    expect(cleared.profile.titleGeneration).toBeUndefined();
   });
 
   it("附件服务通过 AgentStore 使用每个 Agent 的固定 cwd", async () => {

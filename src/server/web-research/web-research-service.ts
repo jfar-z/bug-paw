@@ -1,13 +1,63 @@
 import { extractFromHtml } from "@extractus/article-extractor";
 
 import type { WebResearchConfigDocument } from "../../shared/web-research-contracts";
+import type { CredentialService } from "../configuration/credential-service";
 import { SafeWebClient } from "./safe-web-client";
 import { WebResearchConfigService } from "./web-research-config-service";
 import { EgressProfileRegistry } from "./egress-profile-registry";
+import { ManagedSearchProviderRegistry } from "./managed-search-provider-registry";
+import type { SearchProviderHealth, SearchProviderInput, SearchProviderItem, SearchProviderResult } from "./search-provider";
+import { SearchProviderFactory } from "./search-provider-factory";
+import { SearchProviderRouter } from "./search-provider-router";
+import { SearchRunState } from "./search-run-state";
+import type { ToolWarning } from "../retrieval/tool-response";
+
+/** 规范化后的联网搜索服务结果。 */
+export interface WebSearchServiceResult {
+  data: {
+    query: string;
+    results: Array<{
+      rank: number;
+      title: string;
+      url: string;
+      hostname: string;
+      snippet: string;
+      sourceEngines: string[];
+      publishedAt: string | null;
+    }>;
+  };
+  metadata: {
+    resultCount: number;
+    duplicatesRemoved: number;
+    truncated: boolean;
+    providerHealth: SearchProviderHealth;
+    failedProviderCount: number;
+    providerRetryable: boolean;
+  };
+  warnings: ToolWarning[];
+}
+
+/** 网页正文读取服务结果。 */
+export interface WebReadServiceResult {
+  data: {
+    requestedUrl: string;
+    finalUrl: string;
+    title: string;
+    hostname: string;
+    text: string;
+    publishedAt: string | null;
+    fetchedAt: string;
+    contentType: "text/html" | "text/plain";
+    extractionMode: "article" | "plain_text" | "html_fallback";
+  };
+  metadata: { truncated: boolean; contentCharacters: number; returnedCharacters: number; untrustedContent: true };
+  warnings: ToolWarning[];
+}
 
 interface WebResearchServiceDependencies {
   readConfig(): Promise<WebResearchConfigDocument>;
-  searchSearxng(baseUrl: string, input: { query: string; count: number; site?: string; language?: string; timeRange?: string }, timeoutMs: number): Promise<unknown>;
+  searchProviders(config: WebResearchConfigDocument["config"], input: SearchProviderInput, state: SearchRunState): Promise<SearchProviderResult>;
+  testSearchProvider(config: WebResearchConfigDocument["config"]["searchProviders"][number], input: SearchProviderInput): Promise<SearchProviderResult>;
   fetchText(url: string, config: WebResearchConfigDocument["config"]): ReturnType<SafeWebClient["fetchText"]>;
   extract(html: string, url: string): Promise<{ title?: string | null; content?: string | null; published?: string | null } | null>;
 }
@@ -26,53 +76,133 @@ export class WebResearchService {
   }
 
   /** 搜索互联网并返回带来源的规范化结果。 */
-  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }): Promise<{ results: Array<{ title: string; url: string; snippet: string; source: string }> }> {
+  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }, state = new SearchRunState()): Promise<WebSearchServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const count = Math.min(Math.max(input.count ?? config.maxResults, 1), config.maxResults);
-    const raw = await this.dependencies.searchSearxng(config.searxngBaseUrl, { ...input, count }, config.timeoutMs);
-    return { results: readSearchResults(raw).slice(0, count) };
+    const providerResult = await this.dependencies.searchProviders(config, { ...input, count }, state);
+    const rawResults = readSearchResults(providerResult.results);
+    // URL 安全过滤后重新归一化健康状态，避免把仅含非法地址的故障响应误报为空结果。
+    const providerHealth: SearchProviderHealth = providerResult.health === "degraded" && rawResults.length === 0
+      ? "unavailable"
+      : providerResult.health;
+    const deduplicated = new Map<string, Omit<WebSearchServiceResult["data"]["results"][number], "rank">>();
+    for (const result of rawResults) {
+      const existing = deduplicated.get(result.url);
+      if (existing) {
+        for (const engine of result.sourceEngines) {
+          if (!existing.sourceEngines.includes(engine)) existing.sourceEngines.push(engine);
+        }
+        if (existing.publishedAt === null && result.publishedAt !== null) existing.publishedAt = result.publishedAt;
+        continue;
+      }
+      deduplicated.set(result.url, result);
+    }
+    const unique = [...deduplicated.values()];
+    const results = unique.slice(0, count).map((result, index) => ({ rank: index + 1, ...result }));
+    return {
+      data: { query: input.query, results },
+      metadata: {
+        resultCount: results.length,
+        duplicatesRemoved: rawResults.length - unique.length,
+        truncated: unique.length > results.length,
+        providerHealth,
+        failedProviderCount: providerResult.failures.length,
+        providerRetryable: providerResult.failures.some((failure) => failure.retryable),
+      },
+      warnings: providerHealth === "degraded"
+        ? [{ code: "SEARCH_PROVIDERS_DEGRADED", message: "部分搜索供应商暂不可用，结果可能不完整" }]
+        : [],
+    };
   }
 
   /** 读取公开网页并返回经过长度限制的正文。 */
-  async open(input: { url: string; maxTextLength?: number }): Promise<{ title: string; finalUrl: string; text: string; published?: string; sourceUrl: string }> {
+  async read(input: { url: string; maxCharacters?: number }): Promise<WebReadServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const page = await this.dependencies.fetchText(input.url, config);
-    const article = await this.dependencies.extract(page.body, page.finalUrl);
-    const text = (article?.content?.trim() || stripHtml(page.body)).slice(0, Math.min(input.maxTextLength ?? config.maxTextLength, config.maxTextLength));
+    const article = page.contentType === "text/html"
+      ? await this.dependencies.extract(page.body, page.finalUrl).catch(() => null)
+      : null;
+    const articleText = article?.content?.trim();
+    const extractionMode = page.contentType === "text/plain"
+      ? "plain_text"
+      : articleText
+        ? "article"
+        : "html_fallback";
+    const fullText = extractionMode === "plain_text"
+      ? page.body.trim()
+      : extractionMode === "article"
+        ? articleText!
+        : stripHtml(page.body);
+    const maxCharacters = Math.min(Math.max(input.maxCharacters ?? config.maxTextLength, 1), config.maxTextLength);
+    const text = fullText.slice(0, maxCharacters);
+    const warnings: ToolWarning[] = extractionMode === "html_fallback"
+      ? [{ code: "ARTICLE_EXTRACTION_FALLBACK", message: "文章正文提取失败，已降级为 HTML 文本" }]
+      : [];
     return {
-      title: article?.title?.trim() || page.finalUrl,
-      finalUrl: page.finalUrl,
-      text,
-      ...(article?.published ? { published: article.published } : {}),
-      sourceUrl: page.finalUrl,
+      data: {
+        requestedUrl: input.url,
+        finalUrl: page.finalUrl,
+        title: article?.title?.trim() || page.finalUrl,
+        hostname: new URL(page.finalUrl).hostname.toLowerCase(),
+        text,
+        publishedAt: normalizePublishedDate(article?.published),
+        fetchedAt: new Date().toISOString(),
+        contentType: page.contentType,
+        extractionMode,
+      },
+      metadata: {
+        truncated: text.length < fullText.length,
+        contentCharacters: fullText.length,
+        returnedCharacters: text.length,
+        untrustedContent: true,
+      },
+      warnings,
     };
   }
 
   /** 验证受管 SearXNG 是否可返回 JSON 搜索结果。 */
   async testConnection(): Promise<void> {
     const { config } = await this.dependencies.readConfig();
-    await this.dependencies.searchSearxng(config.searxngBaseUrl, { query: "BugPaw", count: 1 }, config.timeoutMs);
+    const provider = config.searchProviders.find((candidate) => candidate.enabled);
+    if (!provider) throw new Error("尚未配置可用的搜索服务");
+    const result = await this.dependencies.testSearchProvider(provider, { query: "BugPaw", count: 1 });
+    if (result.health === "unavailable") {
+      throw new Error("搜索供应商当前不可用");
+    }
+  }
+
+  /** 只测试指定已保存实例，不触发路由故障切换。 */
+  async testProvider(providerId: string): Promise<void> {
+    const { config } = await this.dependencies.readConfig();
+    const provider = config.searchProviders.find((candidate) => candidate.id === providerId);
+    if (!provider) throw new Error("搜索服务不存在");
+    const result = await this.dependencies.testSearchProvider(provider, { query: "BugPaw", count: 1 });
+    if (result.health === "unavailable") throw new Error("搜索供应商当前不可用");
   }
 }
 
 /** 创建生产环境使用的联网搜索服务。 */
-export function createWebResearchService(configs: WebResearchConfigService, egressProfiles = new EgressProfileRegistry(), client = new SafeWebClient()): WebResearchService {
+export function createWebResearchService(
+  configs: WebResearchConfigService,
+  egressProfiles = new EgressProfileRegistry(),
+  client = new SafeWebClient(),
+  managedProviders = new ManagedSearchProviderRegistry(false),
+  credentials?: Pick<CredentialService, "getApiKey">,
+): WebResearchService {
+  const factory = new SearchProviderFactory({
+    credentials: credentials ?? { getApiKey: async () => undefined },
+    managedProviders,
+    egressProfiles,
+  });
+  const router = new SearchProviderRouter(factory);
   return new WebResearchService({
     readConfig: () => configs.read(),
-    fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.egressProfileId)),
+    searchProviders: (config, input, state) => router.search(config.searchProviders, input, state),
+    testSearchProvider: async (provider, input) => (await factory.create(provider)).search(input),
+    fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.webRead.egressProfileId)),
     extract: (html, url) => extractFromHtml(html, url),
-    async searchSearxng(baseUrl, input, timeoutMs) {
-      const url = new URL("search", `${baseUrl}/`);
-      url.searchParams.set("format", "json");
-      url.searchParams.set("q", input.site ? `${input.query} site:${input.site}` : input.query);
-      url.searchParams.set("language", input.language ?? "auto");
-      if (input.timeRange) url.searchParams.set("time_range", input.timeRange);
-      const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
-      if (!response.ok) throw new Error("搜索服务暂不可用");
-      return response.json();
-    },
   });
 }
 
@@ -81,13 +211,21 @@ function assertEnabled(enabled: boolean): asserts enabled {
   if (!enabled) throw new Error("联网搜索尚未启用，请先在能力扩展中启用");
 }
 
-/** 对 SearXNG 非法或不完整响应进行保守过滤。 */
-function readSearchResults(value: unknown): Array<{ title: string; url: string; snippet: string; source: string }> {
-  if (!isRecord(value) || !Array.isArray(value.results)) return [];
-  return value.results.flatMap((item) => {
-    if (!isRecord(item) || typeof item.url !== "string" || !isHttpUrl(item.url)) return [];
-    const source = typeof item.engine === "string" ? item.engine : new URL(item.url).hostname;
-    return [{ title: typeof item.title === "string" ? item.title : item.url, url: item.url, snippet: typeof item.content === "string" ? item.content : "", source }];
+/** 对供应商结果中的非法或不完整地址进行保守过滤。 */
+function readSearchResults(value: SearchProviderItem[]): Array<Omit<WebSearchServiceResult["data"]["results"][number], "rank">> {
+  return value.flatMap((item) => {
+    const url = canonicalizeHttpUrl(item.url);
+    if (!url) return [];
+    const hostname = new URL(url).hostname.toLowerCase();
+    const engine = item.source.trim() || hostname;
+    return [{
+      title: item.title.trim() || url,
+      url,
+      hostname,
+      snippet: item.snippet.trim(),
+      sourceEngines: [engine],
+      publishedAt: normalizePublishedDate(item.publishedAt),
+    }];
   });
 }
 
@@ -97,15 +235,24 @@ function stripHtml(value: string): string {
 }
 
 /** 判断搜索结果 URL 是否为可引用的 HTTP 地址。 */
-function isHttpUrl(value: string): boolean {
+function canonicalizeHttpUrl(value: string): string | undefined {
   try {
-    return ["http:", "https:"].includes(new URL(value).protocol);
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
+    url.hostname = url.hostname.toLowerCase();
+    url.hash = "";
+    return url.toString();
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-/** 判断未知值是否为对象。 */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** 只保留可验证的发布时间，不根据模糊文本猜测。 */
+function normalizePublishedDate(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const normalized = value.trim();
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) return normalized;
+  return new Date(timestamp).toISOString();
 }

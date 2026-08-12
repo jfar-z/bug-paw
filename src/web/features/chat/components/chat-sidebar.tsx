@@ -1,6 +1,6 @@
-import { Archive, Clock3, MessageSquare, MessageSquarePlus, RefreshCw } from "lucide-react";
+import { Archive, Clock3, MessageSquare, MessageSquarePlus, RefreshCw, Trash2, X } from "lucide-react";
 import { useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
 
 import type { SessionSummary } from "../../../api";
 import type { IdentityPreview } from "../../../pages/chat-page";
@@ -18,6 +18,11 @@ interface ChatSidebarProps {
   refreshing: boolean;
   profileIdentity: IdentityPreview;
   actionsOpenRequest?: { sessionId: string; requestId: number };
+  selectionMode: boolean;
+  selectedSessionIds: string[];
+  bulkBusy?: boolean;
+  swipeTranslatePercent?: number;
+  swiping?: boolean;
   onClose(): void;
   onEnterDraft(): void;
   onRefresh(): void;
@@ -28,10 +33,17 @@ interface ChatSidebarProps {
   shouldSuppressOpen(sessionId: string): boolean;
   onRename(sessionId: string, name: string): void;
   onArchive(sessionId: string): void;
-  onDelete(sessionId: string, deleteScheduledTasks: boolean): void;
+  onDelete(sessionId: string, confirmBoundTasks: boolean): void;
+  onEnterSelection(sessionId: string): void;
+  onToggleSelection(sessionId: string): void;
+  onCancelSelection(): void;
+  onBulkArchive(): void;
+  onBulkDelete(): void;
   onShowArchived(): void;
   onEditProfile(): void;
 }
+
+const selectionActionStyle: CSSProperties = { display: "grid", flex: 1, minHeight: 42, placeItems: "center", border: 0, borderRadius: 7, color: "var(--text-secondary)", background: "transparent", fontSize: 10 };
 
 /** 会话侧栏仅负责展示与手势转发，不持有请求或领域状态。 */
 export function ChatSidebar(props: ChatSidebarProps) {
@@ -62,17 +74,37 @@ export function ChatSidebar(props: ChatSidebarProps) {
 
   return <>
     {props.open && <button type="button" className="sidebar-scrim" aria-label="关闭会话侧栏" onClick={props.onClose} />}
-    <aside aria-label="会话历史" className={props.open ? "chat-sidebar is-open" : "chat-sidebar"}>
-      <div className="sidebar-header live-session-header"><div><span>会话</span><small>SESSIONS</small></div><button type="button" className="session-refresh-button" aria-label="刷新会话列表" title="刷新会话列表" disabled={props.refreshing || isOpeningSession} onClick={props.onRefresh}><RefreshCw size={15} aria-hidden="true" className={props.refreshing ? "is-spinning" : undefined} /></button></div>
-      <button type="button" className="new-chat-button" onClick={props.onEnterDraft} disabled={props.noAvailableAgent || isOpeningSession}>
+    <aside
+      aria-label="会话历史"
+      className={`chat-sidebar${props.open ? " is-open" : ""}${props.swiping ? " is-swiping" : ""}`}
+      style={props.swipeTranslatePercent === undefined ? undefined : { transform: `translateX(${props.swipeTranslatePercent}%)` }}
+    >
+      <div className="sidebar-header live-session-header"><div><span>{props.selectionMode ? `已选 ${props.selectedSessionIds.length} 项` : "会话"}</span><small>{props.selectionMode ? "SELECT SESSIONS" : "SESSIONS"}</small></div><button type="button" className="session-refresh-button" aria-label="刷新会话列表" title="刷新会话列表" disabled={props.refreshing || isOpeningSession || props.selectionMode} onClick={props.onRefresh}><RefreshCw size={15} aria-hidden="true" className={props.refreshing ? "is-spinning" : undefined} /></button></div>
+      <button type="button" className="new-chat-button" onClick={props.onEnterDraft} disabled={props.noAvailableAgent || isOpeningSession || props.selectionMode}>
         <MessageSquarePlus size={18} aria-hidden="true" /><span>新对话</span>
       </button>
       <nav className={`session-nav${props.scrolling ? " is-scrolling" : ""}${pullDistance > 0 ? " is-pulling" : ""}`} aria-label="会话历史" onScroll={props.onScroll} onTouchStart={startPullToRefresh} onTouchMove={trackPullToRefresh} onTouchEnd={finishPullToRefresh} onTouchCancel={finishPullToRefresh}>
         {pullDistance > 0 ? <div className="session-refresh-hint" aria-live="polite" style={{ height: pullDistance }}><RefreshCw size={14} aria-hidden="true" className={refreshReady ? "is-ready" : undefined} /><span>{refreshReady ? "松开刷新" : "下拉刷新"}</span></div> : null}
         <p>最近</p>
-        {props.sessions.map((item) => (
+        {props.sessions.map((item) => {
+          const title = item.name || item.firstMessage || "新对话";
+          const selectionDisabled = isOpeningSession || (props.streaming && item.id === props.activeSessionId);
+          return (
           <div className={`session-row${item.id === props.activeSessionId ? " is-active" : ""}${item.id === props.openingSessionId ? " is-opening" : ""}`} key={item.id}>
-            <button
+            {props.selectionMode ? <label className={`session-row__open session-row__select${selectionDisabled ? " is-disabled" : ""}`} style={{ display: "flex", alignItems: "center", color: "var(--text-secondary)", cursor: selectionDisabled ? "not-allowed" : "pointer", opacity: selectionDisabled ? 0.62 : 1 }}>
+              <input
+                type="checkbox"
+                style={{ width: 15, height: 15, margin: 0, flex: "0 0 auto", accentColor: "var(--accent)" }}
+                aria-label={`选择 ${title}`}
+                checked={props.selectedSessionIds.includes(item.id)}
+                disabled={selectionDisabled}
+                onChange={() => props.onToggleSelection(item.id)}
+              />
+              <MessageSquare size={16} aria-hidden="true" />
+              <span>{title}</span>
+              {props.streaming && item.id === props.activeSessionId ? <small>生成中</small> : null}
+              {item.scheduledTaskCount ? <Clock3 size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
+            </label> : <><button
               type="button"
               className="session-row__open"
               disabled={isOpeningSession}
@@ -84,7 +116,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
               onContextMenu={(event) => event.preventDefault()}
               onClick={() => { if (!props.shouldSuppressOpen(item.id)) props.onOpen(item.id); }}
             >
-              <MessageSquare size={16} aria-hidden="true" /><span>{item.name || item.firstMessage || "新对话"}</span>{item.scheduledTaskCount ? <Clock3 size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
+              <MessageSquare size={16} aria-hidden="true" /><span>{title}</span>{item.scheduledTaskCount ? <Clock3 size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
             </button>
             <SessionActionsMenu
               session={item}
@@ -92,14 +124,20 @@ export function ChatSidebar(props: ChatSidebarProps) {
               openRequestId={props.actionsOpenRequest?.sessionId === item.id ? props.actionsOpenRequest.requestId : undefined}
               onRename={(name) => props.onRename(item.id, name)}
               onArchive={() => props.onArchive(item.id)}
-              onDelete={(deleteScheduledTasks) => props.onDelete(item.id, deleteScheduledTasks)}
+              onDelete={(confirmBoundTasks) => props.onDelete(item.id, confirmBoundTasks)}
+              onSelectMultiple={() => props.onEnterSelection(item.id)}
             />
+            </>}
           </div>
-        ))}
+        ); })}
       </nav>
-      <button type="button" className="archived-chat-button" aria-label="查看已归档会话" disabled={isOpeningSession} onClick={props.onShowArchived}>
+      {props.selectionMode ? <div className="session-selection-toolbar" style={{ display: "flex", gap: 5, margin: "8px 0" }} aria-label="会话多选操作">
+        <button type="button" style={selectionActionStyle} aria-label="归档已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkArchive}><Archive size={15} aria-hidden="true" /><span>归档</span></button>
+        <button type="button" style={{ ...selectionActionStyle, color: "var(--danger)" }} className="is-danger" aria-label="删除已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkDelete}><Trash2 size={15} aria-hidden="true" /><span>删除</span></button>
+        <button type="button" style={selectionActionStyle} aria-label="取消多选" disabled={props.bulkBusy} onClick={props.onCancelSelection}><X size={15} aria-hidden="true" /><span>取消</span></button>
+      </div> : <button type="button" className="archived-chat-button" aria-label="查看已归档会话" disabled={isOpeningSession} onClick={props.onShowArchived}>
         <Archive size={16} aria-hidden="true" /><span>已归档</span>
-      </button>
+      </button>}
       <div className="sidebar-footer"><button type="button" className="account-button" aria-label="编辑个人资料" onClick={props.onEditProfile}><UserAvatar identity={props.profileIdentity} className="avatar" /><span><strong>{props.profileIdentity.displayName}</strong><small>本地工作区</small></span></button></div>
     </aside>
   </>;

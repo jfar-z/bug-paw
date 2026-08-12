@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { ApiTaskProvider } from "../api-task-provider";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { AgentDetailPage } from "./agent-detail-page";
+
+function renderAgentDetailPage(agentId: string) {
+  return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><AgentDetailPage agentId={agentId} onNavigate={vi.fn()} /></ApiTaskProvider></ErrorToastProvider>);
+}
 
 describe("AgentDetailPage v0 身份结构", () => {
   it("可为所选语音模型设置仅作用于 Agent 的音色覆盖", async () => {
@@ -34,7 +40,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="voice-agent" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("voice-agent");
 
     await screen.findByText("语音 Agent");
     fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
@@ -60,7 +66,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       status: "active" as const,
       cwd: "/data/workspace/agents/tool-agent",
       instructions: { role: "", behavior: "", rules: "", user: "" },
-      allowedTools: ["read", "search_knowledge"],
+      allowedTools: ["read", "knowledge_search"],
       createdAt: "2026-08-07T00:00:00.000Z",
       updatedAt: "2026-08-07T00:00:00.000Z",
     };
@@ -79,12 +85,15 @@ describe("AgentDetailPage v0 身份结构", () => {
       }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="tool-agent" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("tool-agent");
 
     await screen.findByText("工具 Agent");
     fireEvent.click(screen.getByRole("button", { name: "工具权限" }));
 
-    expect(await screen.findByText("search_knowledge")).toBeInTheDocument();
+    expect(await screen.findByText("knowledge_search")).toBeInTheDocument();
+    expect(screen.getByText("knowledge_read")).toBeInTheDocument();
+    expect(screen.getByText("knowledge_manage")).toBeInTheDocument();
+    expect(screen.getByText("web_read")).toBeInTheDocument();
     expect(screen.getByText("scheduled_tasks")).toBeInTheDocument();
     expect(screen.getByText("edit_own_prompts")).toBeInTheDocument();
     const extensionTool = await screen.findByRole("checkbox", { name: /extension_lookup/ });
@@ -99,7 +108,7 @@ describe("AgentDetailPage v0 身份结构", () => {
   });
 
   it("角色与行为按四个 Markdown 维度展示", () => {
-    render(<AgentDetailPage agentId="default" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("default");
 
     fireEvent.click(screen.getByRole("button", { name: "角色与行为" }));
 
@@ -115,7 +124,7 @@ describe("AgentDetailPage v0 身份结构", () => {
   });
 
   it("使用规格定义的六个详情页签", () => {
-    render(<AgentDetailPage agentId="default" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("default");
 
     const tabs = screen.getByRole("navigation", { name: "Agent 详情页签" });
     expect(tabs).toHaveTextContent("基本信息");
@@ -127,7 +136,7 @@ describe("AgentDetailPage v0 身份结构", () => {
   });
 
   it("历史默认 Agent 的工作目录可修改", () => {
-    render(<AgentDetailPage agentId="default" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("default");
 
     expect(screen.getByRole("textbox", { name: "工作目录" })).toBeEnabled();
     expect(screen.queryByText("默认 Agent 的工作目录不能修改。")).not.toBeInTheDocument();
@@ -162,7 +171,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
       return new Response(JSON.stringify({ profile, revision: "r1" }));
     }));
-    render(<AgentDetailPage agentId="inherits-global" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("inherits-global");
 
     await screen.findByText("继承全局模型的 Agent");
     fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
@@ -171,6 +180,51 @@ describe("AgentDetailPage v0 身份结构", () => {
     expect(modelSelect).toBeDisabled();
     expect(modelSelect).toHaveValue("");
     expect(screen.getByText("当前继承：OpenAI / MiniMax-M3")).toBeInTheDocument();
+  });
+
+  it("保存单独标题模型和思考开关", async () => {
+    const profile = {
+      version: 1 as const,
+      id: "title-agent",
+      name: "标题 Agent",
+      avatar: { kind: "initial" as const, value: "标" },
+      description: "",
+      status: "active" as const,
+      cwd: "/data/workspace/agents/title-agent",
+      instructions: { role: "", behavior: "", rules: "", user: "" },
+      allowedTools: ["read"],
+      createdAt: "2026-08-10T00:00:00.000Z",
+      updatedAt: "2026-08-10T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [
+        { provider: "OpenAI", id: "gpt-chat", name: "gpt-chat" },
+        { provider: "OpenAI", id: "gpt-title", name: "gpt-title" },
+      ] }));
+      if (url === "/api/v1/configuration/global") return new Response(JSON.stringify({ effective: { defaultProvider: "OpenAI", defaultModel: "gpt-chat" } }));
+      if (url === "/api/v1/capabilities/tts") return new Response(JSON.stringify({ profiles: [] }));
+      if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
+      const patch = init?.method === "PATCH" ? JSON.parse(String(init.body)) as { titleGeneration?: unknown } : undefined;
+      return new Response(JSON.stringify({ profile: patch ? { ...profile, titleGeneration: patch.titleGeneration } : profile, revision: patch ? "r2" : "r1" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAgentDetailPage("title-agent");
+
+    await screen.findByText("标题 Agent");
+    fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
+    expect(await screen.findByRole("combobox", { name: "标题模型来源" })).toHaveValue("session");
+    expect(screen.getByRole("checkbox", { name: "标题生成启用思考" })).not.toBeChecked();
+    fireEvent.change(screen.getByRole("combobox", { name: "标题模型来源" }), { target: { value: "custom" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "标题单独模型" }), { target: { value: "OpenAI:gpt-title" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "标题生成启用思考" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await screen.findByText("已保存");
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/agents/title-agent", expect.objectContaining({
+      method: "PATCH",
+      body: expect.stringContaining('"titleGeneration":{"modelSource":"custom","model":{"provider":"OpenAI","id":"gpt-title"},"thinkingEnabled":true}'),
+    }));
   });
 
   it("读取 Profile 并保存合并后的四段角色指令", async () => {
@@ -192,7 +246,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       { status: 200 },
     ));
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="real" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("real");
 
     expect(await screen.findByText("真实 Agent")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "角色与行为" }));
@@ -223,7 +277,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       return new Response(JSON.stringify({ profile, revision: "r1" }));
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="boot" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("boot");
 
     await screen.findByText("初始化 Agent");
     fireEvent.click(screen.getByRole("button", { name: "角色与行为" }));
@@ -262,7 +316,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       }), { status: 200 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="workspace" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("workspace");
 
     fireEvent.change(await screen.findByRole("textbox", { name: "工作目录" }), {
       target: { value: "/data/projects/new-workspace" },
@@ -289,7 +343,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       revision: String(input).includes("/avatar?") ? "r2" : "r1",
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
-    render(<AgentDetailPage agentId="avatar" onNavigate={vi.fn()} />);
+    renderAgentDetailPage("avatar");
     await screen.findByText("头像 Agent");
 
     const file = new File([new Uint8Array([137, 80, 78, 71])], "avatar.png", { type: "image/png" });

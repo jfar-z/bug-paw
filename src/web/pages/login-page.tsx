@@ -1,5 +1,6 @@
 import { ArrowRight, BookOpen, Eye, EyeOff, HardDrive, LockKeyhole, Wifi, Wrench } from "lucide-react";
 import { useState } from "react";
+import { useApiTask } from "../api-task-provider";
 import { ProductMark } from "../components/product-mark";
 
 interface LoginPageProps {
@@ -10,6 +11,7 @@ interface LoginPageProps {
  * 展示 BugPaw 品牌登录入口，并提交单密码认证请求。
  */
 export function LoginPage({ onLogin }: LoginPageProps) {
+  const { runApiTask } = useApiTask();
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
@@ -22,9 +24,18 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     setError("");
     setSubmitting(true);
     try {
-      await onLogin(String(data.get("password") ?? ""), remember);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "登录失败，请稍后重试。");
+      await runApiTask(
+        () => onLogin(String(data.get("password") ?? ""), remember),
+        {
+          operation: "登录 BugPaw",
+          expected: {
+            INVALID_CREDENTIALS: (reason) => setError(reason.message),
+            LOGIN_RATE_LIMITED: (reason) => setError(reason.message),
+            NOT_INITIALIZED: (reason) => setError(reason.message),
+            INVALID_LOGIN_REQUEST: (reason) => setError(reason.message),
+          },
+        },
+      );
     } finally {
       setSubmitting(false);
     }

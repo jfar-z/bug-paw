@@ -24,7 +24,9 @@ import { registerWorkspaceFileRoutes } from "./routes/workspace-files";
 import { registerAgentRoutes } from "./routes/agents";
 import { createRunCheckpointStore } from "./runtime/checkpoint-store";
 import { createSessionMetadataStore } from "./session-metadata";
-import { recoverPendingTransactions } from "./configuration/config-transaction";
+import { createSessionBulkRepository } from "./sessions/session-bulk-repository";
+import { createSessionBulkService } from "./sessions/session-bulk-service";
+import { ConfigTransaction, recoverPendingTransactions } from "./configuration/config-transaction";
 import { createAgentService } from "./agents/agent-service";
 import { AgentPromptStore } from "./agents/agent-prompt-store";
 import { createEditOwnPromptsTool } from "./agents/agent-prompt-tool";
@@ -33,6 +35,7 @@ import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
 import { SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
 import { ProviderRenameService, recoverPendingProviderRenames } from "./configuration/provider-rename-service";
@@ -49,8 +52,10 @@ import { ensureScheduledTaskSkill } from "./scheduled-tasks/global-skill";
 import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool";
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
+import { ManagedSearchProviderRegistry } from "./web-research/managed-search-provider-registry";
+import { WebResearchProviderManagementService } from "./web-research/web-research-provider-management-service";
 import { createWebResearchService } from "./web-research/web-research-service";
-import { createWebOpenTool, createWebSearchTool } from "./web-research/web-research-tools";
+import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
 import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
@@ -61,8 +66,8 @@ import { registerKnowledgeRetrievalRoutes } from "./routes/knowledge-retrieval";
 import { createKnowledgeRepository } from "./knowledge-base/knowledge-repository";
 import { createKnowledgeBaseService } from "./knowledge-base/knowledge-base-service";
 import { registerKnowledgeBaseRoutes } from "./routes/knowledge-bases";
-import { createGetKnowledgeDocumentTool, createManageKnowledgeBaseTool, createSearchKnowledgeTool } from "./knowledge-base/knowledge-tools";
-import { ensureKnowledgeBaseSkill } from "./knowledge-base/global-skill";
+import { createKnowledgeManageTool, createKnowledgeReadTool, createKnowledgeSearchTool } from "./knowledge-base/knowledge-tools";
+import { cleanupBundledRetrievalSkills } from "./retrieval/legacy-retrieval-skills";
 import { createAgentReferenceResolver } from "./agent-references";
 import { ComposerCatalogService } from "./composer-catalog";
 import { registerComposerCatalogRoutes } from "./routes/composer-catalog";
@@ -132,6 +137,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const authService = createAuthService(paths, { identityRepository: identities });
   registerOriginProtection(app);
   const sessionRepository = createSessionRepository(applicationDatabase);
+  const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
   const modelMutations = new KeyedMutex();
@@ -210,9 +216,26 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     process.env.WEB_RESEARCH_EGRESS_PROFILES_PATH,
     process.env.WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS,
   );
-  const webResearchConfigs = new WebResearchConfigService(join(paths.appDir, "web-research.json"), webResearchEgressProfiles);
-  await webResearchConfigs.migrateLegacyInternalHost();
-  const webResearch = createWebResearchService(webResearchConfigs, webResearchEgressProfiles);
+  const managedSearchProviders = new ManagedSearchProviderRegistry(process.env.BUG_PAW_MANAGED_SEARCH_AVAILABLE === "true");
+  const webResearchConfigPath = join(paths.appDir, "web-research.json");
+  const webResearchAuthPath = join(paths.appDir, "web-research-auth.json");
+  const webResearchConfigs = new WebResearchConfigService(webResearchConfigPath, webResearchEgressProfiles, managedSearchProviders);
+  const webResearchCredentials = new CredentialService(webResearchAuthPath);
+  const webResearchManagement = new WebResearchProviderManagementService({
+    configs: webResearchConfigs,
+    credentials: webResearchCredentials,
+    configPath: webResearchConfigPath,
+    authPath: webResearchAuthPath,
+    transaction: new ConfigTransaction({ rootDir: paths.rootDir, transactionDir: paths.transactionDir }),
+  });
+  await webResearchConfigs.migrateLegacyConfig();
+  const webResearch = createWebResearchService(
+    webResearchConfigs,
+    webResearchEgressProfiles,
+    undefined,
+    managedSearchProviders,
+    webResearchCredentials,
+  );
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
   const ttsSynthesis = new TtsSynthesisService(ttsConfigs);
   await recoverPendingProviderRenames(paths, models, agentStore);
@@ -246,35 +269,52 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           return buildAgentInstructionPrompts(latest.profile, bootsharp);
         };
         const webResearchConfig = (await webResearchConfigs.read()).config;
+        const retrievalCapabilities = resolveEffectiveRetrievalCapabilities({
+          allowedTools: profile.profile.allowedTools,
+          webResearchEnabled: webResearchConfig.enabled,
+        });
         return createSdkPiRuntimeGateway({
           cwd,
           agentDir: paths.piDir,
           modelRuntime,
           defaultModel: profile.profile.defaultModel,
+          defaultThinkingLevel: profile.profile.defaultThinkingLevel,
+          titleGeneration: profile.profile.titleGeneration,
           allowedTools: profile.profile.allowedTools,
+          retrievalCapabilities,
           customTools: [
-            createSearchKnowledgeTool(agentId, knowledgeBases),
-            createGetKnowledgeDocumentTool(agentId, knowledgeBases),
-            createManageKnowledgeBaseTool(agentId, knowledgeBases, workspaceFileManager),
+            ...(retrievalCapabilities.knowledgeSearch ? [createKnowledgeSearchTool(agentId, knowledgeBases)] : []),
+            ...(retrievalCapabilities.knowledgeRead ? [createKnowledgeReadTool(agentId, knowledgeBases)] : []),
+            ...(profile.profile.allowedTools.includes("knowledge_manage")
+              ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
+              : []),
             createEditOwnPromptsTool(agentId, agentPrompts, async () => {
               await runtimeSupervisor?.refreshAgentPromptContext(agentId);
             }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
-            ...(webResearchConfig.enabled && profile.profile.allowedTools.includes("web_search") ? [createWebSearchTool(webResearch)] : []),
-            ...(webResearchConfig.enabled && profile.profile.allowedTools.includes("web_open") ? [createWebOpenTool(webResearch)] : []),
+            ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
+          createSessionTools: ({ searchRunState }) => retrievalCapabilities.webSearch
+            ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
+            : [],
           appendSystemPrompt: await readInstructionPrompts(),
           refreshAppendSystemPrompt: readInstructionPrompts,
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
+          onToolCallCircuitBreak: (event) => {
+            app.log.warn(event, "重复空参数工具调用已限制");
+          },
           stageSessionDeletion: (sessionId, sessionFile) => durableDeletions.stage("session", sessionId, [
             sessionFile,
             join(paths.runDir, `${sessionId}.json`),
           ]),
           onBackgroundError: (error) => {
             backgroundErrors.record(error.code, error.sessionId ? { sessionId: error.sessionId } : undefined);
-            app.log.error(error, "Runtime 检查点写入失败");
+            app.log.error(error, "Runtime 后台任务失败");
+          },
+          onSessionTitleGenerated: (event) => {
+            app.log.info(event, "自动会话标题任务完成");
           },
         });
       },
@@ -285,6 +325,17 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       recreateModelRuntime: createSharedModelRuntime,
       onModelRuntimeReplaced: (modelRuntime) => { sharedModelRuntime = modelRuntime; },
     });
+  const sessionBulk = createSessionBulkService({
+    repository: sessionBulkRepository,
+    acquireRuntime: async (agentId) => {
+      const lease = await runtimeSupervisor.acquire(agentId);
+      return { runtime: lease.runtime, release: lease.release };
+    },
+    onCleanupError: (error) => {
+      backgroundErrors.record("SESSION_DELETE_CLEANUP_FAILED", { sessionId: error.sessionId });
+      app.log.error(error, "Session 暂存文件清理失败");
+    },
+  });
   const providerRenameService = new ProviderRenameService({
     paths,
     models,
@@ -314,7 +365,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
   await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
-  await ensureKnowledgeBaseSkill(paths.piDir);
+  const legacySkillCleanup = await cleanupBundledRetrievalSkills(paths.piDir);
+  for (const result of legacySkillCleanup) {
+    if (result.status !== "absent") app.log.info(result, "检索内置 Skill 清理完成");
+  }
   await scheduledTasks?.start();
   const composerCatalog = new ComposerCatalogService({
     agents: agentStore,
@@ -355,31 +409,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     runtimeSupervisor,
     sessionMetadata: sessionMetadataStore,
     scheduledTasks,
+    sessionBulk,
     assertCanCreateSession: (agentId) => agentStore.assertCanCreateSession(agentId),
-    deleteSession: async (sessionId, deleteScheduledTasks) => {
-      const agentId = await resolveSessionAgentId(sessionId, sessionMetadataStore);
-      const lease = await runtimeSupervisor.acquire(agentId);
-      try {
-        const staged = await lease.runtime.prepareSessionDeletion?.(sessionId);
-        if (!staged) throw new Error("当前 Runtime 不支持事务化删除 Session");
-        try {
-          await sessionRepository.removeWithBoundTasks(sessionId, deleteScheduledTasks);
-        } catch (error) {
-          const rollback = await Promise.allSettled([staged.rollback()]);
-          if (rollback[0]?.status === "rejected") {
-            throw new AggregateError([error, rollback[0].reason], "Session 删除事务回滚失败");
-          }
-          throw error;
-        }
-        // SQLite 已提交后，文件清理失败不能把已成功的删除伪装成可重试事务。
-        await staged.commit().catch((error) => {
-          backgroundErrors.record("SESSION_DELETE_CLEANUP_FAILED", { sessionId });
-          app.log.error(error, "Session 暂存文件清理失败");
-        });
-      } finally {
-        lease.release();
-      }
-    },
   });
   registerScheduledTaskRoutes(app, { authService, service: scheduledTasks });
   registerChatRoutes(app, { authService, runtimeSupervisor, sessionMetadata: sessionMetadataStore, workspaceFiles, referenceResolver, chatService });
@@ -467,6 +498,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerWebResearchRoutes(app, {
     authService,
     configs: webResearchConfigs,
+    credentials: webResearchCredentials,
+    management: webResearchManagement,
+    managedProviders: managedSearchProviders,
     service: webResearch,
     egressProfiles: webResearchEgressProfiles,
     refreshRuntime: () => runtimeCoordinator.refreshRuntime(),

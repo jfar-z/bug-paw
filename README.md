@@ -34,7 +34,7 @@ BugPaw 是一个基于 [Pi coding agent](https://github.com/badlogic/pi-mono) SD
 - 工作区文件上传、预览、下载、移动、重命名和目录管理。
 - 知识库全文检索，以及可选的托管中文向量检索。
 - Skills、资源目录、定时任务和长期工作区。
-- 可选 SearXNG 联网搜索，带只读边界、SSRF 防护和出口策略。
+- 可选多 Provider 联网搜索，支持 SearXNG、博查与 Tavily 的有序回退、只读边界、SSRF 防护和出口策略。
 - 可配置的文本转语音播放。
 - 响应式界面和 PWA 安装能力。
 - Docker Compose 自托管，核心、搜索、向量服务可独立组合。
@@ -78,7 +78,16 @@ Set-Location bug-paw
 .\scripts\deploy.ps1 core
 ```
 
-脚本会在缺少 `.env` 时从 `.env.example` 创建，不覆盖已有配置；随后校验 Compose、构建镜像、启动容器并等待健康检查。浏览器访问 `http://127.0.0.1:7080` 完成首启初始化。
+脚本会在缺少 `.env` 时从 `.env.example` 创建，不覆盖已有配置；随后校验 Compose、构建镜像、启动容器并等待健康检查。默认镜像构建只生成并检查生产 Bundle，不运行全量测试，以便快速启动。浏览器访问 `http://127.0.0.1:7080` 完成首启初始化。
+
+如需在部署前重新执行 TypeScript、架构、全部 Vitest、生产构建与 Bundle 门禁，请先显式构建验证目标；`--no-cache` 确保本次实际重新执行验证：
+
+```bash
+docker build --no-cache --target verify .
+./scripts/deploy.sh core
+```
+
+Windows PowerShell 将最后一行替换为 `.\scripts\deploy.ps1 core`。部署其他能力组合时，将 `core` 替换为 `search`、`vector` 或 `full`。
 
 ### 四种部署组合
 
@@ -135,7 +144,7 @@ chmod 600 .env
 
 ### 启用可选能力
 
-部署搜索组合后，进入“能力扩展 → 联网搜索”检查连接并显式启用。默认搜索策略只允许读取公开 HTTP(S) 页面，并执行协议、地址、重定向、响应大小和内容类型校验。
+部署搜索组合后，进入“能力扩展 → 联网搜索”；内置 SearXNG 会自动出现，无需填写容器名称、端口或内部地址。也可以添加自定义 SearXNG、博查 Web Search 或 Tavily Search，配置实例顺序与独立 API Key 后检查单实例连接并显式启用。只有实例不可用时才按顺序回退，健康空结果不会切换厂商。默认页面读取策略只允许公开 HTTP(S) 目标，并执行协议、地址、重定向、响应大小和内容类型校验。
 
 部署向量组合后，内置 `BAAI/bge-small-zh-v1.5` 配置会作为托管服务可用。核心模式首次启动时托管向量默认关闭；仍可在配置中心连接部署者自己的 OpenAI 兼容 Embedding 服务。
 
@@ -196,9 +205,9 @@ npm run dev
 项目规定生产验证统一在 Node 24 容器中运行：
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm test
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run build
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run verify
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm test
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run build
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run verify
 ```
 
 更多架构与安全边界见 `docs/`。贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -245,7 +254,7 @@ BugPaw is a self-hosted personal Web Agent built on the [Pi coding agent](https:
 - Workspace upload, preview, download, move, rename, and directory management.
 - Full-text knowledge retrieval plus optional managed Chinese embeddings.
 - Skills, resource discovery, scheduled tasks, and durable workspaces.
-- Optional SearXNG research with read-only boundaries, SSRF controls, and egress policies.
+- Optional multi-provider web research with ordered SearXNG, Bocha, and Tavily fallback, read-only boundaries, SSRF controls, and egress policies.
 - Configurable text-to-speech playback.
 - Responsive UI with PWA installation support.
 - Composable Docker deployments for core, search, and vector services.
@@ -289,7 +298,16 @@ Set-Location bug-paw
 .\scripts\deploy.ps1 core
 ```
 
-If `.env` is missing, the helper creates it from `.env.example` without replacing existing settings. It validates Compose, builds the image, starts services, and waits for health checks. Open `http://127.0.0.1:7080` to complete first-run setup.
+If `.env` is missing, the helper creates it from `.env.example` without replacing existing settings. It validates Compose, builds the image, starts services, and waits for health checks. By default, the image build only produces and checks the production bundle; it does not run the full test suite, which keeps first startup fast. Open `http://127.0.0.1:7080` to complete first-run setup.
+
+To rerun TypeScript, architecture, all Vitest, production build, and bundle gates before deployment, build the verification target first. `--no-cache` ensures this invocation actually reruns verification:
+
+```bash
+docker build --no-cache --target verify .
+./scripts/deploy.sh core
+```
+
+On Windows PowerShell, replace the last line with `.\scripts\deploy.ps1 core`. Replace `core` with `search`, `vector`, or `full` for another deployment combination.
 
 ### Deployment combinations
 
@@ -346,7 +364,7 @@ chmod 600 .env
 
 ### Enabling optional capabilities
 
-After deploying search mode, open **Capabilities → Web research**, test the connection, and explicitly enable it. The default policy limits access to public HTTP(S) pages and validates schemes, addresses, redirects, response sizes, and content types.
+After deploying search mode, open **Capabilities → Web research**. Managed SearXNG appears automatically, without asking for a container name, port, or internal URL. You may also add custom SearXNG, Bocha Web Search, or Tavily Search instances, configure their order and per-instance API keys, test each saved instance, and explicitly enable the capability. Fallback occurs only when an instance is unavailable; a healthy empty result does not switch providers. Public page reads still validate schemes, addresses, redirects, response sizes, and content types.
 
 After deploying vector mode, the bundled `BAAI/bge-small-zh-v1.5` configuration becomes available. Core-only first runs keep managed embeddings disabled; an administrator may still configure an external OpenAI-compatible embedding endpoint.
 
@@ -407,9 +425,9 @@ npm run dev
 Production verification is standardized on Node 24 containers:
 
 ```bash
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm test
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run build
-docker run --rm -v "$PWD:/workspace" -w /workspace node:24-bookworm-slim npm run verify
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm test
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run build
+docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run verify
 ```
 
 See `docs/` for architecture and security boundaries. Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing.

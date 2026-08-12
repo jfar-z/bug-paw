@@ -4,11 +4,11 @@
 
 BugPaw 需要让 Agent 能够检索互联网并读取公开网页，同时保持自托管、低资源占用和清晰的权限边界。
 
-当前实现只提供两项只读能力：
+当前实现只向 Agent 提供两项只读能力：
 
 ```text
 web_search：搜索互联网
-web_open：读取公开网页的正文
+web_read：读取公开网页的正文
 ```
 
 当前不支持网页点击、表单输入、登录、上传、提交、截图或站点批量爬取。
@@ -18,11 +18,16 @@ web_open：读取公开网页的正文
 ### 组件选择
 
 ```text
-SearXNG                         提供搜索结果
+SearXNG / 博查 / Tavily         提供规范化搜索结果
+SearchProviderRouter            按管理员顺序执行故障切换
 @extractus/article-extractor    在 Node 服务内提取网页正文
 ```
 
-SearXNG 通过其 JSON Search API 返回标题、链接和摘要。默认由同一份 Compose 启动内部 `bug-paw-search` 与 `bug-paw-cache` 服务；管理员也可以在能力扩展页改为其他受管实例。两个搜索相关容器均不映射宿主机端口。
+SearXNG、博查 Web Search 与 Tavily Search Adapter 都只映射标题、链接、摘要、来源与可验证时间，并输出供应商无关的 `healthy`、`degraded` 或 `unavailable` 健康状态，以及稳定的 `rate_limited`、`authentication`、`timeout`、`captcha`、`upstream_error` 失败分类。博查不调用 AI Search；Tavily 固定关闭 Answer、原始正文和自动参数。厂商生成答案、追问建议、`nextAction` 与原始错误正文不会进入统一协议。
+
+默认搜索 Compose 启动内部 `bug-paw-search` 与 `bug-paw-cache`。Web 服务通过部署能力注册表解析受管地址，配置文件和页面只保存 `connectionMode=managed`，不回显或要求管理员填写容器名与端口。两个搜索相关容器均不映射宿主机端口。核心部署仍可配置自定义 SearXNG 或直连搜索厂商。
+
+业务服务只依赖统一搜索供应商接口。Router 按配置数组顺序串行尝试启用实例，只在 `unavailable` 时切换；`healthy + []` 是有效空结果，`degraded + results` 是有效部分结果，两者都不会切换厂商或改写查询。一次逻辑搜索不会重复同一实例，同一 Run 会继续跳过已失败实例；厂商 `Retry-After` 尚未到期时，新 Run 也会跳过该实例。
 
 部署前在根目录 `.env` 设置 `SEARXNG_SECRET` 为强随机值。该文件属于部署环境，不应提交到代码仓库，也不得在接口、日志或诊断中回显其值。
 
@@ -37,14 +42,14 @@ SearXNG 通过其 JSON Search API 返回标题、链接和摘要。默认由同�
 
 联网工具属于 BugPaw 自身的系统能力，按项目约定通过 SDK `customTools` 注册，不作为核心扩展文件安装。
 
-运行时只在“联网检索”已启用时注册 `web_search` 和 `web_open`。工具名称同时进入 Agent 的可配置工具目录；只有管理员在对应 Agent 的“工具权限”中显式勾选后，才会进入该 Agent 的运行时白名单。
+运行时只在“联网检索”已启用时注册 `web_search` 和 `web_read`。工具名称同时进入 Agent 的可配置工具目录；只有管理员在对应 Agent 的“工具权限”中显式勾选后，才会进入该 Agent 的运行时白名单。Runtime 创建时会同时计算有效联网能力快照；工具注册和系统提示词的联网路由政策共同使用该快照。
 
 ```text
 Agent 工具权限
   ↓ 显式授权
 SDK tools allowlist
   ↓
-customTools: web_search / web_open
+customTools: web_search / web_read
   ↓
 SearXNG 与 Node 正文提取器
 ```
@@ -59,24 +64,33 @@ SearXNG 与 Node 正文提取器
 
 ### 配置边界
 
-在配置中心的“能力扩展”模块提供“联网搜索”子页，至少包含：
+在配置中心的“能力扩展”模块提供“联网搜索”子页，包含：
 
 - 启用开关；
-- SearXNG 基础地址；
+- 有序的 SearXNG、博查与 Tavily 实例卡片；
+- 实例启停、上移/下移、单实例测试与删除；
+- 自定义 SearXNG 地址、实例级出口和超时；
+- 直连实例 API Key 的按需查看、替换与删除；
 - 每次搜索的最大结果数；
 - 单页最大正文长度；
-- 请求超时。
+- 页面读取出口和超时；
 - 最大重定向数、最大响应体、HTTPS 策略、域名允许名单与允许内容类型。
 
-配置只保存在服务端。若未来接入需要认证的搜索服务，其凭证不得返回前端、写入日志或出现在诊断响应中。
+非敏感路由配置保存在 `/data/app/web-research.json`，API Key 独立保存在 `/data/app/web-research-auth.json`。普通配置、日志、历史、诊断和安全导出均不包含明文；凭证只在管理员主动点击小眼睛时由独立 `no-store` 接口按需返回。
 
 ### 工具输入与输出
 
-`web_search` 接收查询词以及可选的站点限定、时间范围、语言和结果数量，返回统一的 `title`、`url`、`snippet`、`source` 结果列表。
+`web_search` 接收查询词以及可选的站点限定、时间范围、语言和结果数量。它过滤非 HTTP(S) 地址、规范化并去重 URL、合并搜索引擎来源，返回 `rank`、`title`、`url`、`hostname`、`snippet`、`sourceEngines` 与可验证的 `publishedAt`；无法确认发布时间时为 `null`。
 
-`web_open` 接收 URL 和可选正文长度限制，返回 `title`、最终 `url`、正文文本或 Markdown，以及可获得的发布时间等元数据。
+`web_read` 接收 URL 和可选正文字符数限制，返回请求地址、最终地址、标题、主机名、正文、发布时间、抓取时间、内容类型与正文提取方式。HTML 正文提取失败时降级为清理后的文本，并以 `partial` 和 `ARTICLE_EXTRACTION_FALLBACK` 记录事实；超出长度限制时以 `partial` 和截断元数据记录事实。
 
-两个工具的输出必须保留来源 URL，供 Agent 在回答中引用，也为后续前端来源卡片保留数据基础。
+两个工具统一返回 `ok`、`empty`、`partial` 或 `error`。成功类响应包含 `data`、`metadata` 和事实性 `warnings`；错误只包含稳定的 `code`、安全消息与 `retryable`。`retryable` 只描述错误是否具备重试条件；多个供应商失败时，只要至少一个失败具备重试条件就为 `true`，纯鉴权失败为 `false`。搜索供应商健康且确实无命中时才返回 `empty`；部分引擎失败但经 URL 安全过滤后仍有结果时返回 `partial` 和 `SEARCH_PROVIDERS_DEGRADED`；无有效结果且存在引擎故障时返回 `SEARCH_PROVIDERS_UNAVAILABLE`，不再伪装成空结果。工具响应不包含 `nextAction`、行为建议或答案充分性判断，也不回显上游原始错误正文。联网结果的 Metadata 标记 `untrustedContent: true`，且始终保留来源 URL，供 Agent 引用和前端展示。
+
+系统政策把 `web_search` 的标题与摘要定义为发现线索，而不是已核验事实。当 `web_read` 同时可用时，Agent 在回答事实问题前必须主动读取至少一个相关页面，不需要等待用户额外要求“查看页面”；发布、可用性、版本、价格、政策、法律、规格和下载优先读取官方或一手来源。页面无法读取时必须说明结论未核验。只有用户明确要求候选链接或搜索结果列表时，才可以不逐页读取直接返回搜索结果。
+
+BugPaw 不自动安装 `web-research` Skill。上述最低路由与核验规则由有效能力快照动态注入系统提示词，用户可以另行安装调研 Skill 组织多轮查询或来源比较。工具结果只提供数据和状态，不能扩大用户指定的来源范围。
+
+Router 会先在同一次工具调用中完成管理员配置的可用实例回退。只有全部候选都不可用并返回 `SEARCH_PROVIDERS_UNAVAILABLE` 后，隐藏 Runtime Extension 才阻止该 Run 后续 `web_search`，避免改写关键词反复请求造成限流反馈循环。断路不会终止当前任务，不影响 `web_read` 或其他工具；Agent 应使用已有证据说明临时限制。用户下一条消息开始新 Run 后恢复搜索机会，但仍遵守厂商尚未到期的 `Retry-After`。
 
 ### 安全与资源限制
 
@@ -97,6 +111,7 @@ SearXNG 与 Node 正文提取器
 3. 未授权 Agent 在运行时无法调用上述工具。
 4. 内网 URL、非法协议、超时页面、过大页面和重定向到受限地址的请求均被安全拒绝。
 5. 工具结果包含可追溯的原始 URL。
+6. 健康空结果、部分供应商降级和全部供应商不可用能被明确区分；同一 Run 在供应商不可用后不再重复调用搜索，但仍能继续回答或使用其他工具。
 
 ## 可选演进方向：Playwright
 
@@ -109,7 +124,7 @@ SearXNG 与 Node 正文提取器
 - 浏览器进程的内存、并发和超时预算；
 - 容器隔离、网络访问范围和下载限制；
 - 动态网页内容的安全过滤；
-- 与一期 `web_open` 结果格式的一致性；
+- 与现有 `web_read` 结果格式的一致性；
 - 失败时的可观测性与用户可理解的诊断信息。
 
 现有工具名称、授权模型和来源数据格式应保持稳定，使 Playwright 能力可以作为底层实现演进，而不需要改变 Agent 的使用方式。

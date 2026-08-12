@@ -1,8 +1,9 @@
 import { ArrowLeft, Check, Copy, Folder, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { AgentInstructions, AgentProfile, AgentProfileDocument } from "../../shared/agent-contracts";
+import type { AgentInstructions, AgentProfile, AgentProfileDocument, TitleGenerationConfig } from "../../shared/agent-contracts";
 import { BUILTIN_TOOL_CATALOG, CAPABILITY_TOOL_CATALOG, DEFAULT_AGENT_TOOL_NAMES, SYSTEM_TOOL_CATALOG } from "../../shared/tool-catalog";
 import { api, type ModelSummary, type ResourceCatalog } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { DangerDialog } from "../components/configuration/danger-dialog";
 import { InheritedField } from "../components/configuration/inherited-field";
 import type { AppRoute } from "../router";
@@ -57,6 +58,7 @@ function fallbackDocument(): AgentProfileDocument {
  * 提供 Agent Profile 的完整六页签配置与生命周期操作。
  */
 export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
+  const { runApiTask, runOptionalApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [activeTab, setActiveTab] = useState<AgentDetailTab>("basic");
   const [document, setDocument] = useState<AgentProfileDocument | undefined>(agentId === "default" ? fallbackDocument() : undefined);
@@ -77,19 +79,20 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
 
   useEffect(() => {
     let active = true;
-    api.getAgent(agentId)
-      .then((loaded) => { if (active) setDocument(loaded); })
-      .catch(() => { if (active && agentId !== "default") setNotFound(true); });
-    api.listModels().then(({ models: loaded }) => { if (active) setModels(loaded); }).catch(() => undefined);
-    api.getTtsProfiles().then((loaded) => { if (active) setTtsProfiles(loaded.profiles ?? []); }).catch(() => undefined);
-    api.getGlobalSettings().then(({ effective }) => {
+    void runApiTask(() => api.getAgent(agentId), { operation: "加载 Agent 详情", expected: { AGENT_NOT_FOUND: () => { if (active && agentId !== "default") setNotFound(true); } } })
+      .then((result) => { if (active && result.status === "success") setDocument(result.data); });
+    void runOptionalApiTask(api.listModels, { operation: "加载模型目录", fallbackReason: "模型目录不可用", fallback: () => ({ models: [] }) }).then((result) => { if (active && (result.status === "success" || result.status === "fallback")) setModels(result.data.models ?? []); });
+    void runOptionalApiTask(api.getTtsProfiles, { operation: "加载语音配置目录", fallbackReason: "语音能力不可用", fallback: () => ({ revision: "", profiles: [] }) }).then((result) => { if (active && (result.status === "success" || result.status === "fallback")) setTtsProfiles(result.data.profiles ?? []); });
+    void runOptionalApiTask(api.getGlobalSettings, { operation: "加载全局默认设置", fallbackReason: "全局默认设置不可用", fallback: () => ({ revision: "", own: {}, effective: {}, diagnostics: [] }) }).then((result) => {
+      if (result.status !== "success" && result.status !== "fallback") return;
+      const effective = result.data.effective ?? {};
       if (!active) return;
       const { defaultProvider, defaultModel } = effective;
       setGlobalDefaultModel(defaultProvider && defaultModel ? { provider: defaultProvider, id: defaultModel } : undefined);
-    }).catch(() => undefined);
-    api.listResources(agentId).then((loaded) => { if (active) setResources(loaded); }).catch(() => undefined);
+    });
+    void runOptionalApiTask(() => api.listResources(agentId), { operation: "加载 Agent 资源目录", fallbackReason: "资源目录不可用", fallback: () => ({ resources: [], tools: [], diagnostics: [] }) }).then((result) => { if (active && (result.status === "success" || result.status === "fallback")) setResources(result.data); });
     return () => { active = false; };
-  }, [agentId]);
+  }, [agentId, runApiTask, runOptionalApiTask]);
 
   const agent = document?.profile;
   const toolCatalog = useMemo(() => {
@@ -107,6 +110,8 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     return [...known, ...retained];
   }, [agent?.allowedTools, resources]);
   const inheritedModelLabel = globalDefaultModel ? `${globalDefaultModel.provider} / ${globalDefaultModel.id}` : "全局默认模型";
+  const titleGeneration = agent?.titleGeneration ?? { modelSource: "session" as const, thinkingEnabled: false };
+  const suggestedTitleModel = globalDefaultModel ?? models[0];
   const selectedTtsProfile = ttsProfiles.find((profile) => profile.id === agent?.ttsProfileId);
   const promptPreview = useMemo(() => agent ? instructionFields
     .filter(({ key }) => agent.instructions[key].trim())
@@ -130,27 +135,30 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     setNotice("");
     try {
       if (activeTab === "instructions") {
-        await Promise.all(instructionFields.map((field) => api.replaceAgentPrompt(agentId, field.key, document.profile.instructions[field.key])));
-        setNotice("已保存");
+        const promptResult = await runApiTask(
+          () => Promise.all(instructionFields.map((field) => api.replaceAgentPrompt(agentId, field.key, document.profile.instructions[field.key]))),
+          { operation: "保存 Agent 提示词", expected: agentDetailExpected(setError) },
+        );
+        if (promptResult.status === "success") setNotice("已保存");
         return;
       }
-      const updated = await api.updateAgent(agentId, document.revision, {
+      const result = await runApiTask(() => api.updateAgent(agentId, document.revision, {
         name: document.profile.name,
         cwd: document.profile.cwd.trim(),
         description: document.profile.description,
         avatar: document.profile.avatar.kind === "initial" ? document.profile.avatar : undefined,
         defaultModel: document.profile.defaultModel ?? null,
         defaultThinkingLevel: document.profile.defaultThinkingLevel ?? null,
+        titleGeneration: document.profile.titleGeneration ?? null,
         allowedTools: document.profile.allowedTools,
         ttsProfileId: document.profile.ttsProfileId ?? null,
         ttsVoice: document.profile.ttsVoice?.trim() || null,
         ttsAutoPlay: document.profile.ttsAutoPlay === true,
         ttsStreamPlayback: document.profile.ttsStreamPlayback === true,
-      });
-      setDocument(updated);
+      }), { operation: "保存 Agent", expected: agentDetailExpected(setError) });
+      if (result.status !== "success") return;
+      setDocument(result.data);
       setNotice("已保存");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存失败");
     } finally {
       setSaving(false);
     }
@@ -158,20 +166,15 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
 
   async function openBootsharp() {
     setError("");
-    try {
-      const prompt = await api.getAgentPrompt(agentId, "bootsharp");
-      setBootsharp(prompt.content);
-      setBootsharpOpen(true);
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "无法读取 BOOTSHARP"); }
+    const result = await runApiTask(() => api.getAgentPrompt(agentId, "bootsharp"), { operation: "读取 BOOTSHARP", expected: agentDetailExpected(setError) });
+    if (result.status === "success") { setBootsharp(result.data.content); setBootsharpOpen(true); }
   }
 
   async function saveBootsharp() {
     setSaving(true);
     try {
-      await api.replaceAgentPrompt(agentId, "bootsharp", bootsharp);
-      setBootsharpOpen(false);
-      setNotice("BOOTSHARP 已保存");
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "保存 BOOTSHARP 失败");
+      const result = await runApiTask(() => api.replaceAgentPrompt(agentId, "bootsharp", bootsharp), { operation: "保存 BOOTSHARP", expected: agentDetailExpected(setError) });
+      if (result.status === "success") { setBootsharpOpen(false); setNotice("BOOTSHARP 已保存"); }
     } finally { setSaving(false); }
   }
 
@@ -180,11 +183,8 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     setSaving(true);
     setError("");
     try {
-      const updated = await api.uploadAgentAvatar(agentId, document.revision, file);
-      setDocument(updated);
-      setNotice("头像已更新");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "头像上传失败");
+      const result = await runApiTask(() => api.uploadAgentAvatar(agentId, document.revision, file), { operation: "上传 Agent 头像", expected: agentDetailExpected(setError) });
+      if (result.status === "success") { setDocument(result.data); setNotice("头像已更新"); }
     } finally {
       setSaving(false);
     }
@@ -192,25 +192,22 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
 
   async function toggleArchive() {
     if (!document || document.revision === "fallback") return;
-    const updated = document.profile.status === "active"
-      ? await api.archiveAgent(agentId, document.revision)
-      : await api.restoreAgent(agentId, document.revision);
-    setDocument(updated);
-    setNotice(updated.profile.status === "active" ? "已恢复" : "已归档");
+    const result = await runApiTask(
+      () => document.profile.status === "active" ? api.archiveAgent(agentId, document.revision) : api.restoreAgent(agentId, document.revision),
+      { operation: document.profile.status === "active" ? "归档 Agent" : "恢复 Agent", expected: agentDetailExpected(setError) },
+    );
+    if (result.status === "success") { setDocument(result.data); setNotice(result.data.profile.status === "active" ? "已恢复" : "已归档"); }
   }
 
   async function openDeleteDialog() {
     setDeleteOpen(true);
-    try {
-      setDeletePreview(await api.getAgentDeletePreview(agentId));
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "无法读取删除影响");
-    }
+    const result = await runApiTask(() => api.getAgentDeletePreview(agentId), { operation: "读取 Agent 删除影响", expected: agentDetailExpected(setError) });
+    if (result.status === "success") setDeletePreview(result.data);
   }
 
   async function removeAgent() {
-    await api.deleteAgent(agentId, removeSessions, removeWorkspace);
-    onNavigate({ page: "agents" });
+    const result = await runApiTask(() => api.deleteAgent(agentId, removeSessions, removeWorkspace), { operation: "删除 Agent", expected: agentDetailExpected(setError) });
+    if (result.status === "success") onNavigate({ page: "agents" });
   }
 
   if (notFound) {
@@ -301,6 +298,27 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
               {thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}
             </select>
           </InheritedField>
+          <section className="configuration-form-card configuration-single-column">
+            <h2>标题生成</h2>
+            <p className="configuration-help">同 Agent 会跟随会话实际模型；系统默认使用 Pi 全局默认模型。启用思考后，标题会继承此 Agent 的思考级别。</p>
+            <label><span>标题模型来源</span><select aria-label="标题模型来源" value={titleGeneration.modelSource} onChange={(event) => {
+              const modelSource = event.target.value as TitleGenerationConfig["modelSource"];
+              updateProfile({ titleGeneration: {
+                modelSource,
+                ...(modelSource === "custom" && suggestedTitleModel ? { model: { provider: suggestedTitleModel.provider, id: suggestedTitleModel.id } } : {}),
+                thinkingEnabled: titleGeneration.thinkingEnabled,
+              } });
+            }}>
+              <option value="session">同 Agent</option>
+              <option value="system-default">使用系统默认</option>
+              <option value="custom">单独选择模型</option>
+            </select></label>
+            {titleGeneration.modelSource === "custom" ? <label><span>标题单独模型</span><select aria-label="标题单独模型" value={titleGeneration.model ? `${titleGeneration.model.provider}:${titleGeneration.model.id}` : ""} onChange={(event) => { const [provider, ...id] = event.target.value.split(":"); updateProfile({ titleGeneration: { ...titleGeneration, model: { provider, id: id.join(":") } } }); }}>
+              <option value="" disabled>请选择标题模型</option>
+              {models.map((model) => <option key={`${model.provider}:${model.id}`} value={`${model.provider}:${model.id}`}>{model.provider} / {model.name}</option>)}
+            </select></label> : null}
+            <label><input aria-label="标题生成启用思考" type="checkbox" checked={titleGeneration.thinkingEnabled} onChange={(event) => updateProfile({ titleGeneration: { ...titleGeneration, thinkingEnabled: event.target.checked } })} />启用思考</label>
+          </section>
           <section className="configuration-form-card configuration-single-column"><h2>语音回答</h2><p className="configuration-help">选择已配置的语音模型后，可让 Agent 回答自动播放。</p><label><span>语音模型</span><select aria-label="Agent 语音模型" value={agent.ttsProfileId ?? ""} onChange={(event) => updateProfile(event.target.value ? { ttsProfileId: event.target.value } : { ttsProfileId: undefined, ttsVoice: undefined, ttsAutoPlay: false, ttsStreamPlayback: false })}><option value="">不使用语音</option>{ttsProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.voice}</option>)}</select></label><label><span>Agent 音色<small>留空则继承所选语音模型；填写后仅在此 Agent 运行时覆盖</small></span><input aria-label="Agent 音色" disabled={!agent.ttsProfileId} maxLength={160} placeholder={selectedTtsProfile ? `继承模型音色：${selectedTtsProfile.voice}` : "请先选择语音模型"} value={agent.ttsVoice ?? ""} onChange={(event) => updateProfile({ ttsVoice: event.target.value || undefined })} /></label><label><input aria-label="自动播放语音" type="checkbox" disabled={!agent.ttsProfileId} checked={agent.ttsAutoPlay === true} onChange={(event) => updateProfile({ ttsAutoPlay: event.target.checked, ttsStreamPlayback: event.target.checked ? agent.ttsStreamPlayback : false })} />自动播放语音</label><label><input aria-label="流式播放语音" type="checkbox" disabled={!agent.ttsProfileId || !agent.ttsAutoPlay} checked={agent.ttsStreamPlayback === true} onChange={(event) => updateProfile({ ttsStreamPlayback: event.target.checked })} />流式播放语音</label></section>
         </section>
       ) : null}
@@ -333,4 +351,33 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
       {bootsharpOpen ? <div className="configuration-dialog-backdrop" role="presentation"><section className="configuration-dialog" role="dialog" aria-modal="true" aria-labelledby="bootsharp-title"><header><div><span>INITIALIZATION</span><h2 id="bootsharp-title">修改 BOOTSHARP</h2></div><button type="button" className="icon-button" aria-label="关闭 BOOTSHARP 编辑" onClick={() => setBootsharpOpen(false)}><X size={18} /></button></header><p>此提示仅在文件非空时引导首次协作；清空后将不再注入新会话。</p><label className="configuration-field"><span>BOOTSHARP 内容</span><textarea aria-label="BOOTSHARP 内容" rows={16} value={bootsharp} onChange={(event) => setBootsharp(event.target.value)} /></label><footer><button type="button" className="secondary-button" onClick={() => setBootsharpOpen(false)}>取消</button><button type="button" className="configuration-primary-action" disabled={saving || !online} onClick={() => void saveBootsharp()}>{saving ? "保存中…" : "保存 BOOTSHARP"}</button></footer></section></div> : null}
     </div>
   );
+}
+
+/** 将 Agent、提示词、头像和工作目录业务错误保留在当前编辑页。 */
+function agentDetailExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    AGENT_INVALID: show,
+    AGENT_NOT_FOUND: show,
+    AGENT_ARCHIVED: show,
+    INVALID_AGENT_NAME: show,
+    VERSION_CONFLICT: show,
+    AGENT_HAS_SESSIONS: show,
+    AGENT_REMOVAL_IN_PROGRESS: show,
+    DELETE_OPTIONS_REQUIRED: show,
+    WORKSPACE_IN_USE: show,
+    WORKSPACE_OUTSIDE_DATA: show,
+    WORKSPACE_PI_CONFLICT: show,
+    WORKSPACE_NOT_ABSOLUTE: show,
+    WORKSPACE_ROOT_FORBIDDEN: show,
+    WORKSPACE_NOT_DIRECTORY: show,
+    INVALID_PROMPT_FILE: show,
+    PROMPT_CONTENT_REQUIRED: show,
+    PROMPT_FILES_ONLY: show,
+    AVATAR_REQUIRED: show,
+    AVATAR_NOT_FOUND: show,
+    AVATAR_TOO_LARGE: show,
+    INVALID_AVATAR: show,
+    INVALID_AVATAR_TYPE: show,
+  };
 }

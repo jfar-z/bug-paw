@@ -432,8 +432,8 @@ describe("PiRuntimeGateway", () => {
     const firstRunEvents = first.filter((event) => event.runId === started.runId);
     const secondRunEvents = second.filter((event) => event.runId === started.runId);
     expect(secondRunEvents).toEqual(firstRunEvents);
-    expect(firstRunEvents.map((event) => event.type)).toEqual(["run_started", "text_delta", "completed"]);
-    expect(firstRunEvents.map((event) => event.id)).toEqual([1, 2, 3]);
+    expect(firstRunEvents.map((event) => event.type)).toEqual(["run_started", "snapshot", "text_delta", "snapshot", "completed"]);
+    expect(firstRunEvents.map((event) => event.id)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("按事件游标补发断线期间的增量", async () => {
@@ -455,8 +455,8 @@ describe("PiRuntimeGateway", () => {
 
     gateway.subscribe(session.sessionId, 1, (event) => replayed.push(event));
 
-    expect(replayed.map((event) => event.id)).toEqual([2, 3]);
-    expect(replayed.map((event) => event.type)).toEqual(["text_delta", "text_delta"]);
+    expect(replayed.map((event) => event.id)).toEqual([2, 3, 4]);
+    expect(replayed.map((event) => event.type)).toEqual(["snapshot", "text_delta", "text_delta"]);
     session.finishPrompt();
   });
 
@@ -524,7 +524,13 @@ describe("PiRuntimeGateway", () => {
   });
 
   it("通过 ResourceLoader 注册系统提示词注入扩展", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp/workspace", "/tmp/pi-agent-test", ["用户自定义 Agent 设定"]);
+    const loader = createWorkspaceResourceLoader(
+      "/tmp/workspace",
+      "/tmp/pi-agent-test",
+      ["用户自定义 Agent 设定"],
+      undefined,
+      { knowledgeSearch: false, knowledgeRead: false, webSearch: true, webRead: true },
+    );
     await loader.reload();
 
     expect(loader.getAppendSystemPrompt()).toEqual(["用户自定义 Agent 设定"]);
@@ -644,7 +650,7 @@ describe("PiRuntimeGateway", () => {
     await prompt;
     gateway.dispose();
 
-    expect(events.at(-1)).toMatchObject({ type: "aborted", id: 2, sessionId: "session-1" });
+    expect(events.at(-1)).toMatchObject({ type: "aborted", id: 3, sessionId: "session-1" });
     expect(session.abort).toHaveBeenCalledOnce();
     expect(session.dispose).toHaveBeenCalledOnce();
   });

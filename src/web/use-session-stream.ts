@@ -3,6 +3,7 @@ import type { ChatRunSummary } from "../shared/contracts";
 import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } from "../shared/api/chat-validation";
 import { api, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
+import { isSessionHistoryPage } from "../shared/session-history-contracts";
 
 interface SessionStreamOptions {
   sessionId?: string;
@@ -12,6 +13,7 @@ interface SessionStreamOptions {
   onModelChange?: (model: ModelSummary) => void;
   onSessionRenamed?: (sessionId: string, name: string) => void;
   onError: (message: string) => void;
+  onUnexpectedError?: (error: unknown) => void;
 }
 
 export interface SessionStreamControl {
@@ -144,7 +146,12 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       } else {
         callbacksRef.current.onRunChange(undefined);
         if (snapshot.run) {
-          callbacksRef.current.onTimelineEvent({ type: "generation_finished" });
+          const outcome = snapshot.run.status === "completed"
+            ? "completed"
+            : snapshot.run.status === "aborted"
+              ? "aborted"
+              : "error";
+          callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome });
         }
       }
     });
@@ -169,9 +176,13 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
           cursor: snapshot.lastEventId,
           nonce: (current?.nonce ?? 0) + 1,
         }));
-      }).catch(() => {
+      }).catch((error: unknown) => {
         if (!active || sourceRef.current !== source) return;
-        callbacksRef.current.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
+        const cancelled = error instanceof DOMException && error.name === "AbortError";
+        if (!cancelled) {
+          callbacksRef.current.onUnexpectedError?.(error);
+          callbacksRef.current.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
+        }
         setReconnectRequest((current) => ({
           sessionId: options.sessionId!,
           cursor: lastEventIdRef.current,
@@ -246,6 +257,57 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         callbacksRef.current.onTimelineEvent({ type: "thinking_finished" });
       }
     });
+    source.addEventListener("tool_preparing", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "tool_preparing") {
+        reportInvalidEvent();
+        return;
+      }
+      if (accept(payload)) {
+        flushDeltas();
+        callbacksRef.current.onTimelineEvent({
+          type: "tool_preparing",
+          callId: payload.callId,
+          toolName: payload.toolName,
+        });
+      }
+    });
+    source.addEventListener("tool_parameters_streaming", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "tool_parameters_streaming") {
+        reportInvalidEvent();
+        return;
+      }
+      if (accept(payload)) {
+        flushDeltas();
+        callbacksRef.current.onTimelineEvent({
+          type: "tool_parameters_streaming",
+          callId: payload.callId,
+          toolName: payload.toolName,
+          generatedBytes: payload.generatedBytes,
+          ...(payload.path ? { path: payload.path } : {}),
+        });
+      }
+    });
+    source.addEventListener("tool_prepared", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "tool_prepared") {
+        reportInvalidEvent();
+        return;
+      }
+      if (accept(payload)) {
+        flushDeltas();
+        callbacksRef.current.onTimelineEvent({
+          type: "tool_prepared",
+          callId: payload.callId,
+          toolName: payload.toolName,
+          args: payload.args,
+        });
+      }
+    });
     source.addEventListener("tool_started", (rawEvent) => {
       const payload = parse(rawEvent as MessageEvent);
       if (!payload) return;
@@ -298,7 +360,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         });
       }
     });
-    ["completed", "aborted", "error"].forEach((type) => {
+    (["completed", "aborted", "error"] as const).forEach((type) => {
       source.addEventListener(type, (rawEvent) => {
         const payload = parse(rawEvent as MessageEvent);
         if (!payload) return;
@@ -311,7 +373,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         }
         flushDeltas();
         callbacksRef.current.onRunChange(undefined);
-        callbacksRef.current.onTimelineEvent({ type: "generation_finished" });
+        callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome: type });
         if (type === "error" && payload.type === "error") {
           callbacksRef.current.onError(payload.message);
         }
@@ -320,7 +382,6 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     source.onerror = () => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       setReconnecting(true);
-      callbacksRef.current.onError("实时连接暂时中断，浏览器会自动重连。");
     };
 
     return () => {
@@ -353,6 +414,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
 function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undefined {
   if (typeof payload.sessionId !== "string"
     || !Array.isArray(payload.messages)
+    || !isSessionHistoryPage(payload.history)
     || typeof payload.lastEventId !== "number"
     || !Number.isSafeInteger(payload.lastEventId)
     || payload.lastEventId < 0) {
@@ -361,6 +423,7 @@ function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undef
   return {
     id: payload.sessionId,
     messages: payload.messages,
+    history: { ...payload.history },
     model: readModel(payload.model),
     run: readRun(payload.run),
     lastEventId: payload.lastEventId,
@@ -399,7 +462,7 @@ function readRun(value: unknown): ChatRunSummary | undefined {
   };
 }
 
-function isActiveRun(run: ChatRunSummary | undefined): run is ChatRunSummary {
+function isActiveRun(run: ChatRunSummary | undefined): run is ChatRunSummary & { status: "queued" | "running" } {
   return run?.status === "queued" || run?.status === "running";
 }
 

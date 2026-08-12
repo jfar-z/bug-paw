@@ -1,4 +1,4 @@
-import type { CreateScheduledTaskInput, ScheduledTaskRun, ScheduledTaskTrigger, UpdateScheduledTaskInput } from "../../shared/scheduled-task-contracts";
+import { isDeletedSessionTarget, type CreateScheduledTaskInput, type ScheduledTaskRun, type ScheduledTaskTarget, type ScheduledTaskTrigger, type UpdateScheduledTaskInput } from "../../shared/scheduled-task-contracts";
 import { nextRunAt, validateSchedule } from "./schedule";
 import type { ScheduledTaskRepository } from "./scheduled-task-repository";
 import { DomainError, toSafePublicMessage } from "../core/errors";
@@ -32,7 +32,7 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
   const MAX_TIMER_DELAY_MS = 2_147_000_000;
 
   /** 拒绝把可跨重启执行的任务绑定到尚无 Pi JSONL 的空 Session。 */
-  async function validatePersistentTarget(agentId: string, target: CreateScheduledTaskInput["target"]): Promise<void> {
+  async function validatePersistentTarget(agentId: string, target: ScheduledTaskTarget): Promise<void> {
     if (target.type !== "existing_session" || !options.sessionIsPersisted) return;
     if (!await options.sessionIsPersisted(agentId, target.sessionId)) {
       throw new DomainError("VALIDATION_FAILED", "空会话尚未产生可恢复记录，不能绑定定时任务");
@@ -99,6 +99,9 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
   async function execute(taskId: string, trigger: ScheduledTaskTrigger): Promise<ScheduledTaskRun> {
     let task = await options.store.getTask(taskId);
     if (!task) throw new Error("定时任务不存在");
+    if (isDeletedSessionTarget(task.target)) {
+      throw new DomainError("SCHEDULED_TASK_TARGET_MISSING", "原目标会话已删除，请重新选择任务目标");
+    }
     if (trigger === "scheduled") {
       const claimed = await options.store.claimDueTask(taskId, new Date());
       if (!claimed) {

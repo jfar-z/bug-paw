@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 
 import type { KnowledgeBaseDocument } from "../../shared/knowledge-base-contracts";
 import type { DataPaths } from "../paths";
-import { chunkKnowledgeText } from "./chunker";
+import { chunkKnowledgePages, chunkKnowledgeText } from "./chunker";
 import { parseKnowledgeDocument } from "./document-parser";
 import {
   createKnowledgeLanceIndex,
@@ -20,6 +20,7 @@ import type { KnowledgeRepository } from "./knowledge-repository";
 import { DomainError, toSafePublicMessage } from "../core/errors";
 import { KeyedMutex } from "../core/keyed-mutex";
 import { SYSTEM_LIMITS } from "../core/limits";
+import type { ToolWarning } from "../retrieval/tool-response";
 
 /** 知识库资料的公开元数据。 */
 export interface KnowledgeDocument {
@@ -89,6 +90,86 @@ export interface KnowledgeBaseSummary {
   updatedAt: string;
 }
 
+/** Agent 知识库检索输入。 */
+export interface KnowledgeSearchInput {
+  query: string;
+  knowledgeBaseIds?: string[];
+  limit?: number;
+}
+
+/** Agent 可追溯的知识库检索结果。 */
+export interface KnowledgeSearchData {
+  query: string;
+  searchedKnowledgeBases: Array<{ id: string; name: string }>;
+  results: Array<{
+    rank: number;
+    knowledgeBase: { id: string; name: string };
+    document: { id: string; name: string; mediaType: string };
+    chunk: { id: string; index: number; page: number | null; section: string | null; text: string };
+    matchedBy: Array<"full_text" | "vector">;
+  }>;
+}
+
+/** 知识库检索执行元数据。 */
+export interface KnowledgeSearchMetadata extends Record<string, unknown> {
+  resultCount: number;
+  retrievalMode: "full_text" | "vector" | "hybrid";
+  truncated: boolean;
+}
+
+/** 知识库检索服务结果，由工具层决定最终响应状态。 */
+export interface KnowledgeSearchServiceResult {
+  data: KnowledgeSearchData;
+  metadata: KnowledgeSearchMetadata;
+  warnings: ToolWarning[];
+}
+
+/** Agent 知识库正文读取输入。 */
+export type KnowledgeReadInput =
+  | {
+      mode: "around_chunk";
+      documentId: string;
+      anchorChunkId: string;
+      beforeChunks?: number;
+      afterChunks?: number;
+      maxCharacters?: number;
+    }
+  | {
+      mode: "document";
+      documentId: string;
+      offset?: number;
+      maxCharacters?: number;
+    };
+
+/** Agent 知识库正文读取结果。 */
+export interface KnowledgeReadData {
+  mode: KnowledgeReadInput["mode"];
+  knowledgeBase: { id: string; name: string };
+  document: { id: string; name: string; mediaType: string };
+  content: string;
+  location: {
+    startChunkIndex: number | null;
+    endChunkIndex: number | null;
+    startPage: number | null;
+    endPage: number | null;
+  };
+}
+
+/** 知识库正文读取元数据。 */
+export interface KnowledgeReadMetadata extends Record<string, unknown> {
+  offset: number;
+  contentCharacters: number;
+  returnedCharacters: number;
+  truncated: boolean;
+}
+
+/** 知识库正文读取服务结果。 */
+export interface KnowledgeReadServiceResult {
+  data: KnowledgeReadData;
+  metadata: KnowledgeReadMetadata;
+  warnings: ToolWarning[];
+}
+
 /** 知识库服务依赖。 */
 export interface KnowledgeBaseServiceDependencies {
   paths: DataPaths;
@@ -125,7 +206,8 @@ export interface KnowledgeBaseService {
   removeDocument(knowledgeBaseId: string, documentId: string): Promise<void>;
   removeDocumentForAgent(agentId: string, knowledgeBaseId: string, documentId: string): Promise<void>;
   searchBase(knowledgeBaseId: string, query: string, limit?: number): Promise<KnowledgeIndexSearchResult[]>;
-  searchForAgent(agentId: string, input: { query: string; knowledgeBaseId?: string; limit?: number }): Promise<KnowledgeIndexSearchResult[]>;
+  searchForAgent(agentId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchServiceResult>;
+  readForAgent(agentId: string, input: KnowledgeReadInput): Promise<KnowledgeReadServiceResult>;
   getDocumentForAgent(agentId: string, documentId: string): Promise<KnowledgeDocument>;
   rebuildSemanticIndex(): Promise<{ totalBases: number; rebuiltBases: number; failedBases: string[] }>;
 }
@@ -197,7 +279,11 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
             const vectors = await createVectors(chunks);
             // 全部向量生成成功后才替换该资料索引，失败时仍保留可用的旧索引。
             await index.removeDocument(base.id, document.id);
-            const indexedChunks = chunks.map((chunk) => ({ chunkId: `${document.id}:${chunk.index}`, documentId: document.id, index: chunk.index, text: chunk.text, page: 1 }));
+            const indexedChunks = chunks.map((chunk) => ({
+              chunkId: `${document.id}:${chunk.index}`,
+              documentId: document.id,
+              ...chunk,
+            }));
             await index.upsertChunks(base.id, indexedChunks);
             await index.upsertVectorChunks?.(base.id, indexedChunks.map((chunk, index) => ({ ...chunk, vector: vectors[index] })));
           }
@@ -280,11 +366,11 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
         if (parsed.status === "needs_ocr") {
           document = { id, knowledgeBaseId, name, mediaType: upload.mediaType, status: "needs_ocr", failureReason: "该 PDF 没有可提取的文字层，需要 OCR", createdAt: new Date().toISOString() };
         } else {
-          const chunks = chunkKnowledgeText(parsed.text, { maxLength: 800, overlap: 120 });
+          const chunks = chunkKnowledgePages(parsed.pages, { maxLength: 800, overlap: 120 });
           if (chunks.length > SYSTEM_LIMITS.knowledgeChunksPerDocument) throw new RangeError("资料切片数量超过系统上限");
           await writeFile(join(sourceDir, "text.txt"), parsed.text, { encoding: "utf8", mode: 0o600 });
           attemptedIndex = true;
-          const indexedChunks = chunks.map((chunk) => ({ chunkId: `${id}:${chunk.index}`, documentId: id, index: chunk.index, text: chunk.text, page: 1 }));
+          const indexedChunks = chunks.map((chunk) => ({ chunkId: `${id}:${chunk.index}`, documentId: id, ...chunk }));
           await index.upsertChunks(knowledgeBaseId, indexedChunks);
           if (await isSemanticSearchEnabled()) {
             const vectors = await createVectors(chunks);
@@ -336,7 +422,7 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
           const text = await readFile(join(sourceDirectory, "text.txt"), "utf8");
           await index.removeDocument(knowledgeBaseId, documentId);
           await index.upsertChunks(knowledgeBaseId, chunkKnowledgeText(text, { maxLength: 800, overlap: 120 }).map((chunk) => ({
-            chunkId: `${documentId}:${chunk.index}`, documentId, index: chunk.index, text: chunk.text, page: 1,
+            chunkId: `${documentId}:${chunk.index}`, documentId, ...chunk,
           })));
         }
       } catch (rollbackError) {
@@ -489,26 +575,189 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
 
     async searchForAgent(agentId, input) {
       const baseIds = await dependencies.store.listBaseIdsForAgent(agentId);
-      const selected = input.knowledgeBaseId ? baseIds.filter((id) => id === input.knowledgeBaseId) : baseIds;
+      const requested = input.knowledgeBaseIds ? [...new Set(input.knowledgeBaseIds)] : undefined;
+      if (requested?.some((id) => !baseIds.includes(id))) throw new Error("无权访问指定知识库");
+      const selected = requested ?? baseIds;
       if (selected.length === 0) throw new Error("没有可访问的知识库");
       const normalizedQuery = input.query.trim();
       if (!normalizedQuery) throw new TypeError("检索关键词不能为空");
       const limit = normalizeLimit(input.limit ?? 5);
-      const results = await Promise.all(selected.map((baseId) => mutations.run(baseId, async () => {
+      const candidateLimit = Math.min(Math.max(limit * 4, 20), 50);
+      const semanticEnabled = await isSemanticSearchEnabled();
+      const warnings: ToolWarning[] = [];
+      let queryVector: number[] | undefined;
+      if (semanticEnabled && dependencies.embeddingClient && index.searchVectors) {
+        try {
+          queryVector = await dependencies.embeddingClient.embedQuery(normalizedQuery);
+        } catch {
+          warnings.push({
+            code: "VECTOR_SEARCH_UNAVAILABLE",
+            message: "语义检索暂时不可用，结果仅来自全文检索",
+          });
+        }
+      }
+      let vectorSearchSucceeded = false;
+      const baseResults = await Promise.all(selected.map((baseId) => mutations.run(baseId, async () => {
         const stillAllowed = (await dependencies.store.listBaseIdsForAgent(agentId)).includes(baseId);
-        if (!stillAllowed || !(await dependencies.store.getBase(baseId))) return [];
-        if (await isSemanticSearchEnabled() && dependencies.embeddingClient && index.searchVectors) {
+        const base = await dependencies.store.getBase(baseId);
+        if (!stillAllowed || !base) return undefined;
+        const documents = (await dependencies.store.listDocuments(baseId))
+          .filter((document) => document.status === "indexed");
+        const fullText = await filterIndexedResults(baseId, await index.search(baseId, normalizedQuery, candidateLimit));
+        let vector: KnowledgeIndexSearchResult[] = [];
+        if (queryVector && index.searchVectors) {
           try {
-            const vector = await dependencies.embeddingClient.embedQuery(normalizedQuery);
-            const semanticResults = await index.searchVectors(baseId, vector, limit);
-            if (semanticResults.length > 0) return filterIndexedResults(baseId, semanticResults);
+            vector = await filterIndexedResults(baseId, await index.searchVectors(baseId, queryVector, candidateLimit));
+            vectorSearchSucceeded = true;
           } catch {
-            // 某一知识库的语义检索异常不能影响同一 Agent 的其他知识库。
+            if (!warnings.some((warning) => warning.code === "VECTOR_SEARCH_UNAVAILABLE")) {
+              warnings.push({
+                code: "VECTOR_SEARCH_UNAVAILABLE",
+                message: "语义检索暂时不可用，部分结果仅来自全文检索",
+              });
+            }
           }
         }
-        return filterIndexedResults(baseId, await index.search(baseId, normalizedQuery, limit));
+        return { base, documents, fullText, vector };
       })));
-      return results.flat().slice(0, limit);
+      const availableBaseResults = baseResults.filter((result) => result !== undefined);
+      if (availableBaseResults.length === 0) throw new Error("没有可访问的知识库");
+
+      type FusedResult = {
+        key: string;
+        score: number;
+        knowledgeBase: KnowledgeBaseDocument;
+        document: KnowledgeDocument;
+        chunk: KnowledgeIndexSearchResult;
+        matchedBy: Array<"full_text" | "vector">;
+      };
+      const fused = new Map<string, FusedResult>();
+      for (const result of availableBaseResults) {
+        const documents = new Map(result.documents.map((document) => [document.id, document]));
+        const addRanked = (items: KnowledgeIndexSearchResult[], mode: "full_text" | "vector") => {
+          items.forEach((chunk, index) => {
+            const document = documents.get(chunk.documentId);
+            if (!document) return;
+            const key = `${result.base.id}:${chunk.chunkId}`;
+            const existing = fused.get(key);
+            if (existing) {
+              existing.score += 1 / (60 + index + 1);
+              if (!existing.matchedBy.includes(mode)) existing.matchedBy.push(mode);
+              return;
+            }
+            fused.set(key, {
+              key,
+              score: 1 / (60 + index + 1),
+              knowledgeBase: result.base,
+              document,
+              chunk,
+              matchedBy: [mode],
+            });
+          });
+        };
+        addRanked(result.fullText, "full_text");
+        addRanked(result.vector, "vector");
+      }
+      const ranked = [...fused.values()]
+        .sort((left, right) => right.score - left.score || left.key.localeCompare(right.key));
+      const sliced = ranked.slice(0, limit);
+      const results = sliced.map((result, index) => ({
+        rank: index + 1,
+        knowledgeBase: { id: result.knowledgeBase.id, name: result.knowledgeBase.name },
+        document: { id: result.document.id, name: result.document.name, mediaType: result.document.mediaType },
+        chunk: {
+          id: result.chunk.chunkId,
+          index: result.chunk.index,
+          page: result.chunk.page ?? null,
+          section: result.chunk.section ?? null,
+          text: result.chunk.text,
+        },
+        matchedBy: result.matchedBy,
+      }));
+      const retrievalMode = vectorSearchSucceeded
+        ? availableBaseResults.some((result) => result.fullText.length > 0) ? "hybrid" : "vector"
+        : "full_text";
+      return {
+        data: {
+          query: normalizedQuery,
+          searchedKnowledgeBases: availableBaseResults.map(({ base }) => ({ id: base.id, name: base.name })),
+          results,
+        },
+        metadata: {
+          resultCount: results.length,
+          retrievalMode,
+          truncated: ranked.length > results.length,
+        },
+        warnings,
+      };
+    },
+
+    async readForAgent(agentId, input) {
+      const document = (await dependencies.store.listAllDocuments()).find((item) => item.id === input.documentId);
+      if (!document) throw new Error("资料不存在");
+      const allowed = (await dependencies.store.listBaseIdsForAgent(agentId)).includes(document.knowledgeBaseId);
+      if (!allowed) throw new Error("无权访问该知识库资料");
+      if (document.status !== "indexed") throw new Error("资料正文不可用");
+      const base = await dependencies.store.getBase(document.knowledgeBaseId);
+      if (!base) throw new Error("知识库不存在");
+      const maxCharacters = normalizeCharacterLimit(input.maxCharacters);
+      const documentSummary = { id: document.id, name: document.name, mediaType: document.mediaType };
+      const knowledgeBase = { id: base.id, name: base.name };
+
+      if (input.mode === "document") {
+        const text = await readFile(join(dependencies.paths.knowledgeDir, "sources", base.id, document.id, "text.txt"), "utf8");
+        const offset = Math.max(0, Math.min(Math.floor(input.offset ?? 0), text.length));
+        const content = text.slice(offset, offset + maxCharacters);
+        return {
+          data: {
+            mode: input.mode,
+            knowledgeBase,
+            document: documentSummary,
+            content,
+            location: { startChunkIndex: null, endChunkIndex: null, startPage: null, endPage: null },
+          },
+          metadata: {
+            offset,
+            contentCharacters: text.length,
+            returnedCharacters: content.length,
+            truncated: offset + content.length < text.length,
+          },
+          warnings: [],
+        };
+      }
+
+      const chunks = await index.listDocumentChunks?.(base.id, document.id);
+      if (!chunks) throw new Error("资料切片上下文不可用");
+      const anchorIndex = chunks.findIndex((chunk) => chunk.chunkId === input.anchorChunkId);
+      if (anchorIndex === -1) throw new Error("命中切片不属于指定资料");
+      const before = normalizeChunkRadius(input.beforeChunks);
+      const after = normalizeChunkRadius(input.afterChunks);
+      const selectedChunks = chunks.slice(Math.max(0, anchorIndex - before), anchorIndex + after + 1);
+      const fullContent = selectedChunks.map((chunk) => chunk.text).join("\n\n");
+      const content = fullContent.slice(0, maxCharacters);
+      const first = selectedChunks[0];
+      const last = selectedChunks.at(-1);
+      return {
+        data: {
+          mode: input.mode,
+          knowledgeBase,
+          document: documentSummary,
+          content,
+          location: {
+            startChunkIndex: first?.index ?? null,
+            endChunkIndex: last?.index ?? null,
+            startPage: first?.page ?? null,
+            endPage: last?.page ?? null,
+          },
+        },
+        metadata: {
+          offset: 0,
+          contentCharacters: fullContent.length,
+          returnedCharacters: content.length,
+          truncated: content.length < fullContent.length,
+        },
+        warnings: [],
+      };
     },
 
     async getDocumentForAgent(agentId, documentId) {
@@ -599,4 +848,16 @@ function toSummary(base: KnowledgeBaseDetail): KnowledgeBaseSummary {
 function normalizeLimit(value: number): number {
   if (!Number.isFinite(value)) return 5;
   return Math.max(1, Math.min(Math.floor(value), 20));
+}
+
+/** 约束正文读取长度，避免单次工具结果过度占用模型上下文。 */
+function normalizeCharacterLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 12_000;
+  return Math.max(1, Math.min(Math.floor(value), 50_000));
+}
+
+/** 约束锚点前后的切片数量。 */
+function normalizeChunkRadius(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 2;
+  return Math.max(0, Math.min(Math.floor(value), 10));
 }

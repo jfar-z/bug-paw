@@ -1,4 +1,5 @@
 import type { SessionEvent, SessionProjectionRequiredEvent, SessionSnapshotEvent } from "./chat";
+import { isSessionHistoryPage } from "../session-history-contracts";
 
 /** 轻量校验 SSE 快照，避免浏览器为单条事件加载完整 Schema 执行器。 */
 export function isSessionSnapshotEvent(value: unknown): value is SessionSnapshotEvent {
@@ -7,6 +8,7 @@ export function isSessionSnapshotEvent(value: unknown): value is SessionSnapshot
     && isSafeInteger(value.id, 0)
     && isNonEmptyString(value.sessionId)
     && Array.isArray(value.messages)
+    && isSessionHistoryPage(value.history)
     && isSafeInteger(value.lastEventId, 0)
     && (value.model === undefined || isModel(value.model))
     && (value.run === undefined || isRun(value.run));
@@ -28,6 +30,12 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     || !isNonEmptyString(value.sessionId)
     || typeof value.type !== "string") return false;
   if (value.type === "model_changed") return isModel(value.model);
+  // 自动标题可能在所属 Run 结束后才到达，因此不绑定任何 Run。
+  if (value.type === "session_renamed") {
+    return value.runId === undefined
+      && isNonEmptyString(value.name)
+      && Array.from(value.name).length <= 120;
+  }
   if (!isNonEmptyString(value.runId)) return false;
   switch (value.type) {
     case "run_started": return isRun(value.run);
@@ -36,7 +44,11 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     case "thinking_finished":
     case "completed":
     case "aborted": return true;
-    case "session_renamed": return isNonEmptyString(value.name) && Array.from(value.name).length <= 120;
+    case "tool_preparing": return isToolIdentity(value);
+    case "tool_parameters_streaming": return isToolIdentity(value)
+      && isSafeInteger(value.generatedBytes, 1)
+      && (value.path === undefined || isNonEmptyString(value.path));
+    case "tool_prepared": return isToolIdentity(value) && "args" in value;
     case "tool_started": return isToolIdentity(value) && "args" in value;
     case "tool_updated": return isToolIdentity(value) && "partialResult" in value;
     case "tool_finished": return isToolIdentity(value) && "result" in value && typeof value.isError === "boolean";

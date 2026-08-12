@@ -354,6 +354,30 @@ describe("Agent 配置路由", () => {
     expect(clamped.json().profile.defaultThinkingLevel).toBe("off");
     await validatingApp.close();
   });
+
+  it("拒绝缺少或不可用的单独标题模型", async () => {
+    const { app, store } = await fixture();
+    const created = await store.create({ name: "标题 Agent" });
+
+    const missing = await app.inject({
+      method: "PATCH",
+      url: `/api/agents/${created.profile.id}`,
+      payload: { revision: created.revision, titleGeneration: { modelSource: "custom", thinkingEnabled: false } },
+    });
+    expect(missing.statusCode).toBe(400);
+
+    const unavailable = await app.inject({
+      method: "PATCH",
+      url: `/api/agents/${created.profile.id}`,
+      payload: { revision: created.revision, titleGeneration: {
+        modelSource: "custom",
+        model: { provider: "missing", id: "title" },
+        thinkingEnabled: false,
+      } },
+    });
+    expect(unavailable.statusCode).toBe(400);
+    await app.close();
+  });
 });
 
 function avatarMultipart(boundary: string, content: Buffer): Buffer {

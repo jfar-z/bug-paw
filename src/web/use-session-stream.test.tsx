@@ -43,7 +43,12 @@ class FakeEventSource {
 
   emitQueued(type: string, payload: unknown) {
     const normalized = payload && typeof payload === "object"
-      ? { ...(type === "snapshot" ? {} : { runId: "run-1" }), ...payload as Record<string, unknown> }
+      ? {
+          ...(type === "snapshot"
+            ? { history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 } }
+            : { runId: "run-1" }),
+          ...payload as Record<string, unknown>,
+        }
       : payload;
     const event = { data: JSON.stringify(normalized) } as MessageEvent;
     this.listeners.get(type)?.forEach((listener) => listener(event));
@@ -130,7 +135,7 @@ describe("useSessionStream", () => {
     expect(onTimelineEvent.mock.calls.filter(([event]) => event.type === "text_delta")).toEqual([
       [{ type: "text_delta", delta: "一次" }],
     ]);
-    expect(onTimelineEvent).toHaveBeenLastCalledWith({ type: "generation_finished" });
+    expect(onTimelineEvent).toHaveBeenLastCalledWith({ type: "generation_finished", outcome: "completed" });
     expect(onRunChange).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -198,6 +203,77 @@ describe("useSessionStream", () => {
     expect(onTimelineEvent).toHaveBeenCalledWith({ type: "thinking_finished" });
   });
 
+  it("转交工具准备阶段并保留运行中止原因", () => {
+    const onTimelineEvent = vi.fn();
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot: vi.fn(),
+      onTimelineEvent,
+      onRunChange: vi.fn(),
+      onError: vi.fn(),
+    }));
+    const source = FakeEventSource.instances[0];
+
+    act(() => {
+      source.emit("tool_preparing", {
+        id: 1,
+        type: "tool_preparing",
+        sessionId: "session-1",
+        runId: "run-1",
+        callId: "call-1",
+        toolName: "write",
+      });
+      source.emit("tool_prepared", {
+        id: 2,
+        type: "tool_prepared",
+        sessionId: "session-1",
+        runId: "run-1",
+        callId: "call-1",
+        toolName: "write",
+        args: { path: "src/app.ts", content: "内容" },
+      });
+      source.emit("tool_parameters_streaming", {
+        id: 3,
+        type: "tool_parameters_streaming",
+        sessionId: "session-1",
+        runId: "run-1",
+        callId: "call-1",
+        toolName: "write",
+        generatedBytes: 4608,
+        path: "src/app.ts",
+      });
+      source.emit("aborted", {
+        id: 4,
+        type: "aborted",
+        sessionId: "session-1",
+        runId: "run-1",
+      });
+    });
+
+    expect(onTimelineEvent).toHaveBeenNthCalledWith(1, {
+      type: "tool_preparing",
+      callId: "call-1",
+      toolName: "write",
+    });
+    expect(onTimelineEvent).toHaveBeenNthCalledWith(2, {
+      type: "tool_prepared",
+      callId: "call-1",
+      toolName: "write",
+      args: { path: "src/app.ts", content: "内容" },
+    });
+    expect(onTimelineEvent).toHaveBeenNthCalledWith(3, {
+      type: "tool_parameters_streaming",
+      callId: "call-1",
+      toolName: "write",
+      generatedBytes: 4608,
+      path: "src/app.ts",
+    });
+    expect(onTimelineEvent).toHaveBeenLastCalledWith({
+      type: "generation_finished",
+      outcome: "aborted",
+    });
+  });
+
   it("连接错误只报告重连状态而不结束任务", () => {
     const onTimelineEvent = vi.fn();
     const onRunChange = vi.fn();
@@ -213,7 +289,7 @@ describe("useSessionStream", () => {
     act(() => FakeEventSource.instances[0].onerror?.());
 
     expect(result.current.reconnecting).toBe(true);
-    expect(onError).toHaveBeenCalledWith("实时连接暂时中断，浏览器会自动重连。");
+    expect(onError).not.toHaveBeenCalled();
     expect(onRunChange).not.toHaveBeenCalled();
     expect(onTimelineEvent).not.toHaveBeenCalled();
   });
@@ -247,6 +323,7 @@ describe("useSessionStream", () => {
     const recovered = {
       id: "session-1",
       messages: [],
+      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
       lastEventId: 9,
     };
     renderHook(() => useSessionStream({
@@ -284,6 +361,8 @@ describe("useSessionStream", () => {
   it("Projection 快照请求永久挂起时按截止时间中止并恢复 SSE", async () => {
     vi.useFakeTimers();
     let recoverySignal: AbortSignal | undefined;
+    const onError = vi.fn();
+    const onUnexpectedError = vi.fn();
     vi.spyOn(api, "openSession").mockImplementation((_sessionId, signal) => {
       recoverySignal = signal;
       return new Promise((_resolve, reject) => {
@@ -295,7 +374,8 @@ describe("useSessionStream", () => {
       onSnapshot: vi.fn(),
       onTimelineEvent: vi.fn(),
       onRunChange: vi.fn(),
-      onError: vi.fn(),
+      onError,
+      onUnexpectedError,
     }));
 
     await act(async () => {
@@ -309,8 +389,37 @@ describe("useSessionStream", () => {
     });
 
     expect(recoverySignal?.aborted).toBe(true);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onUnexpectedError).not.toHaveBeenCalled();
     expect(FakeEventSource.instances).toHaveLength(2);
     expect(FakeEventSource.instances[1]?.url).toBe("/api/v1/sessions/session-1/events?after=0");
+  });
+
+  it("Projection 快照恢复遇到真实请求错误时仅上报一次意外错误", async () => {
+    const failure = new Error("projection unavailable");
+    const onUnexpectedError = vi.fn();
+    vi.spyOn(api, "openSession").mockRejectedValue(failure);
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot: vi.fn(),
+      onTimelineEvent: vi.fn(),
+      onRunChange: vi.fn(),
+      onError: vi.fn(),
+      onUnexpectedError,
+    }));
+
+    await act(async () => {
+      FakeEventSource.instances[0].emit("projection_required", {
+        id: 9,
+        type: "projection_required",
+        sessionId: "session-1",
+        lastEventId: 9,
+      });
+      await Promise.resolve();
+    });
+
+    expect(onUnexpectedError).toHaveBeenCalledTimes(1);
+    expect(onUnexpectedError).toHaveBeenCalledWith(failure);
   });
 
   it("把其他客户端切换的模型同步到当前页面", () => {

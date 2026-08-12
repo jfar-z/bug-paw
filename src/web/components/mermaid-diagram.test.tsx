@@ -79,5 +79,7 @@ describe("MermaidDiagram", () => {
     expect(new Set(ids).size).toBe(2);
     fireEvent.click(screen.getAllByRole("button", { name: "查看 Mermaid 源码" })[0]);
     expect(container.querySelector(".mermaid-diagram__source code")?.textContent).toBe("graph TD\nA-->B");
+    expect(container.querySelector(".mermaid-diagram__source .highlighted-code-block"))
+      .not.toHaveClass("is-line-wrapping");
   });
 });

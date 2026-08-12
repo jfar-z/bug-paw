@@ -2,10 +2,12 @@ import { Check, GripVertical, PencilLine, Plus, Save, TestTube2, Trash2 } from "
 import { useEffect, useMemo, useState } from "react";
 import type { ProviderEditorModel, ProviderTemplate } from "../../shared/configuration-contracts";
 import { api, type DiscoveredModel, type ModelConnectionTestItem, type ModelConnectionTestRequest, type ProvidersDocument } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { KeyValueEditor, type KeyValueRow } from "../components/configuration/key-value-editor";
 import { ProviderRenameDialog } from "../components/configuration/provider-rename-dialog";
 import { SecretInput } from "../components/secret-input";
 import { ThinkingLevelMapEditor } from "../components/configuration/thinking-level-map-editor";
+import { getThinkingProtocolPreview, thinkingProtocolOptions } from "../components/configuration/thinking-protocol-preview";
 import { useOnlineStatus } from "../use-online-status";
 
 interface ProviderNode extends Record<string, unknown> {
@@ -95,6 +97,47 @@ function emptyModel(): ProviderEditorModel {
   return { id: "new-model", name: "新模型", reasoning: false, thinkingLevelMap: {}, compat: {}, input: ["text"], contextWindow: 128000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
 }
 
+/** 将 Provider 编辑和排序的可恢复业务错误保留在当前表单中。 */
+function providerExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    VERSION_CONFLICT: show,
+    PROVIDER_ID_EXISTS: show,
+    PROVIDER_INVALID: show,
+    PROVIDER_IN_USE: show,
+    PROVIDER_NOT_FOUND: show,
+    PROVIDER_RENAME_CONFIRMATION_REQUIRED: show,
+    PROVIDER_RENAME_HISTORY_LIMIT: show,
+    INVALID_PROVIDER_ID: show,
+    INVALID_PROVIDER_ORDER: show,
+    INVALID_PROVIDER_REQUEST: show,
+    INVALID_PROVIDER_BASE_URL: show,
+    MODEL_IN_USE: show,
+    MODEL_SCHEMA_INVALID: show,
+  };
+}
+
+/** 将 Provider 凭证的并发和校验错误保留在凭证编辑区。 */
+function providerCredentialExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return { VERSION_CONFLICT: show, INVALID_CREDENTIAL: show, CREDENTIAL_NOT_FOUND: show };
+}
+
+/** 将模型发现和连接测试的可恢复状态保留在结果区域。 */
+function providerDiscoveryExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    MODEL_TEST_IN_PROGRESS: show,
+    MODEL_DISCOVERY_IN_PROGRESS: show,
+    MODEL_DISCOVERY_TIMEOUT: show,
+    MODEL_DISCOVERY_FAILED: show,
+    MODEL_RUNTIME_UNAVAILABLE: show,
+    MODEL_NOT_FOUND: show,
+    PROVIDER_NOT_FOUND: show,
+    INVALID_MODEL_TEST_REQUEST: show,
+  };
+}
+
 /**
  * 将来源 ID 插入目标 ID 前方，生成一份不修改原数组的新顺序。
  */
@@ -116,6 +159,7 @@ function modelInput(model: ProviderEditorModel | undefined): Array<"text" | "ima
  * 以普通表单为主编辑 Provider、模型和只写凭证，高级 JSON 仅作为兜底。
  */
 export function ProvidersPage() {
+  const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [document, setDocument] = useState<ProvidersDocument>();
   const [selectedId, setSelectedId] = useState("");
@@ -138,6 +182,10 @@ export function ProvidersPage() {
   const providers = providerMap(document);
   const ids = Object.keys(providers);
   const selectedModel = draft.models?.[selectedModelIndex];
+  const thinkingProtocol = thinkingProtocolOptions.find((option) => option.value === selectedModel?.compat?.thinkingFormat)?.value ?? "auto";
+  const thinkingProtocolPreview = selectedModel && thinkingProtocol !== "auto"
+    ? getThinkingProtocolPreview(thinkingProtocol, selectedModel)
+    : undefined;
   const credential = document?.credentials.find((item) => item.providerId === selectedId);
   const providerDraft = useMemo(() => savedProviderDraft(draft, headers), [draft, headers]);
   const savedProvider = providers[selectedId];
@@ -172,15 +220,17 @@ export function ProvidersPage() {
 
   useEffect(() => {
     let active = true;
-    api.listProviders().then((loaded) => {
+    void runApiTask(api.listProviders, { operation: "加载 Provider 配置" }).then((result) => {
+      if (result.status !== "success") return;
+      const loaded = result.data;
       if (!active) return;
       setDocument(loaded);
       const map = providerMap(loaded);
       const first = Object.keys(map)[0];
       if (first) selectProvider(first, map);
-    }).catch((requestError) => setError(requestError instanceof Error ? requestError.message : "Provider 加载失败"));
+    });
     return () => { active = false; };
-  }, []);
+  }, [runApiTask]);
 
   function updateModel(patch: Partial<ProviderEditorModel>) {
     setDraft((current) => ({ ...current, models: (current.models ?? []).map((model, index) => index === selectedModelIndex ? { ...model, ...patch } : model) }));
@@ -245,13 +295,16 @@ export function ProvidersPage() {
     setBusy("saving");
     setError("");
     try {
-      const updated = await api.removeProviderModel(selectedId, selectedModel.id, document.revision);
+      const result = await runApiTask(
+        () => api.removeProviderModel(selectedId, selectedModel.id, document.revision),
+        { operation: "删除 Provider 模型", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       setDocument({ ...document, ...updated });
       const updatedProviders = providerMap({ ...document, ...updated });
       selectProvider(selectedId, updatedProviders);
       setNotice("模型已删除");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "删除模型失败");
     } finally {
       setBusy(false);
     }
@@ -272,17 +325,20 @@ export function ProvidersPage() {
     }
     setBusy("saving"); setError(""); setNotice("");
     try {
-      const updated = savedProvider
-        ? await api.saveProvider(selectedId, document.revision, providerDraft)
-        : await api.createProvider(selectedId, document.revision, providerDraft);
+      const result = await runApiTask(
+        () => savedProvider
+          ? api.saveProvider(selectedId, document.revision, providerDraft)
+          : api.createProvider(selectedId, document.revision, providerDraft),
+        { operation: "保存 Provider", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       setDocument({ ...document, ...updated });
       const updatedProviders = providerMap({ ...document, ...updated });
       selectProvider(selectedId, updatedProviders);
       setDiscoveredModels([]);
       setSelectedDiscoveredIds(new Set());
       setNotice("Provider 已保存；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存失败");
     } finally { setBusy(false); }
   }
 
@@ -290,24 +346,31 @@ export function ProvidersPage() {
     if (!document || !selectedId || !apiKey) return;
     setBusy("saving"); setError("");
     try {
-      const result = await api.saveProviderCredential(selectedId, document.credentialRevision, apiKey);
+      const task = await runApiTask(
+        () => api.saveProviderCredential(selectedId, document.credentialRevision, apiKey),
+        { operation: "保存 Provider 凭证", expected: providerCredentialExpected(setError) },
+      );
+      if (task.status !== "success") return;
+      const result = task.data;
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: [...document.credentials.filter((item) => item.providerId !== selectedId), result.status] });
       setApiKey(""); setApiKeyVisible(false); setNotice("凭证已替换，可点击小眼睛查看");
-    } catch (requestError) { setError(requestError instanceof Error ? requestError.message : "凭证保存失败"); }
-    finally { setBusy(false); }
+    } finally { setBusy(false); }
   }
 
   async function removeCredential() {
     if (!document || !selectedId) return;
     setBusy("saving"); setError("");
     try {
-      const result = await api.removeProviderCredential(selectedId, document.credentialRevision);
+      const task = await runApiTask(
+        () => api.removeProviderCredential(selectedId, document.credentialRevision),
+        { operation: "删除 Provider 凭证", expected: providerCredentialExpected(setError) },
+      );
+      if (task.status !== "success") return;
+      const result = task.data;
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: document.credentials.filter((item) => item.providerId !== selectedId) });
       setApiKey("");
       setApiKeyVisible(false);
       setNotice("凭证已删除");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "凭证删除失败");
     } finally {
       setBusy(false);
     }
@@ -320,13 +383,14 @@ export function ProvidersPage() {
       return;
     }
     if (credential?.configured && !apiKey) {
-      try {
-        const value = await api.getProviderCredential(selectedId);
+      const result = await runApiTask(
+        () => api.getProviderCredential(selectedId),
+        { operation: "读取 Provider API Key", expected: providerCredentialExpected(setError) },
+      );
+      if (result.status === "success") {
+        const value = result.data;
         setApiKey(value.apiKey);
-      } catch (requestError) {
-        setError(requestError instanceof Error ? requestError.message : "无法读取 API Key");
-        return;
-      }
+      } else return;
     }
     setApiKeyVisible(true);
   }
@@ -339,13 +403,16 @@ export function ProvidersPage() {
     }
     setBusy("saving"); setError(""); setNotice("");
     try {
-      const updated = await api.renameProvider(selectedId, targetId, document.revision);
+      const result = await runApiTask(
+        () => api.renameProvider(selectedId, targetId, document.revision),
+        { operation: "重命名 Provider", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       setDocument({ ...document, ...updated });
       selectProvider(targetId, providerMap({ ...document, ...updated }));
       setRenameOpen(false);
       setNotice("Provider 已改名，引用已迁移；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "改名失败");
     } finally {
       setBusy(false);
     }
@@ -356,12 +423,14 @@ export function ProvidersPage() {
     setBusy("discovering"); setError(""); setNotice("");
     setDiscoveredModels([]); setSelectedDiscoveredIds(new Set());
     try {
-      const result = await api.discoverProviderModels(selectedId);
-      setDiscoveredModels(result.models);
-      setSelectedDiscoveredIds(new Set(result.models.filter((model) => !model.exists).map((model) => model.id)));
-      setNotice(`已发现 ${result.models.length} 个模型`);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "模型发现失败");
+      const task = await runApiTask(
+        () => api.discoverProviderModels(selectedId),
+        { operation: "发现 Provider 模型", expected: providerDiscoveryExpected(setError) },
+      );
+      if (task.status !== "success") return;
+      setDiscoveredModels(task.data.models);
+      setSelectedDiscoveredIds(new Set(task.data.models.filter((model) => !model.exists).map((model) => model.id)));
+      setNotice(`已发现 ${task.data.models.length} 个模型`);
     } finally {
       setBusy(false);
     }
@@ -395,9 +464,11 @@ export function ProvidersPage() {
     setError("");
     setTestResults([]);
     try {
-      setTestResults((await api.testProvider(selectedId, request)).results);
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "连接测试失败");
+      const result = await runApiTask(
+        () => api.testProvider(selectedId, request),
+        { operation: "测试 Provider 连接", expected: providerDiscoveryExpected(setError) },
+      );
+      if (result.status === "success") setTestResults(result.data.results);
     } finally {
       setBusy(false);
     }
@@ -416,13 +487,18 @@ export function ProvidersPage() {
     setDraggingProviderId(undefined);
     setError("");
     try {
-      const updated = await api.reorderProviders(nextIds, document.revision);
+      const result = await runApiTask(
+        () => api.reorderProviders(nextIds, document.revision),
+        { operation: "保存 Provider 排序", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       const nextDocument = { ...document, ...updated };
       setDocument(nextDocument);
       selectProvider(selectedId, providerMap(nextDocument));
       setNotice("Provider 排序已保存；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存 Provider 排序失败");
+    } finally {
+      setDraggingProviderId(undefined);
     }
   }
 
@@ -440,13 +516,18 @@ export function ProvidersPage() {
     setDraggingModelId(undefined);
     setError("");
     try {
-      const updated = await api.reorderProviderModels(selectedId, nextIds, document.revision);
+      const result = await runApiTask(
+        () => api.reorderProviderModels(selectedId, nextIds, document.revision),
+        { operation: "保存模型排序", expected: providerExpected(setError) },
+      );
+      if (result.status !== "success") return;
+      const updated = result.data;
       const nextDocument = { ...document, ...updated };
       setDocument(nextDocument);
       selectProvider(selectedId, providerMap(nextDocument));
       setNotice("模型排序已保存；请到系统诊断刷新核心配置后生效。");
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "保存模型排序失败");
+    } finally {
+      setDraggingModelId(undefined);
     }
   }
 
@@ -481,7 +562,7 @@ export function ProvidersPage() {
             {draft.api && !discoveryApis.has(draft.api) ? <p className="configuration-help">当前协议不支持模型发现。</p> : null}
             {discoveredModels.length ? <fieldset className="provider-discovery-list" aria-label="发现的模型"><legend>发现的模型</legend>{discoveredModels.map((model) => <label className="provider-discovery-row" key={model.id}><input aria-label={`选择 ${model.id}`} type="checkbox" checked={selectedDiscoveredIds.has(model.id)} disabled={model.exists || busy !== false} onChange={(event) => toggleDiscoveredModel(model.id, event.target.checked)} /><span>{model.name}</span><small>{model.exists ? "已存在" : "待导入"}</small></label>)}<button type="button" disabled={busy !== false || ![...selectedDiscoveredIds].some((id) => discoveredModels.some((model) => model.id === id && !model.exists))} onClick={importDiscoveredModels}>导入所选模型</button></fieldset> : null}
             <div className="model-chip-list">{draft.models?.map((model, index) => <button type="button" key={`${model.id}-${index}`} className={selectedModelIndex === index ? "is-active model-chip-list__item" : "model-chip-list__item"} aria-label={`选择或拖动模型 ${model.name || model.id} 排序`} draggable={!isDirty && busy === false} onDragStart={() => setDraggingModelId(model.id)} onDragEnd={() => setDraggingModelId(undefined)} onDragOver={(event) => event.preventDefault()} onDrop={() => void moveModel(model.id)} onClick={() => setSelectedModelIndex(index)}><GripVertical className="configuration-sort-handle" size={14} aria-hidden="true" />{model.name || model.id}</button>)}</div>
-            {selectedModel ? <div className="model-editor-fields"><label><span>模型 ID</span><input value={selectedModel.id} onChange={(event) => updateModel({ id: event.target.value })} /></label><label><span>显示名称</span><input value={selectedModel.name ?? ""} onChange={(event) => updateModel({ name: event.target.value })} /></label><fieldset className="model-input-capabilities"><legend>输入能力</legend><div><label><input aria-label="文本输入" type="checkbox" checked disabled /><span>文本输入</span></label><label><input aria-label="图片输入" type="checkbox" checked={modelInput(selectedModel).includes("image")} onChange={(event) => setImageInput(event.target.checked)} /><span>图片输入</span></label></div><small>该设置声明模型可接受图片输入；实际视觉能力仍由 Provider 和远端模型决定。</small></fieldset><label><span>上下文窗口</span><input aria-label="上下文窗口" type="number" min="1" step="1" value={selectedModel.contextWindow ?? ""} onChange={(event) => updateModelCapacity("contextWindow", event.target.value)} /></label><label><span>最大返回 Token</span><input aria-label="最大返回 Token" type="number" min="1" step="1" value={selectedModel.maxTokens ?? ""} onChange={(event) => updateModelCapacity("maxTokens", event.target.value)} /></label><label><span>推理模型</span><input type="checkbox" checked={selectedModel.reasoning} onChange={(event) => updateModel({ reasoning: event.target.checked })} /></label><ThinkingLevelMapEditor value={selectedModel.thinkingLevelMap ?? {}} onChange={(thinkingLevelMap) => updateModel({ thinkingLevelMap })} /><details className="provider-advanced"><summary>兼容性</summary><p>自动会由核心根据 Provider 和 URL 推断；仅在模型服务不兼容时覆盖。</p><div className="model-editor-fields">{compatBooleanFields.map((field) => <label key={field.key}><span>{field.label}{field.help ? <small>{field.help}</small> : null}</span><select aria-label={field.label} value={compatBooleanValue(field.key)} onChange={(event) => updateCompatValue(field.key, event.target.value)}><option value="auto">自动</option><option value="on">开启</option><option value="off">关闭</option></select></label>)}<label><span>最大 Token 字段</span><select aria-label="最大 Token 字段" value={typeof selectedModel.compat?.maxTokensField === "string" ? selectedModel.compat.maxTokensField : "auto"} onChange={(event) => updateCompatOption("maxTokensField", event.target.value)}><option value="auto">自动</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label><label><span>思考格式</span><select aria-label="思考格式" value={typeof selectedModel.compat?.thinkingFormat === "string" ? selectedModel.compat.thinkingFormat : "auto"} onChange={(event) => updateCompatOption("thinkingFormat", event.target.value)}><option value="auto">自动</option><option value="openai">openai</option><option value="deepseek">deepseek</option><option value="zai">zai</option><option value="together">together</option><option value="ant-ling">ant-ling</option><option value="openrouter">openrouter</option></select></label></div></details><button type="button" className="danger-link" disabled={busy !== false} onClick={() => void deleteSelectedModel()}><Trash2 size={14} aria-hidden="true" />删除模型</button></div> : <p className="configuration-help">添加模型后可编辑推理能力和思考映射。</p>}
+            {selectedModel ? <div className="model-editor-fields"><label><span>模型 ID</span><input value={selectedModel.id} onChange={(event) => updateModel({ id: event.target.value })} /></label><label><span>显示名称</span><input value={selectedModel.name ?? ""} onChange={(event) => updateModel({ name: event.target.value })} /></label><fieldset className="model-input-capabilities"><legend>输入能力</legend><div><label><input aria-label="文本输入" type="checkbox" checked disabled /><span>文本输入</span></label><label><input aria-label="图片输入" type="checkbox" checked={modelInput(selectedModel).includes("image")} onChange={(event) => setImageInput(event.target.checked)} /><span>图片输入</span></label></div><small>该设置声明模型可接受图片输入；实际视觉能力仍由 Provider 和远端模型决定。</small></fieldset><label><span>上下文窗口</span><input aria-label="上下文窗口" type="number" min="1" step="1" value={selectedModel.contextWindow ?? ""} onChange={(event) => updateModelCapacity("contextWindow", event.target.value)} /></label><label><span>最大返回 Token</span><input aria-label="最大返回 Token" type="number" min="1" step="1" value={selectedModel.maxTokens ?? ""} onChange={(event) => updateModelCapacity("maxTokens", event.target.value)} /></label><label><span>推理模型</span><input aria-label="推理模型" type="checkbox" checked={selectedModel.reasoning} onChange={(event) => updateModel({ reasoning: event.target.checked })} /></label>{selectedModel.reasoning ? <section className="thinking-protocol" aria-labelledby="thinking-protocol-title"><label><span id="thinking-protocol-title">思考协议<small>决定 Pi 如何开启或关闭该模型的思考能力。</small></span><select aria-label="思考协议" value={thinkingProtocol} onChange={(event) => updateCompatOption("thinkingFormat", event.target.value)}>{thinkingProtocolOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>{thinkingProtocolPreview ? <section className="thinking-protocol-preview" aria-label="思考协议请求参数预览">{([{ title: "开启思考", item: thinkingProtocolPreview.enabled }, { title: "关闭思考", item: thinkingProtocolPreview.disabled }]).map(({ title, item }) => <section key={title} className="thinking-protocol-preview__item"><strong>{title}</strong>{item.json ? <pre><code>{JSON.stringify(item.json, null, 2)}</code></pre> : <p>{item.note}</p>}</section>)}</section> : <p className="configuration-help">由 Pi 根据 Provider 和地址推断，不追加固定思考参数。</p>}</section> : null}<ThinkingLevelMapEditor value={selectedModel.thinkingLevelMap ?? {}} onChange={(thinkingLevelMap) => updateModel({ thinkingLevelMap })} /><details className="provider-advanced"><summary>兼容性</summary><p>自动会由核心根据 Provider 和 URL 推断；仅在模型服务不兼容时覆盖。</p><div className="model-editor-fields">{compatBooleanFields.map((field) => <label key={field.key}><span>{field.label}{field.help ? <small>{field.help}</small> : null}</span><select aria-label={field.label} value={compatBooleanValue(field.key)} onChange={(event) => updateCompatValue(field.key, event.target.value)}><option value="auto">自动</option><option value="on">开启</option><option value="off">关闭</option></select></label>)}<label><span>最大 Token 字段</span><select aria-label="最大 Token 字段" value={typeof selectedModel.compat?.maxTokensField === "string" ? selectedModel.compat.maxTokensField : "auto"} onChange={(event) => updateCompatOption("maxTokensField", event.target.value)}><option value="auto">自动</option><option value="max_tokens">max_tokens</option><option value="max_completion_tokens">max_completion_tokens</option></select></label></div></details><button type="button" className="danger-link" disabled={busy !== false} onClick={() => void deleteSelectedModel()}><Trash2 size={14} aria-hidden="true" />删除模型</button></div> : <p className="configuration-help">添加模型后可编辑推理能力和思考映射。</p>}
             <label className="provider-import"><span>批量导入模型 JSON<small>接受模型对象数组，导入后仍可逐项审阅</small></span><input type="file" accept="application/json" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; void file.text().then((text) => { const parsed = JSON.parse(text) as ProviderEditorModel[]; setDraft({ ...draft, models: [...(draft.models ?? []), ...parsed] }); setError(""); }).catch(() => setError("模型 JSON 文件无法读取或格式无效")); }} /></label>
           </div>
 

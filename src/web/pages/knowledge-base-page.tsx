@@ -2,6 +2,7 @@ import { BookOpen, FileSearch, FileText, Pencil, Search, Trash2, Upload, Users, 
 import { useEffect, useRef, useState } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import { api, type KnowledgeBaseDetail, type KnowledgeDocumentChunk, type KnowledgeDocumentSummary, type KnowledgeSearchResult } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { MarkdownContent } from "../components/markdown-content";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 
@@ -11,6 +12,7 @@ export { KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT } from "../router";
 
 /** 以知识库列表为二级导航，管理资料、绑定关系与检索结果。 */
 export function KnowledgeBasePage() {
+  const { runApiTask } = useApiTask();
   const [bases, setBases] = useState<KnowledgeBaseDetail[]>([]);
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -22,18 +24,20 @@ export function KnowledgeBasePage() {
 
   const reload = async () => {
     setError("");
-    try {
-      const [{ knowledgeBases }, { agents: loadedAgents }] = await Promise.all([api.listKnowledgeBases(), api.listAgents()]);
+    const result = await runApiTask(
+      () => Promise.all([api.listKnowledgeBases(), api.listAgents()]),
+      { operation: "加载知识库" },
+    );
+    if (result.status === "success") {
+      const [{ knowledgeBases }, { agents: loadedAgents }] = result.data;
       const normalizedBases = knowledgeBases.map(normalizeKnowledgeBase);
       setBases(normalizedBases);
       setAgents(loadedAgents);
       setSelectedId((current) => normalizedBases.some((base) => base.id === current) ? current : normalizedBases[0]?.id ?? "");
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "加载知识库失败");
     }
   };
 
-  useEffect(() => { void reload(); }, []);
+  useEffect(() => { void reload(); }, [runApiTask]);
   useEffect(() => {
     const toggle = () => setMobileNavigationOpen((current) => !current);
     window.addEventListener(KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT, toggle);
@@ -41,7 +45,11 @@ export function KnowledgeBasePage() {
   }, []);
 
   const removeKnowledgeBase = async (base: KnowledgeBaseDetail) => {
-    await api.deleteKnowledgeBase(base.id);
+    const result = await runApiTask(
+      () => api.deleteKnowledgeBase(base.id),
+      { operation: "删除知识库", expected: knowledgeExpected(setError) },
+    );
+    if (result.status !== "success") return false;
     setBases((current) => {
       const removedIndex = current.findIndex((item) => item.id === base.id);
       const remaining = current.filter((item) => item.id !== base.id);
@@ -50,6 +58,7 @@ export function KnowledgeBasePage() {
       return remaining;
     });
     setMobileNavigationOpen(false);
+    return true;
   };
 
   if (!selected && bases.length === 0) {
@@ -85,7 +94,7 @@ export function KnowledgeBasePage() {
       {selected ? <KnowledgeBaseWorkspace base={selected} agents={agents} onChanged={(base) => setBases((current) => current.map((item) => item.id === base.id ? base : item))} onDeleteRequested={setBaseToDelete} onError={setError} /> : null}
       {error ? <p className="configuration-inline-error knowledge-base-page__error" role="alert">{error}</p> : null}
       {createOpen ? <KnowledgeBaseDialog agents={agents} onCancel={() => setCreateOpen(false)} onCreated={(base) => { const normalized = normalizeKnowledgeBase(base); setBases((current) => [...current, normalized]); setSelectedId(normalized.id); setMobileNavigationOpen(false); setCreateOpen(false); }} /> : null}
-      {baseToDelete ? <DeleteKnowledgeBaseDialog base={baseToDelete} onCancel={() => setBaseToDelete(undefined)} onConfirm={async () => { await removeKnowledgeBase(baseToDelete); setBaseToDelete(undefined); }} /> : null}
+      {baseToDelete ? <DeleteKnowledgeBaseDialog base={baseToDelete} onCancel={() => setBaseToDelete(undefined)} onConfirm={async () => { if (await removeKnowledgeBase(baseToDelete)) setBaseToDelete(undefined); }} /> : null}
     </main>
   );
 }
@@ -101,6 +110,7 @@ function normalizeKnowledgeBase(base: KnowledgeBaseDetail): KnowledgeBaseDetail 
 
 /** 展示一个知识库的资料、绑定和检索工作区。 */
 function KnowledgeBaseWorkspace({ base, agents, onChanged, onDeleteRequested, onError }: { base: KnowledgeBaseDetail; agents: AgentProfileDocument[]; onChanged: (base: KnowledgeBaseDetail) => void; onDeleteRequested: (base: KnowledgeBaseDetail) => void; onError: (message: string) => void }) {
+  const { runApiTask } = useApiTask();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<KnowledgeSearchResult[]>([]);
   const [document, setDocument] = useState<KnowledgeDocumentSummary>();
@@ -113,32 +123,37 @@ function KnowledgeBaseWorkspace({ base, agents, onChanged, onDeleteRequested, on
   const runSearch = async () => {
     if (!query.trim()) return;
     setBusy(true);
-    try { setResults((await api.searchKnowledgeBase(base.id, query.trim())).results); }
-    catch (reason) { onError(reason instanceof Error ? reason.message : "检索知识库失败"); }
+    try {
+      const result = await runApiTask(() => api.searchKnowledgeBase(base.id, query.trim()), { operation: "检索知识库", expected: knowledgeExpected(onError) });
+      if (result.status === "success") setResults(result.data.results);
+    }
     finally { setBusy(false); }
   };
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
     setBusy(true);
     try {
-      await api.uploadKnowledgeDocuments(base.id, [...files]);
-      onChanged(await api.getKnowledgeBase(base.id));
-    } catch (reason) { onError(reason instanceof Error ? reason.message : "上传资料失败"); }
+      const result = await runApiTask(async () => {
+        await api.uploadKnowledgeDocuments(base.id, [...files]);
+        return api.getKnowledgeBase(base.id);
+      }, { operation: "上传知识库资料", expected: knowledgeExpected(onError) });
+      if (result.status === "success") onChanged(result.data);
+    }
     finally { setBusy(false); if (inputRef.current) inputRef.current.value = ""; }
   };
   const openDocument = async (documentId: string) => {
-    try { setDocument(await api.getKnowledgeDocument(base.id, documentId)); }
-    catch (reason) { onError(reason instanceof Error ? reason.message : "读取资料失败"); }
+    const result = await runApiTask(() => api.getKnowledgeDocument(base.id, documentId), { operation: "读取知识库资料", expected: knowledgeExpected(onError) });
+    if (result.status === "success") setDocument(result.data);
   };
   const removeDocument = async () => {
     if (!documentToDelete) return;
     setBusy(true);
     try {
-      await api.deleteKnowledgeDocument(base.id, documentToDelete.id);
-      onChanged(await api.getKnowledgeBase(base.id));
-      setDocumentToDelete(undefined);
-    } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "删除资料失败");
+      const result = await runApiTask(async () => {
+        await api.deleteKnowledgeDocument(base.id, documentToDelete.id);
+        return api.getKnowledgeBase(base.id);
+      }, { operation: "删除知识库资料", expected: knowledgeExpected(onError) });
+      if (result.status === "success") { onChanged(result.data); setDocumentToDelete(undefined); }
     } finally {
       setBusy(false);
     }
@@ -182,6 +197,7 @@ function KnowledgeBaseWorkspace({ base, agents, onChanged, onDeleteRequested, on
 
 /** 创建知识库并选择初始绑定 Agent 的应用内对话框。 */
 function KnowledgeBaseDialog({ agents, onCancel, onCreated }: { agents: AgentProfileDocument[]; onCancel: () => void; onCreated: (base: KnowledgeBaseDetail) => void }) {
+  const { runApiTask } = useApiTask();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [agentIds, setAgentIds] = useState<string[]>([]);
@@ -189,8 +205,10 @@ function KnowledgeBaseDialog({ agents, onCancel, onCreated }: { agents: AgentPro
   const [busy, setBusy] = useState(false);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); setBusy(true); setError("");
-    try { onCreated(await api.createKnowledgeBase({ name, description, agentIds })); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "创建知识库失败"); }
+    try {
+      const result = await runApiTask(() => api.createKnowledgeBase({ name, description, agentIds }), { operation: "创建知识库", expected: knowledgeExpected(setError) });
+      if (result.status === "success") onCreated(result.data);
+    }
     finally { setBusy(false); }
   };
   return <div className="configuration-dialog-backdrop" role="presentation"><form className="configuration-dialog knowledge-base-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledge-base-create-title" onSubmit={submit}><header><div><span>KNOWLEDGE BASE</span><h2 id="knowledge-base-create-title">创建知识库</h2></div><button type="button" className="icon-button" aria-label="关闭创建知识库" onClick={onCancel}><X size={18} /></button></header><label>名称<input aria-label="知识库名称" value={name} maxLength={80} autoFocus onChange={(event) => setName(event.target.value)} /></label><label>说明<textarea aria-label="知识库说明" value={description} maxLength={300} onChange={(event) => setDescription(event.target.value)} /></label><fieldset><legend>绑定 Agent</legend>{agents.map((agent) => <label key={agent.profile.id} className="knowledge-base-agent-choice"><input type="checkbox" aria-label={`绑定 Agent ${agent.profile.name}`} checked={agentIds.includes(agent.profile.id)} onChange={() => setAgentIds((current) => current.includes(agent.profile.id) ? current.filter((id) => id !== agent.profile.id) : [...current, agent.profile.id])} />{agent.profile.name}</label>)}</fieldset>{error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}<footer><button type="button" onClick={onCancel}>取消</button><button className="configuration-primary-action" disabled={!name.trim() || busy}>创建知识库</button></footer></form></div>;
@@ -198,15 +216,17 @@ function KnowledgeBaseDialog({ agents, onCancel, onCreated }: { agents: AgentPro
 
 /** 修改一个知识库的 Agent 多对多绑定关系。 */
 function BindingDialog({ base, agents, onCancel, onSaved }: { base: KnowledgeBaseDetail; agents: AgentProfileDocument[]; onCancel: () => void; onSaved: (base: KnowledgeBaseDetail) => void }) {
+  const { runApiTask } = useApiTask();
   const [agentIds, setAgentIds] = useState(base.agentIds);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const submit = async (event: React.FormEvent) => { event.preventDefault(); setBusy(true); try { onSaved(await api.updateKnowledgeBase(base.id, { agentIds })); } catch (reason) { setError(reason instanceof Error ? reason.message : "保存绑定失败"); } finally { setBusy(false); } };
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); setBusy(true); try { const result = await runApiTask(() => api.updateKnowledgeBase(base.id, { agentIds }), { operation: "保存知识库绑定", expected: knowledgeExpected(setError) }); if (result.status === "success") onSaved(result.data); } finally { setBusy(false); } };
   return <div className="configuration-dialog-backdrop" role="presentation"><form className="configuration-dialog knowledge-base-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledge-base-binding-title" onSubmit={submit}><header><div><span>AGENT BINDINGS</span><h2 id="knowledge-base-binding-title">管理 Agent 绑定</h2></div><button type="button" className="icon-button" aria-label="关闭 Agent 绑定" onClick={onCancel}><X size={18} /></button></header><p>已绑定的 Agent 可使用知识库检索和单文件详情工具。</p><fieldset>{agents.map((agent) => <label key={agent.profile.id} className="knowledge-base-agent-choice"><input type="checkbox" aria-label={`绑定 Agent ${agent.profile.name}`} checked={agentIds.includes(agent.profile.id)} onChange={() => setAgentIds((current) => current.includes(agent.profile.id) ? current.filter((id) => id !== agent.profile.id) : [...current, agent.profile.id])} />{agent.profile.name}</label>)}</fieldset>{error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}<footer><button type="button" onClick={onCancel}>取消</button><button className="configuration-primary-action" disabled={busy}>保存绑定</button></footer></form></div>;
 }
 
 /** 编辑知识库名称与说明，不改变其 Agent 绑定关系。 */
 function EditKnowledgeBaseDialog({ base, onCancel, onDeleteRequested, onSaved }: { base: KnowledgeBaseDetail; onCancel: () => void; onDeleteRequested: () => void; onSaved: (base: KnowledgeBaseDetail) => void }) {
+  const { runApiTask } = useApiTask();
   const [name, setName] = useState(base.name);
   const [description, setDescription] = useState(base.description);
   const [error, setError] = useState("");
@@ -216,9 +236,8 @@ function EditKnowledgeBaseDialog({ base, onCancel, onDeleteRequested, onSaved }:
     setBusy(true);
     setError("");
     try {
-      onSaved(await api.updateKnowledgeBase(base.id, { name, description }));
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "保存知识库失败");
+      const result = await runApiTask(() => api.updateKnowledgeBase(base.id, { name, description }), { operation: "编辑知识库", expected: knowledgeExpected(setError) });
+      if (result.status === "success") onSaved(result.data);
     } finally {
       setBusy(false);
     }
@@ -251,6 +270,7 @@ function DeleteKnowledgeBaseDialog({ base, onCancel, onConfirm }: { base: Knowle
 
 /** 显示单份资料的状态、原因和可读文本。 */
 function DocumentDialog({ document, onClose }: { document: KnowledgeDocumentSummary; onClose: () => void }) {
+  const { runApiTask } = useApiTask();
   const [displayMode, setDisplayMode] = useState<"markdown" | "source" | "chunks">("markdown");
   const [chunks, setChunks] = useState<KnowledgeDocumentChunk[]>();
   const [chunksLoading, setChunksLoading] = useState(false);
@@ -261,14 +281,32 @@ function DocumentDialog({ document, onClose }: { document: KnowledgeDocumentSumm
     setChunksLoading(true);
     setChunksError("");
     try {
-      setChunks((await api.listKnowledgeDocumentChunks(document.knowledgeBaseId, document.id)).chunks);
-    } catch (reason) {
-      setChunksError(reason instanceof Error ? reason.message : "读取资料分片失败");
+      const result = await runApiTask(
+        () => api.listKnowledgeDocumentChunks(document.knowledgeBaseId, document.id),
+        { operation: "读取知识库资料分片", expected: knowledgeExpected(setChunksError) },
+      );
+      if (result.status === "success") setChunks(result.data.chunks);
     } finally {
       setChunksLoading(false);
     }
   };
   return <div className="configuration-dialog-backdrop" role="presentation"><section className="configuration-dialog knowledge-base-dialog knowledge-base-document-dialog" role="dialog" aria-modal="true" aria-labelledby="knowledge-base-document-title"><header><div><span>DOCUMENT</span><h2 id="knowledge-base-document-title">{document.name}</h2></div><button type="button" className="icon-button" aria-label="关闭资料详情" onClick={onClose}><X size={18} /></button></header><p>状态：{statusLabel(document)}</p>{document.failureReason ? <p className="configuration-inline-error">{document.failureReason}</p> : null}{document.textTruncated ? <p className="knowledge-base-document-dialog__notice">正文过长，当前仅展示前 12,000 个字符。</p> : null}{document.text ? <><div className="knowledge-base-document-dialog__toolbar" role="group" aria-label="资料查看方式"><button type="button" className={displayMode === "markdown" ? "is-active" : undefined} aria-pressed={displayMode === "markdown"} onClick={() => setDisplayMode("markdown")}>Markdown 预览</button><button type="button" className={displayMode === "source" ? "is-active" : undefined} aria-pressed={displayMode === "source"} onClick={() => setDisplayMode("source")}>原始文本</button><button type="button" className={displayMode === "chunks" ? "is-active" : undefined} aria-pressed={displayMode === "chunks"} onClick={() => void showChunks()}>分片内容</button><a href={api.knowledgeDocumentSourceUrl(document.knowledgeBaseId, document.id)} target="_blank" rel="noreferrer">打开原文件</a></div>{displayMode === "markdown" ? <MarkdownContent text={document.text} /> : displayMode === "source" ? <pre>{document.text}</pre> : <DocumentChunks chunks={chunks} loading={chunksLoading} error={chunksError} />}</> : <p>该资料暂无可展示的可提取正文。</p>}</section></div>;
+}
+
+/** 将知识库校验、容量和资料格式错误保留在对应操作附近。 */
+function knowledgeExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_KNOWLEDGE_BASE: show,
+    INVALID_KNOWLEDGE_QUERY: show,
+    INVALID_KNOWLEDGE_REQUEST: show,
+    KNOWLEDGE_BASE_NOT_FOUND: show,
+    KNOWLEDGE_DOCUMENT_NOT_FOUND: show,
+    KNOWLEDGE_FILE_TOO_LARGE: show,
+    UNSUPPORTED_KNOWLEDGE_FILE: show,
+    KNOWLEDGE_UPLOAD_LIMIT: show,
+    TEXT_PREVIEW_UNAVAILABLE: show,
+  };
 }
 
 /** 展示服务端实际用于检索的资料分片。 */

@@ -5,6 +5,7 @@ import type { ThemePreference } from "../theme";
 import { ProductMark } from "../components/product-mark";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import { SecretInput } from "../components/secret-input";
+import { useApiTask } from "../api-task-provider";
 
 interface SetupPageProps {
   theme: ThemePreference;
@@ -18,6 +19,7 @@ const steps = ["设置密码", "连接模型", "开始使用"];
  * 首次启动向导，分步收集访问密码与模型连接配置。
  */
 export function SetupPage({ theme, onThemeChange, onComplete }: SetupPageProps) {
+  const { runApiTask } = useApiTask();
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
@@ -68,9 +70,17 @@ export function SetupPage({ theme, onThemeChange, onComplete }: SetupPageProps) 
     setError("");
     setSubmitting(true);
     try {
-      await onComplete(input);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "初始化失败，请稍后重试。");
+      await runApiTask(
+        () => onComplete(input),
+        {
+          operation: "初始化 BugPaw",
+          expected: {
+            INVALID_SETUP: (reason) => setError(reason.message),
+            ALREADY_INITIALIZED: (reason) => setError(reason.message),
+            VALIDATION_FAILED: (reason) => setError(reason.message),
+          },
+        },
+      );
     } finally {
       setSubmitting(false);
     }

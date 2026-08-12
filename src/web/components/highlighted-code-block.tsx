@@ -42,12 +42,14 @@ hljs.registerLanguage("yaml", yaml);
 interface HighlightedCodeBlockProps {
   code: string;
   language?: string;
+  /** 是否允许代码行在容器内自动换行。 */
+  wrapLines?: boolean;
 }
 
 /**
  * 渲染带语言标签、语法高亮和复制反馈的代码块。
  */
-export function HighlightedCodeBlock({ code, language }: HighlightedCodeBlockProps) {
+export function HighlightedCodeBlock({ code, language, wrapLines = true }: HighlightedCodeBlockProps) {
   const [copied, setCopied] = useState(false);
   const normalizedLanguage = normalizeLanguage(language);
   const highlighted = useMemo(() => normalizedLanguage && hljs.getLanguage(normalizedLanguage)
@@ -68,7 +70,7 @@ export function HighlightedCodeBlock({ code, language }: HighlightedCodeBlockPro
   }
 
   return (
-    <div className="highlighted-code-block">
+    <div className={`highlighted-code-block${wrapLines ? " is-line-wrapping" : ""}`}>
       <div className="highlighted-code-block__toolbar">
         <span>{language || "text"}</span>
         <button type="button" aria-label={copied ? "代码已复制" : "复制代码"} onClick={() => void copyCode()}>

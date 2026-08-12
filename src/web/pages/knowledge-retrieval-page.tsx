@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import type { EmbeddingConfigInput } from "../../shared/knowledge-retrieval-contracts";
 import { api } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
 import { useOnlineStatus } from "../use-online-status";
 
@@ -11,6 +12,7 @@ const emptyDraft = (): EmbeddingConfigInput => ({ baseUrl: "", model: "", batchS
 
 /** 配置语义检索服务，并控制资料上传时是否建立向量索引。 */
 export function KnowledgeRetrievalPage() {
+  const { runApiTask, runOptionalApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [revision, setRevision] = useState("");
   const [draft, setDraft] = useState<EmbeddingConfigInput>(emptyDraft);
@@ -23,45 +25,61 @@ export function KnowledgeRetrievalPage() {
   useEffect(() => {
     const cached = readCache();
     if (cached) applyDocument(cached, setRevision, setDraft, setHasApiKey, setIsManaged);
-    void api.getKnowledgeRetrieval().then((document) => {
-      applyDocument(document, setRevision, setDraft, setHasApiKey, setIsManaged);
-      window.localStorage.setItem(CACHE_KEY, JSON.stringify(document));
-    }).catch(() => setMessage(cached ? "正在显示上次缓存的配置；离线时不能保存或重建。" : "无法读取 Embedding 配置"));
-  }, []);
+    void (async () => {
+      const result = cached
+        ? await runOptionalApiTask(api.getKnowledgeRetrieval, {
+            operation: "加载 Embedding 配置",
+            fallbackReason: "正在显示上次缓存的配置；离线时不能保存或重建。",
+            fallback: () => cached,
+          })
+        : await runApiTask(api.getKnowledgeRetrieval, { operation: "加载 Embedding 配置" });
+      if (result.status === "success" || result.status === "fallback") {
+        applyDocument(result.data, setRevision, setDraft, setHasApiKey, setIsManaged);
+        if (result.status === "success") window.localStorage.setItem(CACHE_KEY, JSON.stringify(result.data));
+        else setMessage(result.reason);
+      }
+    })();
+  }, [runApiTask, runOptionalApiTask]);
 
   const update = <K extends keyof EmbeddingConfigInput>(key: K, value: EmbeddingConfigInput[K]) => setDraft((current) => ({ ...current, [key]: value }));
   const toggleApiKeyVisibility = async () => {
     if (apiKeyVisible) { setApiKeyVisible(false); return; }
     if (isManaged) return;
-    try {
-      if (hasApiKey && !draft.apiKey) {
-        const value = await api.getKnowledgeRetrievalCredential();
-        update("apiKey", value.apiKey);
-      }
+    const result = await runApiTask(async () => {
+      if (!hasApiKey || draft.apiKey) return undefined;
+      return api.getKnowledgeRetrievalCredential();
+    }, { operation: "读取 Embedding API Key", expected: retrievalExpected(setMessage) });
+    if (result.status === "success") {
+      if (result.data) update("apiKey", result.data.apiKey);
       setApiKeyVisible(true);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "无法读取 API Key"); }
+    }
   };
   const save = async () => {
     if (!online) return;
     setBusy(true); setMessage("");
     try {
-      const document = await api.updateKnowledgeRetrieval(revision, draft);
+      const result = await runApiTask(
+        () => api.updateKnowledgeRetrieval(revision, draft),
+        { operation: "保存 Embedding 配置", expected: retrievalExpected(setMessage) },
+      );
+      if (result.status !== "success") return;
+      const document = result.data;
       applyDocument(document, setRevision, setDraft, setHasApiKey, setIsManaged);
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(document));
       setMessage(draft.enabled
         ? "Embedding 配置已保存；更换模型或重新启用后，请手动重建已有知识库的语义索引。"
         : "已关闭语义检索；后续上传资料只会建立全文索引。");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "保存失败"); }
-    finally { setBusy(false); }
+    } finally { setBusy(false); }
   };
   const rebuild = async () => {
     if (!online) return;
     setBusy(true); setMessage("");
     try {
-      const result = await api.rebuildKnowledgeRetrieval();
-      setMessage(result.failedBases.length ? `已重建 ${result.rebuiltBases}/${result.totalBases} 个知识库，部分知识库未完成。` : `已重建 ${result.rebuiltBases} 个知识库的语义索引。`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : "重建失败"); }
-    finally { setBusy(false); }
+      const result = await runApiTask(api.rebuildKnowledgeRetrieval, { operation: "重建语义索引" });
+      if (result.status === "success") {
+        setMessage(result.data.failedBases.length ? `已重建 ${result.data.rebuiltBases}/${result.data.totalBases} 个知识库，部分知识库未完成。` : `已重建 ${result.data.rebuiltBases} 个知识库的语义索引。`);
+      }
+    } finally { setBusy(false); }
   };
   return <main className="configuration-page"><header className="configuration-page__heading"><h1>Embedding 与语义检索</h1><p>内置中文模型已可用，也可配置 OpenAI Embeddings 兼容接口。密钥默认隐藏，点击小眼睛可按需查看。</p></header>
     {message ? <p className="configuration-help" role="status">{message}</p> : null}
@@ -75,6 +93,17 @@ export function KnowledgeRetrievalPage() {
     <div className="configuration-save-bar"><button type="button" className="configuration-secondary-action" disabled={!online || busy || !draft.enabled || (!hasApiKey && !isManaged)} onClick={() => void rebuild()}><RefreshCw size={16} />{busy ? "处理中…" : "手动重建索引"}</button><button type="button" className="configuration-primary-action" disabled={!online || busy} onClick={() => void save()}><Save size={16} />保存配置</button></div>
     <p className="configuration-help"><DatabaseZap size={15} />{draft.enabled ? "日常上传会自动建立索引；重建期间，原有全文检索仍可使用。" : "语义检索已关闭，查询将仅使用全文索引。"}</p>
   </main>;
+}
+
+/** 将 Embedding 配置的可恢复业务错误保留在当前表单中。 */
+function retrievalExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setMessage(error.message);
+  return {
+    VERSION_CONFLICT: show,
+    VALIDATION_FAILED: show,
+    CREDENTIAL_NOT_FOUND: show,
+    MODEL_IN_USE: show,
+  };
 }
 
 /** 从离线缓存读取脱敏配置，损坏缓存直接忽略。 */

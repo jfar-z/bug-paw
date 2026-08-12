@@ -1,6 +1,7 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import { AgentSystemPromptConfiguration } from "./agent-system-prompt-configuration";
+import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 
 /** 运行时注册的隐藏系统提示词注入扩展。 */
 export interface AgentSystemPromptInjectionExtension {
@@ -13,13 +14,15 @@ export interface AgentSystemPromptInjectionExtension {
 }
 
 /** 创建在模型调用前替换 Pi 默认编码身份的内联扩展。 */
-export function createAgentSystemPromptInjectionExtension(): AgentSystemPromptInjectionExtension {
+export function createAgentSystemPromptInjectionExtension(
+  capabilities: EffectiveRetrievalCapabilities,
+): AgentSystemPromptInjectionExtension {
   return {
     name: "bug-paw-system-prompt-injection",
     hidden: true,
     factory: (pi) => {
       pi.on("before_agent_start", (event) => ({
-        systemPrompt: AgentSystemPromptConfiguration.replaceIdentity(event.systemPrompt),
+        systemPrompt: AgentSystemPromptConfiguration.replaceIdentity(event.systemPrompt, capabilities),
       }));
     },
   };

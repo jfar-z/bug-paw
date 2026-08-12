@@ -1,13 +1,20 @@
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
 import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, WebPiSettings } from "../shared/configuration-contracts";
 import type { ChatRunSummary, ComposerCatalog, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
-import type { AgentReferenceInput } from "../shared/agent-reference-contracts";
+import type { AgentReference, AgentReferenceInput } from "../shared/agent-reference-contracts";
 import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateScheduledTaskInput } from "../shared/scheduled-task-contracts";
-import type { WebResearchConfig, WebResearchSettingsDocument } from "../shared/web-research-contracts";
+import type {
+  CreateSearchProviderInput,
+  UpdateSearchProviderInput,
+  WebResearchGlobalConfig,
+  WebResearchSettingsDocument,
+} from "../shared/web-research-contracts";
 import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
+import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
+import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 
-export type { ScheduledTask, ScheduledTaskRun };
+export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
 export interface ServiceStatus {
   initialized: boolean;
@@ -59,10 +66,13 @@ export interface SessionSnapshot {
   id: string;
   agentId?: string;
   messages: unknown[];
+  history: SessionHistoryPage;
   model?: ModelSummary;
   run?: ChatRunSummary;
   lastEventId: number;
 }
+
+export interface SessionEditDraft { text: string; filePaths: string[]; references: AgentReference[]; missingFilePaths: string[] }
 
 export interface ProvidersDocument extends ModelConfigDocument {
   credentials: CredentialStatus[];
@@ -249,8 +259,13 @@ export const api = {
   updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getWebResearch: () => request<WebResearchSettingsDocument>("/api/capabilities/web-research"),
-  updateWebResearch: (revision: string, config: WebResearchConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
-  testWebResearch: () => request<{ ok: boolean; message: string }>("/api/capabilities/web-research/test", { method: "POST" }),
+  updateWebResearchGlobal: (revision: string, config: WebResearchGlobalConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/global", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
+  createWebResearchProvider: (input: CreateSearchProviderInput) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers", { method: "POST", body: JSON.stringify(input) }),
+  updateWebResearchProvider: (providerId: string, input: UpdateSearchProviderInput) => request<WebResearchSettingsDocument>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  reorderWebResearchProviders: (revision: string, providerIds: string[]) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers/order", { method: "PUT", body: JSON.stringify({ revision, providerIds }) }),
+  deleteWebResearchProvider: (providerId: string, configRevision: string, credentialRevision: string) => request<void>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}`, { method: "DELETE", body: JSON.stringify({ configRevision, credentialRevision }) }),
+  testWebResearchProvider: (providerId: string) => request<{ ok: boolean; message: string }>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}/test`, { method: "POST" }),
+  getWebResearchProviderCredential: (providerId: string) => request<{ apiKey: string }>(`/api/capabilities/web-research/providers/${encodeURIComponent(providerId)}/credential`),
   getStatus: () => request<ServiceStatus>("/api/status"),
   setup: (input: SetupRequest) =>
     request<SetupResponse>("/api/setup", { method: "POST", body: JSON.stringify(input) }),
@@ -383,16 +398,37 @@ export const api = {
   listSessions: (agentId: string, archived = false) => request<{ sessions: SessionSummary[] }>(
     `/api/sessions?agentId=${encodeURIComponent(agentId)}${archived ? "&archived=true" : ""}`,
   ),
+  previewSessionBulk: (action: SessionBulkAction, target: SessionBulkTarget) => request<SessionBulkPreview>("/api/sessions/bulk/preview", {
+    method: "POST",
+    body: JSON.stringify({ action, target }),
+  }),
+  executeSessionBulk: (action: SessionBulkAction, target: SessionBulkTarget, fingerprint: string) => request<SessionBulkResult>("/api/sessions/bulk", {
+    method: "POST",
+    body: JSON.stringify({ action, target, fingerprint }),
+  }),
   createSession: (agentId: string) => request<SessionSnapshot>("/api/sessions", { method: "POST", body: JSON.stringify({ agentId }) }),
   openSession: (sessionId: string, signal?: AbortSignal) => request<SessionSnapshot>(
     `/api/sessions/${encodeURIComponent(sessionId)}`,
     { signal },
   ),
+  loadSessionHistory: (sessionId: string, before: string, branchToken: string, signal?: AbortSignal) =>
+    request<SessionHistoryResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/history?before=${encodeURIComponent(before)}&branch=${encodeURIComponent(branchToken)}`,
+      { signal },
+    ),
   sendMessage: (sessionId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
     request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ text, filePaths, references }),
     }),
+  sendBranchMessage: (sessionId: string, entryId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
+    request<{ snapshot: SessionSnapshot; run: ChatRunSummary }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ text, filePaths, references }),
+    }),
+  editSessionBranch: (sessionId: string, entryId: string) => request<{ snapshot: SessionSnapshot; draft: SessionEditDraft }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/edit`, { method: "POST" }),
+  navigateSessionBranch: (sessionId: string, entryId: string) => request<SessionSnapshot>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/navigate`, { method: "POST" }),
+  regenerateSessionBranch: (sessionId: string, entryId: string) => request<{ snapshot: SessionSnapshot; run: ChatRunSummary }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/regenerate`, { method: "POST" }),
   getComposerCatalog: (agentId: string) => request<ComposerCatalog>(`/api/agents/${encodeURIComponent(agentId)}/composer-catalog`),
   uploadAttachments: (agentId: string, files: File[]) => {
     const form = new FormData();
@@ -446,6 +482,6 @@ export const api = {
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" }),
   unarchiveSession: (sessionId: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "DELETE" }),
-  deleteSession: (sessionId: string, deleteScheduledTasks = false) =>
-    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}${deleteScheduledTasks ? "?deleteScheduledTasks=true" : ""}`, { method: "DELETE" }),
+  deleteSession: (sessionId: string, confirmBoundTasks = false) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}${confirmBoundTasks ? "?confirmBoundTasks=true" : ""}`, { method: "DELETE" }),
 };

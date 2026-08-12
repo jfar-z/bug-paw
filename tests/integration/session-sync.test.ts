@@ -78,14 +78,16 @@ describe("Session 多客户端同步集成", () => {
     const firstEvents = await readEventsThrough(firstIterator, "completed");
     const secondEvents = await readEventsThrough(secondIterator, "completed");
     expect(secondEvents).toEqual(firstEvents);
-    expect(firstEvents.map((event) => event.id)).toEqual([0, 1, 2, 3, 4]);
+    expect(firstEvents.map((event) => event.id)).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(firstEvents[0]).toMatchObject({ type: "snapshot", sessionId: session.sessionId, lastEventId: 0 });
 
     second.close();
     const reconnected = await service.subscribe(session.sessionId, 2);
     const reconnectedIterator = reconnected.events[Symbol.asyncIterator]();
-    expect((await reconnectedIterator.next()).value).toMatchObject({ id: 3, type: "text_delta", delta: "第二段" });
-    expect((await reconnectedIterator.next()).value).toMatchObject({ id: 4, type: "completed" });
+    expect((await reconnectedIterator.next()).value).toMatchObject({ id: 3, type: "text_delta", delta: "第一段" });
+    expect((await reconnectedIterator.next()).value).toMatchObject({ id: 4, type: "text_delta", delta: "第二段" });
+    expect((await reconnectedIterator.next()).value).toMatchObject({ id: 5, type: "snapshot" });
+    expect((await reconnectedIterator.next()).value).toMatchObject({ id: 6, type: "completed" });
     first.close();
     reconnected.close();
     expect(releases.every((release) => release.mock.calls.length === 1)).toBe(true);
