@@ -6,6 +6,16 @@ import { QuickWorkspaceDrawer } from "./quick-workspace-drawer";
 import { MOBILE_BACK_REQUEST_EVENT } from "../use-mobile-back-navigation";
 
 describe("QuickWorkspaceDrawer", () => {
+  it("将抽屉渲染到页面顶层，并在自动聚焦时不滚动主页面", () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ entries: [] }))));
+    const focus = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(() => undefined);
+    const { container } = render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><QuickWorkspaceDrawer open agentId="agent-a" onClose={vi.fn()} /></ApiTaskProvider></ErrorToastProvider>);
+
+    expect(container.querySelector(".quick-workspace-drawer")).not.toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "快捷资源管理" })).toHaveClass("is-open");
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
   it("为移动端关闭手势声明纵向触摸操作", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ entries: [] }))));
     render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><QuickWorkspaceDrawer open agentId="agent-a" onClose={vi.fn()} /></ApiTaskProvider></ErrorToastProvider>);

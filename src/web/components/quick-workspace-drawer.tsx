@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { WorkspaceBrowser, type WorkspaceLocationRequest } from "./workspace-browser";
 import { MOBILE_BACK_REQUEST_EVENT } from "../use-mobile-back-navigation";
 
@@ -43,9 +44,10 @@ export function QuickWorkspaceDrawer(props: QuickWorkspaceDrawerProps) {
     return () => query.removeEventListener("change", update);
   }, []);
   useEffect(() => {
-    if (props.open) drawerRef.current?.focus();
+    // 抽屉尚在右侧过渡时聚焦不能触发浏览器滚动主页面。
+    if (props.open) drawerRef.current?.focus({ preventScroll: true });
   }, [props.open]);
-  return <>
+  return createPortal(<>
     {props.open ? <button type="button" className="sidebar-scrim" style={{ display: "block", position: "fixed", inset: 0, zIndex: 29, border: 0, background: "rgba(8, 12, 9, 0.48)", backdropFilter: "blur(2px)" }} aria-label="点击遮罩关闭快捷资源管理" onClick={props.onClose} /> : null}
     <aside ref={drawerRef} className={`quick-workspace-drawer${props.open ? " is-open" : ""}${props.swiping || reduceMotion ? " is-swiping" : ""}`} style={drawerStyle} aria-label="快捷资源管理" aria-hidden={!props.open && !props.swiping} inert={!props.open && !props.swiping ? true : undefined} tabIndex={-1}>
       <header className="workspace-agent-navigation__header">
@@ -55,5 +57,5 @@ export function QuickWorkspaceDrawer(props: QuickWorkspaceDrawerProps) {
       {props.message ? <p className="configuration-inline-error">{props.message}</p> : null}
       {props.open || props.swiping ? props.agentId ? <WorkspaceBrowser agentId={props.agentId} mode="quick" locationRequest={props.locationRequest} previewCloseRequest={previewCloseRequest} onPreviewOpenChange={setPreviewOpen} /> : <p className="quick-workspace-drawer__empty">当前没有可浏览的 Agent 工作目录。</p> : null}
     </aside>
-  </>;
+  </>, document.body);
 }
