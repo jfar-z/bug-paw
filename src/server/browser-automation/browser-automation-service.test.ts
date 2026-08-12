@@ -53,8 +53,32 @@ describe("浏览器策略编排服务", () => {
     const fixture = await createFixture();
     await fixture.service.open({ sessionId: "session-a" }, { path: "index.html", newPage: false }, signal());
     expect(fixture.preview.authorize).toHaveBeenCalledWith({ cwd, runId: "run-a", entryPath: "index.html" });
+    expect(fixture.worker.createContext).toHaveBeenCalledWith(expect.objectContaining({
+      egress: expect.objectContaining({ trustedOrigins: ["http://preview.internal"] }),
+    }), expect.any(AbortSignal));
     await expect(fixture.service.open({ sessionId: "session-a" }, { path: "../outside.html", newPage: false }, signal()))
       .rejects.toMatchObject({ code: "BROWSER_LOCAL_FILE_OUTSIDE_WORKSPACE" });
+  });
+
+  it("浏览器权限按精确 Origin 分组后传给 Worker", async () => {
+    const trustedOrigins = [
+      { origin: "https://editor.example", allowTextInput: false, allowFormSubmit: false, allowFileUpload: false, grantedPermissions: ["clipboard-read" as const] },
+      { origin: "https://preview.example", allowTextInput: false, allowFormSubmit: false, allowFileUpload: false, grantedPermissions: ["clipboard-write" as const] },
+    ];
+    const fixture = await createFixture({
+      localPreview: { ...DEFAULT_BROWSER_AUTOMATION_CONFIG.localPreview, grantedPermissions: ["clipboard-write"] },
+      trustedOrigins,
+    });
+
+    await fixture.service.execute(context(), openUrl(), signal());
+
+    expect(fixture.worker.createContext).toHaveBeenCalledWith(expect.objectContaining({
+      permissionGrants: [
+        { origin: "http://preview.internal", permissions: ["clipboard-write"] },
+        { origin: "https://editor.example", permissions: ["clipboard-read"] },
+        { origin: "https://preview.example", permissions: ["clipboard-write"] },
+      ],
+    }), expect.any(AbortSignal));
   });
 
   it("上传只读取工作区文件并把 Worker 临时句柄交给命令", async () => {
@@ -93,7 +117,7 @@ describe("浏览器策略编排服务", () => {
       uploadFile: vi.fn(async (_leaseId: string, name: string, mediaType: string) => ({ handle: "upload-a", name, mediaType })),
     };
     const pool = { acquire: vi.fn(async () => lease()) };
-    const preview = { authorize: vi.fn(async () => ({ url: "http://preview.internal/token/index.html" })) };
+    const preview = { origin: "http://preview.internal", authorize: vi.fn(async () => ({ url: "http://preview.internal/token/index.html" })) };
     const artifacts = {
       saveScreenshot: vi.fn(async () => ({ path: "browser-artifacts/capture.png", mediaType: "image/png", size: 3, sha256: "a".repeat(64) })),
       saveDownload: vi.fn(),

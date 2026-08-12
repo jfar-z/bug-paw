@@ -290,10 +290,30 @@ function requireContextInput(value: unknown): CreateBrowserContextRequest {
     || !Number.isInteger(value.maxPages)
     || (value.maxPages as number) < 1
     || (value.maxPages as number) > 4
-    || !Array.isArray(value.permissions)) {
+    || !Array.isArray(value.permissionGrants)
+    || !value.permissionGrants.every((grant) => isPermissionGrant(grant, value.egress as Record<string, unknown>))) {
     throw workerError("BROWSER_WORKER_PROTOCOL_INVALID", "Browser Context 参数无效");
   }
   return value as unknown as CreateBrowserContextRequest;
+}
+
+/** 校验权限不会越过出口授权的精确 Origin。 */
+function isPermissionGrant(value: unknown, egress: Record<string, unknown>): boolean {
+  if (!isRecord(value)
+    || typeof value.origin !== "string"
+    || !Array.isArray(value.permissions)
+    || !value.permissions.every((permission) => permission === "clipboard-read" || permission === "clipboard-write")
+    || !Array.isArray(egress.trustedOrigins)
+    || !egress.trustedOrigins.includes(value.origin)) return false;
+  try {
+    const url = new URL(value.origin);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && !url.username
+      && !url.password
+      && url.origin === value.origin;
+  } catch {
+    return false;
+  }
 }
 
 /** 在 Worker 边界完整限制可执行的原子命令形状。 */

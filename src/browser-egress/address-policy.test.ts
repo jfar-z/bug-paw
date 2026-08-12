@@ -34,6 +34,13 @@ describe("浏览器出口地址策略", () => {
       .resolves.toMatchObject({ origin: "https://example.com", address: "93.184.216.34" });
   });
 
+  it("仅在部署侧显式登记后允许 Fake-IP 出口", async () => {
+    await expect(authorizeProxyTarget({
+      ...input("https:", "example.com", 443, ["198.18.1.127"]),
+      trustedFakeIpCidrs: ["198.18.0.0/15"],
+    })).resolves.toMatchObject({ origin: "https://example.com", address: "198.18.1.127" });
+  });
+
   it("任一 DNS 结果受限时拒绝整个目标以防重绑定", async () => {
     await expect(authorizeProxyTarget(input("https:", "example.com", 443, ["93.184.216.34", "127.0.0.1"])))
       .rejects.toMatchObject({ code: "BROWSER_PRIVATE_NETWORK_BLOCKED" });

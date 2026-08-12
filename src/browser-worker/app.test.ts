@@ -125,7 +125,7 @@ function contextInput(): import("../shared/browser-worker-protocol").CreateBrows
   return {
     leaseId: "lease-a",
     egress: { leaseId: "lease-a", expiresAt: 1_700_000_060_000, trustedOrigins: [] },
-    permissions: [],
+    permissionGrants: [],
     maxPages: 2,
   };
 }

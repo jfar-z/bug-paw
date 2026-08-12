@@ -57,7 +57,7 @@ export class BrowserSession {
   private currentPage?: Page;
 
   /** 创建 Browser Context 会话。 */
-  constructor(private readonly context: BrowserContext, private readonly options: { maxPages: number }) {
+  constructor(private readonly context: BrowserContext, private readonly options: { maxPages: number; trustedOrigins: string[] }) {
     context.on("page", (page) => {
       this.assignPageId(page);
       page.on("dialog", (dialog) => { void dialog.dismiss(); });
@@ -96,6 +96,7 @@ export class BrowserSession {
 
   /** 打开 URL 或内部预览 URL。 */
   private async open(command: Extract<BrowserCommand, { type: "open" }>): Promise<Record<string, unknown>> {
+    this.assertNavigationUrl(command.target.url);
     let page = this.currentPage;
     if (!page || page.isClosed() || command.newPage) {
       if (this.context.pages().filter((candidate) => !candidate.isClosed()).length >= this.options.maxPages) {
@@ -190,6 +191,7 @@ export class BrowserSession {
   /** 从 URL 或元素触发下载并读取临时文件。 */
   private async download(command: Extract<BrowserCommand, { type: "download" }>): Promise<{ artifact: BrowserBinaryArtifact }> {
     const page = this.page(command.pageId);
+    if (command.source.kind === "url") this.assertNavigationUrl(command.source.url);
     const downloadPromise = page.waitForEvent("download");
     const action = command.source.kind === "url"
       ? page.goto(command.source.url)
@@ -229,6 +231,19 @@ export class BrowserSession {
   private invalidateReferences(): void {
     this.generation += 1;
     this.references.clear();
+  }
+
+  /** 在请求到达代理前拒绝公开 HTTP 与非 Web 协议，避免代理 403 被导航当作成功页面。 */
+  private assertNavigationUrl(value: string): void {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw workerError("BROWSER_TARGET_BLOCKED", "浏览器目标 URL 无效");
+    }
+    if (url.protocol === "https:") return;
+    if (url.protocol === "http:" && this.options.trustedOrigins.includes(url.origin)) return;
+    throw workerError("BROWSER_TARGET_BLOCKED", "公开浏览只允许 HTTPS；本地 HTTP 需要管理员配置为受信任 Origin");
   }
 }
 

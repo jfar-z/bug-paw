@@ -59,7 +59,7 @@ export function registerBrowserAutomationRoutes(app: FastifyInstance, dependenci
     const query = request.query as { limit?: string };
     const limit = query.limit === undefined ? 30 : Number(query.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) return sendApiError(reply, 400, "VALIDATION_FAILED", "审计数量必须在 1 到 100 之间");
-    return reply.send({ events: dependencies.audit.list(limit) });
+    return reply.send({ events: dependencies.audit.list(limit).map(({ agentId: _agentId, sessionId: _sessionId, runId: _runId, ...event }) => event) });
   });
 }
 

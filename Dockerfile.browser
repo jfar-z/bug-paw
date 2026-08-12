@@ -21,5 +21,7 @@ ENV NODE_ENV=production
 ENV PORT=7082
 WORKDIR /app
 COPY --from=source /app /app
-USER node
+# 与 Playwright 官方镜像的 pwuser 共用专用 UID，确保两端只读同一份 0600 内部密钥。
+RUN useradd --uid 1001 --create-home browser
+USER browser
 CMD ["node", "--import", "tsx", "src/browser-egress/main.ts"]

@@ -68,3 +68,16 @@ const tool = defineTool({
 ## 定时任务示例
 
 `scheduled_tasks` 由 `createScheduledTasksTool(agentId, service)` 创建，运行时只注入当前 Agent 的服务作用域。它的全局 Skill 说明 Cron、时区、目标会话及执行行为；真实字段校验仍在 TypeBox Schema 与服务层完成。
+
+## 浏览器原子工具
+
+浏览器执行能力按原子操作注册 `browser_open`、`browser_snapshot`、`browser_click`、`browser_scroll`、`browser_screenshot`、`browser_download`、`browser_input`、`browser_submit` 和 `browser_upload`。Context 归属当前 Agent Run；同一 Run 内复用，Run 结束后由服务端回收，不把 `agentId`、`sessionId` 或 `runId` 暴露为模型参数。
+
+- 默认工具白名单只包含前六个只读游览与产物工具。文本输入、文件上传和授权操作需要管理员在“能力扩展 → 浏览器执行”中显式开启。
+- `browser_input` 与 `browser_submit` 使用独立权限，不能通过文本输入参数绕过提交开关；浏览器授权由管理员配置精确 Origin 的权限清单，不提供让 Agent 点击系统授权弹窗的通用工具。
+- 工具因能力关闭、操作权限、目标范围或资源池策略被拒绝时，统一返回稳定错误码、明确原因、配置路径和可执行建议；不得只转发 Worker 原始异常。
+- Agent 使用快照返回的稳定引用定位元素，不使用任意 CSS/XPath 选择器。引用跨导航失效，避免把页面结构变化误当成同一目标。
+- 截图和下载只以短期一次性产物地址返回，工具结果不暴露宿主机路径、内部 Worker 地址或签名令牌。
+- 浏览器服务仍必须独立执行 URL、网络地址、重定向、文件大小和内容类型校验；Agent Profile 的 `allowedTools` 不能替代服务端安全边界。
+
+更完整的出口、隔离、审计和生命周期约束见 [`08-browser-automation-security-boundaries.md`](08-browser-automation-security-boundaries.md)。

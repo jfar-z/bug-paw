@@ -120,7 +120,8 @@ if [ "$deployment_mode" = "browser" ] || [ "$deployment_mode" = "full" ]; then
     mv "$temporary_token" "$browser_token_file"
     printf '已生成浏览器组件内部通信密钥。\n'
   fi
-  if [ "$(id -u)" = "0" ]; then chown 1000:1000 "$browser_token_file"; fi
+  # Playwright Worker 与出口代理统一使用专用 UID 1001。
+  if [ "$(id -u)" = "0" ]; then chown 1001:1001 "$browser_token_file"; fi
   chmod 600 "$browser_token_file"
 fi
 

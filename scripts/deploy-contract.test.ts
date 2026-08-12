@@ -33,6 +33,15 @@ describe("部署脚本模式选择", () => {
     expect(deployment.stdout).not.toContain(token);
   });
 
+  it("浏览器容器使用同一专用 UID 读取内部密钥", async () => {
+    const dockerfile = await readFile(resolve("Dockerfile.browser"), "utf8");
+    const deployScript = await readFile(script, "utf8");
+
+    expect(dockerfile).toContain("RUN useradd --uid 1001 --create-home browser");
+    expect(dockerfile).toContain("USER browser");
+    expect(deployScript).toContain('chown 1001:1001 "$browser_token_file"');
+  });
+
   it("不指定模式时使用核心部署", () => {
     const output = execFileSync("bash", [script, "--dry-run"], { encoding: "utf8" });
 

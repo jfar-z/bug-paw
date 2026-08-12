@@ -54,9 +54,14 @@ export class BrowserArtifactService {
   private readonly taskId: () => string;
 
   /** 创建浏览产物服务。 */
-  constructor(private readonly config: BrowserAutomationConfig["artifacts"], dependencies: ArtifactServiceDependencies = {}) {
+  constructor(private config: BrowserAutomationConfig["artifacts"], dependencies: ArtifactServiceDependencies = {}) {
     this.now = dependencies.now ?? (() => new Date());
     this.taskId = dependencies.taskId ?? randomUUID;
+  }
+
+  /** 运行期应用管理员更新后的产物配额。 */
+  reconfigure(config: BrowserAutomationConfig["artifacts"]): void {
+    this.config = { ...config, allowedDownloadMimeTypes: [...config.allowedDownloadMimeTypes], screenshotFormats: [...config.screenshotFormats] };
   }
 
   /** 保存一个下载流。 */

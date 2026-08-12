@@ -21,6 +21,7 @@ services:
         condition: service_healthy
     environment:
       BUG_PAW_BROWSER_TOKEN_FILE: /run/secrets/browser-internal-token
+      BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS: ${BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS:-}
       BUG_PAW_BROWSER_PROXY_SERVER: http://browser-egress-proxy:7082
     volumes:
       - ${BUG_PAW_DATA_DIR:-./pi-agent-data}/app/browser-internal-token:/run/secrets/browser-internal-token:ro

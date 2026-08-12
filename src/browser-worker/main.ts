@@ -24,9 +24,11 @@ async function start(): Promise<void> {
         serviceWorkers: "block",
         proxy: { server: proxyServer, username: "bugpaw", password: proxyGrant },
       });
-      for (const permission of input.permissions) await context.grantPermissions([permission]);
+      for (const grant of input.permissionGrants) {
+        await context.grantPermissions(grant.permissions, { origin: grant.origin });
+      }
       await context.routeWebSocket(/.*/u, (socket) => socket.close());
-      return new BrowserSession(context, { maxPages: input.maxPages });
+      return new BrowserSession(context, { maxPages: input.maxPages, trustedOrigins: input.egress.trustedOrigins });
     },
   });
   server.listen(Number(process.env.PORT ?? "7081"), "0.0.0.0");

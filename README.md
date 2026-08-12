@@ -35,13 +35,14 @@ BugPaw 是一个基于 [Pi coding agent](https://github.com/badlogic/pi-mono) SD
 - 知识库全文检索，以及可选的托管中文向量检索。
 - Skills、资源目录、定时任务和长期工作区。
 - 可选多 Provider 联网搜索，支持 SearXNG、博查与 Tavily 的有序回退、只读边界、SSRF 防护和出口策略。
+- 可选自托管浏览器执行，支持只读游览、截图与文件下载，并提供独立出口代理、资源池和权限审计。
 - 可配置的文本转语音播放。
 - 响应式界面和 PWA 安装能力。
-- Docker Compose 自托管，核心、搜索、向量服务可独立组合。
+- Docker Compose 自托管，核心、搜索、向量和浏览器服务可独立组合。
 
 ### 部署架构
 
-默认只启动 `bug-paw-web`。搜索和向量能力是可选部署层：
+默认只启动 `bug-paw-web`。搜索、向量和浏览器能力是可选部署层：
 
 | 组件 | 用途 | 是否默认启动 |
 | --- | --- | --- |
@@ -49,6 +50,8 @@ BugPaw 是一个基于 [Pi coding agent](https://github.com/badlogic/pi-mono) SD
 | `bug-paw-search` | 私有 SearXNG 搜索 API | 否 |
 | `bug-paw-cache` | SearXNG 使用的 Valkey | 否 |
 | `bug-paw-embedding` | `BAAI/bge-small-zh-v1.5` 托管向量服务 | 否 |
+| `browser-worker` | 基于 Playwright 的隔离浏览器执行服务 | 否 |
+| `browser-egress-proxy` | 校验公网 HTTPS 目标的受控出口代理 | 否 |
 
 宿主机默认在所有网络接口监听 `7080` 端口（`0.0.0.0:7080`）。搜索、缓存和向量容器不发布宿主机端口，只在 Compose 内部网络通信。所有应用数据默认写入 `./pi-agent-data` 并挂载到容器 `/data`。
 
@@ -87,15 +90,16 @@ docker build --no-cache --target verify .
 ./scripts/deploy.sh core
 ```
 
-Windows PowerShell 将最后一行替换为 `.\scripts\deploy.ps1 core`。部署其他能力组合时，将 `core` 替换为 `search`、`vector` 或 `full`。
+Windows PowerShell 将最后一行替换为 `.\scripts\deploy.ps1 core`。部署其他能力组合时，将 `core` 替换为 `search`、`vector`、`browser` 或 `full`。
 
-### 四种部署组合
+### 五种部署组合
 
 | 模式 | Bash | PowerShell | 服务 |
 | --- | --- | --- | --- |
 | 核心 | `./scripts/deploy.sh core` | `.\scripts\deploy.ps1 core` | Web |
 | 核心 + 搜索 | `./scripts/deploy.sh search` | `.\scripts\deploy.ps1 search` | Web、SearXNG、Valkey |
 | 核心 + 向量 | `./scripts/deploy.sh vector` | `.\scripts\deploy.ps1 vector` | Web、Embedding |
+| 核心 + 浏览器 | `./scripts/deploy.sh browser` | `.\scripts\deploy.ps1 browser` | Web、Playwright Worker、出口代理 |
 | 全能力 | `./scripts/deploy.sh full` | `.\scripts\deploy.ps1 full` | 全部服务 |
 
 搜索或全能力模式发现 `SEARXNG_SECRET` 为空时，部署脚本会在本机生成强随机值并写入 `.env`，不会打印密钥。
@@ -114,8 +118,11 @@ docker compose --env-file .env -f compose.yaml -f compose.search.yaml up -d --bu
 # 核心 + 向量
 docker compose --env-file .env -f compose.yaml -f compose.vector.yaml up -d --build
 
+# 核心 + 浏览器
+docker compose --env-file .env -f compose.yaml -f compose.browser.yaml up -d --build
+
 # 全能力
-docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml up -d --build
+docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml up -d --build
 ```
 
 切换模式时建议使用部署脚本，或在命令末尾增加 `--remove-orphans`，以清理上一个组合不再需要的容器。
@@ -139,6 +146,9 @@ chmod 600 .env
 | `WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS` | `198.18.0.0/15` | 搜索、全能力 | 允许代理解析的测试网段；大多数部署无需修改。 |
 | `WEB_RESEARCH_EGRESS_PROFILES_FILE` | `./config/web-research-egress-profiles.json` | 搜索、全能力 | 联网读取出口配置文件。 |
 | `BUG_PAW_EMBEDDING_CPUS` | `2.0` | 向量、全能力 | 托管 Embedding 容器 CPU 上限。 |
+| `BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS` | 无 | 浏览器、全能力 | 部署网络使用 Fake-IP DNS 时显式信任的合成 IPv4/IPv6 网段；直连网络保持为空。 |
+| `BUG_PAW_BROWSER_CPUS` | `2.0` | 浏览器、全能力 | Chromium Worker 的 CPU 上限。 |
+| `BUG_PAW_BROWSER_MEMORY` | `2g` | 浏览器、全能力 | Chromium Worker 的内存上限。 |
 
 `NODE_ENV`、容器内 `PORT`、`PI_AGENT_DATA_ROOT` 和托管能力开关属于镜像与 Compose 的内部约定，不应放入 `.env` 手工覆盖。模型 Provider API Key、TTS Key 等业务凭证通过 BugPaw 配置中心写入服务端，不属于 Compose 环境变量。
 
@@ -148,12 +158,14 @@ chmod 600 .env
 
 部署向量组合后，内置 `BAAI/bge-small-zh-v1.5` 配置会作为托管服务可用。核心模式首次启动时托管向量默认关闭；仍可在配置中心连接部署者自己的 OpenAI 兼容 Embedding 服务。
 
+部署浏览器组合后，进入“能力扩展 → 浏览器执行”。能力默认关闭；管理员确认公网 HTTPS 范围、并发资源池和敏感操作权限后再显式启用。第一期默认开放只读游览、截图与下载，文本输入、表单提交、上传和授权弹窗保持关闭。安全边界与验收方法见 [`docs/08-browser-automation-security-boundaries.md`](docs/08-browser-automation-security-boundaries.md) 和 [`docs/browser-automation-acceptance.md`](docs/browser-automation-acceptance.md)。
+
 ### 日常操作
 
 查看状态和健康接口：
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml ps
+docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml ps
 curl --fail --silent --show-error http://127.0.0.1:7080/healthz
 ```
 
@@ -167,7 +179,7 @@ git pull --ff-only
 停止全能力部署：
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml down --remove-orphans
+docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml down --remove-orphans
 ```
 
 删除容器不会删除 `BUG_PAW_DATA_DIR`。如需完全卸载，请先备份，再手动删除明确的数据目录；不要对不确定路径使用递归删除命令。
@@ -255,13 +267,14 @@ BugPaw is a self-hosted personal Web Agent built on the [Pi coding agent](https:
 - Full-text knowledge retrieval plus optional managed Chinese embeddings.
 - Skills, resource discovery, scheduled tasks, and durable workspaces.
 - Optional multi-provider web research with ordered SearXNG, Bocha, and Tavily fallback, read-only boundaries, SSRF controls, and egress policies.
+- Optional self-hosted browser automation for read-only browsing, screenshots, and downloads, with an isolated egress proxy, resource pool, and permission audit.
 - Configurable text-to-speech playback.
 - Responsive UI with PWA installation support.
-- Composable Docker deployments for core, search, and vector services.
+- Composable Docker deployments for core, search, vector, and browser services.
 
 ### Architecture
 
-The default deployment starts only `bug-paw-web`. Search and vector services are optional layers:
+The default deployment starts only `bug-paw-web`. Search, vector, and browser services are optional layers:
 
 | Component | Purpose | Started by default |
 | --- | --- | --- |
@@ -269,6 +282,8 @@ The default deployment starts only `bug-paw-web`. Search and vector services are
 | `bug-paw-search` | Private SearXNG search API | No |
 | `bug-paw-cache` | Valkey for SearXNG | No |
 | `bug-paw-embedding` | Managed `BAAI/bge-small-zh-v1.5` embeddings | No |
+| `browser-worker` | Isolated Playwright browser execution | No |
+| `browser-egress-proxy` | Controlled egress proxy that validates public HTTPS targets | No |
 
 The host listens on port `7080` on all network interfaces by default (`0.0.0.0:7080`). Search, cache, and embedding containers do not publish host ports. Application data is stored in `./pi-agent-data` and mounted at `/data` inside the Web container.
 
@@ -307,7 +322,7 @@ docker build --no-cache --target verify .
 ./scripts/deploy.sh core
 ```
 
-On Windows PowerShell, replace the last line with `.\scripts\deploy.ps1 core`. Replace `core` with `search`, `vector`, or `full` for another deployment combination.
+On Windows PowerShell, replace the last line with `.\scripts\deploy.ps1 core`. Replace `core` with `search`, `vector`, `browser`, or `full` for another deployment combination.
 
 ### Deployment combinations
 
@@ -316,6 +331,7 @@ On Windows PowerShell, replace the last line with `.\scripts\deploy.ps1 core`. R
 | Core | `./scripts/deploy.sh core` | `.\scripts\deploy.ps1 core` | Web |
 | Core + search | `./scripts/deploy.sh search` | `.\scripts\deploy.ps1 search` | Web, SearXNG, Valkey |
 | Core + vector | `./scripts/deploy.sh vector` | `.\scripts\deploy.ps1 vector` | Web, Embedding |
+| Core + browser | `./scripts/deploy.sh browser` | `.\scripts\deploy.ps1 browser` | Web, Playwright worker, egress proxy |
 | Full | `./scripts/deploy.sh full` | `.\scripts\deploy.ps1 full` | All services |
 
 For search and full modes, the helper generates a strong local `SEARXNG_SECRET` when the value is empty. The secret is written to `.env` and never printed.
@@ -334,8 +350,11 @@ docker compose --env-file .env -f compose.yaml -f compose.search.yaml up -d --bu
 # Core + vector
 docker compose --env-file .env -f compose.yaml -f compose.vector.yaml up -d --build
 
+# Core + browser
+docker compose --env-file .env -f compose.yaml -f compose.browser.yaml up -d --build
+
 # Full
-docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml up -d --build
+docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml up -d --build
 ```
 
 When changing modes, use the deployment helper or add `--remove-orphans` so services from the previous combination are removed.
@@ -359,6 +378,9 @@ chmod 600 .env
 | `WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS` | `198.18.0.0/15` | Search, full | Test-network ranges eligible for proxy resolution; usually unchanged. |
 | `WEB_RESEARCH_EGRESS_PROFILES_FILE` | `./config/web-research-egress-profiles.json` | Search, full | Web research egress profile file. |
 | `BUG_PAW_EMBEDDING_CPUS` | `2.0` | Vector, full | CPU limit for the managed embedding container. |
+| `BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS` | None | Browser, full | Synthetic IPv4/IPv6 CIDRs explicitly trusted when the deployment network uses Fake-IP DNS; leave empty for direct networks. |
+| `BUG_PAW_BROWSER_CPUS` | `2.0` | Browser, full | CPU limit for the Chromium worker. |
+| `BUG_PAW_BROWSER_MEMORY` | `2g` | Browser, full | Memory limit for the Chromium worker. |
 
 `NODE_ENV`, the internal `PORT`, `PI_AGENT_DATA_ROOT`, and managed capability flags are image/Compose contracts and should not be overridden manually. Provider and TTS credentials are configured inside BugPaw and are not Compose environment variables.
 
@@ -368,12 +390,14 @@ After deploying search mode, open **Capabilities → Web research**. Managed Sea
 
 After deploying vector mode, the bundled `BAAI/bge-small-zh-v1.5` configuration becomes available. Core-only first runs keep managed embeddings disabled; an administrator may still configure an external OpenAI-compatible embedding endpoint.
 
+After deploying browser mode, open **Capabilities → Browser automation**. The capability is disabled by default. Review the public HTTPS scope, concurrency pool, and sensitive-operation permissions before enabling it. Phase one enables read-only browsing, screenshots, and downloads by default; text input, form submission, uploads, and permission prompts remain disabled. See [`docs/08-browser-automation-security-boundaries.md`](docs/08-browser-automation-security-boundaries.md) and [`docs/browser-automation-acceptance.md`](docs/browser-automation-acceptance.md).
+
 ### Operations
 
 Check services and health:
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml ps
+docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml ps
 curl --fail --silent --show-error http://127.0.0.1:7080/healthz
 ```
 
@@ -387,7 +411,7 @@ git pull --ff-only
 Stop the full deployment:
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml down --remove-orphans
+docker compose --env-file .env -f compose.yaml -f compose.search.yaml -f compose.vector.yaml -f compose.browser.yaml down --remove-orphans
 ```
 
 Removing containers does not delete `BUG_PAW_DATA_DIR`. For complete removal, back up the data and delete only the explicit configured directory.

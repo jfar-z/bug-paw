@@ -14,6 +14,8 @@ export interface BrowserEgressProxyOptions {
   lookup?: LookupAll;
   /** 可测试当前时间。 */
   now?: () => number;
+  /** 部署网络显式声明的 Fake-IP CIDR。 */
+  trustedFakeIpCidrs?: string[];
 }
 
 /** 签发可作为 Chromium Proxy password 使用的短期 Grant。 */
@@ -63,12 +65,21 @@ export function readEgressGrant(header: string | undefined, secret: string, now 
 export function createBrowserEgressProxy(options: BrowserEgressProxyOptions): Server {
   const now = options.now ?? Date.now;
   const server = createServer((request, response) => {
+    if (!request.headers["proxy-authorization"]) {
+      response.writeHead(407, { "proxy-authenticate": 'Basic realm="BugPaw browser egress"' });
+      response.end();
+      return;
+    }
     void handleHttpRequest(request, response, options, now()).catch(() => {
       if (!response.headersSent) response.writeHead(403);
       response.end();
     });
   });
   server.on("connect", (request, clientSocket, head) => {
+    if (!request.headers["proxy-authorization"]) {
+      clientSocket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="BugPaw browser egress"\r\nConnection: close\r\n\r\n');
+      return;
+    }
     void handleConnect(request.url ?? "", request.headers["proxy-authorization"], clientSocket, head, options, now()).catch(() => {
       clientSocket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     });
@@ -89,7 +100,14 @@ async function handleHttpRequest(
   if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("协议不允许");
   const grant = readEgressGrant(incoming.headers["proxy-authorization"], options.secret, now);
   const port = url.port ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
-  const target = await authorizeProxyTarget({ protocol: url.protocol, hostname: url.hostname, port, grant, lookup: options.lookup });
+  const target = await authorizeProxyTarget({
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port,
+    grant,
+    lookup: options.lookup,
+    trustedFakeIpCidrs: options.trustedFakeIpCidrs,
+  });
   const headers: IncomingHttpHeaders = { ...incoming.headers, host: url.host };
   delete headers["proxy-authorization"];
   delete headers["proxy-connection"];
@@ -122,7 +140,14 @@ async function handleConnect(
   const url = new URL(`https://${authority}`);
   const grant = readEgressGrant(authorization, options.secret, now);
   const port = url.port ? Number(url.port) : 443;
-  const target = await authorizeProxyTarget({ protocol: "https:", hostname: url.hostname, port, grant, lookup: options.lookup });
+  const target = await authorizeProxyTarget({
+    protocol: "https:",
+    hostname: url.hostname,
+    port,
+    grant,
+    lookup: options.lookup,
+    trustedFakeIpCidrs: options.trustedFakeIpCidrs,
+  });
   const upstream = netConnect({ host: target.address, port: target.port, family: target.family });
   await new Promise<void>((resolve, reject) => {
     upstream.once("connect", resolve);

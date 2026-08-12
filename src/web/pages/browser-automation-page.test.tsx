@@ -25,6 +25,8 @@ describe("浏览器执行配置页", () => {
     expect(screen.getByLabelText("允许文本输入")).not.toBeChecked();
     expect(screen.getByLabelText("允许表单提交")).not.toBeChecked();
     expect(screen.getByLabelText("允许文件上传")).not.toBeChecked();
+    expect(screen.getByLabelText("允许读取剪贴板")).not.toBeChecked();
+    expect(screen.getByLabelText("允许写入剪贴板")).not.toBeChecked();
     expect(screen.getByText("所有公网 HTTPS 站点")).toBeInTheDocument();
   });
 
@@ -35,10 +37,11 @@ describe("浏览器执行配置页", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加 Origin" }));
     fireEvent.click(screen.getByLabelText("启用浏览器执行"));
     fireEvent.click(screen.getAllByLabelText("允许文本输入")[0]!);
+    fireEvent.click(screen.getAllByLabelText("允许读取剪贴板")[0]!);
     fireEvent.click(screen.getByRole("button", { name: "保存浏览器设置" }));
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/v1/capabilities/browser", expect.objectContaining({ method: "PATCH" })));
     const request = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "PATCH")!;
-    expect(JSON.parse(String(request[1]?.body))).toMatchObject({ config: { enabled: true, trustedOrigins: [{ origin: "https://ui.example.com", allowTextInput: true }] } });
+    expect(JSON.parse(String(request[1]?.body))).toMatchObject({ config: { enabled: true, trustedOrigins: [{ origin: "https://ui.example.com", allowTextInput: true, grantedPermissions: ["clipboard-read"] }] } });
   });
 
   it("离线时读取缓存并禁用测试与保存", async () => {

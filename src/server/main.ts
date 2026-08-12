@@ -256,6 +256,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const browserAudit = new BrowserAuditRepository(applicationDatabase);
   const browserRuns = new BrowserRunRegistry();
   let browserPool: BrowserResourcePool | undefined;
+  let browserArtifacts: BrowserArtifactService | undefined;
   let browserAutomation: BrowserAutomationService | undefined;
   let browserWorker: BrowserWorkerClient | undefined;
   if (deploymentCapabilities.browserAutomationAvailable) {
@@ -266,7 +267,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     if (!secret) throw new Error("浏览器内部通信密钥为空");
     browserWorker = new BrowserWorkerClient({ baseUrl: workerUrl, secret });
     const initialBrowserConfig = (await browserConfigs.read()).config;
-    const browserArtifacts = new BrowserArtifactService(initialBrowserConfig.artifacts);
+    browserArtifacts = new BrowserArtifactService(initialBrowserConfig.artifacts);
     browserPool = new BrowserResourcePool(initialBrowserConfig.pool, {
       closeContext: (leaseId) => browserWorker!.closeContext(leaseId),
     });
@@ -278,6 +279,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       worker: browserWorker,
       preview: browserPreview,
       artifacts: browserArtifacts,
+      audit: browserAudit,
     });
   }
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
@@ -619,6 +621,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     onConfigUpdated: async (previous, current) => {
       if (browserPool) {
         await browserPool.reconfigure(current.pool);
+        browserArtifacts?.reconfigure(current.artifacts);
         if (previous.enabled && !current.enabled) await browserPool.disable();
       }
       await runtimeCoordinator.refreshRuntime();

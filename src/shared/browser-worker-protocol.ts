@@ -38,8 +38,13 @@ export interface CreateBrowserContextRequest {
   leaseId: string;
   /** 本 Context 的受控出口。 */
   egress: BrowserEgressGrant;
-  /** 可授予的有限浏览器权限。 */
-  permissions: BrowserGrantedPermission[];
+  /** 按精确 Origin 隔离的有限浏览器权限。 */
+  permissionGrants: Array<{
+    /** 只接收 Scheme、Host 和 Port 组成的精确 Origin。 */
+    origin: string;
+    /** 仅允许配置中心声明的低风险权限。 */
+    permissions: BrowserGrantedPermission[];
+  }>;
   /** 单 Context 页面上限。 */
   maxPages: number;
 }

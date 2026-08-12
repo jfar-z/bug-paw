@@ -36,7 +36,7 @@ describe.skipIf(!runBrowserTests)("Playwright 浏览器 Session", () => {
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: true });
-    session = new BrowserSession(context, { maxPages: 2 });
+    session = new BrowserSession(context, { maxPages: 2, trustedOrigins: [baseUrl] });
   });
 
   afterAll(async () => {

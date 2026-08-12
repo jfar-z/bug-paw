@@ -57,6 +57,11 @@ export class BrowserPreviewService {
     this.ttlMs = options.ttlMs ?? 90 * 60_000;
   }
 
+  /** 返回可加入短期出口 Grant 的规范化内部 Origin。 */
+  get origin(): string {
+    return new URL(this.internalOrigin).origin;
+  }
+
   /** 校验 HTML 入口并签发当前 Run 的临时 URL。 */
   async authorize(input: { cwd: string; runId: string; entryPath: string }): Promise<BrowserPreviewGrant> {
     const cwd = await realpath(input.cwd);

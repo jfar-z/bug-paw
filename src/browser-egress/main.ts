@@ -9,7 +9,11 @@ async function start(): Promise<void> {
   const secret = (await readFile(secretPath, "utf8")).trim();
   if (!secret) throw new Error("浏览器内部通信密钥为空");
   const port = Number(process.env.PORT ?? "7082");
-  const server = createBrowserEgressProxy({ secret });
+  const trustedFakeIpCidrs = (process.env.BUG_PAW_BROWSER_TRUSTED_FAKE_IP_CIDRS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const server = createBrowserEgressProxy({ secret, trustedFakeIpCidrs });
   server.listen(port, "0.0.0.0");
   const close = () => server.close(() => process.exit(0));
   process.once("SIGINT", close);

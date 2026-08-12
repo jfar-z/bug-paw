@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { sendApiError } from "./http";
 
 interface BrowserPreviewRouteDependencies {
   read(token: string, resourcePath: string): Promise<{ content: Buffer; mediaType: string }>;
@@ -17,7 +18,7 @@ export function registerBrowserPreviewRoutes(app: FastifyInstance, preview: Brow
         .send(resource.content);
     } catch {
       // 不区分 token、过期和路径错误，避免把内部授权状态暴露给普通请求。
-      return reply.code(404).send({ error: { code: "NOT_FOUND", message: "预览资源不存在" } });
+      return sendApiError(reply, 404, "NOT_FOUND", "预览资源不存在");
     }
   });
 }

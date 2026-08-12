@@ -5,6 +5,8 @@ import { basename, resolve, sep } from "node:path";
 import { lstat, readFile, realpath } from "node:fs/promises";
 import mime from "mime";
 import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
+import type { BrowserAuditEvent } from "./browser-audit-repository";
 import type { BrowserLease, BrowserQueueUpdate } from "./browser-resource-pool";
 import { BrowserAutomationError, browserPolicyError } from "./browser-error";
 
@@ -32,12 +34,18 @@ interface BrowserAutomationDependencies {
     uploadFile(leaseId: string, name: string, mediaType: string, content: Buffer, maximumBytes: number, signal?: AbortSignal): Promise<BrowserWorkerUpload>;
   };
   /** 签发工作区静态站点预览。 */
-  preview: { authorize(input: { cwd: string; runId: string; entryPath: string }): Promise<{ url: string }> };
+  preview: {
+    /** 固定内部预览 Origin，仅用于当前部署的 control 网络。 */
+    origin: string;
+    authorize(input: { cwd: string; runId: string; entryPath: string }): Promise<{ url: string }>;
+  };
   /** 主服务工作区产物保存边界。 */
   artifacts: {
     saveScreenshot(input: { cwd: string; runId: string; format: "png" | "jpeg"; content: Buffer }): Promise<unknown>;
     saveDownload(input: { cwd: string; runId: string; originalName: string; mediaType: string; sourceUrl: string; stream: Readable }): Promise<unknown>;
   };
+  /** 不记录正文、输入或凭证的最小审计。 */
+  audit?: { record(event: BrowserAuditEvent): void };
 }
 
 interface ActiveBrowserRun {
@@ -71,17 +79,14 @@ export class BrowserAutomationService {
     if (input.url) {
       return this.execute(context, { type: "open", target: { kind: "url", url: input.url }, newPage: input.newPage ?? false }, signal, onQueueUpdate);
     }
-    const config = await this.requireAvailable();
+    await this.requireAvailable();
     const path = input.path!;
     const normalized = posix.normalize(path);
     if (!path || path.includes("\0") || path.includes("\\") || isAbsolute(path) || normalized === ".." || normalized.startsWith("../")) {
       throw new BrowserAutomationError("BROWSER_LOCAL_FILE_OUTSIDE_WORKSPACE", "本地页面文件不在当前 Agent 工作目录", false);
     }
     const grant = await this.dependencies.preview.authorize({ cwd: identity.cwd, runId: identity.runId, entryPath: normalized });
-    const active = await this.ensureContext(identity, config, signal, onQueueUpdate);
-    active.localPreview = true;
-    active.origin = new URL(grant.url).origin;
-    return this.dependencies.worker.execute(active.lease.id, { type: "open", target: { kind: "preview", url: grant.url }, newPage: input.newPage ?? false }, signal);
+    return this.execute(context, { type: "open", target: { kind: "preview", url: grant.url }, newPage: input.newPage ?? false }, signal, onQueueUpdate);
   }
 
   /** 执行单个已类型化的浏览器命令。 */
@@ -93,27 +98,36 @@ export class BrowserAutomationService {
   ): Promise<unknown> {
     const config = await this.requireAvailable();
     const identity = this.dependencies.runRegistry.requireCurrent(context.sessionId);
-    const active = await this.ensureContext(identity, config, signal, onQueueUpdate);
-    if (command.type === "open") {
-      if (command.target.kind === "url") this.assertNavigation(command.target.url, config);
-      active.localPreview = command.target.kind === "preview";
-      active.origin = new URL(command.target.url).origin;
-    } else {
-      this.assertInteraction(command, active, config);
+    let active: ActiveBrowserRun | undefined;
+    try {
+      active = await this.ensureContext(identity, config, signal, onQueueUpdate);
+      if (command.type === "open") {
+        if (command.target.kind === "url") this.assertNavigation(command.target.url, config);
+        active.localPreview = command.target.kind === "preview";
+        active.origin = new URL(command.target.url).origin;
+      } else {
+        this.assertInteraction(command, active, config);
+      }
+      const result = await this.dependencies.worker.execute<unknown>(active.lease.id, command, signal);
+      let output = result;
+      if ((command.type === "screenshot" || command.type === "download") && isArtifactResult(result)) {
+        const maximum = command.type === "download" ? config.artifacts.maxDownloadBytes : 50 * 1024 * 1024;
+        const content = await this.dependencies.worker.readArtifact(active.lease.id, result.artifact.handle, maximum, signal);
+        if (command.type === "screenshot") {
+          output = await this.dependencies.artifacts.saveScreenshot({ cwd: identity.cwd, runId: identity.runId, format: command.format, content });
+        } else {
+          const originalName = result.artifact.suggestedName ?? "download.bin";
+          const mediaType = result.artifact.mediaType === "application/octet-stream" ? mime.getType(originalName) ?? result.artifact.mediaType : result.artifact.mediaType;
+          const sourceUrl = command.source.kind === "url" ? command.source.url : active.origin ?? "unknown";
+          output = await this.dependencies.artifacts.saveDownload({ cwd: identity.cwd, runId: identity.runId, originalName, mediaType, sourceUrl, stream: Readable.from(content) });
+        }
+      }
+      this.recordAudit(identity, command.type, active.origin, "allowed", output);
+      return output;
+    } catch (error) {
+      this.recordAudit(identity, command.type, active?.origin, error instanceof BrowserAutomationError ? "blocked" : "failed", undefined, error);
+      throw error;
     }
-    const result = await this.dependencies.worker.execute<unknown>(active.lease.id, command, signal);
-    if ((command.type !== "screenshot" && command.type !== "download") || !isArtifactResult(result)) return result;
-    const maximum = command.type === "download" ? config.artifacts.maxDownloadBytes : 50 * 1024 * 1024;
-    const content = await this.dependencies.worker.readArtifact(active.lease.id, result.artifact.handle, maximum, signal);
-    if (command.type === "screenshot") {
-      return this.dependencies.artifacts.saveScreenshot({ cwd: identity.cwd, runId: identity.runId, format: command.format, content });
-    }
-    const originalName = result.artifact.suggestedName ?? "download.bin";
-    const mediaType = result.artifact.mediaType === "application/octet-stream"
-      ? mime.getType(originalName) ?? result.artifact.mediaType
-      : result.artifact.mediaType;
-    const sourceUrl = command.source.kind === "url" ? command.source.url : active.origin ?? "unknown";
-    return this.dependencies.artifacts.saveDownload({ cwd: identity.cwd, runId: identity.runId, originalName, mediaType, sourceUrl, stream: Readable.from(content) });
   }
 
   /** 校验并复制当前工作区文件后执行上传。 */
@@ -126,18 +140,25 @@ export class BrowserAutomationService {
     const config = await this.requireAvailable();
     const identity = this.dependencies.runRegistry.requireCurrent(context.sessionId);
     const active = await this.ensureContext(identity, config, signal, onQueueUpdate);
-    this.assertInteraction({ type: "upload", ref: input.ref, files: [] }, active, config);
-    const files: BrowserWorkerUpload[] = [];
-    for (const path of input.paths) {
-      const file = await readWorkspaceUpload(identity.cwd, path);
-      files.push(await this.dependencies.worker.uploadFile(active.lease.id, file.name, file.mediaType, file.content, 20 * 1024 * 1024, signal));
+    try {
+      this.assertInteraction({ type: "upload", ref: input.ref, files: [] }, active, config);
+      const files: BrowserWorkerUpload[] = [];
+      for (const path of input.paths) {
+        const file = await readWorkspaceUpload(identity.cwd, path);
+        files.push(await this.dependencies.worker.uploadFile(active.lease.id, file.name, file.mediaType, file.content, 20 * 1024 * 1024, signal));
+      }
+      const result = await this.dependencies.worker.execute(active.lease.id, {
+        type: "upload",
+        ref: input.ref,
+        ...(input.pageId ? { pageId: input.pageId } : {}),
+        files,
+      }, signal);
+      this.recordAudit(identity, "upload", active.origin, "allowed");
+      return result;
+    } catch (error) {
+      this.recordAudit(identity, "upload", active.origin, error instanceof BrowserAutomationError ? "blocked" : "failed", undefined, error);
+      throw error;
     }
-    return this.dependencies.worker.execute(active.lease.id, {
-      type: "upload",
-      ref: input.ref,
-      ...(input.pageId ? { pageId: input.pageId } : {}),
-      files,
-    }, signal);
   }
 
   /** Run 结束时释放 Context；不存在时保持幂等。 */
@@ -172,8 +193,15 @@ export class BrowserAutomationService {
     try {
       await this.dependencies.worker.createContext({
         leaseId: lease.id,
-        egress: { leaseId: lease.id, expiresAt: lease.acquiredAt + config.pool.runTimeoutMs, trustedOrigins: config.trustedOrigins.map(({ origin }) => origin) },
-        permissions: [...new Set([...config.localPreview.grantedPermissions, ...config.trustedOrigins.flatMap(({ grantedPermissions }) => grantedPermissions)])],
+        egress: {
+          leaseId: lease.id,
+          expiresAt: lease.acquiredAt + config.pool.runTimeoutMs,
+          trustedOrigins: [...new Set([this.dependencies.preview.origin, ...config.trustedOrigins.map(({ origin }) => origin)])],
+        },
+        permissionGrants: [
+          { origin: this.dependencies.preview.origin, permissions: [...new Set(config.localPreview.grantedPermissions)] },
+          ...config.trustedOrigins.map(({ origin, grantedPermissions }) => ({ origin, permissions: [...new Set(grantedPermissions)] })),
+        ].filter(({ permissions }) => permissions.length > 0),
         maxPages: config.publicBrowsing.maxPagesPerContext,
       }, signal);
     } catch (error) {
@@ -208,6 +236,32 @@ export class BrowserAutomationService {
     const code = command.type === "input" ? "BROWSER_TEXT_INPUT_DISABLED" : command.type === "submit" ? "BROWSER_FORM_SUBMIT_DISABLED" : "BROWSER_UPLOAD_DISABLED";
     if (!policy[setting]) throw browserPolicyError(code, { operation: command.type, origin: active.origin, requiredSetting: setting, scope: active.localPreview ? "local_preview" : "trusted_ui_origin" });
   }
+
+  /** 写入不包含页面内容和输入值的审计事实。 */
+  private recordAudit(
+    identity: { agentId: string; sessionId: string; runId: string },
+    operation: BrowserCommand["type"],
+    origin: string | undefined,
+    decision: BrowserAuditEvent["decision"],
+    result?: unknown,
+    error?: unknown,
+  ): void {
+    if (!this.dependencies.audit) return;
+    const artifact = isSavedArtifact(result) ? result : undefined;
+    this.dependencies.audit.record({
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+      agentId: identity.agentId,
+      sessionId: identity.sessionId,
+      runId: identity.runId,
+      toolName: `browser_${operation}`,
+      operation,
+      ...(origin ? { origin } : {}),
+      decision,
+      ...(error instanceof BrowserAutomationError ? { errorCode: error.code } : {}),
+      ...(artifact ? { artifact } : {}),
+    });
+  }
 }
 
 /** 读取无符号链接、严格位于工作区内的上传文件。 */
@@ -239,4 +293,13 @@ function isArtifactResult(value: unknown): value is { artifact: { handle: string
     && typeof (artifact as { handle?: unknown }).handle === "string"
     && typeof (artifact as { mediaType?: unknown }).mediaType === "string"
     && typeof (artifact as { size?: unknown }).size === "number";
+}
+
+/** 识别主服务已保存且可公开审计的产物元数据。 */
+function isSavedArtifact(value: unknown): value is { path: string; mediaType: string; size: number; sha256: string } {
+  return typeof value === "object" && value !== null
+    && typeof (value as { path?: unknown }).path === "string"
+    && typeof (value as { mediaType?: unknown }).mediaType === "string"
+    && typeof (value as { size?: unknown }).size === "number"
+    && typeof (value as { sha256?: unknown }).sha256 === "string";
 }

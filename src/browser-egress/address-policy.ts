@@ -76,6 +76,7 @@ export async function authorizeProxyTarget(input: {
   port: number;
   grant: BrowserEgressGrant;
   lookup?: LookupAll;
+  trustedFakeIpCidrs?: string[];
 }): Promise<AuthorizedProxyTarget> {
   const hostname = stripBrackets(input.hostname).toLowerCase();
   const origin = formatOrigin(input.protocol, hostname, input.port);
@@ -87,10 +88,33 @@ export async function authorizeProxyTarget(input: {
   for (const result of addresses) {
     const metadataAddress = normalizeAddress(result.address);
     if (METADATA_ADDRESSES.has(metadataAddress)) throw blocked("云元数据地址不可访问");
-    if (!trusted && isRestrictedAddress(result.address, result.family)) throw blocked("目标解析到非公网地址");
+    if (!trusted
+      && isRestrictedAddress(result.address, result.family)
+      && !isTrustedFakeIp(result.address, result.family, input.trustedFakeIpCidrs ?? [])) {
+      throw blocked("目标解析到非公网地址");
+    }
   }
   const selected = addresses[0]!;
   return { origin, address: selected.address, family: selected.family, port: input.port, hostname };
+}
+
+/** 仅匹配部署者明确声明的 Fake-IP 网段，不把该例外扩展到其他受限地址。 */
+function isTrustedFakeIp(address: string, family: 4 | 6, cidrs: string[]): boolean {
+  const blockList = new BlockList();
+  for (const cidr of cidrs) {
+    const separator = cidr.lastIndexOf("/");
+    const network = cidr.slice(0, separator);
+    const prefix = Number(cidr.slice(separator + 1));
+    const networkFamily = isIP(network);
+    if ((networkFamily !== 4 && networkFamily !== 6)
+      || !Number.isInteger(prefix)
+      || prefix < 0
+      || prefix > (networkFamily === 4 ? 32 : 128)) {
+      throw new TypeError("浏览器受信任 Fake-IP CIDR 无效");
+    }
+    blockList.addSubnet(network, prefix, networkFamily === 4 ? "ipv4" : "ipv6");
+  }
+  return blockList.check(address, family === 4 ? "ipv4" : "ipv6");
 }
 
 /** 查询主机名的全部 A/AAAA 结果；IP 字面量不再次解析。 */
