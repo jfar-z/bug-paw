@@ -167,7 +167,9 @@ describe("WorkspaceResourcesPage", () => {
 
     renderWorkspaceResourcesPage();
     expect((await screen.findByRole("checkbox", { name: `选择 ${longName}` })).parentElement).toHaveClass("workspace-entry-select");
-    expect(screen.getByRole("button", { name: `移动 ${longName}` })).toBeVisible();
+    const actionCell = screen.getByRole("button", { name: `移动 ${longName}` }).closest("td");
+    expect(actionCell).toHaveStyle({ position: "sticky", right: "0px" });
+    expect(screen.getByRole("columnheader", { name: "操作" })).toHaveStyle({ position: "sticky", right: "0px" });
     expect(document.querySelector(".workspace-entry-name__label")).toHaveTextContent(longName);
   });
 });

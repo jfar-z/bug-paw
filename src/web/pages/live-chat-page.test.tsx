@@ -713,6 +713,17 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByLabelText("默认 Agent 头像")).toBeInTheDocument();
   });
 
+  it("将快捷资源入口放在 Agent 选择框与新建会话之间", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    const agentTrigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const resourcesTrigger = screen.getByRole("button", { name: "打开快捷资源管理" });
+    const createTrigger = screen.getByRole("button", { name: "新建会话" });
+
+    expect(agentTrigger.compareDocumentPosition(resourcesTrigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(resourcesTrigger.compareDocumentPosition(createTrigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("触摸长按会话时展开操作菜单且不打开会话", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     const sessionButton = await screen.findByRole("button", { name: "测试" });
