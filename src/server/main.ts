@@ -640,6 +640,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     root: staticRoot,
     wildcard: false,
     maxAge: "1h",
+    setHeaders: (reply, filePath) => {
+      // Service Worker 本身必须每次校验，避免已安装 PWA 因静态长缓存继续运行旧入口。
+      if (filePath === join(staticRoot, "sw.js")) reply.header("Cache-Control", "no-cache");
+    },
   });
 
   app.setNotFoundHandler((request, reply) => {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "bugpaw-shell-v10";
+const CACHE_NAME = "bugpaw-shell-v13";
 const BUILD_ASSETS = __BUGPAW_PRECACHE__;
 const CORE_ASSETS = [
   "/",

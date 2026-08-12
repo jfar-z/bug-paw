@@ -54,7 +54,7 @@ export function WorkbenchShell({
   const shellMode = configurationRoute ? "is-configuration" : agentNavigationRoute ? "is-workspace-resources" : "is-chat";
 
   return (
-    <main className={`workbench-shell ${shellMode}`}>
+    <main className={`workbench-shell ${shellMode}`} style={{ height: "var(--app-viewport-height, 100dvh)" }}>
       <header className="workbench-mobile-header">
         <button
           type="button"

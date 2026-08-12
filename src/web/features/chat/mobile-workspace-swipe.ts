@@ -87,7 +87,8 @@ export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.pointerType !== "touch" || !mobileWorkspaceSwipeEnabled()) return;
     const target = event.target instanceof HTMLElement ? event.target : undefined;
-    if (!target || shouldIgnoreWorkspaceSwipe(target, event.currentTarget)) return;
+    // 抽屉打开后需允许从其任何操作区开始关闭手势，横向意图确定前仍不拦截点击。
+    if (!target || (!options.openDrawer && shouldIgnoreWorkspaceSwipe(target, event.currentTarget))) return;
     gestureRef.current = {
       pointerId: event.pointerId,
       x: event.clientX,
@@ -164,6 +165,8 @@ export function resolveWorkspaceSwipe(
 
 /** 排除会与点击、文本选择、媒体操作或横向滚动冲突的起点。 */
 export function shouldIgnoreWorkspaceSwipe(target: HTMLElement, boundary: HTMLElement): boolean {
+  // 消息输入框保留点击和纵向滚动，仅在横向意图成立后由外层手势接管。
+  if (target.matches(".reference-composer textarea")) return false;
   if (target.closest(BLOCKED_SWIPE_SELECTOR)) return true;
   for (let element: HTMLElement | null = target; element && element !== boundary; element = element.parentElement) {
     const style = window.getComputedStyle(element);

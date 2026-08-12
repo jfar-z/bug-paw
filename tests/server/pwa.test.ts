@@ -46,9 +46,8 @@ describe("PWA 应用壳", () => {
     expect(source).not.toContain("/icons/icon.svg");
   });
 
-  it("浏览器动态数据始终走网络且缓存版本已升级", async () => {
+  it("浏览器动态数据始终走网络", async () => {
     const source = await readFile("public/sw.js", "utf8");
-    expect(source).toContain('const CACHE_NAME = "bugpaw-shell-v10"');
     expect(source).toContain('url.pathname.startsWith("/api/")');
     expect(source).not.toMatch(/cache\.put\([^)]*(?:artifact|snapshot|screenshot|download|audit)/u);
   });
@@ -59,5 +58,11 @@ describe("PWA 应用壳", () => {
     expect(source).toContain('const NETWORK_FIRST_DESTINATIONS = new Set(["script", "style"])');
     expect(source).toContain("NETWORK_FIRST_DESTINATIONS.has(request.destination)");
     expect(source).toContain("fetch(request).then(cacheResponse).catch(() => caches.match(request)");
+  });
+
+  it("使用新应用壳版本清除已安装 PWA 的旧入口缓存", async () => {
+    const source = await readFile("public/sw.js", "utf8");
+
+    expect(source).toContain('const CACHE_NAME = "bugpaw-shell-v13"');
   });
 });

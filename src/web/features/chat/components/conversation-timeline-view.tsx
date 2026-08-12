@@ -74,7 +74,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
 
   return <>
     <MessageNavigator items={props.navigationItems} scrollContainerRef={props.scrollRef} />
-    <div className="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable" }}>
+    <div className="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable", touchAction: "pan-y" }}>
       <div className="message-column message-column--compact-end" ref={props.contentRef}>
         {props.timeline.length > 0 ? <div ref={props.historySentinelRef} className="session-history-sentinel" aria-live="polite">
           {props.historyState === "loading" ? <span role="status">正在加载更早消息…</span> : null}

@@ -36,6 +36,12 @@ function renderShell(route: AppRoute = { page: "agents" }) {
 }
 
 describe("WorkbenchShell", () => {
+  it("以实际可视高度变量约束工作台，避免刷新后输入区越过屏幕底部", () => {
+    renderShell({ page: "chat" });
+
+    expect(document.querySelector(".workbench-shell")).toHaveStyle({ height: "var(--app-viewport-height, 100dvh)" });
+  });
+
   it("配置页同时显示主导航和配置二级导航", () => {
     renderShell();
 

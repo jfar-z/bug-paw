@@ -1,5 +1,5 @@
 import { ChevronLeft, Download, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import type { WorkspaceEntry, WorkspaceTextPreview } from "../../shared/contracts";
 import { api, workspaceFileUrl } from "../api";
 import { useApiTask } from "../api-task-provider";
@@ -20,6 +20,10 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
   const [error, setError] = useState("");
   const mediaType = entry.mediaType ?? "application/octet-stream";
   const source = workspaceFileUrl(agentId, entry.path);
+  // 预览层及其内容区均可能成为滚动边界，需要继续支持横划返回资源列表。
+  const previewStyle: CSSProperties | undefined = mode === "overlay"
+    ? { width: "100%", minWidth: 0, height: "100%", zIndex: 2, touchAction: "pan-y" }
+    : undefined;
 
   useEffect(() => {
     if (mediaType.startsWith("image/") || mediaType.startsWith("video/") || mediaType.startsWith("audio/")) return;
@@ -42,9 +46,9 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
     return () => { active = false; };
   }, [agentId, entry.path, mediaType, runApiTask]);
 
-  return <aside className={`workspace-file-preview workspace-file-preview--${mode}`} style={mode === "overlay" ? { width: "100%", minWidth: 0, height: "100%", zIndex: 2 } : undefined} aria-label={`${entry.name} 预览`}>
+  return <aside className={`workspace-file-preview workspace-file-preview--${mode}`} style={previewStyle} aria-label={`${entry.name} 预览`}>
     <header><div><span>PREVIEW</span><strong>{entry.name}</strong></div><button type="button" className="icon-button" aria-label={mode === "overlay" ? "返回文件列表" : "关闭预览"} onClick={onClose}>{mode === "overlay" ? <ChevronLeft size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button></header>
-    <div className="workspace-file-preview__body">
+    <div className="workspace-file-preview__body" style={mode === "overlay" ? { touchAction: "pan-y" } : undefined}>
       {mediaType.startsWith("image/") ? <img src={source} alt={entry.name} /> : null}
       {mediaType.startsWith("video/") ? <video src={source} controls /> : null}
       {mediaType.startsWith("audio/") ? <audio src={source} controls /> : null}
