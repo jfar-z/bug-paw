@@ -205,6 +205,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
       <div className="reference-composer__input-row">
         <textarea
           ref={textareaRef}
+          style={{ touchAction: "pan-y" }}
           rows={1}
           placeholder="给 Agent 发消息…（输入 @ 引用资源）"
           aria-label="消息内容"

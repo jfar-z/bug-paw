@@ -19,6 +19,12 @@ const emptyCatalog = {
 };
 
 describe("ReferenceComposer", () => {
+  it("消息输入框保留纵向原生手势并允许页面识别横划", () => {
+    renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
+
+    expect(screen.getByRole("textbox")).toHaveStyle({ touchAction: "pan-y" });
+  });
+
   it("同一个 @ 引用会话只读取一次目录并通过 Tab 选中候选", async () => {
     const loadCatalog = vi.fn(async () => ({
       skills: [{ name: "knowledge-base", description: "检索资料" }],

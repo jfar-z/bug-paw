@@ -67,10 +67,14 @@ describe("移动端工作区双向抽屉手势", () => {
     expect(screen.getByTestId("open-drawer")).toHaveTextContent("none");
   });
 
-  it("排除交互元素、媒体和横向滚动区域", () => {
+  it("排除交互元素、媒体和横向滚动区域，但允许从消息输入框起划", () => {
     const root = document.createElement("section");
     const button = root.appendChild(document.createElement("button"));
     const link = root.appendChild(document.createElement("a"));
+    const input = root.appendChild(document.createElement("input"));
+    const composer = root.appendChild(document.createElement("div"));
+    composer.className = "reference-composer";
+    const messageInput = composer.appendChild(document.createElement("textarea"));
     const code = root.appendChild(document.createElement("code"));
     const image = root.appendChild(document.createElement("img"));
     const scroller = root.appendChild(document.createElement("div"));
@@ -83,6 +87,8 @@ describe("移动端工作区双向抽屉手势", () => {
 
     expect(shouldIgnoreWorkspaceSwipe(button, root)).toBe(true);
     expect(shouldIgnoreWorkspaceSwipe(link, root)).toBe(true);
+    expect(shouldIgnoreWorkspaceSwipe(input, root)).toBe(true);
+    expect(shouldIgnoreWorkspaceSwipe(messageInput, root)).toBe(false);
     expect(shouldIgnoreWorkspaceSwipe(code, root)).toBe(true);
     expect(shouldIgnoreWorkspaceSwipe(image, root)).toBe(true);
     expect(shouldIgnoreWorkspaceSwipe(child, root)).toBe(true);
