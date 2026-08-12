@@ -212,7 +212,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         const messages = mergeOlderHistory(current.messages, page.messages);
         const merged = { ...current, messages, history: page.history };
         sessionSnapshotRef.current = merged;
-        setTimeline(parsePiHistory(messages, current.run?.status === "queued" || current.run?.status === "running"));
+        const pendingResult = reconcilePendingUserMessage(
+          current.id,
+          parsePiHistory(messages, current.run?.status === "queued" || current.run?.status === "running"),
+          pendingUserMessageRef.current,
+        );
+        pendingUserMessageRef.current = pendingResult.pending;
+        setTimeline(pendingResult.timeline);
         return merged;
       });
     },

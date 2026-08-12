@@ -9,6 +9,22 @@ import { LiveChatPage } from "./live-chat-page";
 type EventListener = (event: MessageEvent) => void;
 const operationLog: string[] = [];
 let regenerateResponse: Promise<Response> | undefined;
+let historyResponse: Response | undefined;
+const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
+
+class HistoryObserverDouble {
+  constructor(callback: IntersectionObserverCallback) {
+    intersectionObserverCallbacks.push(callback);
+  }
+
+  observe() {}
+  disconnect() {}
+  unobserve() {}
+  takeRecords() { return []; }
+  readonly root = null;
+  readonly rootMargin = "";
+  readonly thresholds = [];
+}
 
 class FakeEventSource {
   static readonly OPEN = 1;
@@ -124,8 +140,11 @@ beforeEach(() => {
   PageFakeAudio.instances = [];
   operationLog.length = 0;
   regenerateResponse = undefined;
+  historyResponse = undefined;
+  intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("IntersectionObserver", HistoryObserverDouble);
   vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(false)));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -213,6 +232,9 @@ beforeEach(() => {
           startedAt: "2026-08-12T00:00:00.000Z",
         },
       })));
+    }
+    if (url.includes("/history?")) {
+      return historyResponse ?? new Response(JSON.stringify({}), { status: 500 });
     }
     if (url.includes("/branches/") && url.endsWith("/messages")) {
       return new Response(JSON.stringify({
@@ -460,6 +482,66 @@ describe("LiveChatPage 时间线", () => {
     const rows = messageRowTexts();
     expect(rows[0]).toContain("需要保留的问题");
     expect(rows[1]).toContain("最终新回答");
+  });
+
+  it("重新生成期间加载更早历史后仍保留待确认用户消息", async () => {
+    regenerateResponse = new Promise(() => {});
+    historyResponse = new Response(JSON.stringify({
+      sessionId: "session-1",
+      messages: [{ role: "user", content: "更早的问题", __piEntryId: "older-user" }],
+      history: {
+        startEntryId: "older-user",
+        branchToken: "branch-regenerated",
+        hasMoreBefore: false,
+        turnCount: 1,
+      },
+    }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+    act(() => source.emit("snapshot", {
+      messages: [
+        { role: "user", content: "需要保留的问题", __piEntryId: "user-source" },
+        { role: "assistant", content: [{ type: "text", text: "旧回答" }] },
+      ],
+      lastEventId: 2,
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: "重新生成回答" }));
+    act(() => source.emit("snapshot", {
+      messages: [],
+      history: {
+        startEntryId: "recent-user",
+        branchToken: "branch-regenerated",
+        hasMoreBefore: true,
+        turnCount: 2,
+      },
+      run: {
+        runId: "run-regenerated",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-12T00:00:00.000Z",
+      },
+      lastEventId: 3,
+    }));
+    await waitFor(() => expect(intersectionObserverCallbacks.length).toBeGreaterThan(0));
+
+    await act(async () => {
+      const entry = {
+        isIntersecting: true,
+        boundingClientRect: { top: 0 },
+      } as IntersectionObserverEntry;
+      intersectionObserverCallbacks.forEach((callback) => callback(
+        [entry],
+        {} as IntersectionObserver,
+      ));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(operationLog).toEqual(expect.arrayContaining([
+      expect.stringContaining("/history?"),
+    ])));
+    await screen.findByText("已加载全部消息");
+    expect(messageRowTexts().some((text) => text.includes("需要保留的问题"))).toBe(true);
   });
 
   it("重新生成请求失败时保留原时间线并显示统一错误", async () => {
