@@ -4,6 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatSidebar } from "./chat-sidebar";
 
 describe("ChatSidebar 会话多选", () => {
+  it("为移动端关闭手势声明纵向触摸操作", () => {
+    render(<ChatSidebar {...baseProps()} />);
+
+    expect(screen.getByRole("complementary", { name: "会话历史" })).toHaveStyle({ touchAction: "pan-y" });
+  });
+
   it("进入多选后显示所有复选框，当前会话不可选择", () => {
     const onToggleSelection = vi.fn();
     render(<ChatSidebar {...baseProps()} selectionMode selectedSessionIds={["session-2"]} onToggleSelection={onToggleSelection} />);

@@ -51,6 +51,11 @@ export function ChatSidebar(props: ChatSidebarProps) {
   const pullStartYRef = useRef<number | undefined>(undefined);
   const [pullDistance, setPullDistance] = useState(0);
   const refreshReady = pullDistance >= 64;
+  // 横向触摸由根手势处理器结算关闭，纵向滚动仍保持浏览器原生行为。
+  const sidebarStyle: CSSProperties = {
+    touchAction: "pan-y",
+    ...(props.swipeTranslatePercent === undefined ? {} : { transform: `translateX(${props.swipeTranslatePercent}%)` }),
+  };
 
   /** 仅在列表滚动到顶部时记录移动端下拉手势。 */
   function startPullToRefresh(event: ReactTouchEvent<HTMLElement>) {
@@ -77,7 +82,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
     <aside
       aria-label="会话历史"
       className={`chat-sidebar${props.open ? " is-open" : ""}${props.swiping ? " is-swiping" : ""}`}
-      style={props.swipeTranslatePercent === undefined ? undefined : { transform: `translateX(${props.swipeTranslatePercent}%)` }}
+      style={sidebarStyle}
     >
       <div className="sidebar-header live-session-header"><div><span>{props.selectionMode ? `已选 ${props.selectedSessionIds.length} 项` : "会话"}</span><small>{props.selectionMode ? "SELECT SESSIONS" : "SESSIONS"}</small></div><button type="button" className="session-refresh-button" aria-label="刷新会话列表" title="刷新会话列表" disabled={props.refreshing || isOpeningSession || props.selectionMode} onClick={props.onRefresh}><RefreshCw size={15} aria-hidden="true" className={props.refreshing ? "is-spinning" : undefined} /></button></div>
       <button type="button" className="new-chat-button" onClick={props.onEnterDraft} disabled={props.noAvailableAgent || isOpeningSession || props.selectionMode}>
