@@ -74,17 +74,18 @@ export function BrowserAutomationPage() {
 
     <BrowserSettingsSection index={1} title="服务状态" description="不显示 Context 或 Agent 身份">
       <label className="configuration-capability-toggle"><span>启用浏览器执行<small>启用后，仍只有获得对应工具权限的 Agent 可以调用。</small></span><input aria-label="启用浏览器执行" type="checkbox" checked={draft.enabled} onChange={(event) => patch({ enabled: event.target.checked })} /></label>
-      <div className="configuration-button-row browser-service-status"><span>{document.deployment.workerAvailable ? "Worker 可用" : "Worker 不可用"}</span><span>{document.deployment.activeContexts} 个活动 Context</span><span>{document.deployment.queuedRequests} 个排队任务</span><button type="button" className="configuration-secondary-action" disabled={offline || !browserOnline || !document.deployment.available} onClick={() => void api.testBrowserAutomation().then((result) => setNotice(result.message)).catch(() => setError("浏览器组件测试失败"))}><ServerCog size={16} aria-hidden="true" />测试浏览器组件</button></div>
+      <div className="configuration-button-row"><span>{document.deployment.workerAvailable ? "Worker 可用" : "Worker 不可用"}</span><span>{document.deployment.activeContexts} 个活动 Context</span><span>{document.deployment.queuedRequests} 个排队任务</span><button type="button" className="configuration-secondary-action" disabled={offline || !browserOnline || !document.deployment.available} onClick={() => void api.testBrowserAutomation().then((result) => setNotice(result.message)).catch(() => setError("浏览器组件测试失败"))}><ServerCog size={16} aria-hidden="true" />测试浏览器组件</button></div>
     </BrowserSettingsSection>
 
     <BrowserSettingsSection index={2} title="公开浏览范围" description="固定 HTTPS；空清单允许全部公网站点">
-      <p className="configuration-help browser-scope-summary"><strong>所有公网 HTTPS 站点</strong><span>私网、回环、链路本地、云元数据和重绑定地址始终由受控出口拒绝。</span></p>
+      <p className="configuration-help"><strong>所有公网 HTTPS 站点</strong><br />私网、回环、链路本地、云元数据和重绑定地址始终由受控出口拒绝。</p>
       <NumberField label="导航超时（秒）" value={draft.publicBrowsing.navigationTimeoutMs / 1000} min={10} max={120} onChange={(value) => patch({ publicBrowsing: { ...draft.publicBrowsing, navigationTimeoutMs: value * 1000 } })} />
       <NumberField label="单 Run 打开上限" value={draft.publicBrowsing.maxPagesPerRun} min={1} max={100} onChange={(value) => patch({ publicBrowsing: { ...draft.publicBrowsing, maxPagesPerRun: value } })} />
     </BrowserSettingsSection>
 
     <BrowserSettingsSection index={3} title="受信任 UI 验证" description="交互权限按精确 Origin 生效">
-      <label><span>精确 Origin<small>不含路径、查询或通配符。</small></span><span className="browser-origin-input"><input aria-label="新增受信任 Origin" value={origin} placeholder="https://ui.example.com" onChange={(event) => setOrigin(event.target.value)} /><button type="button" className="configuration-secondary-action" onClick={addOrigin}><Plus size={15} aria-hidden="true" />添加 Origin</button></span></label>
+      <label><span>精确 Origin<small>不含路径、查询或通配符。</small></span><input aria-label="新增受信任 Origin" value={origin} placeholder="https://ui.example.com" onChange={(event) => setOrigin(event.target.value)} /></label>
+      <div className="configuration-button-row"><button type="button" className="configuration-secondary-action" onClick={addOrigin}><Plus size={15} aria-hidden="true" />添加 Origin</button></div>
       {draft.trustedOrigins.length === 0 ? <p className="configuration-help">尚未信任任何 UI Origin；公开网页只能只读游览。</p> : draft.trustedOrigins.map((item, index) => <BrowserOriginGroup key={item.origin} value={item} onChange={(next) => patch({ trustedOrigins: draft.trustedOrigins.map((candidate, candidateIndex) => candidateIndex === index ? next : candidate) })} onRemove={() => patch({ trustedOrigins: draft.trustedOrigins.filter((_, candidateIndex) => candidateIndex !== index) })} />)}
     </BrowserSettingsSection>
 
@@ -118,7 +119,7 @@ function BrowserSettingsSection({ index, title, description, children }: { index
 }
 
 function BrowserOriginGroup({ value, onChange, onRemove }: { value: TrustedBrowserOrigin; onChange: (value: TrustedBrowserOrigin) => void; onRemove: () => void }) {
-  return <article className="browser-origin-group"><header className="browser-origin-group__heading"><strong>{value.origin}</strong><button type="button" className="icon-button" aria-label={`删除 ${value.origin}`} onClick={onRemove}><Trash2 size={15} aria-hidden="true" /></button></header><PermissionSwitches value={value} onChange={(next) => onChange({ ...value, ...next })} /></article>;
+  return <article className="configuration-section"><header className="configuration-section__heading"><strong>{value.origin}</strong><button type="button" className="icon-button" aria-label={`删除 ${value.origin}`} onClick={onRemove}><Trash2 size={15} aria-hidden="true" /></button></header><PermissionSwitches value={value} onChange={(next) => onChange({ ...value, ...next })} /></article>;
 }
 
 function PermissionSwitches({ value, onChange }: { value: Omit<TrustedBrowserOrigin, "origin">; onChange: (value: Omit<TrustedBrowserOrigin, "origin">) => void }) {
