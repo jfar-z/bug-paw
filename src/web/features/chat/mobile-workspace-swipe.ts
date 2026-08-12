@@ -120,7 +120,7 @@ export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
       onPointerDown,
       onPointerMove,
       onPointerUp: onPointerEnd,
-      onPointerCancel: onPointerEnd,
+      onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => clearGesture(event.pointerId),
     },
   };
 }

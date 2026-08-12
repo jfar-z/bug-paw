@@ -113,6 +113,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [resourcesOpen, setResourcesOpen] = useState(false);
   const [workspaceLocationRequest, setWorkspaceLocationRequest] = useState<{ id: number; path: string }>();
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const workspaceTriggerRef = useRef<HTMLElement | undefined>(undefined);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
@@ -411,7 +413,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     cancelSessionSelection();
     setSidebarOpen(false);
   };
-  const closeResources = () => setResourcesOpen(false);
+  const closeResources = () => {
+    setResourcesOpen(false);
+    window.setTimeout(() => workspaceTriggerRef.current?.focus(), 0);
+  };
   const openDrawer = (drawer: MobileWorkspaceDrawer) => {
     if (drawer === "sessions") {
       setResourcesOpen(false);
@@ -842,9 +847,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const intent = classifyWorkspaceLink(href);
     if (intent.kind === "passthrough") return false;
     if (intent.kind === "blocked") {
-      setError(intent.message);
+      workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+      setWorkspaceMessage(intent.message);
+      openDrawer("resources");
       return true;
     }
+    workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    setWorkspaceMessage("");
     setWorkspaceLocationRequest((current) => ({ id: (current?.id ?? 0) + 1, path: intent.path }));
     openDrawer("resources");
     return true;
@@ -1112,7 +1121,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
             <div className="chat-title"><strong>{session ? "Agent 对话" : "新对话"}</strong><span>pi SDK · 实时连接</span></div>
           </div>
           <div className="chat-header__actions">
-            <button type="button" className="icon-button quick-workspace-open-button" aria-label="打开快捷资源管理" title="快捷资源管理" disabled={!activeAgentId} onClick={() => openDrawer("resources")}><FolderOpen size={18} aria-hidden="true" /></button>
+            <button type="button" className="icon-button quick-workspace-open-button" aria-label="打开快捷资源管理" title="快捷资源管理" disabled={!activeAgentId} onClick={(event) => { workspaceTriggerRef.current = event.currentTarget; setWorkspaceMessage(""); openDrawer("resources"); }}><FolderOpen size={18} aria-hidden="true" /></button>
             <AgentModelMenu
               agents={agents}
               selectedAgentId={activeAgentId}
@@ -1195,6 +1204,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         agentId={activeAgentId}
         agentName={activeAgent?.profile.name}
         locationRequest={workspaceLocationRequest}
+        message={workspaceMessage}
         swiping={workspaceSwipe.resourceTranslatePercent !== undefined}
         swipeTranslatePercent={workspaceSwipe.resourceTranslatePercent}
         onClose={closeResources}

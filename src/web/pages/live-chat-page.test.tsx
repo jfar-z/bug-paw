@@ -807,11 +807,11 @@ describe("LiveChatPage 时间线", () => {
   });
 
   it("移动端内容区左划打开当前 Agent 的快捷资源管理", async () => {
-    vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(true)));
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => mediaQueryResult(query.includes("max-width"))));
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: /^第二会话/ });
     const workspace = document.querySelector<HTMLElement>(".chat-workspace")!;
-    const resources = screen.getByRole("complementary", { name: "快捷资源管理" });
+    const resources = document.querySelector<HTMLElement>(".quick-workspace-drawer")!;
 
     fireEvent.pointerDown(workspace, { pointerType: "touch", pointerId: 7, clientX: 220, clientY: 200 });
     fireEvent.pointerMove(workspace, { pointerType: "touch", pointerId: 7, clientX: 105, clientY: 205 });
@@ -824,9 +824,8 @@ describe("LiveChatPage 时间线", () => {
   it("桌面快捷入口与 Markdown 相对路径共用资源抽屉", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-    const resources = screen.getByRole("complementary", { name: "快捷资源管理" });
-
     fireEvent.click(screen.getByRole("button", { name: "打开快捷资源管理" }));
+    const resources = screen.getByRole("complementary", { name: "快捷资源管理" });
     expect(resources).toHaveClass("is-open");
     fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
 
@@ -836,7 +835,20 @@ describe("LiveChatPage 时间线", () => {
     fireEvent.click(await screen.findByRole("link", { name: "查看说明" }));
 
     expect(resources).toHaveClass("is-open");
-    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("directory=docs%2Freadme.md"))).toBe(true));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("directory=docs"))).toBe(true));
+  });
+
+  it("阻止越界本地链接并在资源抽屉反馈", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "[敏感文件](../secret.txt)" }] }],
+    }));
+
+    fireEvent.click(await screen.findByRole("link", { name: "敏感文件" }));
+
+    expect(screen.getByRole("complementary", { name: "快捷资源管理" })).toHaveClass("is-open");
+    expect(screen.getByText("文件路径已越出当前 Agent 工作目录")).toBeInTheDocument();
   });
 
   it("移动端从输入框起划时不触发侧栏手势", async () => {

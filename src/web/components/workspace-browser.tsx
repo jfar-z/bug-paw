@@ -18,10 +18,11 @@ interface WorkspaceBrowserProps {
   heading?: ReactNode;
   locationRequest?: WorkspaceLocationRequest;
   onPreviewOpenChange?: (open: boolean) => void;
+  previewCloseRequest?: number;
 }
 
 /** 为独立资源页和快捷抽屉提供固定 Agent 的同一套文件管理能力。 */
-export function WorkspaceBrowser({ agentId, mode, heading, locationRequest, onPreviewOpenChange }: WorkspaceBrowserProps) {
+export function WorkspaceBrowser({ agentId, mode, heading, locationRequest, onPreviewOpenChange, previewCloseRequest }: WorkspaceBrowserProps) {
   const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [directory, setDirectory] = useState("");
@@ -63,6 +64,14 @@ export function WorkspaceBrowser({ agentId, mode, heading, locationRequest, onPr
     }
   };
 
+  useEffect(() => {
+    setDirectory("");
+    setQuery("");
+    setSelectedPaths([]);
+    setPreview(undefined);
+    setHighlightedPath("");
+    setError("");
+  }, [agentId]);
   useEffect(() => { void refreshEntries(); }, [agentId, directory, query, includeHidden]);
   useEffect(() => {
     if (!locationRequest || !agentId) return;
@@ -91,6 +100,9 @@ export function WorkspaceBrowser({ agentId, mode, heading, locationRequest, onPr
     });
   }, [agentId, includeHidden, locationRequest?.id]);
   useEffect(() => onPreviewOpenChange?.(Boolean(preview)), [onPreviewOpenChange, preview]);
+  useEffect(() => {
+    if (previewCloseRequest !== undefined) setPreview(undefined);
+  }, [previewCloseRequest]);
 
   const resetLocationState = () => {
     setQuery("");

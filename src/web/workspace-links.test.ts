@@ -19,8 +19,8 @@ describe("工作目录 Markdown 链接", () => {
   });
 
   it("定位现有目录", async () => {
-    const listDirectory = vi.fn(async (directory: string) => directory === "docs"
-      ? [file("docs/readme.md", "readme.md")]
+    const listDirectory = vi.fn(async (directory: string) => directory === ""
+      ? [directoryEntry("docs", "docs")]
       : notFound());
 
     await expect(locateWorkspaceReference("docs", listDirectory)).resolves.toEqual({
@@ -32,7 +32,7 @@ describe("工作目录 Markdown 链接", () => {
   it("通过父目录定位现有文件", async () => {
     const target = file("docs/readme.md", "readme.md");
     const listDirectory = vi.fn(async (directory: string) => {
-      if (directory === "docs/readme.md") return notFound();
+      if (directory === "docs/readme.md") throw new ApiClientError("INVALID_PATH", "目标路径不是目录", 400);
       if (directory === "docs") return [target];
       return notFound();
     });

@@ -6363,7 +6363,7 @@ img.message-avatar {
 .workspace-file-preview__body audio { width: 100%; }
 .workspace-file-preview__body pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 10px; }
 .workspace-file-preview > a { display: inline-flex; align-items: center; justify-content: center; gap: 6px; margin: auto 18px 18px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; color: var(--text-secondary); font-size: 10px; text-decoration: none; }
-.quick-workspace-drawer { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; display: flex; width: min(720px, calc(100vw - 72px)); flex-direction: column; border-left: 1px solid var(--border); background: var(--surface); transform: translateX(102%); transition: transform 200ms cubic-bezier(.2, .8, .2, 1); }
+.quick-workspace-drawer { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; display: flex; width: min(46vw, 680px); flex-direction: column; border-left: 1px solid var(--border); background: var(--surface); transform: translateX(102%); transition: transform 200ms cubic-bezier(.2, .8, .2, 1); }
 .quick-workspace-drawer.is-open { transform: translateX(0); }
 .quick-workspace-drawer.is-swiping { transition: none; }
 .workspace-browser--quick { position: relative; min-height: 0; flex: 1; padding: 18px; overflow: auto; }
@@ -6381,7 +6381,7 @@ img.message-avatar {
 
 @media (max-width: 760px) {
   .quick-workspace-open-button { display: none; }
-  .quick-workspace-drawer { width: 100%; border-left: 0; }
+  .quick-workspace-drawer { width: min(92vw, 680px); border-left: 0; }
   .workspace-resources-page { display: block; height: 100%; overflow: auto; }
   .workspace-agent-navigation { display: none; }
   .workspace-agent-navigation__scrim { display: block; }

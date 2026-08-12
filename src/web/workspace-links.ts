@@ -51,13 +51,6 @@ export async function locateWorkspaceReference(
   path: string,
   listDirectory: WorkspaceDirectoryReader,
 ): Promise<WorkspaceReferenceLocation> {
-  try {
-    await listDirectory(path);
-    return { kind: "directory", directory: path };
-  } catch (error) {
-    if (!isMissingWorkspaceTarget(error)) throw error;
-  }
-
   const segments = path.split("/");
   const name = segments.at(-1) ?? path;
   const immediateParent = segments.slice(0, -1).join("/");

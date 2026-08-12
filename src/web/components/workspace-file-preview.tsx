@@ -42,7 +42,7 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
     return () => { active = false; };
   }, [agentId, entry.path, mediaType, runApiTask]);
 
-  return <aside className={`workspace-file-preview workspace-file-preview--${mode}`} aria-label={`${entry.name} 预览`}>
+  return <aside className={`workspace-file-preview workspace-file-preview--${mode}`} style={mode === "overlay" ? { width: "100%", minWidth: 0, height: "100%", zIndex: 2 } : undefined} aria-label={`${entry.name} 预览`}>
     <header><div><span>PREVIEW</span><strong>{entry.name}</strong></div><button type="button" className="icon-button" aria-label={mode === "overlay" ? "返回文件列表" : "关闭预览"} onClick={onClose}>{mode === "overlay" ? <ChevronLeft size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button></header>
     <div className="workspace-file-preview__body">
       {mediaType.startsWith("image/") ? <img src={source} alt={entry.name} /> : null}

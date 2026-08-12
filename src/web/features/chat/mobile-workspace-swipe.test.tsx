@@ -41,6 +41,19 @@ describe("移动端工作区双向抽屉手势", () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
   });
 
+  it("pointercancel 只清理手势且不切换抽屉", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    render(<SwipeHarness />);
+    const surface = screen.getByTestId("swipe-surface");
+    Object.assign(surface, { setPointerCapture: vi.fn(), releasePointerCapture: vi.fn() });
+
+    fireEvent.pointerDown(surface, { pointerType: "touch", pointerId: 8, clientX: 220, clientY: 200 });
+    fireEvent.pointerMove(surface, { pointerType: "touch", pointerId: 8, clientX: 100, clientY: 204 });
+    fireEvent.pointerCancel(surface, { pointerType: "touch", pointerId: 8, clientX: 100, clientY: 204 });
+
+    expect(screen.getByTestId("open-drawer")).toHaveTextContent("none");
+  });
+
   it("排除交互元素、媒体和横向滚动区域", () => {
     const root = document.createElement("section");
     const button = root.appendChild(document.createElement("button"));
