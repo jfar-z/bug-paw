@@ -45,6 +45,9 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     case "completed":
     case "aborted": return true;
     case "tool_preparing": return isToolIdentity(value);
+    case "tool_parameters_streaming": return isToolIdentity(value)
+      && isSafeInteger(value.generatedBytes, 1)
+      && (value.path === undefined || isNonEmptyString(value.path));
     case "tool_prepared": return isToolIdentity(value) && "args" in value;
     case "tool_started": return isToolIdentity(value) && "args" in value;
     case "tool_updated": return isToolIdentity(value) && "partialResult" in value;

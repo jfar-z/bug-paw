@@ -95,6 +95,7 @@ describe("对话时间线", () => {
   it("按调用标识合并工具准备、执行和完成阶段", () => {
     const entries = reduceEvents([
       { type: "tool_preparing", callId: "call-1", toolName: "write" },
+      { type: "tool_parameters_streaming", callId: "call-1", toolName: "write", generatedBytes: 4608, path: "src/app.ts" },
       { type: "tool_prepared", callId: "call-1", toolName: "write", args: { path: "src/app.ts", content: "内容" } },
       { type: "tool_started", callId: "call-1", toolName: "write", args: { path: "src/app.ts", content: "内容" } },
       { type: "tool_finished", callId: "call-1", toolName: "write", result: "ok", isError: false },
@@ -105,6 +106,8 @@ describe("对话时间线", () => {
     expect(turn.blocks[0]).toMatchObject({
       callId: "call-1",
       status: "completed",
+      parameterBytes: 4608,
+      parameterPath: "src/app.ts",
       args: { path: "src/app.ts", content: "内容" },
       result: "ok",
     });
@@ -113,6 +116,7 @@ describe("对话时间线", () => {
   it("运行在工具执行前中止时将准备项标记为未执行", () => {
     const entries = reduceEvents([
       { type: "tool_preparing", callId: "call-2", toolName: "edit" },
+      { type: "tool_parameters_streaming", callId: "call-2", toolName: "edit", generatedBytes: 512 },
       { type: "generation_finished", outcome: "aborted" },
     ]);
 

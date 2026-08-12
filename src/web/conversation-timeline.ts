@@ -42,10 +42,12 @@ export interface ToolBlock {
   callId: string;
   name: string;
   args: unknown;
+  parameterBytes?: number;
+  parameterPath?: string;
   partialResult?: unknown;
   result?: unknown;
   details?: unknown;
-  status: "preparing" | "running" | "completed" | "cancelled" | "error";
+  status: "preparing" | "parameterizing" | "running" | "completed" | "cancelled" | "error";
 }
 
 export type AgentBlock = MarkdownBlock | ThinkingBlock | FileBlock | ToolBlock;
@@ -66,6 +68,7 @@ export type TimelineEvent =
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "tool_preparing"; callId: string; toolName: string }
+  | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
   | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
@@ -158,7 +161,7 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
       ...turn,
       blocks: turn.blocks.map((block) => {
         if (block.type === "markdown" || block.type === "thinking") return { ...block, streaming: false };
-        if (block.type === "tool" && block.status === "preparing" && event.outcome !== "completed") {
+        if (block.type === "tool" && (block.status === "preparing" || block.status === "parameterizing") && event.outcome !== "completed") {
           return { ...block, status: "cancelled" };
         }
         return block;
@@ -505,7 +508,7 @@ function createToolFromEvent(
     callId: event.callId,
     name: event.toolName,
     args: undefined,
-    status: event.type === "tool_preparing" || event.type === "tool_prepared" ? "preparing" : "running",
+    status: event.type === "tool_preparing" || event.type === "tool_prepared" ? "preparing" : event.type === "tool_parameters_streaming" ? "parameterizing" : "running",
   }, event);
 }
 
@@ -515,6 +518,15 @@ function updateToolFromEvent(
 ): ToolBlock {
   if (event.type === "tool_preparing") {
     return { ...tool, name: event.toolName, status: tool.status === "preparing" ? "preparing" : tool.status };
+  }
+  if (event.type === "tool_parameters_streaming") {
+    return {
+      ...tool,
+      name: event.toolName,
+      parameterBytes: event.generatedBytes,
+      ...(event.path ? { parameterPath: event.path } : {}),
+      status: tool.status === "preparing" || tool.status === "parameterizing" ? "parameterizing" : tool.status,
+    };
   }
   if (event.type === "tool_prepared") {
     return { ...tool, name: event.toolName, args: event.args, status: tool.status === "preparing" ? "preparing" : tool.status };
@@ -537,7 +549,7 @@ function updateToolFromEvent(
 }
 
 type ToolTimelineEvent = Extract<TimelineEvent, {
-  type: "tool_preparing" | "tool_prepared" | "tool_started" | "tool_updated" | "tool_finished";
+  type: "tool_preparing" | "tool_parameters_streaming" | "tool_prepared" | "tool_started" | "tool_updated" | "tool_finished";
 }>;
 
 function extractContentText(content: unknown): string {

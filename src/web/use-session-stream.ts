@@ -273,6 +273,24 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         });
       }
     });
+    source.addEventListener("tool_parameters_streaming", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "tool_parameters_streaming") {
+        reportInvalidEvent();
+        return;
+      }
+      if (accept(payload)) {
+        flushDeltas();
+        callbacksRef.current.onTimelineEvent({
+          type: "tool_parameters_streaming",
+          callId: payload.callId,
+          toolName: payload.toolName,
+          generatedBytes: payload.generatedBytes,
+          ...(payload.path ? { path: payload.path } : {}),
+        });
+      }
+    });
     source.addEventListener("tool_prepared", (rawEvent) => {
       const payload = parse(rawEvent as MessageEvent);
       if (!payload) return;

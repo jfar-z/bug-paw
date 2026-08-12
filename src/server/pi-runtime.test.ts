@@ -213,15 +213,17 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     gateway.dispose();
   });
 
-  it("在工具参数生成开始与结束时发布轻量事件且不转发原始增量", async () => {
+  it("在工具参数生成时发布节流进度且不转发原始正文", async () => {
     let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
+    let now = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
     const toolCall = {
       type: "toolCall",
       id: "call-1",
       name: "write",
       arguments: { path: "src/app.ts", content: "完整内容" },
     };
-    const assistantMessage = { role: "assistant", content: [toolCall] };
+    const assistantMessage = { role: "assistant", content: [{ ...toolCall, arguments: { path: "src/app.ts", content: "大文件正文" } }] };
     const session = createSession(async () => {
       listener({
         type: "message_update",
@@ -234,7 +236,39 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         assistantMessageEvent: {
           type: "toolcall_delta",
           contentIndex: 0,
-          delta: "large-content-delta",
+          delta: "x".repeat(512),
+          partial: assistantMessage,
+        },
+      } as never);
+      now = 300;
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "y".repeat(200),
+          partial: assistantMessage,
+        },
+      } as never);
+      now = 600;
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "z".repeat(200),
+          partial: assistantMessage,
+        },
+      } as never);
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "a".repeat(512),
           partial: assistantMessage,
         },
       } as never);
@@ -259,10 +293,32 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     const toolEvents = events.filter((event) => event.type.startsWith("tool_"));
     expect(toolEvents).toEqual([
       expect.objectContaining({ type: "tool_preparing", callId: "call-1", toolName: "write" }),
+      expect.objectContaining({
+        type: "tool_parameters_streaming",
+        callId: "call-1",
+        toolName: "write",
+        generatedBytes: 512,
+        path: "src/app.ts",
+      }),
+      expect.objectContaining({
+        type: "tool_parameters_streaming",
+        callId: "call-1",
+        toolName: "write",
+        generatedBytes: 912,
+        path: "src/app.ts",
+      }),
+      expect.objectContaining({
+        type: "tool_parameters_streaming",
+        callId: "call-1",
+        toolName: "write",
+        generatedBytes: 1424,
+        path: "src/app.ts",
+      }),
       expect.objectContaining({ type: "tool_prepared", callId: "call-1", toolName: "write", args: toolCall.arguments }),
     ]);
-    expect(JSON.stringify(toolEvents)).not.toContain("large-content-delta");
+    expect(JSON.stringify(toolEvents)).not.toContain("大文件正文");
     gateway.dispose();
+    dateNow.mockRestore();
   });
 
   it("第三次连续空参数工具事件终止当前 Run 并保留会话", async () => {

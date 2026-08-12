@@ -47,11 +47,30 @@ describe("Chat SSE 轻量校验", () => {
     })).toBe(true);
     expect(isSessionEvent({
       id: 3,
+      type: "tool_parameters_streaming",
+      sessionId: "s1",
+      runId: "r1",
+      callId: "call-1",
+      toolName: "write",
+      generatedBytes: 512,
+      path: "src/app.ts",
+    })).toBe(true);
+    expect(isSessionEvent({
+      id: 3,
       type: "tool_preparing",
       sessionId: "s1",
       runId: "r1",
       callId: "",
       toolName: "write",
+    })).toBe(false);
+    expect(isSessionEvent({
+      id: 4,
+      type: "tool_parameters_streaming",
+      sessionId: "s1",
+      runId: "r1",
+      callId: "call-1",
+      toolName: "write",
+      generatedBytes: 0,
     })).toBe(false);
   });
 });

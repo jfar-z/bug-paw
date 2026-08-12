@@ -33,6 +33,7 @@ describe("LiveToolCard", () => {
 
   it.each([
     ["preparing", "组织命令", "准备中"],
+    ["parameterizing", "正在组织命令", "参数生成中"],
     ["running", "执行命令", "执行中"],
     ["completed", "执行命令", "已完成"],
     ["cancelled", "执行命令", "未执行"],
@@ -71,6 +72,22 @@ describe("LiveToolCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "展开 bash 工具详情" }));
 
     expect(screen.getByText("已读取 12 行")).toBeInTheDocument();
+  });
+
+  it("参数生成中不展示原始入参，并显示进度", () => {
+    render(<LiveToolCard tool={{
+      ...completedTool,
+      name: "write",
+      args: undefined,
+      parameterBytes: 4608,
+      parameterPath: "src/app.ts",
+      status: "parameterizing",
+    }} />);
+    fireEvent.click(screen.getByRole("button", { name: "展开 write 工具详情" }));
+
+    expect(screen.getByText("参数生成中 · 已生成 4.5 KB")).toBeInTheDocument();
+    expect(screen.getByText("目标：src/app.ts")).toBeInTheDocument();
+    expect(screen.queryByText("入参")).not.toBeInTheDocument();
   });
 
   it.each([
