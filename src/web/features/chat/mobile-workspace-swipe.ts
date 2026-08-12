@@ -41,7 +41,7 @@ interface SwipeGesture {
 
 /** 统一协调移动端左侧会话与右侧资源抽屉的跟手手势。 */
 export function useMobileWorkspaceSwipe(options: MobileWorkspaceSwipeOptions) {
-  const gestureRef = useRef<SwipeGesture>();
+  const gestureRef = useRef<SwipeGesture | undefined>(undefined);
   const [sessionTranslatePercent, setSessionTranslatePercent] = useState<number>();
   const [resourceTranslatePercent, setResourceTranslatePercent] = useState<number>();
 

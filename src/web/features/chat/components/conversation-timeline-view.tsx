@@ -41,6 +41,7 @@ interface ConversationTimelineViewProps {
   onRetryHistory?(): void;
   onResolved(summary: WorkspaceFileSummary): void;
   onPreview(summary: WorkspaceFileSummary): void;
+  onWorkspaceLink?(href: string): boolean;
   onCreateAgent(): void;
   onToggleSpeech(turn: AgentTurn): void;
   editingEntryId?: string;
@@ -120,6 +121,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
                 theme={props.theme}
                 onResolved={props.onResolved}
                 onPreview={props.onPreview}
+                onLinkActivate={props.onWorkspaceLink}
               />
               {(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
                 <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
