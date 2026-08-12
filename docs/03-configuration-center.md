@@ -42,6 +42,8 @@ Pi 设置支持全局和 Agent 作用域。Agent 页面同时展示自有值、�
 
 安装与卸载使用 Pi `DefaultPackageManager`，必须确认来源；长任务通过 SSE 输出脱敏日志。扩展和第三方 Skill 能以容器授予的最大权限运行，安装前必须审阅来源。全局包仍被任何 Agent 项目设置引用时，卸载返回 `409 PACKAGE_IN_USE`。
 
+系统预装 Pi 兼容的 `skill-creator`，只提供创建、临时审阅和安装决策流程，不自动下载或安装外部 Skill。创建或从外部渠道获取的 Skill 在写入正式位置前，Agent 必须向用户确认安装到全局目录还是当前 Agent 目录。
+
 BugPaw 不自动安装 `knowledge-base` 或 `web-research` Skill。检索的最低路由与来源核验边界由 Runtime 根据有效工具动态注入；用户仍可通过 Pi 资源机制安装和组合自己的调研 Skill，补充查询拆分、研究方法或领域工作流。
 
 ## 能力扩展与联网搜索
