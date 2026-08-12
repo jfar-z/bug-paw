@@ -17,6 +17,7 @@ interface MarkdownContentProps {
   revealStart?: number;
   revealPhase?: number;
   theme?: ThemePreference;
+  onLinkActivate?: (href: string) => boolean;
 }
 
 /**
@@ -28,6 +29,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   revealStart,
   revealPhase = 0,
   theme = "bug",
+  onLinkActivate,
 }: MarkdownContentProps) {
   const { visibleText, isRevealing } = useStreamingTextReveal(text, streaming);
   const normalizedText = normalizeMathDelimiters(visibleText);
@@ -38,7 +40,9 @@ export const MarkdownContent = memo(function MarkdownContent({
     a: ({ href, children }) => {
       const external = href?.startsWith("http://") || href?.startsWith("https://");
       return (
-        <a href={href} {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})}>
+        <a href={href} {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})} onClick={(event) => {
+          if (href && onLinkActivate?.(href)) event.preventDefault();
+        }}>
           {children}
         </a>
       );
@@ -56,7 +60,7 @@ export const MarkdownContent = memo(function MarkdownContent({
       }
       return <HighlightedCodeBlock code={code} language={language} wrapLines={!isMermaid} />;
     },
-  }), [streaming, theme]);
+  }), [onLinkActivate, streaming, theme]);
 
   return (
     <div className={`markdown-content${isRevealing ? " is-text-revealing" : ""}`}>

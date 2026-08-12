@@ -167,6 +167,9 @@ beforeEach(() => {
     if (url === "/api/v1/models") {
       return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
     }
+    if (url.includes("/workspace/entries")) {
+      return new Response(JSON.stringify({ entries: [] }));
+    }
     if (url === "/api/v1/sessions/bulk/preview" && init?.method === "POST") {
       const body = JSON.parse(String(init.body)) as {
         action: "archive" | "restore" | "delete";
@@ -801,6 +804,57 @@ describe("LiveChatPage 时间线", () => {
     fireEvent.pointerUp(workspace, { pointerType: "touch", pointerId: 3, clientX: 125, clientY: 204 });
     expect(sidebar).toHaveClass("is-open");
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  });
+
+  it("移动端内容区左划打开当前 Agent 的快捷资源管理", async () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => mediaQueryResult(query.includes("max-width"))));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^第二会话/ });
+    const workspace = document.querySelector<HTMLElement>(".chat-workspace")!;
+    const resources = document.querySelector<HTMLElement>(".quick-workspace-drawer")!;
+
+    fireEvent.pointerDown(workspace, { pointerType: "touch", pointerId: 7, clientX: 220, clientY: 200 });
+    fireEvent.pointerMove(workspace, { pointerType: "touch", pointerId: 7, clientX: 105, clientY: 205 });
+    fireEvent.pointerUp(workspace, { pointerType: "touch", pointerId: 7, clientX: 105, clientY: 205 });
+
+    expect(resources).toHaveClass("is-open");
+    expect(resources).toHaveTextContent("默认 Agent 的工作目录");
+  });
+
+  it("桌面快捷入口与 Markdown 相对路径共用资源抽屉", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    fireEvent.click(screen.getByRole("button", { name: "打开快捷资源管理" }));
+    const resources = screen.getByRole("complementary", { name: "快捷资源管理" });
+    expect(resources).toHaveClass("is-open");
+    fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "[查看说明](docs/readme.md)" }] }],
+    }));
+    fireEvent.click(await screen.findByRole("link", { name: "查看说明" }));
+
+    expect(resources).toHaveClass("is-open");
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("directory=docs"))).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
+    const docsRequestCount = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("directory=docs")).length;
+    fireEvent.click(screen.getByRole("button", { name: "打开快捷资源管理" }));
+    await waitFor(() => expect(resources).toHaveClass("is-open"));
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("directory=docs"))).toHaveLength(docsRequestCount);
+  });
+
+  it("阻止越界本地链接并在资源抽屉反馈", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      messages: [{ role: "assistant", content: [{ type: "text", text: "[敏感文件](../secret.txt)" }] }],
+    }));
+
+    fireEvent.click(await screen.findByRole("link", { name: "敏感文件" }));
+
+    expect(screen.getByRole("complementary", { name: "快捷资源管理" })).toHaveClass("is-open");
+    expect(screen.getByText("文件路径已越出当前 Agent 工作目录")).toBeInTheDocument();
   });
 
   it("移动端从输入框起划时不触发侧栏手势", async () => {
