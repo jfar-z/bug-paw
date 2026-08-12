@@ -27,8 +27,9 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
   const isMedia = mediaType.startsWith("image/") || mediaType.startsWith("video/") || mediaType.startsWith("audio/");
   // 预览层及其内容区均可能成为滚动边界，需要继续支持横划返回资源列表。
   const previewStyle: CSSProperties | undefined = mode === "overlay"
-    ? { width: "100%", minWidth: 0, height: "100%", zIndex: 2, touchAction: "pan-y" }
-    : undefined;
+    ? { width: "100%", minWidth: 0, height: "100%", zIndex: 2, touchAction: "pan-y", ...(isFullscreen ? { border: 0 } : {}) }
+    : isFullscreen ? { width: "100%", minWidth: 0, height: "100%", border: 0 } : undefined;
+  const previewBodyStyle: CSSProperties = { flex: 1, ...(mode === "overlay" ? { touchAction: "pan-y" } : {}) };
 
   useEffect(() => {
     if (isMedia || (isHtml && htmlView === "page")) return;
@@ -72,12 +73,12 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
   };
 
   return <aside ref={previewRef} className={`workspace-file-preview workspace-file-preview--${mode}`} style={previewStyle} aria-label={`${entry.name} 预览`}>
-    <header><div className="workspace-file-preview__heading"><span>PREVIEW</span><strong>{entry.name}</strong></div><div className="workspace-file-preview__controls">{isHtml ? <button type="button" className="workspace-file-preview__view-button" aria-label={htmlView === "page" ? "查看源码" : "查看页面"} onClick={() => setHtmlView((current) => current === "page" ? "source" : "page")}>{htmlView === "page" ? "源码" : "页面"}</button> : null}<button type="button" className="icon-button" aria-label={isFullscreen ? "退出全屏预览" : "全屏预览"} onClick={toggleFullscreen}>{isFullscreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}</button><button type="button" className="icon-button" aria-label={mode === "overlay" ? "返回文件列表" : "关闭预览"} onClick={onClose}>{mode === "overlay" ? <ChevronLeft size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button></div></header>
-    <div className="workspace-file-preview__body" style={mode === "overlay" ? { touchAction: "pan-y" } : undefined}>
+    <header><div><span>PREVIEW</span><strong>{entry.name}</strong></div><span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>{isHtml ? <button type="button" aria-label={htmlView === "page" ? "查看源码" : "查看页面"} style={{ minHeight: 32, padding: "0 9px", border: "1px solid var(--border)", borderRadius: 7, color: "var(--text-secondary)", background: "transparent", fontSize: 10 }} onClick={() => setHtmlView((current) => current === "page" ? "source" : "page")}>{htmlView === "page" ? "源码" : "页面"}</button> : null}<button type="button" className="icon-button" aria-label={isFullscreen ? "退出全屏预览" : "全屏预览"} onClick={toggleFullscreen}>{isFullscreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}</button><button type="button" className="icon-button" aria-label={mode === "overlay" ? "返回文件列表" : "关闭预览"} onClick={onClose}>{mode === "overlay" ? <ChevronLeft size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button></span></header>
+    <div className="workspace-file-preview__body" style={previewBodyStyle}>
       {mediaType.startsWith("image/") ? <img src={source} alt={entry.name} /> : null}
       {mediaType.startsWith("video/") ? <video src={source} controls /> : null}
       {mediaType.startsWith("audio/") ? <audio src={source} controls /> : null}
-      {isHtml && htmlView === "page" ? <iframe className="workspace-file-preview__html-frame" title={`${entry.name} 页面预览`} src={source} sandbox="allow-scripts" /> : null}
+      {isHtml && htmlView === "page" ? <iframe title={`${entry.name} 页面预览`} src={source} sandbox="allow-scripts" style={{ display: "block", width: "100%", minHeight: "100%", border: 0, background: "#fff" }} /> : null}
       {!isMedia && (!isHtml || htmlView === "source") ? <>{error ? <p className="configuration-inline-error">{error}</p> : text ? <><pre>{text.content}</pre>{text.truncated ? <p>仅展示前 512 KiB。</p> : null}</> : <p>正在读取文本预览…</p>}</> : null}
     </div>
     <a href={workspaceFileUrl(agentId, entry.path, true)} download={entry.name}><Download size={15} aria-hidden="true" />下载文件</a>
