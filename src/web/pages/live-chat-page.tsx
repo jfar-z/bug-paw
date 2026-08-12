@@ -417,13 +417,19 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setResourcesOpen(false);
     window.setTimeout(() => workspaceTriggerRef.current?.focus(), 0);
   };
+  /** 普通入口只打开当前目录，避免重放上一次 Markdown 文件定位。 */
+  const openResources = () => {
+    closeSidebar();
+    setWorkspaceLocationRequest(undefined);
+    setWorkspaceMessage("");
+    setResourcesOpen(true);
+  };
   const openDrawer = (drawer: MobileWorkspaceDrawer) => {
     if (drawer === "sessions") {
       setResourcesOpen(false);
       setSidebarOpen(true);
     } else {
-      closeSidebar();
-      setResourcesOpen(true);
+      openResources();
     }
   };
   const workspaceSwipe = useMobileWorkspaceSwipe({
@@ -843,19 +849,26 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const activeAgentId = session?.agentId ?? selectedAgentId;
   const activeAgent = agents.find((item) => item.profile.id === activeAgentId);
   const noAvailableAgent = agents.length === 0;
+  useEffect(() => {
+    setWorkspaceLocationRequest(undefined);
+    setWorkspaceMessage("");
+  }, [activeAgentId]);
   const activateWorkspaceLink = useCallback((href: string): boolean => {
     const intent = classifyWorkspaceLink(href);
     if (intent.kind === "passthrough") return false;
     if (intent.kind === "blocked") {
       workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+      setWorkspaceLocationRequest(undefined);
       setWorkspaceMessage(intent.message);
-      openDrawer("resources");
+      closeSidebar();
+      setResourcesOpen(true);
       return true;
     }
     workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     setWorkspaceMessage("");
     setWorkspaceLocationRequest((current) => ({ id: (current?.id ?? 0) + 1, path: intent.path }));
-    openDrawer("resources");
+    closeSidebar();
+    setResourcesOpen(true);
     return true;
   }, []);
 

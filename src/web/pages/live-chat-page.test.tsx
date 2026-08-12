@@ -836,6 +836,12 @@ describe("LiveChatPage 时间线", () => {
 
     expect(resources).toHaveClass("is-open");
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("directory=docs"))).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
+    const docsRequestCount = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("directory=docs")).length;
+    fireEvent.click(screen.getByRole("button", { name: "打开快捷资源管理" }));
+    await waitFor(() => expect(resources).toHaveClass("is-open"));
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).includes("directory=docs"))).toHaveLength(docsRequestCount);
   });
 
   it("阻止越界本地链接并在资源抽屉反馈", async () => {
