@@ -68,20 +68,20 @@ describe("SessionQuestionRepository", () => {
     })).toThrow("问题状态已变化");
 
     const restored = repository.restorePending("record-1", "resolution-1");
-    expect(restored).toMatchObject({ state: "pending", version: 3 });
+    expect(restored).toMatchObject({ state: "pending", version: 1 });
     expect(restored.resolution).toBeUndefined();
 
     const claimedAgain = repository.claimResolution({
       id: "record-1",
       agentId: "agent-1",
       sessionId: "session-1",
-      expectedVersion: 3,
+      expectedVersion: 1,
       resolutionId: "resolution-2",
       resolution: { ...resolution, resolutionId: "resolution-2" },
       now: "2026-08-13T00:03:00.000Z",
     });
     const completed = repository.completeResolution(claimedAgain.id, "resolution-2", "run-2");
-    expect(completed).toMatchObject({ state: "submitted", version: 5, resumedRunId: "run-2" });
+    expect(completed).toMatchObject({ state: "submitted", version: 3, resumedRunId: "run-2" });
     expect(repository.findPending("agent-1", "session-1")).toBeUndefined();
   });
 

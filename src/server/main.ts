@@ -103,6 +103,7 @@ import { createBrowserTools } from "./browser-automation/browser-tools";
 import { SessionQuestionRepository } from "./questions/session-question-repository";
 import { createAskUserTool } from "./questions/ask-user-tool";
 import { SessionQuestionRuntimeState } from "./questions/session-question-reconciliation";
+import { SessionQuestionService } from "./questions/session-question-service";
 import { resolveBrowserCapabilities } from "./browser-automation/browser-capabilities";
 import { registerBrowserAutomationRoutes } from "./routes/browser-automation";
 import { registerBrowserPreviewRoutes } from "./routes/browser-preview";
@@ -164,6 +165,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     questionRuntimeStates.set(agentId, created);
     return created;
   };
+  const questionService = new SessionQuestionService(sessionQuestions, questionStateFor);
   const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
@@ -435,6 +437,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     assignSession: (sessionId, agentId) => sessionMetadataStore.assignAgent(sessionId, agentId),
     archiveSession: (sessionId) => sessionMetadataStore.archive(sessionId),
     sessionIsPersisted: (agentId, sessionId) => hasPersistedSessionFile(paths, agentId, sessionId),
+    assertSessionRunnable: (agentId, sessionId) => questionService.assertAutomationCanStart(agentId, sessionId),
     onBackgroundError: (error) => {
       backgroundErrors.record(error.code, { taskId: error.taskId });
       app.log.error(error, "定时任务后台执行失败");
@@ -445,6 +448,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     sessionAgent: (sessionId) => resolveSessionAgentId(sessionId, sessionMetadataStore),
     workspaceFiles,
     referenceResolver,
+    questions: questionService,
   });
   await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);
   await agentStore.ensureSystemToolPermissions(STARTUP_ENFORCED_SYSTEM_TOOL_NAMES);

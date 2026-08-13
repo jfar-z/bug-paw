@@ -202,6 +202,35 @@ describe("ChatApplicationService", () => {
     await expect(service.navigateHistory("s1", "assistant-branch-leaf")).resolves.toBe(snapshot);
     expect(runtime.navigateTree).toHaveBeenCalledWith("s1", "assistant-branch-leaf");
   });
+
+  it("普通发送和答案提交都经过问题状态服务", async () => {
+    const runtime = fakeRuntime();
+    const questions = {
+      startUserMessage: vi.fn(async (input, startPrompt) => startPrompt(input.sessionId, input.prompt, input.userText)),
+      submitAnswers: vi.fn(async (_input, startPrompt) => startPrompt("s1", "内部答案协议", "")),
+    };
+    const service = new ChatApplicationService({
+      runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
+      sessionAgent: async () => "a1",
+      questions: questions as never,
+    });
+
+    await service.startTurn("s1", { text: "普通消息" });
+    await service.submitQuestionAnswers("s1", "record-1", { version: 1, answers: [] });
+
+    expect(questions.startUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "a1",
+      sessionId: "s1",
+      prompt: "普通消息",
+      userText: "普通消息",
+    }), expect.any(Function));
+    expect(questions.submitAnswers).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "a1",
+      sessionId: "s1",
+      questionRecordId: "record-1",
+      input: { version: 1, answers: [] },
+    }), expect.any(Function));
+  });
 });
 
 function fakeRuntime(): PiRuntimeGateway {

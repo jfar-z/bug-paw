@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import { DomainError } from "../core/errors";
-import { registerApiErrorHandler } from "./error-handler";
+import { registerApiErrorHandler, statusForDomainError } from "./error-handler";
 
 describe("统一 API 错误处理", () => {
   it("返回领域错误的稳定错误码、请求 ID 和脱敏详情", async () => {
@@ -46,5 +46,16 @@ describe("统一 API 错误处理", () => {
       },
     });
     await app.close();
+  });
+
+  it.each([
+    ["QUESTION_NOT_FOUND", 404],
+    ["QUESTION_ANSWER_INVALID", 400],
+    ["QUESTION_VERSION_CONFLICT", 409],
+    ["QUESTION_STATE_CONFLICT", 409],
+    ["QUESTION_BRANCH_CHANGED", 409],
+    ["SESSION_AWAITING_USER", 409],
+  ] as const)("问题错误 %s 使用稳定 HTTP 状态", (code, status) => {
+    expect(statusForDomainError(code)).toBe(status);
   });
 });

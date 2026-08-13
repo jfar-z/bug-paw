@@ -167,7 +167,7 @@ export class SessionQuestionRepository {
     const current = this.requireByRecordId(id);
     const result = this.database.write(`
       UPDATE session_questions
-      SET state = 'pending', version = version + 1, resolution_json = NULL,
+      SET state = 'pending', version = version - 1, resolution_json = NULL,
           resolution_id = NULL, resumed_run_id = NULL, updated_at = ?
       WHERE id = ? AND agent_id = ? AND session_id = ? AND state = 'resolving'
         AND version = ? AND resolution_id = ?
