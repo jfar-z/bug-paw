@@ -345,11 +345,12 @@ interface PiRuntimeGatewayOptions {
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   onRunStarted?: (run: { runId: string; sessionId: string }) => void;
   onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
-  toolCallCircuitBreakerTools?: readonly ToolDefinition[];
+  toolCallCircuitBreakerTools?: readonly ToolDefinition[] | (() => readonly ToolDefinition[]);
   onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
   sessionText?: {
     agentId: string;
     readPersistedBranch(session: SessionTextSourceSession): Promise<unknown[]>;
+    registerService?(service: SessionTextService): void;
   };
 }
 
@@ -403,6 +404,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     readLiveBranch: (sessionId) => sessionRegistry.peek(sessionId)?.session.messages,
     isArchived: (sessionId) => sessionMetadataStore.isArchived(sessionId),
   }) : undefined;
+  if (sessionTextService) options.sessionText?.registerService?.(sessionTextService);
 
   function publish(event: ChatEvent): void {
     listeners.get(event.sessionId)?.forEach((listener) => listener(event));
@@ -456,8 +458,11 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   function manageSession(session: PiSessionAdapter): ManagedSession {
+    const circuitBreakerTools = typeof options.toolCallCircuitBreakerTools === "function"
+      ? options.toolCallCircuitBreakerTools()
+      : options.toolCallCircuitBreakerTools ?? [];
     const toolCallCircuitBreaker = createToolCallCircuitBreaker(
-      options.toolCallCircuitBreakerTools ?? [],
+      circuitBreakerTools,
       options.onToolCallCircuitBreak,
     );
     const toolParameterProgress = new Map<string, ToolParameterProgress>();
@@ -1202,6 +1207,7 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
+  createRuntimeTools?: (services: { sessionText: SessionTextService }) => ToolDefinition[];
   createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
@@ -1243,6 +1249,8 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   const sessionDir = options.sessionDir ?? join(options.agentDir, "sessions");
   let commandCatalog: PiCommandSummary[] | undefined;
   let appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
+  let runtimeTools: ToolDefinition[] = [];
+  const circuitBreakerTools = new Map((options.customTools ?? []).map((tool) => [tool.name, tool]));
 
   /** 从 Agent 提示词文件读取下一次 reload 应使用的系统提示片段。 */
   async function refreshAppendSystemPrompt(): Promise<void> {
@@ -1267,6 +1275,12 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       searchRunState,
     );
     await resourceLoader.reload();
+    const finalCustomTools = [
+      ...(options.customTools ?? []),
+      ...runtimeTools,
+      ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
+    ];
+    finalCustomTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
     const { session, extensionsResult } = await createAgentSession({
       cwd: options.cwd,
       agentDir: options.agentDir,
@@ -1279,10 +1293,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       thinkingLevel: options.defaultThinkingLevel ?? "medium",
       // 工具白名单必须与 Agent Profile 一致，不能因为工具已注册就自动放行。
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
-      customTools: [
-        ...(options.customTools ?? []),
-        ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
-      ],
+      customTools: finalCustomTools,
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({
       name: command.name,
@@ -1376,7 +1387,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     onSessionTitleGenerated: options.onSessionTitleGenerated,
     onRunStarted: options.onRunStarted,
     onRunFinished: options.onRunFinished,
-    toolCallCircuitBreakerTools: options.customTools,
+    toolCallCircuitBreakerTools: () => [...circuitBreakerTools.values()],
     onToolCallCircuitBreak: options.onToolCallCircuitBreak,
     sessionText: {
       agentId: options.agentId,
@@ -1384,6 +1395,10 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
         const sessionFile = assertManagedSessionFile(sessionDir, session.path);
         const manager = SessionManager.open(sessionFile, sessionDir, options.cwd);
         return sessionManagerVisibleMessages(manager);
+      },
+      registerService: (service) => {
+        runtimeTools = options.createRuntimeTools?.({ sessionText: service }) ?? [];
+        runtimeTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
       },
     },
   });

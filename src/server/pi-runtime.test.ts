@@ -382,7 +382,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     dateNow.mockRestore();
   });
 
-  it("第三次连续空参数工具事件终止当前 Run 并保留会话", async () => {
+  it("最终合并工具第三次连续空参数事件终止当前 Run 并保留会话", async () => {
     let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
     let aborted = false;
     const abort = vi.fn(() => {
@@ -394,13 +394,13 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         listener({
           type: "tool_execution_start",
           toolCallId: `call-${count}`,
-          toolName: "knowledge_manage",
+          toolName: "session_search",
           args: {},
         } as never);
         listener({
           type: "tool_execution_end",
           toolCallId: `call-${count}`,
-          toolName: "knowledge_manage",
+          toolName: "session_search",
           result: { content: [{ type: "text", text: aborted ? "Operation aborted" : "参数校验失败" }] },
           isError: true,
         } as never);
@@ -413,9 +413,9 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     session.abort = abort;
     const diagnostics: Array<{ count: number; action: string }> = [];
     const gateway = createPiRuntimeGateway(createBackend(session), {
-      toolCallCircuitBreakerTools: [{
-        name: "knowledge_manage",
-        label: "Knowledge Manage",
+      toolCallCircuitBreakerTools: () => [{
+        name: "session_search",
+        label: "Session Search",
         description: "测试工具",
         parameters: {
           type: "object",
