@@ -1,5 +1,29 @@
 export type SessionTextRole = "user" | "assistant";
 
+/** 会话列表请求；limit 显式必填以避免 Pi 工具空参数调用。 */
+export interface SessionTextListRequest {
+  limit: number;
+  cursor?: string;
+}
+
+/** 当前 Agent 下可供发现的一条 Session 摘要。 */
+export interface SessionTextListItem {
+  sessionId: string;
+  sessionName?: string;
+  sessionFirstMessage: string;
+  created: string;
+  modified: string;
+  messageCount: number;
+  archived: boolean;
+}
+
+/** 使用不透明游标分页的 Session 摘要页。 */
+export interface SessionTextListPage {
+  sessions: SessionTextListItem[];
+  nextCursor?: string;
+  hasMore: boolean;
+}
+
 /** 当前活动分支中可供搜索和阅读的一条可见文本消息。 */
 export interface SessionTextMessage {
   entryId: string;

@@ -457,13 +457,13 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         listener({
           type: "tool_execution_start",
           toolCallId: `call-${count}`,
-          toolName: "session_search",
+          toolName: "session_list",
           args: {},
         } as never);
         listener({
           type: "tool_execution_end",
           toolCallId: `call-${count}`,
-          toolName: "session_search",
+          toolName: "session_list",
           result: { content: [{ type: "text", text: aborted ? "Operation aborted" : "参数校验失败" }] },
           isError: true,
         } as never);
@@ -477,8 +477,8 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     const diagnostics: Array<{ count: number; action: string }> = [];
     const gateway = createPiRuntimeGateway(createBackend(session), {
       toolCallCircuitBreakerTools: () => [{
-        name: "session_search",
-        label: "Session Search",
+        name: "session_list",
+        label: "Session List",
         description: "测试工具",
         parameters: {
           type: "object",

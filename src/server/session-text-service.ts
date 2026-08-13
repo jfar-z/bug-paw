@@ -6,9 +6,12 @@ import {
   SESSION_TEXT_READ_DEFAULT_MESSAGES,
   SESSION_TEXT_READ_MAX_CHARACTERS,
   type SessionTextMessage,
+  type SessionTextListItem,
   type SessionTextSearchHit,
 } from "../shared/session-text-search";
 import type {
+  SessionTextListPage,
+  SessionTextListRequest,
   SessionTextReadPage,
   SessionTextReadRequest,
   SessionTextSearchPage,
@@ -19,6 +22,8 @@ export const SESSION_TEXT_CURSOR_TTL_MS = 10 * 60 * 1_000;
 export const SESSION_TEXT_CURSOR_MAX_ENTRIES = 2_000;
 
 export type SessionTextErrorCode =
+  | "SESSION_LIST_LIMIT_INVALID"
+  | "SESSION_LIST_CURSOR_INVALID"
   | "SESSION_SEARCH_QUERY_INVALID"
   | "SESSION_SEARCH_CURSOR_INVALID"
   | "SESSION_NOT_FOUND"
@@ -70,6 +75,14 @@ interface SearchCursorState {
   revision: string;
 }
 
+interface ListCursorState {
+  kind: "list";
+  agentId: string;
+  limit: number;
+  modified: string;
+  sessionId: string;
+}
+
 interface ReadCursorState {
   kind: "read";
   agentId: string;
@@ -80,14 +93,14 @@ interface ReadCursorState {
   revision: string;
 }
 
-type CursorState = SearchCursorState | ReadCursorState;
+type CursorState = ListCursorState | SearchCursorState | ReadCursorState;
 
 interface CursorRecord {
   expiresAt: number;
   state: CursorState;
 }
 
-/** 为单个 Agent 提供搜索、阅读、缓存和不透明游标。 */
+/** 为单个 Agent 提供列表、搜索、阅读、缓存和不透明游标。 */
 export class SessionTextService {
   private readonly cache = new Map<string, CachedSessionText>();
   private readonly cursors = new Map<string, CursorRecord>();
@@ -96,6 +109,41 @@ export class SessionTextService {
     private readonly agentId: string,
     private readonly source: SessionTextSource,
   ) {}
+
+  async list(input: SessionTextListRequest): Promise<SessionTextListPage> {
+    const limit = validateListLimit(input.limit);
+    let boundary: Pick<ListCursorState, "modified" | "sessionId"> | undefined;
+    if (input.cursor) {
+      const cursor = this.readCursor(input.cursor, invalidListCursor);
+      if (cursor.kind !== "list"
+        || cursor.agentId !== this.agentId
+        || cursor.limit !== limit) {
+        throw invalidListCursor();
+      }
+      boundary = cursor;
+    }
+
+    const listed = await this.loadSessionList();
+    const remaining = boundary
+      ? listed.filter((session) => isAfterListBoundary(session, boundary))
+      : listed;
+    const sessions = remaining.slice(0, limit);
+    const hasMore = remaining.length > sessions.length;
+    const last = sessions.at(-1);
+    return {
+      sessions,
+      hasMore,
+      ...(hasMore && last ? {
+        nextCursor: this.createCursor({
+          kind: "list",
+          agentId: this.agentId,
+          limit,
+          modified: last.modified,
+          sessionId: last.sessionId,
+        }),
+      } : {}),
+    };
+  }
 
   async search(input: SessionTextSearchRequest): Promise<SessionTextSearchPage> {
     validateQuery(input.query);
@@ -214,7 +262,10 @@ export class SessionTextService {
 
   invalidate(sessionId: string): void {
     this.cache.delete(sessionId);
-    this.cursors.clear();
+    for (const [cursor, record] of this.cursors) {
+      // 列表使用稳定边界分页，不应因当前会话正常追加消息而失效。
+      if (record.state.kind !== "list") this.cursors.delete(cursor);
+    }
   }
 
   clear(): void {
@@ -252,6 +303,20 @@ export class SessionTextService {
     }));
   }
 
+  private async loadSessionList(): Promise<SessionTextListItem[]> {
+    const listed = await this.source.listSessions();
+    const sessions = await Promise.all(listed.map(async (session) => ({
+      sessionId: session.id,
+      ...(session.name ? { sessionName: session.name } : {}),
+      sessionFirstMessage: session.firstMessage,
+      created: session.created,
+      modified: session.modified,
+      messageCount: session.messageCount,
+      archived: await this.source.isArchived(session.id),
+    })));
+    return sessions.sort(compareListedSessions);
+  }
+
   private createCursor(state: CursorState): string {
     this.cleanupCursors();
     while (this.cursors.size >= SESSION_TEXT_CURSOR_MAX_ENTRIES) {
@@ -265,10 +330,10 @@ export class SessionTextService {
     return cursor;
   }
 
-  private readCursor(cursor: string): CursorState {
+  private readCursor(cursor: string, errorFactory: () => SessionTextError = invalidCursor): CursorState {
     this.cleanupCursors();
     const record = this.cursors.get(cursor);
-    if (!record) throw invalidCursor();
+    if (!record) throw errorFactory();
     return record.state;
   }
 
@@ -278,6 +343,18 @@ export class SessionTextService {
       if (record.expiresAt <= now) this.cursors.delete(cursor);
     }
   }
+}
+
+function compareListedSessions(left: SessionTextListItem, right: SessionTextListItem): number {
+  return right.modified.localeCompare(left.modified) || left.sessionId.localeCompare(right.sessionId);
+}
+
+function isAfterListBoundary(
+  session: SessionTextListItem,
+  boundary: Pick<ListCursorState, "modified" | "sessionId">,
+): boolean {
+  return session.modified < boundary.modified
+    || (session.modified === boundary.modified && session.sessionId > boundary.sessionId);
 }
 
 function buildSearchHits(sessions: readonly CachedSessionText[], query: string): SessionTextSearchHit[] {
@@ -339,6 +416,13 @@ function validateQuery(query: string): void {
   }
 }
 
+function validateListLimit(limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 20) {
+    throw new SessionTextError("SESSION_LIST_LIMIT_INVALID", "会话列表数量必须为 1 到 20 的整数");
+  }
+  return limit;
+}
+
 function validateSearchLimit(limit: number | undefined): number {
   const value = limit ?? 30;
   if (!Number.isSafeInteger(value) || value < 1 || value > 50) {
@@ -357,6 +441,10 @@ function validateReadLimit(limit: number | undefined): number {
 
 function invalidCursor(): SessionTextError {
   return new SessionTextError("SESSION_SEARCH_CURSOR_INVALID", "会话文本游标无效或已过期");
+}
+
+function invalidListCursor(): SessionTextError {
+  return new SessionTextError("SESSION_LIST_CURSOR_INVALID", "会话列表游标无效或已过期");
 }
 
 function isHighSurrogate(value: number): boolean {
