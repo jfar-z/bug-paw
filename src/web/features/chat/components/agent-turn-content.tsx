@@ -62,7 +62,7 @@ export function AgentTurnContent({
         onPreview={onPreview}
       />;
     })}
-    {activityItems.length > 0 ? <div className="agent-turn-activity-controls">
+    {activityItems.length > 0 ? <div className="agent-turn-activity-controls message-actions--separated">
       <button type="button" onClick={() => setAllExpanded(!anyExpanded)}>
         {anyExpanded ? "收起本轮全部活动" : "展开本轮全部活动"}
       </button>

@@ -50,6 +50,9 @@ describe("AgentTurnContent", () => {
     expect(first.compareDocumentPosition(firstActivity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(firstActivity.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(second.compareDocumentPosition(secondActivity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const activityControls = screen.getByRole("button", { name: "收起本轮全部活动" }).parentElement;
+    expect(activityControls).toHaveClass("agent-turn-activity-controls", "message-actions--separated");
+    expect(secondActivity.compareDocumentPosition(activityControls!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "收起本轮全部活动" }));
     expect(screen.getByText("第一段正文")).toBeVisible();
