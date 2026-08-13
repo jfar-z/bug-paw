@@ -1642,13 +1642,16 @@ function normalizeSessionEvent(
     if (event.assistantMessageEvent.type === "toolcall_delta") {
       const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
       if (!toolCall || !toolParameterProgress) return undefined;
+      const deltaBytes = Buffer.byteLength(event.assistantMessageEvent.delta);
+      // Provider 可能发送空参数片段；零字节事件没有展示价值，也不满足共享 SSE 契约。
+      if (deltaBytes === 0) return undefined;
       const now = Date.now();
       const progress = toolParameterProgress.get(toolCall.id) ?? {
         generatedBytes: 0,
         lastPublishedBytes: 0,
         lastPublishedAt: 0,
       };
-      progress.generatedBytes += Buffer.byteLength(event.assistantMessageEvent.delta);
+      progress.generatedBytes += deltaBytes;
       const shouldPublish = progress.lastPublishedBytes === 0
         || progress.generatedBytes - progress.lastPublishedBytes >= 512
         || now - progress.lastPublishedAt >= 500;
