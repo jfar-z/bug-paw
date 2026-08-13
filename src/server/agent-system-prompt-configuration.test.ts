@@ -10,6 +10,25 @@ const noRetrieval: EffectiveRetrievalCapabilities = {
   webSearch: false,
   webRead: false,
 };
+const promptContext = {
+  agentPrompts: {
+    directory: "/data/app/agents/agent-a",
+    paths: {
+      role: "/data/app/agents/agent-a/ROLE.md",
+      behavior: "/data/app/agents/agent-a/BEHAVIOR.md",
+      rules: "/data/app/agents/agent-a/RULES.md",
+      user: "/data/app/agents/agent-a/USER.md",
+      bootsharp: "/data/app/agents/agent-a/BOOTSHARP.md",
+    },
+    instructions: {
+      role: "研究助手",
+      behavior: "回答简洁",
+      rules: "发布前确认",
+      user: "称呼用户为小嘉",
+    },
+    bootsharp: "逐步确认协作方式",
+  },
+};
 
 describe("AgentSystemPromptConfiguration", () => {
   it("仅替换默认身份前缀并保留 Pi 后续提示词", () => {
@@ -31,6 +50,50 @@ describe("AgentSystemPromptConfiguration", () => {
     expect(prefix).not.toContain("### Retrieval source coordination");
     expect(prefix).not.toContain("## BugPaw Web interaction protocols");
     expect(prefix).not.toMatch(/[\u4e00-\u9fff]/);
+  });
+
+  it("注入当前 Agent 的精确路径、四段轻量维护提示和最新内容", () => {
+    const result = AgentSystemPromptConfiguration.replaceIdentity(
+      "Old identity" + piSuffix,
+      noRetrieval,
+      promptContext,
+    );
+
+    expect(result).toContain("### Your persistent instruction files");
+    expect(result).toContain("Directory: `/data/app/agents/agent-a`");
+    expect(result).toContain("ROLE.md (`/data/app/agents/agent-a/ROLE.md`)");
+    expect(result).toContain("lasting change to who you should be");
+    expect(result).toContain("lasting change in how you should work");
+    expect(result).toContain("Do not store one-off task instructions");
+    expect(result).toContain("asks you to remember such information");
+    expect(result).toContain("Never store credentials, secrets");
+    expect(result).toContain("do not repeat them in ordinary user-facing responses");
+    expect(result).toContain("#### Role and responsibilities\n\n研究助手");
+    expect(result).toContain("#### Behavior and collaboration style\n\n回答简洁");
+    expect(result).toContain("#### Rules\n\n发布前确认");
+    expect(result).toContain("#### User context\n\n称呼用户为小嘉");
+    expect(result).toContain("### Initialization guidance\n\n逐步确认协作方式");
+    expect(result).toContain(piSuffix);
+  });
+
+  it("BOOTSHARP 为空时保留路径说明但不注入初始化正文", () => {
+    const context = {
+      agentPrompts: { ...promptContext.agentPrompts, bootsharp: "" },
+    };
+    const result = AgentSystemPromptConfiguration.buildReplacementPrefix(noRetrieval, context);
+
+    expect(result).toContain("BOOTSHARP.md (`/data/app/agents/agent-a/BOOTSHARP.md`)");
+    expect(result).not.toContain("### Initialization guidance");
+  });
+
+  it("上下文读取失败时禁止覆盖文件且不暴露异常", () => {
+    const result = AgentSystemPromptConfiguration.buildReplacementPrefix(noRetrieval, {
+      agentPromptsUnavailable: true,
+    });
+
+    expect(result).toContain("persistent instruction files are unavailable");
+    expect(result).toContain("do not read, create, overwrite, or edit them in this turn");
+    expect(result).not.toContain("EACCES");
   });
 
   it("只按实际能力注入知识库政策与上下文读取规则", () => {
