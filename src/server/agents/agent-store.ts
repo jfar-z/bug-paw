@@ -141,6 +141,27 @@ export class AgentStore {
   }
 
   /**
+   * 幂等移除已经退役的工具权限，不改变其他权限及顺序。
+   *
+   * @param toolNames 需要精确移除的废弃工具名称
+   */
+  async removeToolPermissions(toolNames: readonly string[]): Promise<void> {
+    const removed = new Set(toolNames);
+    if (removed.size === 0) return;
+    for (const current of await this.list()) {
+      const allowedTools = current.profile.allowedTools.filter((name) => !removed.has(name));
+      if (allowedTools.length === current.profile.allowedTools.length) continue;
+      const next: AgentProfile = {
+        ...current.profile,
+        allowedTools,
+        updatedAt: new Date().toISOString(),
+      };
+      const { instructions: _instructions, ...persisted } = next;
+      await this.repository.update(current.profile.id, current.revision, persisted);
+    }
+  }
+
+  /**
    * 保存 Agent 的展示顺序，并返回规范化后的完整列表。
    *
    * @param agentIds 用户指定的 Agent ID 顺序

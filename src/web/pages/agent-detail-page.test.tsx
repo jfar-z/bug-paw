@@ -95,7 +95,7 @@ describe("AgentDetailPage v0 身份结构", () => {
     expect(screen.getByText("knowledge_manage")).toBeInTheDocument();
     expect(screen.getByText("web_read")).toBeInTheDocument();
     expect(screen.getByText("scheduled_tasks")).toBeInTheDocument();
-    expect(screen.getByText("edit_own_prompts")).toBeInTheDocument();
+    expect(screen.queryByText("edit_own_prompts")).not.toBeInTheDocument();
     const extensionTool = await screen.findByRole("checkbox", { name: /extension_lookup/ });
     fireEvent.click(extensionTool);
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));

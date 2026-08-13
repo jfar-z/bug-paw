@@ -25,7 +25,6 @@ interface AgentRouteDependencies {
   beginAgentRemoval?: (agentId: string) => Promise<AgentRemovalPermit>;
   countSessions?: (agentId: string) => Promise<number>;
   prompts?: AgentPromptStore;
-  refreshPromptContext?: (agentId: string) => Promise<void>;
   resolveAvailableModel?: (provider: string, modelId: string) => Promise<{
     reasoning: boolean;
     thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
@@ -109,7 +108,6 @@ export function registerAgentRoutes(app: FastifyInstance, dependencies: AgentRou
       if (!dependencies.prompts) throw new Error("提示词存储尚未就绪");
       return await runAgentMutation(dependencies, request.params.id, async () => {
         await dependencies.prompts!.replace(request.params.id, file, content);
-        await dependencies.refreshPromptContext?.(request.params.id);
         return reply.send({ file, content });
       });
     } catch (error) { return sendAgentError(reply, error); }

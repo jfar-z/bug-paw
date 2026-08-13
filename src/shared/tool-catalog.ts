@@ -29,8 +29,10 @@ export const SYSTEM_TOOL_CATALOG: ToolCatalogItem[] = [
   { name: "knowledge_read", description: "读取知识库资料或命中位置上下文", source: "system", highRisk: false },
   { name: "knowledge_manage", description: "管理当前 Agent 的知识库与资料", source: "system", highRisk: true },
   { name: "scheduled_tasks", description: "创建、修改和执行定时任务", source: "system", highRisk: true },
-  { name: "edit_own_prompts", description: "编辑自身的角色、行为风格、规则、用户和初始化提示词", source: "system", highRisk: true },
 ];
+
+/** 启动时需要从存量 Agent 权限中精确移除的废弃工具。 */
+export const RETIRED_AGENT_TOOL_NAMES = ["edit_own_prompts"] as const;
 
 /** 由能力扩展模块提供、可按全局开关停用的工具。 */
 export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
@@ -52,11 +54,5 @@ export const DEFAULT_AGENT_TOOL_NAMES = [...BUILTIN_TOOL_CATALOG, ...SYSTEM_TOOL
   .filter(({ name }) => !["browser_input", "browser_submit", "browser_upload"].includes(name))
   .map(({ name }) => name);
 
-/**
- * 历史 Agent 升级时需要补齐的系统工具权限。
- *
- * edit_own_prompts 为用户可选的权限，仅在新建 Agent 默认启用，不能在启动时强制回写给存量 Agent。
- */
-export const SYSTEM_TOOL_NAMES = SYSTEM_TOOL_CATALOG
-  .filter(({ name }) => name !== "edit_own_prompts")
-  .map(({ name }) => name);
+/** 历史 Agent 升级时需要补齐的系统工具权限。 */
+export const SYSTEM_TOOL_NAMES = SYSTEM_TOOL_CATALOG.map(({ name }) => name);

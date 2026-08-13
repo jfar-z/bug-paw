@@ -95,16 +95,6 @@ export class RuntimeSupervisor {
     if (entry?.disposal) await entry.disposal;
   }
 
-  async refreshAgentPromptContext(agentId: string): Promise<void> {
-    if (!this.current.has(agentId)) return;
-    const lease = await this.acquire(agentId);
-    try {
-      await lease.runtime.refreshPromptContext?.();
-    } finally {
-      lease.release();
-    }
-  }
-
   async refreshAllAgents(): Promise<void> {
     for (const agentId of this.knownAgentIds()) await this.refreshAgent(agentId);
   }

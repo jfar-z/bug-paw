@@ -1,5 +1,16 @@
+import type { AgentPromptContextSnapshot } from "./agents/agent-prompt-store";
+import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
+
 /** Agent 系统提示词中可独立扩展的交互协议标识。 */
 export type AgentSystemPromptCapability = "agentReferences" | "workspaceFileDelivery";
+
+/** 每轮构建系统提示词时可用的 Agent 私有上下文。 */
+export interface AgentSystemPromptContext {
+  /** 当前 Agent 五个持久提示词文件的权威快照。 */
+  agentPrompts?: AgentPromptContextSnapshot;
+  /** 文件读取失败时启用的保守禁止写入状态。 */
+  agentPromptsUnavailable?: boolean;
+}
 
 /** 集中维护 Pi 系统提示词的身份替换、交互协议与检索路由政策。 */
 export class AgentSystemPromptConfiguration {
@@ -105,8 +116,16 @@ Use browser tools as atomic operations controlled by the current Agent. Public b
 
 Text input, form submission, file upload, and browser permissions require an administrator-configured exact trusted Origin. Passwords, MFA codes, recovery codes, credentials, payment details, and account-security actions are always blocked. If a browser tool returns a permission error, explain its required setting and the configuration path /settings/capabilities/browser to the user. Do not attempt to bypass a denied operation with scripts, selectors, shell networking, or a different tool.`;
 
+  /** 提示词文件不可读取时使用的稳定保守边界，不暴露底层异常或路径。 */
+  static readonly unavailableAgentPromptsNotice = `### Persistent instruction files unavailable
+
+Your persistent instruction files are unavailable. To avoid overwriting unknown or newer settings, do not read, create, overwrite, or edit them in this turn. Continue the user's task using the remaining context and capabilities.`;
+
   /** 按固定顺序构建替换 Pi 默认身份段的英文提示词前缀。 */
-  static buildReplacementPrefix(capabilities: EffectiveRetrievalCapabilities): string {
+  static buildReplacementPrefix(
+    capabilities: EffectiveRetrievalCapabilities,
+    context: AgentSystemPromptContext = {},
+  ): string {
     const knowledgePolicy = capabilities.knowledgeSearch
       ? [
           this.knowledgeRetrievalPolicy,
@@ -129,6 +148,7 @@ Text input, form submission, file upload, and browser permissions require an adm
       webPolicy,
       capabilities.knowledgeSearch && capabilities.webSearch ? this.retrievalSourceCoordination : "",
       hasRetrieval ? this.retrievalControlBoundary : "",
+      this.buildAgentPromptContext(context),
     ].filter(Boolean).join("\n\n");
   }
 
@@ -138,12 +158,55 @@ Text input, form submission, file upload, and browser permissions require an adm
    * @param systemPrompt Pi 已组装完成的系统提示词
    * @returns 保留 Pi 后续提示词的替换结果
    */
-  static replaceIdentity(systemPrompt: string, capabilities: EffectiveRetrievalCapabilities): string {
+  static replaceIdentity(
+    systemPrompt: string,
+    capabilities: EffectiveRetrievalCapabilities,
+    context: AgentSystemPromptContext = {},
+  ): string {
     const boundary = systemPrompt.indexOf(this.availableToolsBoundary);
-    const prefix = this.buildReplacementPrefix(capabilities);
+    const prefix = this.buildReplacementPrefix(capabilities, context);
     // Pi 上游调整默认结构时保留原提示词，避免截断工具和规则说明。
     if (boundary === -1) return [systemPrompt, prefix].filter(Boolean).join("\n\n");
     return `${prefix}${systemPrompt.slice(boundary)}`;
   }
+
+  /** 根据本轮文件快照生成路径、维护时机、现有内容和初始化引导。 */
+  private static buildAgentPromptContext(context: AgentSystemPromptContext): string {
+    if (context.agentPromptsUnavailable) return this.unavailableAgentPromptsNotice;
+    if (!context.agentPrompts) return "";
+    const snapshot = context.agentPrompts;
+    const pathGuidance = `### Your persistent instruction files
+
+Directory: \`${snapshot.directory}\`
+
+These files contain durable collaboration settings, not a conversation transcript. Do not update them merely because something was mentioned once. Update only information that is intended to remain useful in future conversations. Read the existing file first, preserve unrelated confirmed content, and ask the user when persistence is unclear.
+
+- ROLE.md (\`${snapshot.paths.role}\`) — Your identity, role, responsibilities, capability boundaries, and non-goals. Update it when the user confirms a lasting change to who you should be or what you should be responsible for.
+- BEHAVIOR.md (\`${snapshot.paths.behavior}\`) — Your communication style, level of initiative, collaboration habits, workflow, and delivery preferences. Update it when the user asks for a lasting change in how you should work with them.
+- RULES.md (\`${snapshot.paths.rules}\`) — Durable requirements, prohibitions, approval boundaries, and standing operating rules. Update it when the user establishes a rule that should apply beyond the current task. Do not store one-off task instructions here.
+- USER.md (\`${snapshot.paths.user}\`) — Stable user context that improves future collaboration, such as their preferred name, background, recurring work context, language, and delivery preferences. Update it when the user asks you to remember such information or clearly agrees that it should be retained. Never store credentials, secrets, or unnecessary sensitive information.
+- BOOTSHARP.md (\`${snapshot.paths.bootsharp}\`) — Temporary initialization guidance. Follow it only while it is non-empty. Once ROLE.md, BEHAVIOR.md, and USER.md are sufficient for stable collaboration, clear BOOTSHARP.md by writing an empty string. RULES.md may remain empty.
+
+Use only the exact paths listed above. Treat these as internal configuration paths and do not repeat them in ordinary user-facing responses. Before changing a file, read its current content. Use write for an empty file or a complete replacement, and edit for a precise change to existing content. If read, write, or edit is unavailable, explain that your current tool permissions cannot maintain these files and tell the user they can update them on the Agent configuration page. Never use bash to bypass unavailable file permissions, inspect sibling Agent directories, or modify another Agent's files.
+
+Do not interrupt ordinary work to conduct a profile interview. During initialization, gather settings gradually through natural conversation. Outside initialization, update these files only when the conversation provides a clear durable preference or the user explicitly asks you to remember something.`;
+    const instructionSections = [
+      this.buildContentSection("Role and responsibilities", snapshot.instructions.role),
+      this.buildContentSection("Behavior and collaboration style", snapshot.instructions.behavior),
+      this.buildContentSection("Rules", snapshot.instructions.rules),
+      this.buildContentSection("User context", snapshot.instructions.user),
+    ].filter(Boolean);
+    const currentInstructions = instructionSections.length > 0
+      ? ["### Current persistent instructions", ...instructionSections].join("\n\n")
+      : "";
+    const initializationGuidance = this.buildContentSection("Initialization guidance", snapshot.bootsharp, 3);
+    return [pathGuidance, currentInstructions, initializationGuidance].filter(Boolean).join("\n\n");
+  }
+
+  /** 仅为非空内容生成 Markdown 小节，避免把空文件误呈现为规则。 */
+  private static buildContentSection(title: string, content: string, headingLevel = 4): string {
+    const normalized = content.trim();
+    if (!normalized) return "";
+    return `${"#".repeat(headingLevel)} ${title}\n\n${normalized}`;
+  }
 }
-import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";

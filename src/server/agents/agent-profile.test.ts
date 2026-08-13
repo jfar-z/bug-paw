@@ -20,10 +20,10 @@ describe("createAgentProfile", () => {
       "knowledge_read",
       "knowledge_manage",
       "scheduled_tasks",
-      "edit_own_prompts",
       "web_search",
       "web_read",
     ]));
+    expect(profile.allowedTools).not.toContain("edit_own_prompts");
     expect(profile.allowedTools).not.toEqual(expect.arrayContaining([
       "search_knowledge",
       "get_knowledge_document",
