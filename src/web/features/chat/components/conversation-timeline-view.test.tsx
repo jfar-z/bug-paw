@@ -131,7 +131,7 @@ describe("ConversationTimelineView 消息复制", () => {
 });
 
 describe("ConversationTimelineView 消息排版", () => {
-  it("有活动时由本轮活动控制承担唯一分割线", () => {
+  it("有活动时本轮活动控制与消息操作共用同一行底栏", () => {
     const turn: AgentTurn = {
       id: "agent-activity",
       type: "agent",
@@ -143,10 +143,15 @@ describe("ConversationTimelineView 消息排版", () => {
     };
     render(<ConversationTimelineView {...baseProps()} timeline={[turn]} />);
 
-    expect(screen.getByRole("button", { name: "展开本轮全部活动" }).parentElement)
-      .toHaveClass("message-actions--separated");
-    expect(screen.getByLabelText("Agent 消息操作"))
-      .not.toHaveClass("message-actions--separated");
+    const activityButton = screen.getByRole("button", { name: "展开本轮全部活动" });
+    const messageActions = screen.getByLabelText("Agent 消息操作");
+    const sharedFooter = activityButton.closest(".agent-turn-footer");
+
+    expect(sharedFooter).not.toBeNull();
+    expect(messageActions.parentElement).toBe(sharedFooter);
+    expect(sharedFooter).toHaveClass("message-actions--separated");
+    expect(messageActions.compareDocumentPosition(activityButton) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
   });
 
   it("无活动时保留 Agent 操作区原有分割线", () => {
