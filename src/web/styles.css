@@ -4685,7 +4685,7 @@ img.message-avatar {
 
 .secondary-sidebar-header__title {
   overflow: hidden;
-  color: var(--text-primary);
+  color: inherit;
   font-size: 17px;
   font-weight: 650;
   letter-spacing: -0.025em;
