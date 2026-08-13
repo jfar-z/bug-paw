@@ -51,6 +51,7 @@ import { registerScheduledTaskRoutes } from "./routes/scheduled-tasks";
 import { ensureScheduledTaskSkill } from "./scheduled-tasks/global-skill";
 import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool";
 import { ensureSkillCreatorGlobalSkill } from "./skills/skill-creator-global-skill";
+import { ensureDeepResearchGlobalSkill } from "./skills/deep-research-global-skill";
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { ManagedSearchProviderRegistry } from "./web-research/managed-search-provider-registry";
@@ -443,6 +444,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureSkillCreatorGlobalSkill(paths.piDir);
+  const deepResearchSkill = await ensureDeepResearchGlobalSkill(paths.piDir);
+  if (deepResearchSkill.status !== "current") {
+    app.log.info(deepResearchSkill, "通用深度研究 Skill 初始化完成");
+  }
   const legacySkillCleanup = await cleanupBundledRetrievalSkills(paths.piDir);
   for (const result of legacySkillCleanup) {
     if (result.status !== "absent") app.log.info(result, "检索内置 Skill 清理完成");

@@ -1,10 +1,11 @@
-import { access, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildServer, resolveAgentSessionDir } from "../../src/server/main";
 import { createDataPaths } from "../../src/server/paths";
 import type { ChatEvent, PiRuntimeGateway } from "../../src/server/pi-runtime";
+import { readBundledDeepResearchSkill } from "../../src/server/skills/deep-research-global-skill";
 
 const temporaryDirectories: string[] = [];
 
@@ -74,6 +75,17 @@ describe("Web 服务装配", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ status: "ok" });
+    await app.close();
+  });
+
+  it("启动时安装内置通用深度研究 Skill", async () => {
+    const fixture = await createFixture();
+    const dataRoot = join(fixture.root, "data");
+    const app = await buildServer({ dataRoot, staticRoot: fixture.staticRoot });
+
+    const installed = await readFile(join(dataRoot, "pi", "skills", "deep-research", "SKILL.md"), "utf8");
+
+    expect(installed).toBe(await readBundledDeepResearchSkill());
     await app.close();
   });
 
