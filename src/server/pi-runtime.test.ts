@@ -16,6 +16,7 @@ import {
   type PiRuntimeBackend,
   type PiSessionAdapter,
 } from "./pi-runtime";
+import type { RunCheckpoint } from "./runtime/checkpoint-store";
 
 /** 创建受测试控制的异步值。 */
 function createDeferred<T>() {
@@ -576,7 +577,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     const onRunFinished = vi.fn(async () => undefined);
     const checkpointStore = {
       load: vi.fn(async () => undefined),
-      save: vi.fn(async () => undefined),
+      save: vi.fn(async (_checkpoint: RunCheckpoint) => undefined),
       remove: vi.fn(async () => undefined),
       markInterrupted: vi.fn(async () => undefined),
     };
