@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
+import { sortSessionsPinnedFirst } from "../../shared/session-sort";
 import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionBulkTarget, type SessionSnapshot, type SessionSummary } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { AgentModelMenu } from "../components/agent-model-menu";
@@ -83,6 +84,7 @@ function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expec
     UNKNOWN_COMMAND: show,
     SESSION_BUSY: show,
     SESSION_NOT_FOUND: show,
+    SESSION_ARCHIVED: show,
     SESSION_AGENT_CONFLICT: show,
     AGENT_ARCHIVED: show,
     INVALID_SESSION_NAME: show,
@@ -556,6 +558,21 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
   };
 
+  /** 持久化置顶状态，并按置顶分区和最近更新时间立即重排侧栏。 */
+  const changeConversationPinned = async (sessionId: string, pinned: boolean): Promise<boolean> => {
+    setError("");
+    const outcome = await runApiTask(
+      () => pinned ? api.pinSession(sessionId) : api.unpinSession(sessionId),
+      { operation: pinned ? "置顶会话" : "取消置顶会话", expected: chatExpected(setError) },
+    );
+    if (outcome.status !== "success") return false;
+    setSessions((current) => sortSessionsPinnedFirst(current.map((item) => (
+      item.id === sessionId ? { ...item, pinned } : item
+    ))));
+    sessionSyncRef.current?.notify();
+    return true;
+  };
+
   const archiveConversation = async (sessionId: string) => {
     try {
       await api.archiveSession(sessionId);
@@ -747,13 +764,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           references,
         }), { type: "generation_started" }));
       if (wasDraft) {
-        setSessions((current) => [{
+        setSessions((current) => sortSessionsPinnedFirst([{
           id: activeSession.id,
           agentId: activeSession.agentId,
           firstMessage: text || files[0]?.name || "新对话",
           modified: new Date().toISOString(),
           messageCount: 1,
-        }, ...current.filter((item) => item.id !== activeSession.id)]);
+          pinned: false,
+        }, ...current.filter((item) => item.id !== activeSession.id)]));
       }
       if (branchEntryId) {
         const result = await api.sendBranchMessage(activeSession.id, branchEntryId, text, files.map((file) => file.path), draftReferences);
@@ -1112,6 +1130,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         }}
         onOpen={(sessionId) => void openConversation(sessionId)}
         onRename={(sessionId, name) => void renameConversation(sessionId, name)}
+        onPinChange={changeConversationPinned}
         onArchive={(sessionId) => void archiveConversation(sessionId)}
         onDelete={(sessionId, confirmBoundTasks) => void deleteConversation(sessionId, false, confirmBoundTasks)}
         onEnterSelection={enterSessionSelection}

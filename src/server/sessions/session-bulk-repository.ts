@@ -45,7 +45,7 @@ export function createSessionBulkRepository(database: Database): SessionBulkRepo
         assertPreviewFresh(database, preview);
         for (const sessionId of preview.resolvedSessionIds) {
           database.write(
-            "UPDATE sessions SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?",
+            "UPDATE sessions SET archived_at = COALESCE(archived_at, ?), pinned_at = NULL, updated_at = ? WHERE id = ?",
             [now, now, sessionId],
           );
         }

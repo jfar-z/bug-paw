@@ -48,7 +48,7 @@ describe("SessionActionsMenu", () => {
   it("支持重命名和归档会话", () => {
     const onRename = vi.fn();
     const onArchive = vi.fn();
-    render(<SessionActionsMenu session={session} onRename={onRename} onArchive={onArchive} onDelete={vi.fn()} />);
+    render(<SessionActionsMenu session={session} onPinChange={vi.fn()} onRename={onRename} onArchive={onArchive} onDelete={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "重命名" }));
@@ -65,7 +65,7 @@ describe("SessionActionsMenu", () => {
   it("永久删除前要求二次确认，并可禁用危险操作", () => {
     const onDelete = vi.fn();
     const { rerender } = render(
-      <SessionActionsMenu session={session} onRename={vi.fn()} onArchive={vi.fn()} onDelete={onDelete} />,
+      <SessionActionsMenu session={session} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={onDelete} />,
     );
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
@@ -73,7 +73,7 @@ describe("SessionActionsMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
     expect(onDelete).toHaveBeenCalledWith(false);
 
-    rerender(<SessionActionsMenu session={session} disabled onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
+    rerender(<SessionActionsMenu session={session} disabled onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     expect(screen.getByRole("menuitem", { name: "归档" })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "删除" })).toBeDisabled();
@@ -81,7 +81,7 @@ describe("SessionActionsMenu", () => {
 
   it("删除绑定定时任务的会话时明确要求停用并保留任务", () => {
     const onDelete = vi.fn();
-    render(<SessionActionsMenu session={{ ...session, scheduledTaskCount: 2 }} onRename={vi.fn()} onArchive={vi.fn()} onDelete={onDelete} />);
+    render(<SessionActionsMenu session={{ ...session, scheduledTaskCount: 2 }} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={onDelete} />);
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
     const warning = screen.getByText(/绑定的 2 个定时任务将同步停用/);
@@ -93,17 +93,17 @@ describe("SessionActionsMenu", () => {
 
   it("接收到新的展开请求时打开菜单", () => {
     const { rerender } = render(
-      <SessionActionsMenu session={session} openRequestId={0} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />,
+      <SessionActionsMenu session={session} openRequestId={0} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />,
     );
 
-    rerender(<SessionActionsMenu session={session} openRequestId={1} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
+    rerender(<SessionActionsMenu session={session} openRequestId={1} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
 
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
   it("可从三点菜单进入多选模式", () => {
     const onSelectMultiple = vi.fn();
-    render(<SessionActionsMenu session={session} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} onSelectMultiple={onSelectMultiple} />);
+    render(<SessionActionsMenu session={session} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} onSelectMultiple={onSelectMultiple} />);
 
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "多选" }));
@@ -117,7 +117,7 @@ describe("SessionActionsMenu", () => {
     vi.stubGlobal("innerHeight", 768);
     mockMenuGeometry(rect({ top: 720, right: 260, bottom: 750, left: 230, width: 30, height: 30 }));
 
-    render(<SessionActionsMenu session={session} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
+    render(<SessionActionsMenu session={session} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
 
     const menu = screen.getByRole("menu");
@@ -130,7 +130,7 @@ describe("SessionActionsMenu", () => {
     vi.stubGlobal("innerHeight", 768);
     mockMenuGeometry(rect({ top: 100, right: 260, bottom: 130, left: 230, width: 30, height: 30 }));
 
-    render(<SessionActionsMenu session={session} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
+    render(<SessionActionsMenu session={session} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
 
     expect(screen.getByRole("menu")).toHaveStyle({ top: "134px", left: "86px" });
@@ -145,7 +145,7 @@ describe("SessionActionsMenu", () => {
       () => menuHeight,
     );
 
-    render(<SessionActionsMenu session={session} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
+    render(<SessionActionsMenu session={session} onPinChange={vi.fn()} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
     const deleteButton = screen.getByRole("menuitem", { name: "删除" });
     fireEvent.pointerDown(deleteButton);
@@ -157,5 +157,40 @@ describe("SessionActionsMenu", () => {
 
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("通过同一菜单切换置顶状态，并在请求期间避免重复提交", async () => {
+    let resolvePin!: (success: boolean) => void;
+    const onPinChange = vi.fn(() => new Promise<boolean>((resolve) => { resolvePin = resolve; }));
+    const { rerender } = render(
+      <SessionActionsMenu session={session} onPinChange={onPinChange} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+    expect(onPinChange).toHaveBeenCalledWith(true);
+    expect(screen.getByRole("menuitem", { name: "置顶" })).toBeDisabled();
+
+    resolvePin(true);
+    await screen.findByRole("button", { name: "管理会话：研究记录" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    rerender(<SessionActionsMenu session={{ ...session, pinned: true }} onPinChange={onPinChange} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
+    expect(screen.getByRole("menuitem", { name: "取消置顶" })).toBeInTheDocument();
+  });
+
+  it("置顶失败时保留菜单，且生成中的会话仍可切换置顶", async () => {
+    const onPinChange = vi.fn(async () => false);
+    render(
+      <SessionActionsMenu session={session} disabled onPinChange={onPinChange} onRename={vi.fn()} onArchive={vi.fn()} onDelete={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：研究记录" }));
+    expect(screen.getByRole("menuitem", { name: "置顶" })).not.toBeDisabled();
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+
+    expect(await screen.findByRole("menuitem", { name: "置顶" })).toBeInTheDocument();
+    expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 });

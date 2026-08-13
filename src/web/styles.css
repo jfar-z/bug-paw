@@ -1919,7 +1919,7 @@ p {
   color: var(--accent);
 }
 
-.session-nav > p {
+.session-nav p {
   margin: 0 10px 8px;
   color: var(--text-tertiary);
   font-size: 10px;
@@ -1950,7 +1950,7 @@ p {
   touch-action: manipulation;
 }
 
-.session-row__open span {
+.session-row__title {
   min-width: 0;
   flex: 1;
   overflow: hidden;

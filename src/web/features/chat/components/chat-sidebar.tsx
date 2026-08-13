@@ -1,7 +1,8 @@
-import { Archive, Clock3, MessageSquare, MessageSquarePlus, RefreshCw, Trash2, X } from "lucide-react";
+import { Archive, Clock3, MessageSquare, MessageSquarePlus, Pin, RefreshCw, Trash2, X } from "lucide-react";
 import { useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
 
+import { sortSessionsPinnedFirst } from "../../../../shared/session-sort";
 import type { SessionSummary } from "../../../api";
 import type { IdentityPreview } from "../../../pages/chat-page";
 import { SessionActionsMenu } from "../../../components/session-actions-menu";
@@ -32,6 +33,7 @@ interface ChatSidebarProps {
   onOpen(sessionId: string): void;
   shouldSuppressOpen(sessionId: string): boolean;
   onRename(sessionId: string, name: string): void;
+  onPinChange(sessionId: string, pinned: boolean): Promise<boolean>;
   onArchive(sessionId: string): void;
   onDelete(sessionId: string, confirmBoundTasks: boolean): void;
   onEnterSelection(sessionId: string): void;
@@ -44,10 +46,20 @@ interface ChatSidebarProps {
 }
 
 const selectionActionStyle: CSSProperties = { display: "grid", flex: 1, minHeight: 42, placeItems: "center", border: 0, borderRadius: 7, color: "var(--text-secondary)", background: "transparent", fontSize: 10 };
+const sessionGroupLabelStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 5 };
+const pinStatusStyle: CSSProperties = { flex: "0 0 auto", color: "var(--accent)", transform: "rotate(-7deg)" };
+const taskStatusStyle: CSSProperties = { flex: "0 0 auto" };
 
 /** 会话侧栏仅负责展示与手势转发，不持有请求或领域状态。 */
 export function ChatSidebar(props: ChatSidebarProps) {
   const isOpeningSession = props.openingSessionId !== undefined;
+  const sortedSessions = sortSessionsPinnedFirst(props.sessions);
+  const pinnedSessions = sortedSessions.filter((session) => session.pinned);
+  const recentSessions = sortedSessions.filter((session) => !session.pinned);
+  const sessionGroups = [
+    ...(pinnedSessions.length ? [{ label: "置顶", ariaLabel: "置顶会话", sessions: pinnedSessions }] : []),
+    { label: "最近", ariaLabel: "最近会话", sessions: recentSessions },
+  ];
   const pullStartYRef = useRef<number | undefined>(undefined);
   const [pullDistance, setPullDistance] = useState(0);
   const refreshReady = pullDistance >= 64;
@@ -90,8 +102,9 @@ export function ChatSidebar(props: ChatSidebarProps) {
       </button>
       <nav className={`session-nav${props.scrolling ? " is-scrolling" : ""}${pullDistance > 0 ? " is-pulling" : ""}`} style={{ touchAction: "pan-y" }} aria-label="会话历史" onScroll={props.onScroll} onTouchStart={startPullToRefresh} onTouchMove={trackPullToRefresh} onTouchEnd={finishPullToRefresh} onTouchCancel={finishPullToRefresh}>
         {pullDistance > 0 ? <div className="session-refresh-hint" aria-live="polite" style={{ height: pullDistance }}><RefreshCw size={14} aria-hidden="true" className={refreshReady ? "is-ready" : undefined} /><span>{refreshReady ? "松开刷新" : "下拉刷新"}</span></div> : null}
-        <p>最近</p>
-        {props.sessions.map((item) => {
+        {sessionGroups.map((group, index) => <section className="session-group" role="group" aria-label={group.ariaLabel} key={group.ariaLabel} style={index > 0 ? { marginTop: 16 } : undefined}>
+          <p style={sessionGroupLabelStyle}>{group.label === "置顶" ? <Pin size={11} aria-hidden="true" /> : null}{group.label}</p>
+        {group.sessions.map((item) => {
           const title = item.name || item.firstMessage || "新对话";
           const selectionDisabled = isOpeningSession || (props.streaming && item.id === props.activeSessionId);
           return (
@@ -106,9 +119,10 @@ export function ChatSidebar(props: ChatSidebarProps) {
                 onChange={() => props.onToggleSelection(item.id)}
               />
               <MessageSquare size={16} aria-hidden="true" />
-              <span>{title}</span>
+              <span className="session-row__title">{title}</span>
               {props.streaming && item.id === props.activeSessionId ? <small>生成中</small> : null}
-              {item.scheduledTaskCount ? <Clock3 size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
+              {item.pinned ? <Pin className="session-row__pin" style={pinStatusStyle} size={13} aria-label="已置顶" /> : null}
+              {item.scheduledTaskCount ? <Clock3 className="session-row__task" style={taskStatusStyle} size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
             </label> : <><button
               type="button"
               className="session-row__open"
@@ -121,12 +135,16 @@ export function ChatSidebar(props: ChatSidebarProps) {
               onContextMenu={(event) => event.preventDefault()}
               onClick={() => { if (!props.shouldSuppressOpen(item.id)) props.onOpen(item.id); }}
             >
-              <MessageSquare size={16} aria-hidden="true" /><span>{title}</span>{item.scheduledTaskCount ? <Clock3 size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
+              <MessageSquare size={16} aria-hidden="true" />
+              <span className="session-row__title">{title}</span>
+              {item.pinned ? <Pin className="session-row__pin" style={pinStatusStyle} size={13} aria-label="已置顶" /> : null}
+              {item.scheduledTaskCount ? <Clock3 className="session-row__task" style={taskStatusStyle} size={14} aria-label={`已绑定 ${item.scheduledTaskCount} 个定时任务`} /> : null}
             </button>
             <SessionActionsMenu
               session={item}
               disabled={isOpeningSession || (props.streaming && item.id === props.activeSessionId)}
               openRequestId={props.actionsOpenRequest?.sessionId === item.id ? props.actionsOpenRequest.requestId : undefined}
+              onPinChange={(pinned) => props.onPinChange(item.id, pinned)}
               onRename={(name) => props.onRename(item.id, name)}
               onArchive={() => props.onArchive(item.id)}
               onDelete={(confirmBoundTasks) => props.onDelete(item.id, confirmBoundTasks)}
@@ -135,6 +153,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
             </>}
           </div>
         ); })}
+        </section>)}
       </nav>
       {props.selectionMode ? <div className="session-selection-toolbar" style={{ display: "flex", gap: 5, margin: "8px 0" }} aria-label="会话多选操作">
         <button type="button" style={selectionActionStyle} aria-label="归档已选会话" disabled={props.selectedSessionIds.length === 0 || props.bulkBusy} onClick={props.onBulkArchive}><Archive size={15} aria-hidden="true" /><span>归档</span></button>

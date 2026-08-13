@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../styles.css";
@@ -72,6 +72,23 @@ class FakeEventSource {
   }
 }
 
+/** 记录跨标签页会话列表广播，验证失败请求不会误通知其他页面。 */
+class RecordingBroadcastChannel {
+  static instances: RecordingBroadcastChannel[] = [];
+  readonly messages: unknown[] = [];
+  onmessage: ((event: MessageEvent) => void) | null = null;
+
+  constructor(readonly name: string) {
+    RecordingBroadcastChannel.instances.push(this);
+  }
+
+  postMessage(message: unknown): void {
+    this.messages.push(message);
+  }
+
+  close(): void {}
+}
+
 /** 页面级音频桩保留播放状态，便于验证按钮和导航触发的停止行为。 */
 class PageFakeAudio {
   static instances: PageFakeAudio[] = [];
@@ -137,6 +154,7 @@ function mediaQueryResult(matches: boolean): MediaQueryList {
 
 beforeEach(() => {
   FakeEventSource.instances = [];
+  RecordingBroadcastChannel.instances = [];
   PageFakeAudio.instances = [];
   operationLog.length = 0;
   regenerateResponse = undefined;
@@ -144,6 +162,7 @@ beforeEach(() => {
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("BroadcastChannel", RecordingBroadcastChannel);
   vi.stubGlobal("IntersectionObserver", HistoryObserverDouble);
   vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(false)));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1226,6 +1245,55 @@ describe("LiveChatPage 时间线", () => {
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/archived-1/archive" && init?.method === "DELETE")).toBe(true));
   });
 
+  it("从三点菜单置顶和取消置顶后即时更新会话分区", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    RecordingBroadcastChannel.instances.forEach((channel) => channel.messages.splice(0));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/session-1/pin" && init?.method === "PUT")).toBe(true));
+    expect(RecordingBroadcastChannel.instances.flatMap((channel) => channel.messages)).toContain("sessions-invalidated");
+    expect(screen.getByRole("group", { name: "置顶会话" })).toHaveTextContent("测试");
+    expect(screen.getByRole("group", { name: "最近会话" })).toHaveTextContent("第二会话");
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    RecordingBroadcastChannel.instances.forEach((channel) => channel.messages.splice(0));
+    fireEvent.click(screen.getByRole("menuitem", { name: "取消置顶" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/session-1/pin" && init?.method === "DELETE")).toBe(true));
+    expect(RecordingBroadcastChannel.instances.flatMap((channel) => channel.messages)).toContain("sessions-invalidated");
+    expect(screen.queryByRole("group", { name: "置顶会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "最近会话" })).toHaveTextContent("测试");
+  });
+
+  it("置顶请求失败时保留原分区并展示稳定业务错误", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultImplementation = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/sessions/session-1/pin" && init?.method === "PUT") {
+        return new Response(JSON.stringify({ error: { code: "SESSION_ARCHIVED", message: "归档 Session 不能置顶" } }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (!defaultImplementation) throw new Error("测试 fetch 桩未配置");
+      return defaultImplementation(input, init);
+    });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    RecordingBroadcastChannel.instances.forEach((channel) => channel.messages.splice(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+
+    expect(await screen.findByText("归档 Session 不能置顶")).toHaveClass("live-chat-error");
+    expect(RecordingBroadcastChannel.instances.flatMap((channel) => channel.messages)).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: "置顶会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "置顶" })).toBeInTheDocument();
+  });
+
   it("全部恢复按服务端归档范围确认并刷新两个列表", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "查看已归档会话" });
@@ -1337,6 +1405,33 @@ describe("LiveChatPage 时间线", () => {
     expect(operationLog.filter((entry) => entry === "fetch:POST:/api/v1/sessions")).toHaveLength(1);
     expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events"))
       .toBeLessThan(operationLog.indexOf("fetch:POST:/api/v1/sessions/session-new/messages"));
+  });
+
+  it("存在置顶会话时草稿首次发送仍将新会话放入最近分区", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultImplementation = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/sessions?agentId=default") {
+        return new Response(JSON.stringify({ sessions: [
+          { id: "session-1", firstMessage: "已置顶会话", modified: "2026-08-13T10:00:00.000Z", messageCount: 1, pinned: true },
+          { id: "session-2", firstMessage: "原最近会话", modified: "2026-08-13T09:00:00.000Z", messageCount: 2 },
+        ] }));
+      }
+      if (!defaultImplementation) throw new Error("测试 fetch 桩未配置");
+      return defaultImplementation(input, init);
+    });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^已置顶会话/ });
+
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "草稿首条消息" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    const pinnedGroup = await screen.findByRole("group", { name: "置顶会话" });
+    const recentGroup = screen.getByRole("group", { name: "最近会话" });
+    expect(within(pinnedGroup).getByRole("button", { name: /^已置顶会话/ })).toBeInTheDocument();
+    expect(within(recentGroup).getByRole("button", { name: "草稿首条消息" })).toBeInTheDocument();
+    expect(within(pinnedGroup).queryByText("草稿首条消息")).not.toBeInTheDocument();
   });
 
   it("用户发送后在首个增量前显示 Agent 等待气泡和运行状态", async () => {
