@@ -26,4 +26,18 @@ describe("长内容滚动布局", () => {
     expect(results.overflowY).toBe("auto");
     expect(results.overscrollBehaviorY).toBe("contain");
   });
+
+  it("让每个工具详情代码区分别限高并滚动", () => {
+    document.body.innerHTML = `
+      <section class="live-tool-card__detail"><pre>长入参</pre></section>
+      <section class="live-tool-card__detail"><pre>长结果</pre></section>`;
+
+    const details = [...document.querySelectorAll<HTMLElement>(".live-tool-card__detail pre")];
+    for (const detail of details) {
+      const computed = getComputedStyle(detail);
+      expect(Number.parseFloat(computed.maxHeight)).toBeGreaterThanOrEqual(160);
+      expect(Number.parseFloat(computed.maxHeight)).toBeLessThanOrEqual(300);
+      expect(computed.overflow).toBe("auto");
+    }
+  });
 });

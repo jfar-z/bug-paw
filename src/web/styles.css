@@ -1655,8 +1655,10 @@ p {
 }
 
 .live-tool-card__detail pre {
+  max-height: clamp(160px, 28vh, 300px);
   margin: 0;
   padding: 10px 12px;
+  overflow: auto;
   border: 1px solid var(--border);
   background: var(--surface-soft);
   line-height: 1.55;
