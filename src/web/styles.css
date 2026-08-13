@@ -1673,7 +1673,6 @@ p {
 }
 
 .agent-turn-activity-controls {
-  margin: -4px 0 8px;
   text-align: right;
 }
 
@@ -2773,6 +2772,11 @@ img.message-avatar {
   margin-bottom: 0;
 }
 
+.user-message-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .is-user .message-content {
   width: fit-content;
   max-width: min(100%, 620px);
@@ -3402,6 +3406,11 @@ img.message-avatar {
   border-top: 1px solid var(--border);
 }
 
+.agent-turn-activity-controls.message-actions--separated {
+  margin-top: 8px;
+  padding-top: 6px;
+}
+
 /* 用户气泡和操作区共用内在宽度，确保分隔线不少于气泡或按钮区。 */
 .user-message-body {
   display: grid;
@@ -3748,6 +3757,10 @@ img.message-avatar {
   line-height: 1.55;
 }
 
+.composer textarea:focus-visible {
+  outline: none;
+}
+
 .reference-composer {
   position: relative;
 }
@@ -3818,17 +3831,29 @@ img.message-avatar {
 
 .reference-composer__footer {
   position: relative;
+  display: flex;
+  min-width: 0;
   min-height: 38px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .reference-composer__control-rail {
-  position: absolute;
-  bottom: 1px;
-  left: 0;
+  position: static;
   z-index: 4;
   display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
   align-items: center;
   gap: 4px;
+}
+
+.reference-composer__footer > .composer-actions,
+.reference-composer__picker,
+.reference-composer__control-rail .attachment-picker__button,
+.composer-session-control:not(.composer-model-control) {
+  flex: 0 0 auto;
 }
 
 .reference-composer__picker {
@@ -4529,22 +4554,23 @@ img.message-avatar {
     padding: 10px 12px 12px;
   }
 
+  .composer-session-controls {
+    flex: 1 1 auto;
+  }
+
+  .composer-model-control {
+    flex: 1 1 156px;
+  }
+
   .composer-model-trigger {
-    max-width: 112px;
+    width: 100%;
+    max-width: 156px;
   }
 
   .preview-switcher {
     right: 10px;
     bottom: 90px;
   }
-}
-
-@media (max-width: 380px) {
-  .composer-model-trigger {
-    max-width: 82px;
-    padding-inline: 6px;
-  }
-
 }
 
 /* 配置中心沿用现有工作台 token，只增加双层导航所需的结构样式。 */

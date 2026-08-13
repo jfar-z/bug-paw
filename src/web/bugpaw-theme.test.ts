@@ -120,6 +120,28 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".is-user .message-content p", "margin-bottom")).toBe("0px");
   });
 
+  it("会话输入区使用单一焦点框、可收缩底栏和多行消息排版", async () => {
+    const source = await readFile("src/web/styles.css", "utf8");
+    const rules = parseStyleRules(source);
+
+    expect(declaration(rules, ".composer textarea:focus-visible", "outline")).toBe("none");
+    expect(declaration(rules, ".reference-composer__footer", "display")).toBe("flex");
+    expect(declaration(rules, ".reference-composer__footer", "gap")).toBe("8px");
+    expect(declaration(rules, ".reference-composer__control-rail", "position")).toBe("static");
+    expect(declaration(rules, ".reference-composer__control-rail", "min-width")).toBe("0px");
+    expect(declaration(rules, ".reference-composer__control-rail", "flex")).toBe("1 1 auto");
+    expect(declaration(rules, ".user-message-text", "white-space")).toBe("pre-wrap");
+    expect(declaration(rules, ".user-message-text", "overflow-wrap")).toBe("anywhere");
+    expect(declaration(rules, ".agent-turn-activity-controls.message-actions--separated", "margin-top")).toBe("8px");
+    expect(declaration(rules, ".agent-turn-activity-controls.message-actions--separated", "padding-top")).toBe("6px");
+    expect(mediaDeclaration(source, "(max-width: 760px)", ".composer-model-control", "flex"))
+      .toBe("1 1 156px");
+    expect(mediaDeclaration(source, "(max-width: 760px)", ".composer-model-trigger", "max-width"))
+      .toBe("156px");
+    expect(mediaDeclaration(source, "(max-width: 760px)", ".composer-model-trigger", "width"))
+      .toBe("100%");
+  });
+
   it("BUG 主题的会话菜单和账户信息在深色侧栏中保持可读", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8");
     const rules = parseStyleRules(source);
