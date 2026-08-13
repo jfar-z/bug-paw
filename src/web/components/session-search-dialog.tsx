@@ -117,7 +117,13 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
           {(search.state === "loading" || search.state === "loadingMore")
             ? <LoaderCircle className="is-spinning" size={16} aria-hidden="true" /> : null}
         </label>
-        <p className="session-search-dialog__announcement" role="status" aria-live="polite">{statusText(search.state, search.hits.length)}</p>
+        <p
+          className={`session-search-dialog__announcement${statusVisuallyHidden(search.state) ? " visually-hidden" : ""}`}
+          role="status"
+          aria-live="polite"
+        >
+          {statusText(search.state, search.hits.length)}
+        </p>
         <div className="session-search-dialog__results">
           {search.state === "idle" ? <p className="session-search-dialog__empty">输入内容以搜索当前 Agent 的聊天记录。</p> : null}
           {search.state === "empty" ? <p className="session-search-dialog__empty">没有找到匹配的聊天记录</p> : null}
@@ -170,6 +176,11 @@ function statusText(state: ReturnType<typeof useSessionSearch>["state"], count: 
   if (state === "empty") return "没有找到匹配的聊天记录";
   if (state === "error") return "聊天记录搜索失败";
   return "请输入搜索内容";
+}
+
+/** 空态、错误和初始引导已有可见正文，仅保留隐藏播报避免重复显示。 */
+function statusVisuallyHidden(state: ReturnType<typeof useSessionSearch>["state"]): boolean {
+  return state === "idle" || state === "empty" || state === "error";
 }
 
 function formatTimestamp(timestamp: string): string {
