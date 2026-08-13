@@ -6959,7 +6959,7 @@ img.message-avatar {
   justify-content: space-between;
 }
 
-.live-session-header > div {
+.live-session-header__heading {
   display: grid;
   gap: 2px;
 }
@@ -6974,10 +6974,6 @@ img.message-avatar {
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.08em;
-}
-
-.live-session-header__heading {
-  display: grid;
 }
 
 .live-session-header__actions {
