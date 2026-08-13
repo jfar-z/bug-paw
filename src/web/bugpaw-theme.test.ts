@@ -169,8 +169,12 @@ describe("BugPaw 生产视觉合同", () => {
   });
 
   it("五个二级侧边栏共用宽度与标题视觉合同", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
+    const [source, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
     const rules = parseStyleRules(source);
+    const themeRules = parseStyleRules(themeSource);
 
     expect(declaration(rules, ":root", "--secondary-sidebar-width")).toBe("272px");
     expect(declaration(rules, ".chat-shell", "grid-template-columns"))
@@ -185,9 +189,20 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color")).toBe("var(--accent)");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-size")).toBe("11px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-weight")).toBe("650");
-    expect(declaration(rules, ".secondary-sidebar-header__title", "color")).toBe("var(--text-primary)");
+    expect(declaration(rules, ".secondary-sidebar-header__title", "color")).toBe("inherit");
     expect(declaration(rules, ".secondary-sidebar-header__title", "font-size")).toBe("17px");
     expect(declaration(rules, ".secondary-sidebar-header__title", "font-weight")).toBe("650");
+
+    // 资源与定时任务共用 Agent 导航，四个容器选择器覆盖五个侧边栏实例。
+    const bugSidebarSelectors = [
+      ':root[data-theme="bug"] .chat-sidebar',
+      ':root[data-theme="bug"] .configuration-sidebar',
+      ':root[data-theme="bug"] .workspace-agent-navigation',
+      ':root[data-theme="bug"] .knowledge-base-navigation',
+    ];
+    for (const selector of bugSidebarSelectors) {
+      expect(groupedDeclaration(themeRules, selector, "color")).toBe("rgb(255, 249, 238)");
+    }
   });
 
   it("知识库与其他工作区页面使用一致的主画布背景", async () => {
