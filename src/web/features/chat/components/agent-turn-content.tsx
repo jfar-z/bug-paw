@@ -6,6 +6,7 @@ import { MarkdownContent } from "../../../components/markdown-content";
 import { MessageAttachments } from "../../../components/message-attachments";
 import { groupAgentBlocks } from "../activity-groups";
 import { ActivityGroup, activityGroupAutomaticExpanded } from "./activity-group";
+import { QuestionTimelineCard } from "../../../components/question-timeline-card";
 
 interface AgentTurnContentProps {
   turn: AgentTurn;
@@ -52,6 +53,9 @@ export function AgentTurnContent({
           expandedOverride={expandedOverrides[item.id]}
           onExpandedChange={(expanded) => setExpandedOverrides((current) => ({ ...current, [item.id]: expanded }))}
         />;
+      }
+      if (item.type === "question") {
+        return <QuestionTimelineCard key={item.id} tool={item.tool} />;
       }
       if (item.block.type === "markdown") return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={Boolean(focusedEntryId) && item.block.piEntryId === focusedEntryId} />;
       return <FileBlockView

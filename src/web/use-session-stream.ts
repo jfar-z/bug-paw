@@ -5,6 +5,13 @@ import { api, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
 import { isSessionHistoryPage } from "../shared/session-history-contracts";
 import type { ThinkingLevel } from "../shared/configuration-contracts";
+import { PendingQuestionProjectionSchema, type PendingQuestionProjection } from "../shared/session-question-contracts";
+import { Check } from "typebox/value";
+
+export interface QuestionResolvedNotice {
+  questionRecordId: string;
+  state: "submitted" | "discarded";
+}
 
 interface SessionStreamOptions {
   sessionId?: string;
@@ -13,6 +20,8 @@ interface SessionStreamOptions {
   onRunChange: (run: ChatRunSummary | undefined) => void;
   onModelChange?: (model: ModelSummary) => void;
   onThinkingLevelChange?: (thinkingLevel: ThinkingLevel) => void;
+  onPendingQuestion?: (pending: PendingQuestionProjection) => void;
+  onQuestionResolved?: (notice: QuestionResolvedNotice) => void;
   onSessionRenamed?: (sessionId: string, name: string) => void;
   onError: (message: string) => void;
   onUnexpectedError?: (error: unknown) => void;
@@ -268,6 +277,31 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       if (!accept(payload)) return;
       callbacksRef.current.onSessionRenamed?.(payload.sessionId, payload.name);
     });
+    source.addEventListener("question_pending", (rawEvent) => {
+      const payload = parse("question_pending", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "question_pending") {
+        reportInvalidEvent("question_pending", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      flushDeltas();
+      callbacksRef.current.onPendingQuestion?.(payload.pendingQuestion);
+    });
+    source.addEventListener("question_resolved", (rawEvent) => {
+      const payload = parse("question_resolved", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "question_resolved") {
+        reportInvalidEvent("question_resolved", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      flushDeltas();
+      callbacksRef.current.onQuestionResolved?.({
+        questionRecordId: payload.questionRecordId,
+        state: payload.state,
+      });
+    });
     source.addEventListener("text_delta", (rawEvent) => {
       const payload = parse("text_delta", rawEvent as MessageEvent);
       if (!payload) return;
@@ -470,6 +504,9 @@ function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undef
     messages: payload.messages,
     history: { ...payload.history },
     model: readModel(payload.model),
+    pendingQuestion: Check(PendingQuestionProjectionSchema, payload.pendingQuestion)
+      ? payload.pendingQuestion
+      : undefined,
     run: readRun(payload.run),
     lastEventId: payload.lastEventId,
   };

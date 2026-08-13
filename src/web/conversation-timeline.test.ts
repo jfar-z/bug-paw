@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { compileQuestionResponseProtocol } from "../shared/question-response-protocol";
 import {
   formatToolValue,
   parsePiHistory,
@@ -157,6 +158,21 @@ describe("对话时间线", () => {
     });
   });
 
+  it("ask_user 开始时移除同回合尚未执行的普通工具占位", () => {
+    const entries = reduceEvents([
+      { type: "tool_started", callId: "running", toolName: "read", args: {} },
+      { type: "tool_preparing", callId: "unused", toolName: "write" },
+      { type: "tool_parameters_streaming", callId: "partial", toolName: "bash", generatedBytes: 12 },
+      { type: "tool_preparing", callId: "ask", toolName: "ask_user" },
+    ]);
+
+    const turn = entries[0] as AgentTurn;
+    expect(turn.blocks).toMatchObject([
+      { callId: "running", status: "running" },
+      { callId: "ask", name: "ask_user", status: "preparing" },
+    ]);
+  });
+
   it("连续文本增量保持流式 Markdown 块标识稳定", () => {
     const first = reduceTimeline([], { type: "text_delta", delta: "第一段" });
     const firstBlock = (first[0] as AgentTurn).blocks[0];
@@ -256,6 +272,55 @@ describe("对话时间线", () => {
   it("标记定时任务发出的会话消息", () => {
     const entries = parsePiHistory([{ role: "user", content: "这是定时任务发出的消息\n\n整理日报" }]);
     expect(entries[0]).toMatchObject({ type: "user", source: "scheduled" });
+  });
+
+  it("将纯内部回答协议归并到对应提问卡片且不创建用户气泡", () => {
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+    const entries = parsePiHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask_user",
+        content: [{ type: "text", text: "等待用户回答" }],
+        details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
+      },
+      { role: "user", content: compileQuestionResponseProtocol(resolution) },
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect((entries[0] as AgentTurn).blocks[0]).toMatchObject({
+      name: "ask_user",
+      details: { resolution },
+    });
+  });
+
+  it("放弃协议只显示协议后的普通正文，损坏协议保留原文", () => {
+    const discarded = compileQuestionResponseProtocol({
+      resolutionId: "resolution-2",
+      questionRecordId: "question-1",
+      status: "discarded",
+      discardReason: "new_message",
+      answers: [],
+      unansweredQuestionIds: ["q-1"],
+    });
+    const entries = parsePiHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      { role: "toolResult", toolCallId: "ask-1", toolName: "ask_user", content: "等待", details: { type: "question_pending", pendingQuestion: historyPendingQuestion } },
+      { role: "user", content: `${discarded}\n\n改为直接处理` },
+      { role: "user", content: '<bug_paw_question_response version="1">\n{broken}\n</bug_paw_question_response>' },
+    ]);
+
+    expect(entries.filter((entry) => entry.type === "user")).toMatchObject([
+      { text: "改为直接处理" },
+      { text: '<bug_paw_question_response version="1">\n{broken}\n</bug_paw_question_response>' },
+    ]);
   });
 
   it("保留找不到调用记录的孤立工具结果", () => {
@@ -391,3 +456,20 @@ describe("对话时间线", () => {
     ]);
   });
 });
+
+const historyPendingQuestion = {
+  id: "question-1",
+  version: 1,
+  toolCallId: "ask-1",
+  createdAt: "2026-08-13T08:00:00.000Z",
+  questions: [{
+    id: "q-1",
+    header: "范围",
+    question: "处理范围？",
+    multiSelect: false,
+    options: [
+      { id: "o-1", label: "全部", description: "处理全部" },
+      { id: "o-2", label: "部分", description: "处理部分" },
+    ],
+  }],
+};

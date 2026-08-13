@@ -46,7 +46,9 @@ class FakeEventSource {
       ? {
           ...(type === "snapshot"
             ? { history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 } }
-            : { runId: "run-1" }),
+            : type === "question_pending" || type === "question_resolved" || type === "session_renamed"
+              ? {}
+              : { runId: "run-1" }),
           ...payload as Record<string, unknown>,
         }
       : payload;
@@ -74,6 +76,69 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("useSessionStream", () => {
+  it("从快照恢复待回答问题", () => {
+    const onSnapshot = vi.fn();
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot,
+      onTimelineEvent: vi.fn(),
+      onRunChange: vi.fn(),
+      onError: vi.fn(),
+    }));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      id: 1,
+      type: "snapshot",
+      sessionId: "session-1",
+      messages: [],
+      lastEventId: 1,
+      pendingQuestion: pendingQuestion,
+    }));
+
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ pendingQuestion }));
+  });
+
+  it("在正文增量后依次通知问题出现与解决", () => {
+    const onTimelineEvent = vi.fn();
+    const onPendingQuestion = vi.fn();
+    const onQuestionResolved = vi.fn();
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot: vi.fn(),
+      onTimelineEvent,
+      onRunChange: vi.fn(),
+      onPendingQuestion,
+      onQuestionResolved,
+      onError: vi.fn(),
+    }));
+    const source = FakeEventSource.instances[0];
+
+    act(() => {
+      source.emit("text_delta", { id: 1, type: "text_delta", sessionId: "session-1", delta: "请选择" });
+      source.emit("question_pending", {
+        id: 2,
+        type: "question_pending",
+        sessionId: "session-1",
+        pendingQuestion,
+      });
+      source.emit("question_resolved", {
+        id: 3,
+        type: "question_resolved",
+        sessionId: "session-1",
+        questionRecordId: pendingQuestion.id,
+        state: "submitted",
+      });
+    });
+
+    expect(onTimelineEvent).toHaveBeenCalledWith({ type: "text_delta", delta: "请选择" });
+    expect(onTimelineEvent.mock.invocationCallOrder[0]).toBeLessThan(onPendingQuestion.mock.invocationCallOrder[0]);
+    expect(onPendingQuestion).toHaveBeenCalledWith(pendingQuestion);
+    expect(onQuestionResolved).toHaveBeenCalledWith({
+      questionRecordId: pendingQuestion.id,
+      state: "submitted",
+    });
+  });
+
   it("从 snapshot 恢复活动任务并创建等待中的 Agent 回合", () => {
     const onSnapshot = vi.fn();
     const onTimelineEvent = vi.fn();
@@ -616,3 +681,20 @@ describe("useSessionStream", () => {
     expect(onTimelineEvent).toHaveBeenCalledWith({ type: "text_delta", delta: "新会话" });
   });
 });
+
+const pendingQuestion = {
+  id: "question-1",
+  version: 1,
+  toolCallId: "call-ask",
+  createdAt: "2026-08-13T08:00:00.000Z",
+  questions: [{
+    id: "q-1",
+    header: "范围",
+    question: "需要处理哪些内容？",
+    multiSelect: false,
+    options: [
+      { id: "o-1", label: "全部", description: "处理全部内容" },
+      { id: "o-2", label: "部分", description: "只处理一部分" },
+    ],
+  }],
+};
