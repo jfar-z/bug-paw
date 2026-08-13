@@ -23,7 +23,7 @@ class ObserverDouble {
 const snapshot = (): SessionSnapshot => ({
   id: "session-1",
   messages: [{ role: "user", __piEntryId: "user-21" }],
-  history: { startEntryId: "user-21", branchToken: "branch-a", hasMoreBefore: true, turnCount: 20 },
+  history: { startEntryId: "user-21", branchToken: "branch-a", hasMoreBefore: true, hasMoreAfter: false, turnCount: 20 },
   lastEventId: 0,
 });
 
@@ -37,7 +37,7 @@ describe("useSessionHistory", () => {
     vi.spyOn(api, "loadSessionHistory").mockResolvedValue({
       sessionId: "session-1",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
     });
     const element = document.createElement("div");
     const { result } = renderHook(() => useSessionHistory({
@@ -63,7 +63,7 @@ describe("useSessionHistory", () => {
     vi.spyOn(api, "loadSessionHistory").mockResolvedValue({
       sessionId: "session-1",
       messages: [{ role: "user", __piEntryId: "user-1" }],
-      history: { startEntryId: "user-1", branchToken: "branch-a", hasMoreBefore: false, turnCount: 5 },
+      history: { startEntryId: "user-1", branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 5 },
     });
     const { result, rerender } = renderHook(() => useSessionHistory({
       snapshot: current,

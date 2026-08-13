@@ -63,7 +63,7 @@ class FakeEventSource {
       type,
       sessionId,
       ...(isRunScopedEvent ? { runId: "run-1" } : {}),
-      ...(type === "snapshot" ? { history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 1 } } : {}),
+      ...(type === "snapshot" ? { history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 } } : {}),
       ...original,
       ...(type === "snapshot" && original.lastEventId === undefined ? { lastEventId: id } : {}),
     };
@@ -221,7 +221,7 @@ beforeEach(() => {
         id: "session-2",
         agentId: "default",
         messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
-        history: { branchToken: "branch-session-2", hasMoreBefore: false, turnCount: 1 },
+        history: { branchToken: "branch-session-2", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
         lastEventId: 1,
       }));
     }
@@ -235,7 +235,7 @@ beforeEach(() => {
       return new Response(JSON.stringify({
         id: "session-1",
         messages: [{ role: "user", content: "上一版本", __piEntryId: "user-old" }],
-        history: { branchToken: "branch-b", hasMoreBefore: false, turnCount: 1 },
+        history: { branchToken: "branch-b", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
         lastEventId: 2,
       }));
     }
@@ -244,7 +244,7 @@ beforeEach(() => {
         snapshot: {
           id: "session-1",
           messages: [],
-          history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+          history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
           lastEventId: 3,
         },
         run: {
@@ -443,7 +443,7 @@ describe("LiveChatPage 时间线", () => {
 
     act(() => source.emit("snapshot", {
       messages: [],
-      history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
       run: {
         runId: "run-regenerated",
         sessionId: "session-1",
@@ -458,7 +458,7 @@ describe("LiveChatPage 时间线", () => {
       snapshot: {
         id: "session-1",
         messages: [],
-        history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+        history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
         lastEventId: 3,
       },
       run: {
@@ -487,7 +487,7 @@ describe("LiveChatPage 时间线", () => {
         { role: "user", content: "需要保留的问题", __piEntryId: "user-regenerated" },
         { role: "assistant", content: [{ type: "text", text: "最终新回答" }] },
       ],
-      history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 1 },
+      history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
       run: {
         runId: "run-regenerated",
         sessionId: "session-1",
@@ -515,6 +515,7 @@ describe("LiveChatPage 时间线", () => {
         startEntryId: "older-user",
         branchToken: "branch-regenerated",
         hasMoreBefore: false,
+        hasMoreAfter: false,
         turnCount: 1,
       },
     }));
@@ -535,6 +536,7 @@ describe("LiveChatPage 时间线", () => {
         startEntryId: "recent-user",
         branchToken: "branch-regenerated",
         hasMoreBefore: true,
+        hasMoreAfter: false,
         turnCount: 2,
       },
       run: {
@@ -612,7 +614,7 @@ describe("LiveChatPage 时间线", () => {
         snapshot: {
           id: "session-1",
           messages: [{ role: "user", content: "旧会话问题", __piEntryId: "old-regenerated" }],
-          history: { branchToken: "branch-old", hasMoreBefore: false, turnCount: 1 },
+          history: { branchToken: "branch-old", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
           lastEventId: 3,
         },
         run: {

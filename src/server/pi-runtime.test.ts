@@ -81,11 +81,27 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     const gateway = createPiRuntimeGateway(createBackend(session));
 
     const latest = await gateway.createSession();
-    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true });
+    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true, hasMoreAfter: false });
     expect(latest.messages[1]).toMatchObject({ content: [{ data: "<IMAGE_BASE64>" }] });
 
     const previous = await gateway.loadHistoryPage!("session-1", "user-6", latest.history.branchToken);
-    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false });
+    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false, hasMoreAfter: true });
+    expect((gateway as unknown as Record<string, unknown>).loadHistoryTarget).toBeTypeOf("function");
+    expect((gateway as unknown as Record<string, unknown>).loadHistoryPageAfter).toBeTypeOf("function");
+    const target = await gateway.loadHistoryTarget!("session-1", "assistant-10", latest.history.branchToken);
+    expect(target).toMatchObject({
+      targetEntryId: "assistant-10",
+      history: { startEntryId: "user-1", endEntryId: "assistant-20", hasMoreAfter: true },
+    });
+    const newer = await gateway.loadHistoryPageAfter!("session-1", "assistant-20", latest.history.branchToken);
+    expect(newer.history).toMatchObject({
+      startEntryId: "user-21",
+      endEntryId: "assistant-25",
+      hasMoreAfter: false,
+      turnCount: 5,
+    });
+    await expect(gateway.loadHistoryTarget!("session-1", "assistant-10", "stale-token"))
+      .rejects.toMatchObject({ code: "SESSION_BRANCH_CHANGED" });
     await expect(gateway.loadHistoryPage!("session-1", "user-6", "stale-token")).rejects.toMatchObject({ code: "SESSION_HISTORY_STALE" });
     gateway.dispose();
   });

@@ -9,7 +9,7 @@ describe("Chat SSE 轻量校验", () => {
       type: "snapshot",
       sessionId: "s1",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
       lastEventId: 0,
     })).toBe(true);
     expect(isSessionSnapshotEvent({

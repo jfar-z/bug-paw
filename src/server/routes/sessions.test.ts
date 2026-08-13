@@ -23,12 +23,12 @@ describe("会话路由的定时任务联动", () => {
     const loadHistoryPage = vi.fn(async () => ({
       sessionId: "session-1",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
     }));
     const openSession = vi.fn(async () => ({
       id: "session-1",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
       lastEventId: 0,
     }));
     const app = Fastify();
@@ -48,7 +48,7 @@ describe("会话路由的定时任务联动", () => {
 
   it("历史分支 token 过期时返回稳定冲突错误", async () => {
     const runtime = {
-      openSession: vi.fn(async () => ({ id: "session-1", messages: [], history: { branchToken: "new", hasMoreBefore: false, turnCount: 0 }, lastEventId: 0 })),
+      openSession: vi.fn(async () => ({ id: "session-1", messages: [], history: { branchToken: "new", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 }, lastEventId: 0 })),
       loadHistoryPage: vi.fn(async () => { throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化"); }),
     } as unknown as PiRuntimeGateway;
     const app = Fastify();

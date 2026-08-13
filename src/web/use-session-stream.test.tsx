@@ -45,7 +45,7 @@ class FakeEventSource {
     const normalized = payload && typeof payload === "object"
       ? {
           ...(type === "snapshot"
-            ? { history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 } }
+            ? { history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 } }
             : { runId: "run-1" }),
           ...payload as Record<string, unknown>,
         }
@@ -323,7 +323,7 @@ describe("useSessionStream", () => {
     const recovered = {
       id: "session-1",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
       lastEventId: 9,
     };
     renderHook(() => useSessionStream({

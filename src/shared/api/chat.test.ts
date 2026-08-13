@@ -51,7 +51,7 @@ describe("Chat API Schema", () => {
       projectionVersion: 2,
       lastEventId: 9,
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
     })).toBe(true);
     expect(Check(SessionProjectionSchema, {
       sessionId: "s1",
@@ -64,7 +64,7 @@ describe("Chat API Schema", () => {
       sessionId: "s1",
       type: "snapshot",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
       lastEventId: 0,
     })).toBe(true);
   });
