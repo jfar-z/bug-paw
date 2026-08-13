@@ -337,6 +337,95 @@ describe("LiveChatPage 时间线", () => {
     expect(screen.getByText("Agent 执行失败")).toHaveClass("live-chat-error");
   });
 
+  it("重新打开失败会话时从权威快照恢复安全模型提示", async () => {
+    installTtsFetch({
+      messages: [
+        { role: "user", content: "触发模型失败" },
+        {
+          role: "assistant",
+          stopReason: "error",
+          content: [],
+          errorMessage: "模型请求失败",
+        },
+      ],
+    });
+
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("模型请求失败")).toHaveClass("live-chat-error");
+    expect(document.querySelectorAll(".live-chat-error")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "朗读消息" })).not.toBeInTheDocument();
+  });
+
+  it("快照与 SSE 复用一个模型错误提示并由新一轮清除", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.emit("snapshot", {
+      id: 2,
+      messages: [
+        { role: "user", content: "失败问题" },
+        { role: "assistant", stopReason: "error", content: [], errorMessage: "模型请求失败" },
+      ],
+      lastEventId: 2,
+    }));
+    expect(screen.getByText("模型请求失败")).toHaveClass("live-chat-error");
+
+    act(() => source.emit("error", { code: "AGENT_EXECUTION_FAILED", message: "模型请求失败" }));
+    expect(document.querySelectorAll(".live-chat-error")).toHaveLength(1);
+
+    act(() => source.emit("snapshot", {
+      id: 4,
+      messages: [
+        { role: "user", content: "失败问题" },
+        { role: "assistant", stopReason: "error", content: [], errorMessage: "模型请求失败" },
+        { role: "user", content: "重新提问" },
+      ],
+      lastEventId: 4,
+    }));
+    await waitFor(() => expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument());
+  });
+
+  it("长度截断显示固定提示并保留已有回答", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      id: 2,
+      messages: [
+        { role: "user", content: "生成长回答" },
+        {
+          role: "assistant",
+          stopReason: "length",
+          content: [{ type: "text", text: "已生成的部分回答" }],
+          errorMessage: "回答因达到长度限制而被截断",
+        },
+      ],
+      lastEventId: 2,
+    }));
+
+    expect(await screen.findByText("已生成的部分回答")).toBeInTheDocument();
+    expect(screen.getByText("回答因达到长度限制而被截断")).toHaveClass("live-chat-error");
+  });
+
+  it("切换到正常会话时不保留上一会话的模型错误", async () => {
+    installTtsFetch({
+      messages: [
+        { role: "user", content: "失败问题" },
+        { role: "assistant", stopReason: "error", content: [], errorMessage: "模型请求失败" },
+      ],
+      secondSessionMessages: [{ role: "user", content: "正常会话问题" }],
+    });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    expect(await screen.findByText("模型请求失败")).toHaveClass("live-chat-error");
+
+    fireEvent.click(screen.getByRole("button", { name: "第二会话" }));
+
+    await waitFor(() => expect(messageRowTexts().some((text) => text.includes("正常会话问题"))).toBe(true));
+    expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument();
+  });
+
   it("将用户操作区置于气泡外侧，并把版本切换发送到分支导航接口", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });

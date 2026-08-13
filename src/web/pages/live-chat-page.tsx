@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
+import { classifyAssistantRunOutcome } from "../../shared/assistant-run-outcome";
 import { sortSessionsPinnedFirst } from "../../shared/session-sort";
 import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionBulkTarget, type SessionSnapshot, type SessionSummary } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
@@ -106,6 +107,13 @@ function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expec
   };
 }
 
+/** 从权威快照提取当前一轮的安全模型提示。 */
+function modelRunNotice(messages: readonly unknown[]): string {
+  const outcome = classifyAssistantRunOutcome(messages);
+  if (outcome.status === "error") return outcome.message;
+  return outcome.status === "completed" && "notice" in outcome ? outcome.notice : "";
+}
+
 /**
  * 接入真实会话 API 与 SSE 的第一版对话工作台。
  */
@@ -140,6 +148,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [draftReferences, setDraftReferences] = useState<AgentReference[]>([]);
   const [activeRun, setActiveRun] = useState<ChatRunSummary>();
   const [error, setError] = useState("");
+  const [runNotice, setRunNotice] = useState("");
   const reportFailure = useCallback((reason: unknown, operation: string) => runApiTask(
     async () => { throw reason; },
     { operation, expected: chatExpected(setError) },
@@ -199,6 +208,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const mergedSnapshot = { ...next, messages: reconciled.messages };
     sessionSnapshotRef.current = mergedSnapshot;
     setSession(mergedSnapshot);
+    setRunNotice(modelRunNotice(mergedSnapshot.messages));
     if (next.model) setSelectedModel(next.model);
     const running = next.run?.status === "queued" || next.run?.status === "running";
     const pendingResult = reconcilePendingUserMessage(
@@ -246,7 +256,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
       sessionSyncRef.current?.notify();
     },
-    onError: setError,
+    onError: setRunNotice,
     onUnexpectedError: (reason) => void reportFailure(reason, "恢复会话实时连接"),
   });
 
@@ -262,7 +272,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const streaming = activeRun?.status === "queued" || activeRun?.status === "running";
   const isOpeningSession = openingSessionId !== undefined;
   // 连接状态独立于业务错误，重连成功后提示会自然撤销且不会误清其他错误。
-  const composerError = error || (stream.reconnecting ? "实时连接暂时中断，浏览器会自动重连。" : "");
+  const composerError = error || runNotice || (stream.reconnecting ? "实时连接暂时中断，浏览器会自动重连。" : "");
 
   /** 获取当前 Agent 的唯一播放控制器，切换 Agent 时销毁旧实例。 */
   const ensureSpeechController = useCallback((agentId: string): StreamingTtsController => {
@@ -453,6 +463,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setDraftReferences([]);
     setAttachmentItems([]);
     setError("");
+    setRunNotice("");
     pendingUserMessageRef.current = undefined;
     closeSidebar();
   };
@@ -506,6 +517,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     stopSpeech();
     pendingUserMessageRef.current = undefined;
     setError("");
+    setRunNotice("");
     setEditingEntryId(undefined);
     setMediaSummaries({});
     setPreviewImage(undefined);
@@ -727,6 +739,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setDraftReferences([]);
       setAttachmentItems([]);
       setError("");
+      setRunNotice("");
       setActiveRun({
         runId: `pending-${crypto.randomUUID()}`,
         sessionId: activeSession.id,
