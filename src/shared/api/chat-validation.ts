@@ -1,4 +1,5 @@
 import type { SessionEvent, SessionProjectionRequiredEvent, SessionSnapshotEvent } from "./chat";
+import { THINKING_LEVELS, type ThinkingLevel } from "../configuration-contracts";
 import { isSessionHistoryPage } from "../session-history-contracts";
 
 /** 轻量校验 SSE 快照，避免浏览器为单条事件加载完整 Schema 执行器。 */
@@ -11,6 +12,7 @@ export function isSessionSnapshotEvent(value: unknown): value is SessionSnapshot
     && isSessionHistoryPage(value.history)
     && isSafeInteger(value.lastEventId, 0)
     && (value.model === undefined || isModel(value.model))
+    && (value.thinkingLevel === undefined || isThinkingLevel(value.thinkingLevel))
     && (value.run === undefined || isRun(value.run));
 }
 
@@ -30,6 +32,7 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     || !isNonEmptyString(value.sessionId)
     || typeof value.type !== "string") return false;
   if (value.type === "model_changed") return isModel(value.model);
+  if (value.type === "thinking_level_changed") return isThinkingLevel(value.thinkingLevel);
   // 自动标题可能在所属 Run 结束后才到达，因此不绑定任何 Run。
   if (value.type === "session_renamed") {
     return value.runId === undefined
@@ -65,7 +68,13 @@ function isModel(value: unknown): boolean {
   return isRecord(value)
     && isNonEmptyString(value.provider)
     && isNonEmptyString(value.id)
-    && isNonEmptyString(value.name);
+    && isNonEmptyString(value.name)
+    && (value.thinkingLevels === undefined
+      || (Array.isArray(value.thinkingLevels) && value.thinkingLevels.every(isThinkingLevel)));
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 function isRun(value: unknown): boolean {

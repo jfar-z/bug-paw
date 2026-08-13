@@ -46,12 +46,25 @@ describe("Chat API Schema", () => {
       type: "session_renamed",
       name: "登录故障排查",
     })).toBe(false);
+    expect(Check(SessionEventSchema, {
+      id: 4,
+      sessionId: "s1",
+      type: "thinking_level_changed",
+      thinkingLevel: "high",
+    })).toBe(true);
+    expect(Check(SessionEventSchema, {
+      id: 5,
+      sessionId: "s1",
+      type: "thinking_level_changed",
+      thinkingLevel: "invalid",
+    })).toBe(false);
     expect(Check(SessionProjectionSchema, {
       sessionId: "s1",
       projectionVersion: 2,
       lastEventId: 9,
       messages: [],
       history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+      thinkingLevel: "medium",
     })).toBe(true);
     expect(Check(SessionProjectionSchema, {
       sessionId: "s1",
@@ -65,6 +78,7 @@ describe("Chat API Schema", () => {
       type: "snapshot",
       messages: [],
       history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+      thinkingLevel: "xhigh",
       lastEventId: 0,
     })).toBe(true);
   });

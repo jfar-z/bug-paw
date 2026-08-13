@@ -1,13 +1,17 @@
 import { Type, type Static } from "typebox";
+import { THINKING_LEVELS } from "../configuration-contracts";
 import { SessionHistoryPageSchema } from "../session-history-contracts";
 
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
 
+export const ThinkingLevelSchema = Type.Union(THINKING_LEVELS.map((level) => Type.Literal(level)));
+
 export const ModelSummarySchema = StrictObject({
   provider: Type.String({ minLength: 1 }),
   id: Type.String({ minLength: 1 }),
   name: Type.String({ minLength: 1 }),
+  thinkingLevels: Type.Optional(Type.Array(ThinkingLevelSchema, { uniqueItems: true })),
 });
 
 export const ChatRunStatusSchema = Type.Union([
@@ -51,6 +55,7 @@ export const SessionProjectionSchema = StrictObject({
   messages: Type.Array(Type.Unknown()),
   history: SessionHistoryPageSchema,
   model: Type.Optional(ModelSummarySchema),
+  thinkingLevel: Type.Optional(ThinkingLevelSchema),
   run: Type.Optional(ChatRunSummarySchema),
 });
 
@@ -68,6 +73,7 @@ export const SessionSnapshotEventSchema = StrictObject({
   messages: Type.Array(Type.Unknown()),
   history: SessionHistoryPageSchema,
   model: Type.Optional(ModelSummarySchema),
+  thinkingLevel: Type.Optional(ThinkingLevelSchema),
   run: Type.Optional(ChatRunSummarySchema),
   lastEventId: Type.Integer({ minimum: 0 }),
 });
@@ -86,6 +92,12 @@ export const SessionEventSchema = Type.Union([
     sessionId: Type.String({ minLength: 1 }),
     type: Type.Literal("model_changed"),
     model: ModelSummarySchema,
+  }),
+  StrictObject({
+    id: Type.Integer({ minimum: 1 }),
+    sessionId: Type.String({ minLength: 1 }),
+    type: Type.Literal("thinking_level_changed"),
+    thinkingLevel: ThinkingLevelSchema,
   }),
   StrictObject({ ...EventIdentity, type: Type.Literal("run_started"), run: ChatRunSummarySchema }),
   StrictObject({ ...EventIdentity, type: Type.Literal("text_delta"), delta: Type.String() }),
