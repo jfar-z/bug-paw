@@ -40,6 +40,7 @@ describe("BugPaw SQLite", () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
     ]);
     database.close();
 
@@ -49,6 +50,7 @@ describe("BugPaw SQLite", () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
     ]);
     reopened.close();
   });
@@ -89,7 +91,29 @@ describe("BugPaw SQLite", () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
     ]);
+    database.close();
+  });
+
+  it("为已有 Session 增加空的置顶状态", () => {
+    const database = openDatabase(":memory:");
+    runMigrations(database, { throughVersion: 3 });
+    database.write(
+      "INSERT INTO agents(id, cwd, profile_json, sort_order, revision, created_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)",
+      ["agent-1", "/data/workspace/agent-1", "{}", "2026-08-07T00:00:00.000Z", "2026-08-07T00:00:00.000Z"],
+    );
+    database.write(
+      "INSERT INTO sessions(id, agent_id, projection_version, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+      ["session-1", "agent-1", "2026-08-07T00:00:00.000Z", "2026-08-07T00:00:00.000Z"],
+    );
+
+    runMigrations(database);
+
+    expect(database.readOne<{ pinned_at: string | null }>(
+      "SELECT pinned_at FROM sessions WHERE id = ?",
+      ["session-1"],
+    )).toEqual({ pinned_at: null });
     database.close();
   });
 

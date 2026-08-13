@@ -2,8 +2,9 @@ import type { Database } from "./database";
 import { initialMigration } from "./migrations/001-initial";
 import { retrievalToolNamesMigration } from "./migrations/002-retrieval-tool-names";
 import { browserAuditMigration } from "./migrations/003-browser-audit";
+import { sessionPinningMigration } from "./migrations/004-session-pinning";
 
-const MIGRATIONS = [initialMigration, retrievalToolNamesMigration, browserAuditMigration] as const;
+const MIGRATIONS = [initialMigration, retrievalToolNamesMigration, browserAuditMigration, sessionPinningMigration] as const;
 
 /** 按版本顺序执行未应用的数据库 Migration。 */
 export function runMigrations(database: Database, options: { throughVersion?: number } = {}): void {

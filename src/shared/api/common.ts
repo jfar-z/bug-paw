@@ -9,6 +9,7 @@ export const ApiErrorCodeSchema = Type.Union([
   Type.Literal("VERSION_CONFLICT"),
   Type.Literal("SESSION_BUSY"),
   Type.Literal("SESSION_NOT_FOUND"),
+  Type.Literal("SESSION_ARCHIVED"),
   Type.Literal("SESSION_AGENT_CONFLICT"),
   Type.Literal("SESSION_HISTORY_CURSOR_INVALID"),
   Type.Literal("SESSION_HISTORY_STALE"),
