@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionBulkAction, SessionBulkTarget } from "../../shared/session-bulk-contracts";
+import { sortSessionsPinnedFirst } from "../../shared/session-sort";
 import type { PiRuntimeGateway } from "../pi-runtime";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
 import type { SessionMetadataStore } from "../session-metadata";
@@ -36,12 +37,14 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     const acquired = await acquireRuntimeForAgent(dependencies, agentId);
     try {
       const sessions = await acquired.runtime.listSessions({ archived: request.query.archived === "true" });
+      const pinnedIds = new Set(await dependencies.sessionMetadata?.listPinnedIds(agentId) ?? []);
       const enrichedSessions = await Promise.all(sessions.map(async (session) => ({
         ...session,
         agentId,
+        pinned: pinnedIds.has(session.id),
         scheduledTaskCount: (await dependencies.scheduledTasks?.boundTasks(session.id) ?? []).length,
       })));
-      return reply.send({ sessions: enrichedSessions });
+      return reply.send({ sessions: sortSessionsPinnedFirst(enrichedSessions) });
     } finally {
       acquired.release();
     }
@@ -187,6 +190,32 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
         await acquired.runtime.renameSession(request.params.id, body.name);
         return reply.code(204).send();
       } finally { acquired.release(); }
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string } }>("/api/sessions/:id/pin", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) {
+      return;
+    }
+    try {
+      if (!dependencies.sessionMetadata) throw new Error("Session 元数据服务尚未配置");
+      await dependencies.sessionMetadata.pin(request.params.id);
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/sessions/:id/pin", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) {
+      return;
+    }
+    try {
+      if (!dependencies.sessionMetadata) throw new Error("Session 元数据服务尚未配置");
+      await dependencies.sessionMetadata.unpin(request.params.id);
+      return reply.code(204).send();
     } catch (error) {
       return sendRuntimeError(reply, error);
     }

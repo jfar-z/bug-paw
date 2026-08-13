@@ -63,15 +63,21 @@ describe("SessionBulkRepository", () => {
   it("批量归档会话但保持绑定任务原状态", async () => {
     const { bulk, sessions, tasks } = await createFixture();
     const task = await tasks.createTask(taskInput("task-daily", "日报", "session-1"));
+    await sessions.pin("session-1", "2026-08-11T09:00:00.000Z");
     const preview = await bulk.preview("archive", { mode: "selected", sessionIds: ["session-1"] });
 
     await expect(bulk.archive(preview, "2026-08-11T10:00:00.000Z"))
       .resolves.toEqual({ action: "archive", sessionCount: 1, affectedTaskCount: 1 });
     expect(await sessions.find("session-1")).toMatchObject({ archivedAt: "2026-08-11T10:00:00.000Z" });
+    expect(await sessions.find("session-1")).not.toHaveProperty("pinnedAt");
     expect(await tasks.getTask(task.id)).toMatchObject({
       enabled: true,
       target: { type: "existing_session", sessionId: "session-1" },
     });
+
+    const restorePreview = await bulk.preview("restore", { mode: "all_archived", agentId: "agent-1" });
+    await bulk.restore(restorePreview, "2026-08-11T11:00:00.000Z");
+    expect(await sessions.find("session-1")).not.toHaveProperty("pinnedAt");
   });
 
   it("解析并恢复超过 200 个当前 Agent 的归档会话", async () => {

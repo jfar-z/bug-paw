@@ -64,6 +64,21 @@ describe("会话归档元数据", () => {
     expect(await store.listArchivedIds()).toEqual([]);
   });
 
+  it("置顶状态按 Agent 持久化且归档后不会恢复", async () => {
+    const { store } = await createFixture();
+    await store.assignAgent("session-1", "agent-a");
+    await store.assignAgent("session-2", "agent-b");
+
+    await store.pin("session-1");
+    await store.pin("session-2");
+    expect(await store.listPinnedIds("agent-a")).toEqual(["session-1"]);
+
+    await store.archive("session-1");
+    expect(await store.listPinnedIds("agent-a")).toEqual([]);
+    await store.unarchive("session-1");
+    expect(await store.listPinnedIds("agent-a")).toEqual([]);
+  });
+
   it("拒绝非法会话标识", async () => {
     const { store } = await createFixture();
 

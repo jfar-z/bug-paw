@@ -2,6 +2,7 @@
 
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
+import { DomainError } from "../core/errors";
 import { PiRuntimeError, type PiRuntimeGateway } from "../pi-runtime";
 import type { SessionMetadataStore } from "../session-metadata";
 import type { SessionBulkService } from "../sessions/session-bulk-service";
@@ -110,6 +111,75 @@ describe("会话路由的定时任务联动", () => {
       target: { mode: "selected", sessionIds: ["session-1"] },
       fingerprint: "fingerprint-1",
     });
+    await app.close();
+  });
+
+  it("会话列表合并置顶状态并返回稳定顺序", async () => {
+    const runtime = {
+      listSessions: vi.fn(async () => [
+        { id: "normal-old", modified: "2026-08-01T00:00:00.000Z", messageCount: 1, firstMessage: "普通旧会话" },
+        { id: "pin-b", modified: "2026-08-03T00:00:00.000Z", messageCount: 1, firstMessage: "置顶 B" },
+        { id: "normal-new", modified: "2026-08-04T00:00:00.000Z", messageCount: 1, firstMessage: "普通新会话" },
+        { id: "pin-a", modified: "2026-08-03T00:00:00.000Z", messageCount: 1, firstMessage: "置顶 A" },
+      ]),
+    } as unknown as PiRuntimeGateway;
+    const sessionMetadata = {
+      listPinnedIds: vi.fn(async () => ["pin-a", "pin-b"]),
+    } as unknown as SessionMetadataStore;
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime, sessionMetadata });
+
+    const response = await app.inject({ method: "GET", url: "/api/sessions?agentId=default" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().sessions.map(({ id, pinned }: { id: string; pinned: boolean }) => ({ id, pinned }))).toEqual([
+      { id: "pin-a", pinned: true },
+      { id: "pin-b", pinned: true },
+      { id: "normal-new", pinned: false },
+      { id: "normal-old", pinned: false },
+    ]);
+    await app.close();
+  });
+
+  it("置顶接口只写元数据且不打开 Pi Session", async () => {
+    const pin = vi.fn(async () => undefined);
+    const unpin = vi.fn(async () => undefined);
+    const openSession = vi.fn();
+    const app = Fastify();
+    registerSessionRoutes(app, {
+      authService,
+      runtime: { openSession } as unknown as PiRuntimeGateway,
+      sessionMetadata: { pin, unpin } as unknown as SessionMetadataStore,
+    });
+
+    const pinned = await app.inject({ method: "PUT", url: "/api/sessions/session-1/pin" });
+    const unpinned = await app.inject({ method: "DELETE", url: "/api/sessions/session-1/pin" });
+
+    expect(pinned.statusCode).toBe(204);
+    expect(unpinned.statusCode).toBe(204);
+    expect(pin).toHaveBeenCalledWith("session-1");
+    expect(unpin).toHaveBeenCalledWith("session-1");
+    expect(openSession).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it.each([
+    ["SESSION_ARCHIVED", 409],
+    ["SESSION_NOT_FOUND", 404],
+  ] as const)("置顶失败时把 %s 映射为稳定状态", async (code, statusCode) => {
+    const app = Fastify();
+    registerSessionRoutes(app, {
+      authService,
+      runtime: {} as PiRuntimeGateway,
+      sessionMetadata: {
+        pin: vi.fn(async () => { throw new DomainError(code, code); }),
+      } as unknown as SessionMetadataStore,
+    });
+
+    const response = await app.inject({ method: "PUT", url: "/api/sessions/session-1/pin" });
+
+    expect(response.statusCode).toBe(statusCode);
+    expect(response.json()).toMatchObject({ error: { code } });
     await app.close();
   });
 

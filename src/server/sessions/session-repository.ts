@@ -5,6 +5,7 @@ export interface SessionRecord {
   id: string;
   agentId: string;
   archivedAt?: string;
+  pinnedAt?: string;
   displayName?: string;
   projectionVersion: number;
   createdAt: string;
@@ -16,10 +17,13 @@ export interface SessionRepository {
   find(sessionId: string): Promise<SessionRecord | undefined>;
   listByAgent(agentId: string, archived: boolean): Promise<SessionRecord[]>;
   listArchivedIds(): Promise<string[]>;
+  listPinnedIds(agentId: string): Promise<string[]>;
   listIdsByAgent(agentId: string): Promise<string[]>;
   removeByAgent(agentId: string): Promise<void>;
   archive(sessionId: string, now: string): Promise<void>;
   unarchive(sessionId: string, now: string): Promise<void>;
+  pin(sessionId: string, now: string): Promise<void>;
+  unpin(sessionId: string): Promise<void>;
   rename(sessionId: string, name: string, now: string): Promise<void>;
   remove(sessionId: string): Promise<void>;
   bumpProjectionVersion(sessionId: string, now: string): Promise<number>;
@@ -69,6 +73,14 @@ export function createSessionRepository(database: Database): SessionRepository {
         "SELECT id FROM sessions WHERE archived_at IS NOT NULL ORDER BY id",
       ).map(({ id }) => id);
     },
+    async listPinnedIds(agentId) {
+      assertId("Agent", agentId);
+      return database.read<{ id: string }>(`
+        SELECT id FROM sessions
+        WHERE agent_id = ? AND archived_at IS NULL AND pinned_at IS NOT NULL
+        ORDER BY id
+      `, [agentId]).map(({ id }) => id);
+    },
     async listIdsByAgent(agentId) {
       assertId("Agent", agentId);
       return database.read<{ id: string }>(
@@ -83,7 +95,7 @@ export function createSessionRepository(database: Database): SessionRepository {
     async archive(sessionId, now) {
       assertId("Session", sessionId);
       assertChanged(database.write(
-        "UPDATE sessions SET archived_at = COALESCE(archived_at, ?), updated_at = ? WHERE id = ?",
+        "UPDATE sessions SET archived_at = COALESCE(archived_at, ?), pinned_at = NULL, updated_at = ? WHERE id = ?",
         [now, now, sessionId],
       ).changes);
     },
@@ -93,6 +105,26 @@ export function createSessionRepository(database: Database): SessionRepository {
         "UPDATE sessions SET archived_at = NULL, updated_at = ? WHERE id = ?",
         [now, sessionId],
       ).changes);
+    },
+    async pin(sessionId, now) {
+      assertId("Session", sessionId);
+      database.transaction(() => {
+        const current = database.readOne<SessionRow>("SELECT * FROM sessions WHERE id = ?", [sessionId]);
+        if (!current) throw new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+        if (current.archived_at) throw new DomainError("SESSION_ARCHIVED", "已归档 Session 不能置顶");
+        database.write(
+          "UPDATE sessions SET pinned_at = COALESCE(pinned_at, ?) WHERE id = ?",
+          [now, sessionId],
+        );
+      });
+    },
+    async unpin(sessionId) {
+      assertId("Session", sessionId);
+      database.transaction(() => {
+        const current = database.readOne<SessionRow>("SELECT * FROM sessions WHERE id = ?", [sessionId]);
+        if (!current) throw new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+        database.write("UPDATE sessions SET pinned_at = NULL WHERE id = ?", [sessionId]);
+      });
     },
     async rename(sessionId, name, now) {
       assertId("Session", sessionId);
@@ -122,6 +154,7 @@ interface SessionRow extends Record<string, unknown> {
   id: string;
   agent_id: string;
   archived_at: string | null;
+  pinned_at: string | null;
   display_name: string | null;
   projection_version: number;
   created_at: string;
@@ -133,6 +166,7 @@ function toRecord(row: SessionRow): SessionRecord {
     id: row.id,
     agentId: row.agent_id,
     ...(row.archived_at ? { archivedAt: row.archived_at } : {}),
+    ...(row.pinned_at ? { pinnedAt: row.pinned_at } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
     projectionVersion: row.projection_version,
     createdAt: row.created_at,

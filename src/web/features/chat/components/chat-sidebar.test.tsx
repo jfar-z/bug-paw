@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ChatSidebar } from "./chat-sidebar";
@@ -38,6 +38,56 @@ describe("ChatSidebar 会话多选", () => {
   });
 });
 
+describe("ChatSidebar 会话置顶分区", () => {
+  it("仅在存在置顶会话时显示独立分区，并保留最近会话分区", () => {
+    const { rerender } = render(<ChatSidebar {...baseProps()} sessions={[
+      { id: "pinned-1", firstMessage: "置顶会话", modified: "2026-08-13T10:00:00.000Z", messageCount: 1, pinned: true },
+      { id: "recent-1", firstMessage: "最近会话", modified: "2026-08-13T09:00:00.000Z", messageCount: 1 },
+    ]} />);
+
+    expect(screen.getByRole("group", { name: "置顶会话" })).toHaveTextContent("置顶会话");
+    expect(screen.getByRole("group", { name: "最近会话" })).toHaveTextContent("最近会话");
+    expect(within(screen.getByRole("group", { name: "置顶会话" })).getByLabelText("已置顶")).toBeInTheDocument();
+
+    rerender(<ChatSidebar {...baseProps()} sessions={baseProps().sessions} />);
+    expect(screen.queryByRole("group", { name: "置顶会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "最近会话" })).toBeInTheDocument();
+  });
+
+  it("置顶与定时任务状态共存时完整展示，并从三点菜单转发取消置顶", () => {
+    const onPinChange = vi.fn(async () => true);
+    render(<ChatSidebar {...baseProps()} sessions={[
+      {
+        id: "session-pinned-task",
+        firstMessage: "置顶定时会话",
+        modified: "2026-08-13T10:00:00.000Z",
+        messageCount: 1,
+        pinned: true,
+        scheduledTaskCount: 2,
+      },
+    ]} onPinChange={onPinChange} />);
+
+    expect(screen.getByLabelText("已置顶")).toBeInTheDocument();
+    expect(screen.getByLabelText("已绑定 2 个定时任务")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：置顶定时会话" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "取消置顶" }));
+    expect(onPinChange).toHaveBeenCalledWith("session-pinned-task", false);
+  });
+
+  it("多选模式保留置顶和最近分区且不提供批量置顶操作", () => {
+    render(<ChatSidebar {...baseProps()} sessions={[
+      { id: "pinned-1", firstMessage: "置顶会话", modified: "2026-08-13T10:00:00.000Z", messageCount: 1, pinned: true },
+      { id: "recent-1", firstMessage: "最近会话", modified: "2026-08-13T09:00:00.000Z", messageCount: 1 },
+    ]} activeSessionId="recent-1" selectionMode selectedSessionIds={["pinned-1"]} />);
+
+    expect(screen.getByRole("group", { name: "置顶会话" })).toHaveTextContent("置顶会话");
+    expect(screen.getByRole("group", { name: "最近会话" })).toHaveTextContent("最近会话");
+    expect(screen.getByRole("checkbox", { name: "选择 置顶会话" })).toBeChecked();
+    expect(screen.queryByRole("menuitem", { name: /置顶/ })).not.toBeInTheDocument();
+    expect(within(screen.getByLabelText("会话多选操作")).queryByRole("button", { name: /置顶/ })).not.toBeInTheDocument();
+  });
+});
+
 function baseProps() {
   return {
     open: true,
@@ -62,6 +112,7 @@ function baseProps() {
     onOpen: vi.fn(),
     shouldSuppressOpen: vi.fn(() => false),
     onRename: vi.fn(),
+    onPinChange: vi.fn(async () => true),
     onArchive: vi.fn(),
     onDelete: vi.fn(),
     onShowArchived: vi.fn(),
