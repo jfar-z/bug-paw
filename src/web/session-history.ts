@@ -17,6 +17,18 @@ export function mergeOlderHistory(currentMessages: readonly unknown[], pageMessa
   ];
 }
 
+/** 将较新页去重后追加到当前聚焦历史。 */
+export function mergeNewerHistory(currentMessages: readonly unknown[], pageMessages: readonly unknown[]): unknown[] {
+  const currentIds = new Set(currentMessages.map(messageEntryId).filter((id): id is string => Boolean(id)));
+  return [
+    ...currentMessages,
+    ...pageMessages.filter((message) => {
+      const id = messageEntryId(message);
+      return !id || !currentIds.has(id);
+    }),
+  ];
+}
+
 export function snapshotExtendsCurrentBranch(current: SessionSnapshot, next: SessionSnapshot): boolean {
   return Boolean(current.history && next.history)
     && current.id === next.id

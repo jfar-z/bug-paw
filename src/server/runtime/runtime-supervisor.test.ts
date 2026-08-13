@@ -36,7 +36,7 @@ class FakeRuntime implements PiRuntimeGateway {
 }
 
 function emptyHistory() {
-  return { branchToken: "branch-test", hasMoreBefore: false, turnCount: 0 };
+  return { branchToken: "branch-test", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 };
 }
 
 describe("RuntimeSupervisor", () => {

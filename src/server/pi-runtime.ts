@@ -33,8 +33,24 @@ import {
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
 import { classifyAssistantRunOutcome } from "../shared/assistant-run-outcome";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
-import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
+import {
+  buildHistoryPageAfter,
+  buildHistoryPageAround,
+  buildHistoryPageBefore,
+  buildLatestHistoryPage,
+  type SessionHistorySlice,
+} from "./sessions/session-history-page";
 import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
+import {
+  SessionTextService,
+  type SessionTextSourceSession,
+} from "./session-text-service";
+import type {
+  SessionTextReadPage,
+  SessionTextReadRequest,
+  SessionTextSearchPage,
+  SessionTextSearchRequest,
+} from "../shared/session-text-search";
 
 const DEFAULT_RETRIEVAL_CAPABILITIES: EffectiveRetrievalCapabilities = {
   knowledgeSearch: false,
@@ -256,6 +272,10 @@ export interface PiRuntimeGateway {
   createSession(): Promise<SessionSnapshot>;
   openSession(sessionId: string): Promise<SessionSnapshot>;
   loadHistoryPage?(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
+  loadHistoryTarget?(sessionId: string, entryId: string, branchToken: string): Promise<SessionHistoryResult>;
+  loadHistoryPageAfter?(sessionId: string, after: string, branchToken: string): Promise<SessionHistoryResult>;
+  searchSessionText?(input: SessionTextSearchRequest): Promise<SessionTextSearchPage>;
+  readSessionText?(input: SessionTextReadRequest): Promise<SessionTextReadPage>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
@@ -284,7 +304,7 @@ export interface PiRuntimeGateway {
 
 export class PiRuntimeError extends Error {
   constructor(
-    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID",
+    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID" | "SESSION_ENTRY_NOT_FOUND" | "SESSION_BRANCH_CHANGED",
     message: string,
   ) {
     super(message);
@@ -322,8 +342,13 @@ interface PiRuntimeGatewayOptions {
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   onRunStarted?: (run: { runId: string; sessionId: string }) => void;
   onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
-  toolCallCircuitBreakerTools?: readonly ToolDefinition[];
+  toolCallCircuitBreakerTools?: readonly ToolDefinition[] | (() => readonly ToolDefinition[]);
   onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
+  sessionText?: {
+    agentId: string;
+    readPersistedBranch(session: SessionTextSourceSession): Promise<unknown[]>;
+    registerService?(service: SessionTextService): void;
+  };
 }
 
 /**
@@ -362,6 +387,19 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       recoveredCheckpoints.delete(sessionId);
     },
   });
+  const sessionTextService = options.sessionText ? new SessionTextService(options.sessionText.agentId, {
+    listSessions: async () => {
+      const ownedIds = new Set(await sessionMetadataStore.listIdsByAgent(options.sessionText!.agentId));
+      const persisted = await backend.listSessions();
+      const persistedIds = new Set(persisted.map(({ id }) => id));
+      const sessions = [...persisted, ...[...pendingSessionSummaries.values()].filter(({ id }) => !persistedIds.has(id))];
+      return sessions.filter(({ id }) => ownedIds.has(id));
+    },
+    readPersistedBranch: (session) => options.sessionText!.readPersistedBranch(session),
+    readLiveBranch: (sessionId) => sessionRegistry.peek(sessionId)?.session.messages,
+    isArchived: (sessionId) => sessionMetadataStore.isArchived(sessionId),
+  }) : undefined;
+  if (sessionTextService) options.sessionText?.registerService?.(sessionTextService);
 
   function publish(event: ChatEvent): void {
     listeners.get(event.sessionId)?.forEach((listener) => listener(event));
@@ -405,6 +443,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       session.dispose();
     }
     const attached = sessionRegistry.peek(session.sessionId)!.session;
+    sessionTextService?.invalidate(session.sessionId);
     return snapshotSession(
       attached,
       snapshotMessages(session.sessionId, attached),
@@ -414,8 +453,11 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   function manageSession(session: PiSessionAdapter): ManagedSession {
+    const circuitBreakerTools = typeof options.toolCallCircuitBreakerTools === "function"
+      ? options.toolCallCircuitBreakerTools()
+      : options.toolCallCircuitBreakerTools ?? [];
     const toolCallCircuitBreaker = createToolCallCircuitBreaker(
-      options.toolCallCircuitBreakerTools ?? [],
+      circuitBreakerTools,
       options.onToolCallCircuitBreak,
     );
     const toolParameterProgress = new Map<string, ToolParameterProgress>();
@@ -560,6 +602,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       ...(session.messages.length === 0 && titleInput?.trim() ? { titleInput: titleInput.trim() } : {}),
     };
     runs.set(sessionId, run);
+    sessionTextService?.invalidate(sessionId);
     try {
       options.onRunStarted?.({ runId: run.runId, sessionId: run.sessionId });
     } catch (error) {
@@ -618,6 +661,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             if (runs.has(sessionId) || session.isStreaming) return false;
             if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) return false;
             session.setSessionName(sessionName);
+            sessionTextService?.invalidate(sessionId);
             publishSequenced(sessionId, { type: "session_renamed", name: sessionName }, { associateCurrentRun: false });
             return true;
           });
@@ -681,6 +725,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       run.finishedAt = new Date().toISOString();
       publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: run.error });
     } finally {
+      sessionTextService?.invalidate(run.sessionId);
       abortRequested.delete(run.sessionId);
       await options.onRunFinished?.({
         runId: run.runId,
@@ -788,6 +833,46 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
     },
 
+    async loadHistoryTarget(sessionId, entryId, branchToken) {
+      const session = requireSession(sessionId);
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed || managed.branchToken !== branchToken) {
+        throw new PiRuntimeError("SESSION_BRANCH_CHANGED", "会话分支已变化，请重新搜索");
+      }
+      let page: SessionHistorySlice;
+      try {
+        page = buildHistoryPageAround(session.messages, branchToken, session.branchLeafId, entryId);
+      } catch {
+        throw new PiRuntimeError("SESSION_ENTRY_NOT_FOUND", "目标会话记录不存在");
+      }
+      return {
+        sessionId,
+        messages: projectSessionMessages(page.messages),
+        history: page.history,
+        targetEntryId: page.targetEntryId,
+      };
+    },
+
+    async loadHistoryPageAfter(sessionId, after, branchToken) {
+      const session = requireSession(sessionId);
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed || managed.branchToken !== branchToken) {
+        throw new PiRuntimeError("SESSION_BRANCH_CHANGED", "会话分支已变化，请重新加载");
+      }
+      let page: SessionHistorySlice;
+      try {
+        page = buildHistoryPageAfter(session.messages, branchToken, session.branchLeafId, after);
+      } catch {
+        throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
+      }
+      return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
+    },
+
+    ...(sessionTextService ? {
+      searchSessionText: (input: SessionTextSearchRequest) => sessionTextService.search(input),
+      readSessionText: (input: SessionTextReadRequest) => sessionTextService.read(input),
+    } : {}),
+
     async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
         const summary = pendingSessionSummaries.get(sessionId);
@@ -823,6 +908,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       const managed = sessionRegistry.peek(sessionId);
       if (!managed) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
       managed.branchToken = randomUUID();
+      sessionTextService?.invalidate(sessionId);
       return {
         snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
         editorText: result.editorText,
@@ -872,6 +958,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           handle.release();
         }
         session.setSessionName(sanitized);
+        sessionTextService?.invalidate(sessionId);
         manuallyRenamedSessions.add(sessionId);
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) pendingSessionSummaries.set(sessionId, { ...summary, name: sanitized });
@@ -883,6 +970,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         requireIdleSession(sessionId);
         await ensureSessionExists(sessionId);
         await sessionMetadataStore.archive(sessionId);
+        sessionTextService?.invalidate(sessionId);
       });
     },
 
@@ -890,6 +978,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       await sessionMutations.run(sessionId, async () => {
         await ensureSessionExists(sessionId);
         await sessionMetadataStore.unarchive(sessionId);
+        sessionTextService?.invalidate(sessionId);
       });
     },
 
@@ -899,6 +988,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         requireIdleSession(sessionId);
         await ensureSessionExists(sessionId);
         deletingSessions.add(sessionId);
+        sessionTextService?.invalidate(sessionId);
         let staged: StagedSessionDeletion;
         try {
           staged = backend.stageDeleteSession
@@ -909,6 +999,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           throw error;
         }
         sessionRegistry.invalidate(sessionId);
+        sessionTextService?.invalidate(sessionId);
         subscriptionTerminators.get(sessionId)?.forEach((terminate) => terminate(
           new DomainError("SESSION_NOT_FOUND", "Session 已删除，实时连接需要关闭"),
         ));
@@ -959,6 +1050,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           ? await backend.stageDeleteSession?.(sessionId)
           : undefined;
         sessionRegistry.invalidate(sessionId);
+        sessionTextService?.invalidate(sessionId);
         subscriptionTerminators.get(sessionId)?.forEach((terminate) => terminate(new DomainError("SESSION_NOT_FOUND", "Session 创建已回滚")));
         subscriptionTerminators.delete(sessionId);
         listeners.delete(sessionId);
@@ -1067,6 +1159,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       deletingSessions.clear();
       manuallyRenamedSessions.clear();
       backgroundTitleTasks.clear();
+      sessionTextService?.clear();
       sessionIdleWaiters.forEach((waiters) => waiters.forEach((resolve) => resolve()));
       sessionIdleWaiters.clear();
       // 兼容直接调用 dispose 的旧调用方；Supervisor 会先显式 await drain。
@@ -1077,6 +1170,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
 }
 
 interface SdkPiRuntimeOptions {
+  agentId: string;
   cwd: string;
   agentDir: string;
   provider?: StoredProviderConfig;
@@ -1086,6 +1180,7 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
+  createRuntimeTools?: (services: { sessionText: SessionTextService }) => ToolDefinition[];
   createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
@@ -1127,6 +1222,8 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   const sessionDir = options.sessionDir ?? join(options.agentDir, "sessions");
   let commandCatalog: PiCommandSummary[] | undefined;
   const appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
+  let runtimeTools: ToolDefinition[] = [];
+  const circuitBreakerTools = new Map((options.customTools ?? []).map((tool) => [tool.name, tool]));
 
   async function createWithManager(sessionManager: SessionManager): Promise<PiSessionAdapter> {
     const model = modelRuntime.getModel(selectedProviderId, selectedDefaultModel);
@@ -1143,6 +1240,12 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       options.resolveAgentPromptContext,
     );
     await resourceLoader.reload();
+    const finalCustomTools = [
+      ...(options.customTools ?? []),
+      ...runtimeTools,
+      ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
+    ];
+    finalCustomTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
     const { session, extensionsResult } = await createAgentSession({
       cwd: options.cwd,
       agentDir: options.agentDir,
@@ -1155,10 +1258,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       thinkingLevel: options.defaultThinkingLevel ?? "medium",
       // 工具白名单必须与 Agent Profile 一致，不能因为工具已注册就自动放行。
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
-      customTools: [
-        ...(options.customTools ?? []),
-        ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
-      ],
+      customTools: finalCustomTools,
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({
       name: command.name,
@@ -1251,8 +1351,20 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     onSessionTitleGenerated: options.onSessionTitleGenerated,
     onRunStarted: options.onRunStarted,
     onRunFinished: options.onRunFinished,
-    toolCallCircuitBreakerTools: options.customTools,
+    toolCallCircuitBreakerTools: () => [...circuitBreakerTools.values()],
     onToolCallCircuitBreak: options.onToolCallCircuitBreak,
+    sessionText: {
+      agentId: options.agentId,
+      readPersistedBranch: async (session) => {
+        const sessionFile = assertManagedSessionFile(sessionDir, session.path);
+        const manager = SessionManager.open(sessionFile, sessionDir, options.cwd);
+        return sessionManagerVisibleMessages(manager);
+      },
+      registerService: (service) => {
+        runtimeTools = options.createRuntimeTools?.({ sessionText: service }) ?? [];
+        runtimeTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
+      },
+    },
   });
 }
 
@@ -1315,6 +1427,14 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     },
     dispose: () => session.dispose(),
   };
+}
+
+/** 将 SessionManager 当前叶分支投影成带稳定节点 ID 的消息。 */
+function sessionManagerVisibleMessages(sessionManager: SessionManager): unknown[] {
+  return sessionManager.getBranch().flatMap((entry) => {
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return [];
+    return [{ ...entry.message, __piEntryId: entry.id }];
+  });
 }
 
 /**

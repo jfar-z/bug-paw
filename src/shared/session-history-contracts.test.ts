@@ -10,13 +10,15 @@ describe("会话历史分页契约", () => {
       branchToken: "branch-a",
       branchLeafId: "assistant-100",
       hasMoreBefore: true,
+      hasMoreAfter: false,
       turnCount: SESSION_HISTORY_TURNS_PER_PAGE,
     })).toBe(true);
     expect(isSessionHistoryPage({
       branchToken: "branch-a",
       hasMoreBefore: true,
+      hasMoreAfter: false,
       turnCount: SESSION_HISTORY_TURNS_PER_PAGE + 1,
     })).toBe(false);
-    expect(isSessionHistoryPage({ hasMoreBefore: true, turnCount: 1 })).toBe(false);
+    expect(isSessionHistoryPage({ branchToken: "branch-a", hasMoreBefore: true, turnCount: 1 })).toBe(false);
   });
 });

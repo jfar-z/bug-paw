@@ -87,6 +87,7 @@ import { exposeRequestId, registerApiErrorHandler } from "./http/error-handler";
 import { sendApiError } from "./routes/http";
 import { BackgroundErrorRegistry } from "./observability/background-errors";
 import { SYSTEM_LIMITS } from "./core/limits";
+import { createSessionTextTools } from "./session-text-tools";
 import { AgentLifecycleGate } from "./core/agent-lifecycle-gate";
 import { DurableDeletionCoordinator } from "./core/durable-deletion";
 import { KeyedMutex } from "./core/keyed-mutex";
@@ -321,6 +322,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           deploymentAvailable: deploymentCapabilities.browserAutomationAvailable,
         });
         return createSdkPiRuntimeGateway({
+          agentId,
           cwd,
           agentDir: paths.piDir,
           modelRuntime,
@@ -338,6 +340,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
+          createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
           createSessionTools: ({ searchRunState, sessionId }) => [
             ...(retrievalCapabilities.webSearch
               ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]

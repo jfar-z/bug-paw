@@ -131,6 +131,58 @@ describe("ConversationTimelineView 消息复制", () => {
 });
 
 describe("ConversationTimelineView 历史加载状态", () => {
+  it("为用户行和 Assistant 正文提供稳定 Session entry 锚点", () => {
+    const user: UserEntry = {
+      id: "user-local",
+      type: "user",
+      text: "用户命中",
+      files: [],
+      references: [],
+      piEntryId: "user-25",
+    };
+    const agent: AgentTurn = {
+      id: "agent-local",
+      type: "agent",
+      blocks: [{ id: "agent-text", type: "markdown", text: "Agent 命中", streaming: false, piEntryId: "assistant-25" }],
+    };
+    const { container } = render(
+      <ConversationTimelineView {...baseProps()} timeline={[user, agent]} focusedEntryId="assistant-25" />,
+    );
+
+    expect(container.querySelector('.message-row[data-session-entry-id="user-25"]')).not.toBeNull();
+    expect(container.querySelector('.markdown-content[data-session-entry-id="assistant-25"]'))
+      .toHaveClass("is-session-search-focus");
+  });
+
+  it("聚焦窗口分别展示前后分页状态与返回最新入口", () => {
+    const onRetryNewerHistory = vi.fn();
+    const onReturnLatest = vi.fn();
+    const { rerender } = render(
+      <ConversationTimelineView
+        {...baseProps()}
+        timeline={[firstTurn]}
+        focusedHistory
+        newerHistoryState="loading"
+        onReturnLatest={onReturnLatest}
+      />,
+    );
+
+    expect(screen.getByRole("status", { name: "正在加载较新消息" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "回到最新消息" }));
+    expect(onReturnLatest).toHaveBeenCalledOnce();
+
+    rerender(<ConversationTimelineView
+      {...baseProps()}
+      timeline={[firstTurn]}
+      focusedHistory
+      newerHistoryState="error"
+      onRetryNewerHistory={onRetryNewerHistory}
+      onReturnLatest={onReturnLatest}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "加载较新消息失败，重试" }));
+    expect(onRetryNewerHistory).toHaveBeenCalledOnce();
+  });
+
   it("消息滚动容器保留纵向滚动并允许页面识别横划", () => {
     const { container } = render(<ConversationTimelineView {...baseProps()} timeline={[firstTurn]} />);
 

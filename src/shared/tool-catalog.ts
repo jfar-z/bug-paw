@@ -23,6 +23,8 @@ export const BUILTIN_TOOL_CATALOG: ToolCatalogItem[] = [
 
 /** Web 系统注入、但同样必须获得 Agent 授权的工具。 */
 export const SYSTEM_TOOL_CATALOG: ToolCatalogItem[] = [
+  { name: "session_search", description: "搜索当前 Agent 的历史会话文本", source: "system", highRisk: false },
+  { name: "session_read", description: "读取当前 Agent 的历史会话文本上下文", source: "system", highRisk: false },
   { name: "knowledge_search", description: "检索当前 Agent 可访问的知识库", source: "system", highRisk: false },
   { name: "knowledge_read", description: "读取知识库资料或命中位置上下文", source: "system", highRisk: false },
   { name: "knowledge_manage", description: "管理当前 Agent 的知识库与资料", source: "system", highRisk: true },

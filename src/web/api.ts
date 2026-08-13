@@ -14,6 +14,7 @@ import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/
 import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument } from "../shared/browser-automation-contracts";
+import type { SessionTextSearchPage } from "../shared/session-text-search";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -403,6 +404,11 @@ export const api = {
   listSessions: (agentId: string, archived = false) => request<{ sessions: SessionSummary[] }>(
     `/api/sessions?agentId=${encodeURIComponent(agentId)}${archived ? "&archived=true" : ""}`,
   ),
+  searchSessions: (agentId: string, input: { query: string; cursor?: string }, signal?: AbortSignal) =>
+    request<SessionTextSearchPage>(
+      `/api/sessions/search?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(input.query)}${input.cursor ? `&cursor=${encodeURIComponent(input.cursor)}` : ""}`,
+      { signal },
+    ),
   previewSessionBulk: (action: SessionBulkAction, target: SessionBulkTarget) => request<SessionBulkPreview>("/api/sessions/bulk/preview", {
     method: "POST",
     body: JSON.stringify({ action, target }),
@@ -419,6 +425,16 @@ export const api = {
   loadSessionHistory: (sessionId: string, before: string, branchToken: string, signal?: AbortSignal) =>
     request<SessionHistoryResult>(
       `/api/sessions/${encodeURIComponent(sessionId)}/history?before=${encodeURIComponent(before)}&branch=${encodeURIComponent(branchToken)}`,
+      { signal },
+    ),
+  loadSessionHistoryTarget: (sessionId: string, entryId: string, branchToken: string, signal?: AbortSignal) =>
+    request<SessionHistoryResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/history-window?entryId=${encodeURIComponent(entryId)}&branch=${encodeURIComponent(branchToken)}`,
+      { signal },
+    ),
+  loadSessionHistoryAfter: (sessionId: string, after: string, branchToken: string, signal?: AbortSignal) =>
+    request<SessionHistoryResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/history?after=${encodeURIComponent(after)}&branch=${encodeURIComponent(branchToken)}`,
       { signal },
     ),
   sendMessage: (sessionId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
