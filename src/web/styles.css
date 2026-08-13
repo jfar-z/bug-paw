@@ -7021,6 +7021,7 @@ img.message-avatar {
   width: min(680px, calc(100vw - 32px));
   max-height: min(76vh, 720px);
   padding: 0;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   overflow: hidden;
   border-radius: 13px;
   color: var(--text-primary);
@@ -7050,7 +7051,7 @@ img.message-avatar {
 .session-search-dialog__field {
   display: grid;
   min-height: 44px;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 9px;
   margin: 0 20px;
@@ -7079,6 +7080,18 @@ img.message-avatar {
   animation: session-loading-spin 720ms linear infinite;
 }
 
+.session-search-dialog__field-actions {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.session-search-dialog__clear {
+  flex: 0 0 auto;
+}
+
 .session-search-dialog__announcement {
   min-height: 17px;
   margin: 8px 20px 5px;
@@ -7087,8 +7100,9 @@ img.message-avatar {
 }
 
 .session-search-dialog__results {
-  min-height: 120px;
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .session-search-dialog__results [role="listbox"] {

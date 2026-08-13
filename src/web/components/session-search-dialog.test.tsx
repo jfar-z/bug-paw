@@ -79,6 +79,26 @@ describe("SessionSearchDialog", () => {
     trigger.remove();
   });
 
+  it("使用应用内按钮清空搜索并恢复输入焦点", async () => {
+    vi.spyOn(api, "searchSessions").mockResolvedValue({ hits, hasMore: false });
+    render(<SessionSearchDialog open agentId="agent-a" onClose={vi.fn()} onSelect={vi.fn()} />);
+    const input = screen.getByRole("searchbox", { name: "搜索聊天记录" });
+
+    expect(screen.queryByRole("button", { name: "清空聊天记录搜索" })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "needle" } });
+    await act(async () => vi.advanceTimersByTime(300));
+    expect(screen.getByRole("listbox", { name: "聊天记录搜索结果" })).toBeInTheDocument();
+
+    const clearButton = screen.getByRole("button", { name: "清空聊天记录搜索" });
+    clearButton.focus();
+    fireEvent.click(clearButton);
+
+    expect(input).toHaveValue("");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("listbox", { name: "聊天记录搜索结果" })).not.toBeInTheDocument();
+    expect(screen.getByText("输入内容以搜索当前 Agent 的聊天记录。")).toBeInTheDocument();
+  });
+
   it("展示空、错误、继续加载与结果选择失败状态", async () => {
     vi.spyOn(api, "searchSessions")
       .mockResolvedValueOnce({ hits: [], hasMore: false })

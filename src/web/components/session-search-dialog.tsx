@@ -53,6 +53,11 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
     search.reset();
     props.onClose();
   };
+  const clearSearch = () => {
+    setSelectionError(undefined);
+    search.setQuery("");
+    inputRef.current?.focus({ preventScroll: true });
+  };
   const select = async (hit: SessionTextSearchHit) => {
     if (selecting) return;
     setSelecting(true);
@@ -99,12 +104,13 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
           <div><span>SESSIONS · SEARCH</span><h2 id="session-search-dialog-title">搜索聊天记录</h2></div>
           <button type="button" className="icon-button" aria-label="关闭聊天记录搜索" onClick={close}><X size={18} aria-hidden="true" /></button>
         </header>
-        <label className="session-search-dialog__field">
+        <div className="session-search-dialog__field">
           <Search size={17} aria-hidden="true" />
           <input
             ref={inputRef}
-            type="search"
+            type="text"
             role="searchbox"
+            enterKeyHint="search"
             aria-label="搜索聊天记录"
             aria-controls="session-search-results"
             autoComplete="off"
@@ -114,9 +120,18 @@ export function SessionSearchDialog(props: SessionSearchDialogProps) {
             onChange={(event) => { setSelectionError(undefined); search.setQuery(event.target.value); }}
             onKeyDown={onInputKeyDown}
           />
-          {(search.state === "loading" || search.state === "loadingMore")
-            ? <LoaderCircle className="is-spinning" size={16} aria-hidden="true" /> : null}
-        </label>
+          <span className="session-search-dialog__field-actions">
+            {(search.state === "loading" || search.state === "loadingMore")
+              ? <LoaderCircle className="is-spinning" size={16} aria-hidden="true" /> : null}
+            {search.query ? <button
+              type="button"
+              className="icon-button session-search-dialog__clear"
+              aria-label="清空聊天记录搜索"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={clearSearch}
+            ><X size={16} aria-hidden="true" /></button> : null}
+          </span>
+        </div>
         <p
           className={`session-search-dialog__announcement${statusVisuallyHidden(search.state) ? " visually-hidden" : ""}`}
           role="status"
