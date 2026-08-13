@@ -13,7 +13,7 @@
 
 Agent 自身的 `ROLE.md`、`BEHAVIOR.md`、`RULES.md`、`USER.md` 和 `BOOTSHARP.md` 不是独立业务资源，不注册功能重复的自定义工具。系统在每次 Run 的 `before_agent_start` 中注入当前 Agent 的精确文件路径、维护时机和最新内容；Agent 使用 Pi 原生 `read`、`write`、`edit` 完成维护。
 
-不得重新引入 `edit_own_prompts` 或同义包装工具。文件更新前先读取现有内容，只修改当前 Agent 的精确路径；`BOOTSHARP.md` 初始化完成后通过 `write` 写入空字符串。Web 管理接口可以继续读写这些文件，但不需要触发 Session reload，因为下一次 Run 会重新读取快照。
+不得重新引入 `edit_own_prompts` 或同义包装工具。文件更新前先读取现有内容，只修改当前 Agent 的精确路径；`BOOTSHARP.md` 初始化完成后通过 `write` 写入空字符串。缺少 `read`、`write` 或 `edit` 权限时，Agent 说明能力不足并提示用户使用 Agent 配置页，不自动扩权，也不使用 `bash` 绕过。Web 管理接口可以继续读写这些文件，但不需要触发 Session reload，因为下一次 Run 会重新读取快照。
 
 ## 参数 Schema 兼容性
 

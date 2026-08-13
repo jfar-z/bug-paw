@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { createWriteTool, ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { createEditTool, createReadTool, createWriteTool, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -173,6 +173,38 @@ describe("PiRuntimeGateway 提示词刷新", () => {
       );
 
       await expect(readFile(bootsharp, "utf8")).resolves.toBe("");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("Pi 原生 read 与 edit 可通过绝对路径维护长期提示词", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-native-prompt-tools-"));
+    const cwd = join(root, "workspace");
+    const role = join(root, "app", "agents", "agent-a", "ROLE.md");
+    await Promise.all([
+      mkdir(cwd, { recursive: true }),
+      mkdir(dirname(role), { recursive: true }),
+    ]);
+    await writeFile(role, "研究助手", "utf8");
+    try {
+      const readTool = createReadTool(cwd);
+      const editTool = createEditTool(cwd);
+
+      await expect(readTool.execute(
+        "read-role",
+        { path: role },
+        undefined,
+        undefined,
+      )).resolves.toBeDefined();
+      await editTool.execute(
+        "edit-role",
+        { path: role, edits: [{ oldText: "研究助手", newText: "代码审查助手" }] },
+        undefined,
+        undefined,
+      );
+
+      await expect(readFile(role, "utf8")).resolves.toBe("代码审查助手");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

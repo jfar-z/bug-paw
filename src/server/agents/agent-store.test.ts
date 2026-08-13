@@ -78,6 +78,7 @@ describe("AgentStore", () => {
     expect((await store.get(unchanged.profile.id))?.revision).toBe(unchanged.revision);
 
     const cleanedRevision = (await store.get(withRetired.profile.id))?.revision;
+    expect(Number(cleanedRevision)).toBe(Number(withRetired.revision) + 1);
     await store.removeToolPermissions(["edit_own_prompts"]);
     expect((await store.get(withRetired.profile.id))?.revision).toBe(cleanedRevision);
   });

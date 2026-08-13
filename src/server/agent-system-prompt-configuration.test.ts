@@ -68,6 +68,8 @@ describe("AgentSystemPromptConfiguration", () => {
     expect(result).toContain("asks you to remember such information");
     expect(result).toContain("Never store credentials, secrets");
     expect(result).toContain("do not repeat them in ordinary user-facing responses");
+    expect(result).toContain("If read, write, or edit is unavailable");
+    expect(result).toContain("Agent configuration page");
     expect(result).toContain("#### Role and responsibilities\n\n研究助手");
     expect(result).toContain("#### Behavior and collaboration style\n\n回答简洁");
     expect(result).toContain("#### Rules\n\n发布前确认");
@@ -76,6 +78,12 @@ describe("AgentSystemPromptConfiguration", () => {
     expect(result).toContain(piSuffix);
     expect(result.indexOf("### Workspace file delivery"))
       .toBeLessThan(result.indexOf("### Your persistent instruction files"));
+    const paths = Object.values(promptContext.agentPrompts.paths);
+    for (const path of paths) expect(result.split(path)).toHaveLength(2);
+    expect(result.indexOf(paths[0])).toBeLessThan(result.indexOf(paths[1]));
+    expect(result.indexOf(paths[1])).toBeLessThan(result.indexOf(paths[2]));
+    expect(result.indexOf(paths[2])).toBeLessThan(result.indexOf(paths[3]));
+    expect(result.indexOf(paths[3])).toBeLessThan(result.indexOf(paths[4]));
   });
 
   it("BOOTSHARP 为空时保留路径说明但不注入初始化正文", () => {

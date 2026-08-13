@@ -113,18 +113,23 @@ describe("Agent 配置路由", () => {
   it("读取和修改 Agent 的独立提示词文件", async () => {
     const { app, store, prompts } = await fixture();
     const created = await store.create({ name: "提示词 Agent" });
+    const files = ["role", "behavior", "rules", "user", "bootsharp"] as const;
 
-    const initial = await app.inject({ method: "GET", url: `/api/agents/${created.profile.id}/prompts/role` });
-    expect(initial.statusCode).toBe(200);
-    expect(initial.json()).toEqual({ file: "role", content: "" });
+    for (const file of files) {
+      const existing = await prompts.read(created.profile.id, file);
+      const initial = await app.inject({ method: "GET", url: `/api/agents/${created.profile.id}/prompts/${file}` });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.json()).toEqual({ file, content: existing });
 
-    const saved = await app.inject({
-      method: "PUT",
-      url: `/api/agents/${created.profile.id}/prompts/role`,
-      payload: { content: "负责测试" },
-    });
-    expect(saved.statusCode).toBe(200);
-    expect(await prompts.read(created.profile.id, "role")).toBe("负责测试");
+      const content = `${file} 的测试内容`;
+      const saved = await app.inject({
+        method: "PUT",
+        url: `/api/agents/${created.profile.id}/prompts/${file}`,
+        payload: { content },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(await prompts.read(created.profile.id, file)).toBe(content);
+    }
     await app.close();
   });
 
