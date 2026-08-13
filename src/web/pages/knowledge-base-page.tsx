@@ -4,6 +4,7 @@ import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import { api, type KnowledgeBaseDetail, type KnowledgeDocumentChunk, type KnowledgeDocumentSummary, type KnowledgeSearchResult } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { MarkdownContent } from "../components/markdown-content";
+import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 
 import { KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT } from "../router";
@@ -84,7 +85,7 @@ export function KnowledgeBasePage() {
   return (
     <main className="knowledge-base-page">
       <aside className={mobileNavigationOpen ? "knowledge-base-navigation is-mobile-open" : "knowledge-base-navigation"}>
-        <header><span>KNOWLEDGE BASES</span><strong>知识库</strong></header>
+        <SecondarySidebarHeader eyebrow="KNOWLEDGE BASES" title="知识库" />
         <nav aria-label="知识库列表">
           {bases.map((base) => <button key={base.id} type="button" className={base.id === selectedId ? "is-active" : undefined} aria-current={base.id === selectedId ? "page" : undefined} aria-label={`选择知识库 ${base.name}`} onClick={() => { setSelectedId(base.id); setMobileNavigationOpen(false); }}><BookOpen size={16} aria-hidden="true" /><span><strong>{base.name}</strong><small>{base.documents.length} 份资料</small></span></button>)}
         </nav>

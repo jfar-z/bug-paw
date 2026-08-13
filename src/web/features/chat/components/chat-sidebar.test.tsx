@@ -20,6 +20,10 @@ describe("ChatSidebar 会话多选", () => {
     const onSearch = vi.fn();
     const { rerender } = render(<ChatSidebar {...baseProps()} onSearch={onSearch} />);
 
+    const header = document.querySelector(".live-session-header")!;
+    expect(header).toHaveClass("secondary-sidebar-header");
+    expect([...header.querySelectorAll(".secondary-sidebar-header__eyebrow, .secondary-sidebar-header__title")]
+      .map((element) => element.textContent)).toEqual(["SESSIONS", "会话"]);
     const actions = screen.getByRole("group", { name: "会话列表操作" });
     const buttons = within(actions).getAllByRole("button");
     expect(getComputedStyle(actions).display).toBe("flex");
@@ -29,6 +33,8 @@ describe("ChatSidebar 会话多选", () => {
     expect(onSearch).toHaveBeenCalledOnce();
 
     rerender(<ChatSidebar {...baseProps()} selectionMode onSearch={onSearch} />);
+    expect([...header.querySelectorAll(".secondary-sidebar-header__eyebrow, .secondary-sidebar-header__title")]
+      .map((element) => element.textContent)).toEqual(["SELECT SESSIONS", "已选 0 项"]);
     expect(screen.getByRole("button", { name: "搜索聊天记录" })).toBeDisabled();
     rerender(<ChatSidebar {...baseProps()} noAvailableAgent onSearch={onSearch} />);
     expect(screen.getByRole("button", { name: "搜索聊天记录" })).toBeDisabled();
