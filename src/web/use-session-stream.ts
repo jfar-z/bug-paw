@@ -4,6 +4,7 @@ import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } fro
 import { api, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
 import { isSessionHistoryPage } from "../shared/session-history-contracts";
+import type { ThinkingLevel } from "../shared/configuration-contracts";
 
 interface SessionStreamOptions {
   sessionId?: string;
@@ -11,6 +12,7 @@ interface SessionStreamOptions {
   onTimelineEvent: (event: TimelineEvent) => void;
   onRunChange: (run: ChatRunSummary | undefined) => void;
   onModelChange?: (model: ModelSummary) => void;
+  onThinkingLevelChange?: (thinkingLevel: ThinkingLevel) => void;
   onSessionRenamed?: (sessionId: string, name: string) => void;
   onError: (message: string) => void;
   onUnexpectedError?: (error: unknown) => void;
@@ -217,6 +219,15 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (!accept(payload)) return;
       callbacksRef.current.onModelChange?.(payload.model);
+    });
+    source.addEventListener("thinking_level_changed", (rawEvent) => {
+      const payload = parse(rawEvent as MessageEvent);
+      if (!payload || !isSessionEvent(payload) || payload.type !== "thinking_level_changed") {
+        reportInvalidEvent();
+        return;
+      }
+      if (!accept(payload)) return;
+      callbacksRef.current.onThinkingLevelChange?.(payload.thinkingLevel);
     });
     source.addEventListener("session_renamed", (rawEvent) => {
       const payload = parse(rawEvent as MessageEvent);

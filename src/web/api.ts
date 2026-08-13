@@ -72,6 +72,7 @@ export interface SessionSnapshot {
   messages: unknown[];
   history: SessionHistoryPage;
   model?: ModelSummary;
+  thinkingLevel?: ThinkingLevel;
   run?: ChatRunSummary;
   lastEventId: number;
 }
