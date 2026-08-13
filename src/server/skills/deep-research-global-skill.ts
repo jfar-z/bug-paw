@@ -36,8 +36,14 @@ export async function ensureDeepResearchGlobalSkill(agentDir: string): Promise<D
   const target = join(directory, "SKILL.md");
   const bundled = await readBundledDeepResearchSkill();
 
-  await mkdir(skillsDirectory, { recursive: true, mode: 0o700 });
-  const skillsMetadata = await lstat(skillsDirectory);
+  let skillsMetadata;
+  try {
+    skillsMetadata = await lstat(skillsDirectory);
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) throw error;
+    await mkdir(skillsDirectory, { recursive: true, mode: 0o700 });
+    skillsMetadata = await lstat(skillsDirectory);
+  }
   if (!skillsMetadata.isDirectory()) {
     return { name: DEEP_RESEARCH_SKILL_NAME, status: "preserved_existing" };
   }

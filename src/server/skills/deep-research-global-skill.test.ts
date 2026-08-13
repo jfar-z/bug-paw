@@ -129,6 +129,33 @@ describe("通用深度研究全局 Skill", () => {
     });
   });
 
+  it("保留占用全局技能根路径的文件、文件链接和断链", async () => {
+    const fileRoot = await createRoot();
+    await writeFile(join(fileRoot, "skills"), "user root", "utf8");
+    await expect(ensureDeepResearchGlobalSkill(fileRoot)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
+    expect(await readFile(join(fileRoot, "skills"), "utf8")).toBe("user root");
+
+    const linkedRoot = await createRoot();
+    const linkedFile = join(linkedRoot, "user-skills");
+    await writeFile(linkedFile, "linked root", "utf8");
+    await symlink(linkedFile, join(linkedRoot, "skills"), "file");
+    await expect(ensureDeepResearchGlobalSkill(linkedRoot)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
+    expect(await readFile(linkedFile, "utf8")).toBe("linked root");
+
+    const brokenRoot = await createRoot();
+    await symlink(join(brokenRoot, "missing-skills"), join(brokenRoot, "skills"), "dir");
+    await expect(ensureDeepResearchGlobalSkill(brokenRoot)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
+  });
+
   it("保留技能正文符号链接和断开的符号链接", async () => {
     const root = await createRoot();
     const directory = join(root, "skills", "deep-research");

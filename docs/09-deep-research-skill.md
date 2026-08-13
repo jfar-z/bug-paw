@@ -131,7 +131,7 @@ Entity + Version + Date + Claim
 
 ## 确定性回归环境
 
-`scripts/deep-research-eval/` 提供七个合成案例和两个只读工具：
+`scripts/deep-research-eval/` 提供七个合成案例、两个网页工具和一个仅用于自动发现的受限 Skill 读取工具：
 
 - `web_search` 只返回候选摘要。
 - `web_read` 返回页面正文。
