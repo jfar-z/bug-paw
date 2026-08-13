@@ -63,6 +63,25 @@ describe("AgentStore", () => {
     ]);
   });
 
+  it("幂等移除废弃工具权限并保持其他权限顺序", async () => {
+    const { store } = await fixture();
+    const withRetired = await store.create({
+      name: "旧 Agent",
+      allowedTools: ["read", "edit_own_prompts", "write", "extension_lookup"],
+    });
+    const unchanged = await store.create({ name: "新 Agent", allowedTools: ["read", "write"] });
+
+    await store.removeToolPermissions(["edit_own_prompts"]);
+
+    expect((await store.get(withRetired.profile.id))?.profile.allowedTools)
+      .toEqual(["read", "write", "extension_lookup"]);
+    expect((await store.get(unchanged.profile.id))?.revision).toBe(unchanged.revision);
+
+    const cleanedRevision = (await store.get(withRetired.profile.id))?.revision;
+    await store.removeToolPermissions(["edit_own_prompts"]);
+    expect((await store.get(withRetired.profile.id))?.revision).toBe(cleanedRevision);
+  });
+
   it("保存指定 Agent 顺序，并把未收录 Agent 稳定追加", async () => {
     const { store } = await fixture();
     const first = await store.create({ name: "First" });

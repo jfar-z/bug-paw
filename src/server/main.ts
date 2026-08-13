@@ -29,12 +29,11 @@ import { createSessionBulkService } from "./sessions/session-bulk-service";
 import { ConfigTransaction, recoverPendingTransactions } from "./configuration/config-transaction";
 import { createAgentService } from "./agents/agent-service";
 import { AgentPromptStore } from "./agents/agent-prompt-store";
-import { createEditOwnPromptsTool } from "./agents/agent-prompt-tool";
 import { createRuntimeCoordinator, type RuntimeCoordinator } from "./runtime-coordinator";
 import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
-import { SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { RETIRED_AGENT_TOOL_NAMES, SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
 import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
@@ -310,12 +309,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
         if (!profile) {
           throw new Error("Agent 不存在");
         }
-        const readInstructionPrompts = async () => {
-          const latest = await agentStore.get(agentId);
-          if (!latest) throw new Error("Agent 不存在");
-          const bootsharp = await agentPrompts.read(agentId, "bootsharp");
-          return buildAgentInstructionPrompts(latest.profile, bootsharp);
-        };
         const webResearchConfig = (await webResearchConfigs.read()).config;
         const retrievalCapabilities = resolveEffectiveRetrievalCapabilities({
           allowedTools: profile.profile.allowedTools,
@@ -342,9 +335,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(profile.profile.allowedTools.includes("knowledge_manage")
               ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
               : []),
-            createEditOwnPromptsTool(agentId, agentPrompts, async () => {
-              await runtimeSupervisor?.refreshAgentPromptContext(agentId);
-            }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
@@ -356,14 +346,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
               ? createBrowserTools({ sessionId }, browserAutomation).filter((tool) => browserCapabilities.toolNames.includes(tool.name as never))
               : []),
           ],
-          appendSystemPrompt: [
-            ...await readInstructionPrompts(),
-            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
-          ],
-          refreshAppendSystemPrompt: async () => [
-            ...await readInstructionPrompts(),
-            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
-          ],
+          appendSystemPrompt: browserCapabilities.toolNames.length > 0
+            ? [AgentSystemPromptConfiguration.browserAutomationPolicy]
+            : [],
+          resolveAgentPromptContext: () => agentPrompts.readContext(agentId),
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
@@ -441,6 +427,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     workspaceFiles,
     referenceResolver,
   });
+  await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);
   await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureSkillCreatorGlobalSkill(paths.piDir);
@@ -513,7 +500,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     authService,
     store: agentStore,
     prompts: agentPrompts,
-    refreshPromptContext: (agentId) => runtimeSupervisor.refreshAgentPromptContext(agentId),
     removeAgent: (agentId) => runtimeCoordinator.removeAgent(agentId),
     finalizeAgentRemoval: (agentId) => runtimeCoordinator.finalizeAgentRemoval(agentId),
     restoreAgent: (agentId) => runtimeCoordinator.restoreAgent(agentId),
@@ -684,24 +670,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     throw error;
   }
 }
-
-/**
- * 把 Agent Profile 的稳定角色字段转换为持续注入的系统提示。
- */
-function buildAgentInstructionPrompts(profile: AgentProfile, bootsharp = ""): string[] {
-  const sections: Array<[string, string]> = [
-    ["角色定位", profile.instructions.role],
-    ["行为方式", profile.instructions.behavior],
-    ["规则", profile.instructions.rules],
-    ["用户", profile.instructions.user],
-  ];
-  const content = sections
-    .filter(([, value]) => value.trim())
-    .map(([title, value]) => `## ${title}\n\n${value.trim()}`)
-    .join("\n\n");
-  return [content, bootsharp.trim() ? `## 初始化协作设定\n\n${bootsharp.trim()}` : ""].filter(Boolean);
-}
-
 
 interface GracefulShutdownOptions {
   close(): Promise<void>;

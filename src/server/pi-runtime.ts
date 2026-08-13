@@ -24,6 +24,7 @@ import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt
 import { createSearchRunCircuitExtension } from "./web-research/search-run-circuit-extension";
 import { SearchRunState } from "./web-research/search-run-state";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
+import type { AgentPromptContextSnapshot } from "./agents/agent-prompt-store";
 import {
   createToolCallCircuitBreaker,
   type ToolCallCircuitBreaker,
@@ -35,6 +36,13 @@ import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session
 import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
 import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
 
+const DEFAULT_RETRIEVAL_CAPABILITIES: EffectiveRetrievalCapabilities = {
+  knowledgeSearch: false,
+  knowledgeRead: false,
+  webSearch: false,
+  webRead: false,
+};
+
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
  */
@@ -42,28 +50,19 @@ export function createWorkspaceResourceLoader(
   cwd: string,
   agentDir: string,
   additionalPrompts: string[] = [],
-  currentAdditionalPrompts?: () => string[],
-  retrievalCapabilities: EffectiveRetrievalCapabilities = {
-    knowledgeSearch: false,
-    knowledgeRead: false,
-    webSearch: false,
-    webRead: false,
-  },
+  retrievalCapabilities: EffectiveRetrievalCapabilities = DEFAULT_RETRIEVAL_CAPABILITIES,
   searchRunState = new SearchRunState(),
+  resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
     extensionFactories: [
-      createAgentSystemPromptInjectionExtension(retrievalCapabilities),
+      createAgentSystemPromptInjectionExtension(retrievalCapabilities, resolveAgentPromptContext),
       ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension(searchRunState)] : []),
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
-    appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
-    // 提示词文件可在会话存活期间更新，reload 时从闭包读取最新快照。
-    ...(currentAdditionalPrompts
-      ? { appendSystemPromptOverride: () => currentAdditionalPrompts() }
-      : {}),
+    appendSystemPrompt: additionalPrompts,
   });
 }
 
@@ -223,7 +222,6 @@ export interface PiSessionAdapter {
   readonly isStreaming: boolean;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   prompt(text: string): Promise<void>;
-  reload(): Promise<void>;
   abort(): Promise<void>;
   setModel(model: unknown): Promise<void>;
   setSessionName(name: string): void;
@@ -279,7 +277,6 @@ export interface PiRuntimeGateway {
   ): () => void;
   isBusy?(): boolean;
   onIdle?(listener: () => void): () => void;
-  refreshPromptContext?(): Promise<void>;
   /** 刷新或关机前强制持久化尚未落盘的事件投影。 */
   drain?(): Promise<void>;
   dispose(): void;
@@ -321,7 +318,6 @@ interface PiRuntimeGatewayOptions {
   maxEventBytes?: number;
   checkpointThrottleMs?: number;
   sessionMetadataStore?: SessionMetadataStore;
-  refreshSessionContext?: () => Promise<void>;
   onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED" | "BROWSER_RUN_CLEANUP_FAILED"; sessionId?: string }) => void;
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   onRunStarted?: (run: { runId: string; sessionId: string }) => void;
@@ -342,7 +338,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const pendingSessionSummaries = new Map<string, SessionSummary>();
   const abortRequested = new Set<string>();
   const idleListeners = new Set<() => void>();
-  const pendingPromptReloads = new Set<string>();
   const deletingSessions = new Set<string>();
   const manuallyRenamedSessions = new Set<string>();
   const backgroundTitleTasks = new Set<Promise<void>>();
@@ -365,7 +360,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       listeners.delete(sessionId);
       eventLogs.delete(sessionId);
       recoveredCheckpoints.delete(sessionId);
-      pendingPromptReloads.delete(sessionId);
     },
   });
 
@@ -585,30 +579,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     return run;
   }
 
-  /** 在会话空闲时应用已更新的提示词文件；生成中的会话留待本轮结束。 */
-  async function reloadPromptContextForSession(sessionId: string): Promise<void> {
-    const managed = sessionRegistry.peek(sessionId);
-    if (!managed) return;
-    if (runs.has(sessionId) || managed.session.isStreaming) {
-      pendingPromptReloads.add(sessionId);
-      return;
-    }
-    pendingPromptReloads.delete(sessionId);
-    await managed.session.reload();
-  }
-
-  /** 仅在此前有写入操作时，在下一轮开始前补做重载。 */
-  function reloadPendingPromptContext(sessionId: string): Promise<void> | undefined {
-    if (!pendingPromptReloads.has(sessionId)) return undefined;
-    return reloadPromptContextForSession(sessionId);
-  }
-
-  /** 读取最新提示词快照，并刷新所有已打开的会话。 */
-  async function refreshPromptContext(): Promise<void> {
-    await options.refreshSessionContext?.();
-    await Promise.all(sessionRegistry.ids().map((sessionId) => reloadPromptContextForSession(sessionId)));
-  }
-
   /** 在当前会话的活动 Run 结束后唤醒等待中的后台附属任务。 */
   function notifySessionIdle(sessionId: string): void {
     const waiters = sessionIdleWaiters.get(sessionId);
@@ -725,9 +695,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       });
       runs.delete(run.sessionId);
       notifySessionIdle(run.sessionId);
-      if (pendingPromptReloads.has(run.sessionId)) {
-        await reloadPromptContextForSession(run.sessionId).catch(() => undefined);
-      }
       if (runs.size === 0) {
         idleListeners.forEach((listener) => listener());
       }
@@ -823,8 +790,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
 
     async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
-        const pendingReload = reloadPendingPromptContext(sessionId);
-        if (pendingReload) await pendingReload;
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) {
           pendingSessionSummaries.set(sessionId, {
@@ -841,8 +806,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
 
     async prompt(sessionId, text) {
       const run = await sessionMutations.run(sessionId, async () => {
-        const pendingReload = reloadPendingPromptContext(sessionId);
-        if (pendingReload) await pendingReload;
         return beginRun(sessionId, text);
       });
       await run.completion;
@@ -1090,8 +1053,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       return () => idleListeners.delete(listener);
     },
 
-    refreshPromptContext,
-
     drain: drainCheckpoints,
 
     dispose() {
@@ -1103,7 +1064,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       eventLogs.clear();
       pendingSessionSummaries.clear();
       abortRequested.clear();
-      pendingPromptReloads.clear();
       deletingSessions.clear();
       manuallyRenamedSessions.clear();
       backgroundTitleTasks.clear();
@@ -1129,7 +1089,7 @@ interface SdkPiRuntimeOptions {
   createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
-  refreshAppendSystemPrompt?: () => Promise<string[]>;
+  resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>;
   sessionDir?: string;
   checkpointStore?: RunCheckpointStore;
   sessionMetadataStore?: SessionMetadataStore;
@@ -1166,29 +1126,21 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   }
   const sessionDir = options.sessionDir ?? join(options.agentDir, "sessions");
   let commandCatalog: PiCommandSummary[] | undefined;
-  let appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
-
-  /** 从 Agent 提示词文件读取下一次 reload 应使用的系统提示片段。 */
-  async function refreshAppendSystemPrompt(): Promise<void> {
-    if (options.refreshAppendSystemPrompt) {
-      appendSystemPrompt = await options.refreshAppendSystemPrompt();
-    }
-  }
+  const appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
 
   async function createWithManager(sessionManager: SessionManager): Promise<PiSessionAdapter> {
     const model = modelRuntime.getModel(selectedProviderId, selectedDefaultModel);
     if (!model) {
       throw new PiRuntimeError("MODEL_NOT_FOUND", "默认模型不存在或不可用");
     }
-    await refreshAppendSystemPrompt();
     const searchRunState = new SearchRunState();
     const resourceLoader = createWorkspaceResourceLoader(
       options.cwd,
       options.agentDir,
       appendSystemPrompt,
-      () => appendSystemPrompt,
       options.retrievalCapabilities,
       searchRunState,
+      options.resolveAgentPromptContext,
     );
     await resourceLoader.reload();
     const { session, extensionsResult } = await createAgentSession({
@@ -1295,7 +1247,6 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   return createPiRuntimeGateway(backend, {
     checkpointStore: options.checkpointStore,
     sessionMetadataStore: options.sessionMetadataStore,
-    refreshSessionContext: refreshAppendSystemPrompt,
     onBackgroundError: options.onBackgroundError,
     onSessionTitleGenerated: options.onSessionTitleGenerated,
     onRunStarted: options.onRunStarted,
@@ -1351,7 +1302,6 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     },
     subscribe: (listener) => session.subscribe(listener),
     prompt: (text) => session.prompt(text),
-    reload: () => session.reload(),
     abort: () => session.abort(),
     setModel: (model) => session.setModel(model as Parameters<AgentSession["setModel"]>[0]),
     setSessionName: (name) => session.setSessionName(name),

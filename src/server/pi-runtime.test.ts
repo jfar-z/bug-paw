@@ -1,7 +1,10 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { createWriteTool, ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   MODEL_REQUEST_FAILED_MESSAGE,
   MODEL_RESPONSE_TRUNCATED_MESSAGE,
@@ -17,6 +20,14 @@ import {
   type PiSessionAdapter,
 } from "./pi-runtime";
 import type { RunCheckpoint } from "./runtime/checkpoint-store";
+import { SearchRunState } from "./web-research/search-run-state";
+
+const noRetrieval = {
+  knowledgeSearch: false,
+  knowledgeRead: false,
+  webSearch: false,
+  webRead: false,
+};
 
 /** 创建受测试控制的异步值。 */
 function createDeferred<T>() {
@@ -29,12 +40,12 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** 以最小实现模拟 SDK 会话，记录 reload 调用。 */
+/** 以最小实现模拟 SDK 会话。 */
 function createSession(
   prompt: () => Promise<void> = async () => undefined,
   messages: unknown[] = [],
   model: unknown = undefined,
-): PiSessionAdapter & { reload: ReturnType<typeof vi.fn>; setSessionName: ReturnType<typeof vi.fn> } {
+): PiSessionAdapter & { setSessionName: ReturnType<typeof vi.fn> } {
   return {
     sessionId: "session-1",
     sessionFile: undefined,
@@ -43,7 +54,6 @@ function createSession(
     isStreaming: false,
     subscribe: () => () => undefined,
     prompt,
-    reload: vi.fn(async () => undefined),
     abort: async () => undefined,
     setModel: async () => undefined,
     setSessionName: vi.fn<(name: string) => void>(),
@@ -108,25 +118,68 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     gateway.dispose();
   });
 
-  it("资源加载器 reload 时读取最新的动态提示词快照", async () => {
-    let prompts = ["第一版提示词"];
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], () => prompts, {
-      knowledgeSearch: false,
-      knowledgeRead: false,
-      webSearch: false,
-      webRead: false,
-    });
-
+  it("资源加载器在每个 Run 读取最新 Agent 提示词上下文", async () => {
+    let role = "第一版提示词";
+    const resolveAgentPromptContext = vi.fn(async () => ({
+      directory: "/data/app/agents/agent-a",
+      paths: {
+        role: "/data/app/agents/agent-a/ROLE.md",
+        behavior: "/data/app/agents/agent-a/BEHAVIOR.md",
+        rules: "/data/app/agents/agent-a/RULES.md",
+        user: "/data/app/agents/agent-a/USER.md",
+        bootsharp: "/data/app/agents/agent-a/BOOTSHARP.md",
+      },
+      instructions: { role, behavior: "", rules: "", user: "" },
+      bootsharp: "",
+    }));
+    const loader = createWorkspaceResourceLoader(
+      "/tmp",
+      "/tmp",
+      [],
+      noRetrieval,
+      new SearchRunState(),
+      resolveAgentPromptContext,
+    );
     await loader.reload();
-    expect(loader.getAppendSystemPrompt()).toEqual(["第一版提示词"]);
+    const loaded = loader.getExtensions();
+    const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, "/tmp", {} as never, {} as never);
 
-    prompts = ["第二版提示词"];
-    await loader.reload();
-    expect(loader.getAppendSystemPrompt()).toEqual(["第二版提示词"]);
+    const first = await runner.emitBeforeAgentStart("第一轮", undefined, "Old\n\nAvailable tools:\n- read", {} as never);
+    role = "第二版提示词";
+    const second = await runner.emitBeforeAgentStart("第二轮", undefined, "Old\n\nAvailable tools:\n- read", {} as never);
+
+    expect(first?.systemPrompt).toContain("第一版提示词");
+    expect(second?.systemPrompt).toContain("第二版提示词");
+    expect(second?.systemPrompt).not.toContain("第一版提示词");
+    expect(resolveAgentPromptContext).toHaveBeenCalledTimes(2);
+  });
+
+  it("Pi 原生 write 可通过绝对路径把 BOOTSHARP 写为空内容", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-native-write-"));
+    const cwd = join(root, "workspace");
+    const bootsharp = join(root, "app", "agents", "agent-a", "BOOTSHARP.md");
+    await Promise.all([
+      mkdir(cwd, { recursive: true }),
+      mkdir(dirname(bootsharp), { recursive: true }),
+    ]);
+    await writeFile(bootsharp, "初始化引导", "utf8");
+    try {
+      const tool = createWriteTool(cwd);
+      await tool.execute(
+        "write-bootsharp",
+        { path: bootsharp, content: "" },
+        undefined,
+        undefined,
+      );
+
+      await expect(readFile(bootsharp, "utf8")).resolves.toBe("");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("资源加载器注册提示词注入与搜索断路扩展", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], {
       knowledgeSearch: false,
       knowledgeRead: false,
       webSearch: true,
@@ -143,7 +196,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
   });
 
   it("未授权 web_search 时不注册搜索断路扩展", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], {
       knowledgeSearch: false,
       knowledgeRead: false,
       webSearch: false,
@@ -158,7 +211,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
   });
 
   it("通过 Pi ExtensionRunner 在新 Run 重置搜索断路且不影响其他工具", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], {
       knowledgeSearch: false,
       knowledgeRead: false,
       webSearch: true,
@@ -189,34 +242,6 @@ describe("PiRuntimeGateway 提示词刷新", () => {
 
     await runner.emitBeforeAgentStart("第二轮", undefined, "identity\n\nAvailable tools:\n", {} as never);
     expect(await runner.emitToolCall({ ...searchCall, toolCallId: "search-3" })).toBeUndefined();
-  });
-
-  it("提示词被外部更新时立即 reload 空闲会话", async () => {
-    const session = createSession();
-    const refreshSessionContext = vi.fn(async () => undefined);
-    const gateway = createPiRuntimeGateway(createBackend(session), { refreshSessionContext });
-    await gateway.createSession();
-
-    await gateway.refreshPromptContext?.();
-
-    expect(refreshSessionContext).toHaveBeenCalledOnce();
-    expect(session.reload).toHaveBeenCalledOnce();
-    gateway.dispose();
-  });
-
-  it("生成中更新提示词，在本轮结束后才 reload 会话", async () => {
-    const deferred = createDeferred<void>();
-    const session = createSession(() => deferred.promise);
-    const gateway = createPiRuntimeGateway(createBackend(session));
-    await gateway.createSession();
-    await gateway.startPrompt("session-1", "正在执行");
-
-    await gateway.refreshPromptContext?.();
-    expect(session.reload).not.toHaveBeenCalled();
-
-    deferred.resolve(undefined);
-    await vi.waitFor(() => expect(session.reload).toHaveBeenCalledOnce());
-    gateway.dispose();
   });
 
   it("在工具参数生成时发布节流进度且不转发原始正文", async () => {

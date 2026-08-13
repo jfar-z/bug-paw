@@ -546,7 +546,6 @@ describe("PiRuntimeGateway", () => {
       "/tmp/workspace",
       "/tmp/pi-agent-test",
       ["用户自定义 Agent 设定"],
-      undefined,
       { knowledgeSearch: false, knowledgeRead: false, webSearch: true, webRead: true },
     );
     await loader.reload();
