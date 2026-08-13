@@ -2,6 +2,23 @@ import { describe, expect, it } from "vitest";
 
 import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } from "./chat-validation";
 
+const pendingQuestion = {
+  id: "record-1",
+  version: 1,
+  toolCallId: "call-1",
+  createdAt: "2026-08-13T00:00:00.000Z",
+  questions: [{
+    id: "question-1",
+    header: "方案",
+    question: "选择方案",
+    multiSelect: false,
+    options: [
+      { id: "option-1", label: "A", description: "方案 A" },
+      { id: "option-2", label: "B", description: "方案 B" },
+    ],
+  }],
+};
+
 describe("Chat SSE 轻量校验", () => {
   it("接受正式快照、会话级事件和运行级增量", () => {
     expect(isSessionSnapshotEvent({
@@ -73,6 +90,39 @@ describe("Chat SSE 轻量校验", () => {
       callId: "call-1",
       toolName: "write",
       generatedBytes: 0,
+    })).toBe(false);
+  });
+
+  it("轻量校验待回答快照和无答案正文的控制事件", () => {
+    expect(isSessionSnapshotEvent({
+      id: 0,
+      type: "snapshot",
+      sessionId: "s1",
+      messages: [],
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+      lastEventId: 0,
+      pendingQuestion,
+    })).toBe(true);
+    expect(isSessionEvent({
+      id: 1,
+      type: "question_pending",
+      sessionId: "s1",
+      pendingQuestion,
+    })).toBe(true);
+    expect(isSessionEvent({
+      id: 2,
+      type: "question_resolved",
+      sessionId: "s1",
+      questionRecordId: "record-1",
+      state: "discarded",
+    })).toBe(true);
+    expect(isSessionEvent({
+      id: 2,
+      type: "question_resolved",
+      sessionId: "s1",
+      questionRecordId: "record-1",
+      state: "discarded",
+      answers: [],
     })).toBe(false);
   });
 });

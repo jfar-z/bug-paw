@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { THINKING_LEVELS } from "../configuration-contracts";
 import { SessionHistoryPageSchema } from "../session-history-contracts";
+import { PendingQuestionProjectionSchema } from "../session-question-contracts";
 
 const StrictObject = <const T extends Parameters<typeof Type.Object>[0]>(properties: T) =>
   Type.Object(properties, { additionalProperties: false });
@@ -57,6 +58,7 @@ export const SessionProjectionSchema = StrictObject({
   model: Type.Optional(ModelSummarySchema),
   thinkingLevel: Type.Optional(ThinkingLevelSchema),
   run: Type.Optional(ChatRunSummarySchema),
+  pendingQuestion: Type.Optional(PendingQuestionProjectionSchema),
 });
 
 const EventIdentity = {
@@ -75,6 +77,7 @@ export const SessionSnapshotEventSchema = StrictObject({
   model: Type.Optional(ModelSummarySchema),
   thinkingLevel: Type.Optional(ThinkingLevelSchema),
   run: Type.Optional(ChatRunSummarySchema),
+  pendingQuestion: Type.Optional(PendingQuestionProjectionSchema),
   lastEventId: Type.Integer({ minimum: 0 }),
 });
 
@@ -87,6 +90,19 @@ export const SessionProjectionRequiredEventSchema = StrictObject({
 });
 
 export const SessionEventSchema = Type.Union([
+  StrictObject({
+    id: Type.Integer({ minimum: 1 }),
+    sessionId: Type.String({ minLength: 1 }),
+    type: Type.Literal("question_pending"),
+    pendingQuestion: PendingQuestionProjectionSchema,
+  }),
+  StrictObject({
+    id: Type.Integer({ minimum: 1 }),
+    sessionId: Type.String({ minLength: 1 }),
+    type: Type.Literal("question_resolved"),
+    questionRecordId: Type.String({ minLength: 1 }),
+    state: Type.Union([Type.Literal("submitted"), Type.Literal("discarded")]),
+  }),
   StrictObject({
     id: Type.Integer({ minimum: 1 }),
     sessionId: Type.String({ minLength: 1 }),
