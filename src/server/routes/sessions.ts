@@ -25,6 +25,45 @@ interface SessionRouteDependencies {
  * 注册会话列表、创建、恢复和模型切换接口。
  */
 export function registerSessionRoutes(app: FastifyInstance, dependencies: SessionRouteDependencies): void {
+  app.get<{ Querystring: { agentId?: string; query?: string; cursor?: string } }>(
+    "/api/sessions/search",
+    async (request, reply) => {
+      if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+      const { agentId, query, cursor } = request.query;
+      if (!agentId || agentId.length > 200) {
+        return sendApiError(reply, 400, "AGENT_REQUIRED", "搜索 Session 必须指定 agentId");
+      }
+      if (typeof query !== "string" || query.length < 1 || query.length > 500
+        || (cursor !== undefined && (cursor.length < 1 || cursor.length > 1_000))) {
+        return sendApiError(reply, 400, "SESSION_SEARCH_QUERY_INVALID", "搜索参数格式不正确");
+      }
+      const startedAt = Date.now();
+      let acquired: Awaited<ReturnType<typeof acquireRuntimeForAgent>>;
+      try {
+        acquired = await acquireRuntimeForAgent(dependencies, agentId);
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      }
+      try {
+        if (!acquired.runtime.searchSessionText) {
+          return sendApiError(reply, 409, "SESSION_SEARCH_UNAVAILABLE", "当前运行时不支持会话文本搜索");
+        }
+        const page = await acquired.runtime.searchSessionText({
+          query,
+          limit: 30,
+          ...(cursor ? { cursor } : {}),
+        });
+        // 搜索日志只保留作用域和计数，不能记录聊天正文或查询词。
+        request.log.info({ agentId, resultCount: page.hits.length, elapsedMs: Date.now() - startedAt }, "会话文本搜索完成");
+        return reply.send(page);
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      } finally {
+        acquired.release();
+      }
+    },
+  );
+
   app.get<{ Querystring: { archived?: string; agentId?: string } }>("/api/sessions", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;
@@ -125,26 +164,54 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { before?: string; branch?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { before?: string; after?: string; branch?: string } }>(
     "/api/sessions/:id/history",
     async (request, reply) => {
       if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
-      if (!request.query.before || !request.query.branch
-        || request.query.before.length > 200 || request.query.branch.length > 200) {
+      const { before, after, branch } = request.query;
+      if ((!before && !after) || (before && after) || !branch
+        || (before?.length ?? 0) > 200 || (after?.length ?? 0) > 200 || branch.length > 200) {
         return sendApiError(reply, 400, "VALIDATION_FAILED", "历史分页参数不完整");
       }
       try {
         const resolved = await acquireRuntimeForSession(dependencies, request.params.id);
         try {
           await resolved.runtime.openSession(request.params.id);
-          if (!resolved.runtime.loadHistoryPage) {
+          const loader = before ? resolved.runtime.loadHistoryPage : resolved.runtime.loadHistoryPageAfter;
+          if (!loader) {
             return sendApiError(reply, 409, "SESSION_HISTORY_STALE", "当前运行时不支持历史分页");
           }
-          return reply.send(await resolved.runtime.loadHistoryPage(
+          return reply.send(await loader.call(
+            resolved.runtime,
             request.params.id,
-            request.query.before,
-            request.query.branch,
+            (before ?? after)!,
+            branch,
           ));
+        } finally {
+          resolved.release();
+        }
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { entryId?: string; branch?: string } }>(
+    "/api/sessions/:id/history-window",
+    async (request, reply) => {
+      if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+      const { entryId, branch } = request.query;
+      if (!entryId || !branch || entryId.length > 200 || branch.length > 200) {
+        return sendApiError(reply, 400, "VALIDATION_FAILED", "目标历史窗口参数不完整");
+      }
+      try {
+        const resolved = await acquireRuntimeForSession(dependencies, request.params.id);
+        try {
+          await resolved.runtime.openSession(request.params.id);
+          if (!resolved.runtime.loadHistoryTarget) {
+            return sendApiError(reply, 409, "SESSION_HISTORY_STALE", "当前运行时不支持目标历史窗口");
+          }
+          return reply.send(await resolved.runtime.loadHistoryTarget(request.params.id, entryId, branch));
         } finally {
           resolved.release();
         }

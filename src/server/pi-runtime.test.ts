@@ -63,6 +63,51 @@ function createBackend(
 }
 
 describe("PiRuntimeGateway 提示词刷新", () => {
+  it("会话文本搜索固定 Agent 作用域并优先读取已打开的当前分支", async () => {
+    const messages = [{ role: "assistant", content: "needle 实时分支", __piEntryId: "assistant-live" }];
+    const session = createSession(undefined, messages);
+    session.navigateTree = vi.fn(async () => ({ cancelled: false }));
+    const backend = createBackend(session);
+    backend.listSessions = async () => [{
+      id: "session-1",
+      path: "/managed/session-1.jsonl",
+      name: "测试会话",
+      created: "2026-08-13T00:00:00.000Z",
+      modified: "2026-08-13T01:00:00.000Z",
+      messageCount: 1,
+      firstMessage: "首条消息",
+    }];
+    const sessionMetadataStore = {
+      listIdsByAgent: vi.fn(async (agentId: string) => agentId === "agent-a" ? ["session-1"] : []),
+      listArchivedIds: vi.fn(async () => []),
+      isArchived: vi.fn(async () => false),
+    };
+    const readPersistedBranch = vi.fn(async () => [
+      { role: "assistant", content: "needle 持久化旧分支", __piEntryId: "assistant-old" },
+    ]);
+    const gateway = createPiRuntimeGateway(backend, {
+      sessionMetadataStore,
+      sessionText: { agentId: "agent-a", readPersistedBranch },
+    } as never);
+    await gateway.createSession();
+
+    const first = await gateway.searchSessionText!({ query: "needle" });
+    expect(first.hits).toMatchObject([{ entryId: "assistant-live", sessionId: "session-1" }]);
+    expect(readPersistedBranch).not.toHaveBeenCalled();
+
+    messages.splice(0, messages.length, {
+      role: "assistant",
+      content: "needle 新分支",
+      __piEntryId: "assistant-new",
+    });
+    const snapshot = await gateway.openSession("session-1");
+    await gateway.navigateTree!("session-1", "assistant-new");
+    const refreshed = await gateway.searchSessionText!({ query: "needle" });
+    expect(refreshed.hits).toMatchObject([{ entryId: "assistant-new" }]);
+    expect(snapshot.id).toBe("session-1");
+    gateway.dispose();
+  });
+
   it("快照只返回当前分支最近页并用稳定 token 加载上一页", async () => {
     const messages = Array.from({ length: 25 }, (_, index) => {
       const number = index + 1;

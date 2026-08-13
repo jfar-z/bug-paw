@@ -328,6 +328,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           deploymentAvailable: deploymentCapabilities.browserAutomationAvailable,
         });
         return createSdkPiRuntimeGateway({
+          agentId,
           cwd,
           agentDir: paths.piDir,
           modelRuntime,

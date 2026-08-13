@@ -39,6 +39,16 @@ import {
   type SessionHistorySlice,
 } from "./sessions/session-history-page";
 import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
+import {
+  SessionTextService,
+  type SessionTextSourceSession,
+} from "./session-text-service";
+import type {
+  SessionTextReadPage,
+  SessionTextReadRequest,
+  SessionTextSearchPage,
+  SessionTextSearchRequest,
+} from "../shared/session-text-search";
 
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
@@ -265,6 +275,8 @@ export interface PiRuntimeGateway {
   loadHistoryPage?(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
   loadHistoryTarget?(sessionId: string, entryId: string, branchToken: string): Promise<SessionHistoryResult>;
   loadHistoryPageAfter?(sessionId: string, after: string, branchToken: string): Promise<SessionHistoryResult>;
+  searchSessionText?(input: SessionTextSearchRequest): Promise<SessionTextSearchPage>;
+  readSessionText?(input: SessionTextReadRequest): Promise<SessionTextReadPage>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
@@ -335,6 +347,10 @@ interface PiRuntimeGatewayOptions {
   onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
   toolCallCircuitBreakerTools?: readonly ToolDefinition[];
   onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
+  sessionText?: {
+    agentId: string;
+    readPersistedBranch(session: SessionTextSourceSession): Promise<unknown[]>;
+  };
 }
 
 /**
@@ -375,6 +391,18 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       pendingPromptReloads.delete(sessionId);
     },
   });
+  const sessionTextService = options.sessionText ? new SessionTextService(options.sessionText.agentId, {
+    listSessions: async () => {
+      const ownedIds = new Set(await sessionMetadataStore.listIdsByAgent(options.sessionText!.agentId));
+      const persisted = await backend.listSessions();
+      const persistedIds = new Set(persisted.map(({ id }) => id));
+      const sessions = [...persisted, ...[...pendingSessionSummaries.values()].filter(({ id }) => !persistedIds.has(id))];
+      return sessions.filter(({ id }) => ownedIds.has(id));
+    },
+    readPersistedBranch: (session) => options.sessionText!.readPersistedBranch(session),
+    readLiveBranch: (sessionId) => sessionRegistry.peek(sessionId)?.session.messages,
+    isArchived: (sessionId) => sessionMetadataStore.isArchived(sessionId),
+  }) : undefined;
 
   function publish(event: ChatEvent): void {
     listeners.get(event.sessionId)?.forEach((listener) => listener(event));
@@ -418,6 +446,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       session.dispose();
     }
     const attached = sessionRegistry.peek(session.sessionId)!.session;
+    sessionTextService?.invalidate(session.sessionId);
     return snapshotSession(
       attached,
       snapshotMessages(session.sessionId, attached),
@@ -573,6 +602,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       ...(session.messages.length === 0 && titleInput?.trim() ? { titleInput: titleInput.trim() } : {}),
     };
     runs.set(sessionId, run);
+    sessionTextService?.invalidate(sessionId);
     try {
       options.onRunStarted?.({ runId: run.runId, sessionId: run.sessionId });
     } catch (error) {
@@ -655,6 +685,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             if (runs.has(sessionId) || session.isStreaming) return false;
             if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) return false;
             session.setSessionName(sessionName);
+            sessionTextService?.invalidate(sessionId);
             publishSequenced(sessionId, { type: "session_renamed", name: sessionName }, { associateCurrentRun: false });
             return true;
           });
@@ -706,6 +737,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       run.finishedAt = new Date().toISOString();
       publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: run.error });
     } finally {
+      sessionTextService?.invalidate(run.sessionId);
       abortRequested.delete(run.sessionId);
       await options.onRunFinished?.({
         runId: run.runId,
@@ -851,6 +883,11 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
     },
 
+    ...(sessionTextService ? {
+      searchSessionText: (input: SessionTextSearchRequest) => sessionTextService.search(input),
+      readSessionText: (input: SessionTextReadRequest) => sessionTextService.read(input),
+    } : {}),
+
     async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
         const pendingReload = reloadPendingPromptContext(sessionId);
@@ -890,6 +927,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       const managed = sessionRegistry.peek(sessionId);
       if (!managed) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
       managed.branchToken = randomUUID();
+      sessionTextService?.invalidate(sessionId);
       return {
         snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
         editorText: result.editorText,
@@ -939,6 +977,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           handle.release();
         }
         session.setSessionName(sanitized);
+        sessionTextService?.invalidate(sessionId);
         manuallyRenamedSessions.add(sessionId);
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) pendingSessionSummaries.set(sessionId, { ...summary, name: sanitized });
@@ -950,6 +989,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         requireIdleSession(sessionId);
         await ensureSessionExists(sessionId);
         await sessionMetadataStore.archive(sessionId);
+        sessionTextService?.invalidate(sessionId);
       });
     },
 
@@ -957,6 +997,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       await sessionMutations.run(sessionId, async () => {
         await ensureSessionExists(sessionId);
         await sessionMetadataStore.unarchive(sessionId);
+        sessionTextService?.invalidate(sessionId);
       });
     },
 
@@ -966,6 +1007,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         requireIdleSession(sessionId);
         await ensureSessionExists(sessionId);
         deletingSessions.add(sessionId);
+        sessionTextService?.invalidate(sessionId);
         let staged: StagedSessionDeletion;
         try {
           staged = backend.stageDeleteSession
@@ -976,6 +1018,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           throw error;
         }
         sessionRegistry.invalidate(sessionId);
+        sessionTextService?.invalidate(sessionId);
         subscriptionTerminators.get(sessionId)?.forEach((terminate) => terminate(
           new DomainError("SESSION_NOT_FOUND", "Session 已删除，实时连接需要关闭"),
         ));
@@ -1026,6 +1069,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           ? await backend.stageDeleteSession?.(sessionId)
           : undefined;
         sessionRegistry.invalidate(sessionId);
+        sessionTextService?.invalidate(sessionId);
         subscriptionTerminators.get(sessionId)?.forEach((terminate) => terminate(new DomainError("SESSION_NOT_FOUND", "Session 创建已回滚")));
         subscriptionTerminators.delete(sessionId);
         listeners.delete(sessionId);
@@ -1137,6 +1181,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       deletingSessions.clear();
       manuallyRenamedSessions.clear();
       backgroundTitleTasks.clear();
+      sessionTextService?.clear();
       sessionIdleWaiters.forEach((waiters) => waiters.forEach((resolve) => resolve()));
       sessionIdleWaiters.clear();
       // 兼容直接调用 dispose 的旧调用方；Supervisor 会先显式 await drain。
@@ -1147,6 +1192,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
 }
 
 interface SdkPiRuntimeOptions {
+  agentId: string;
   cwd: string;
   agentDir: string;
   provider?: StoredProviderConfig;
@@ -1332,6 +1378,14 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
     onRunFinished: options.onRunFinished,
     toolCallCircuitBreakerTools: options.customTools,
     onToolCallCircuitBreak: options.onToolCallCircuitBreak,
+    sessionText: {
+      agentId: options.agentId,
+      readPersistedBranch: async (session) => {
+        const sessionFile = assertManagedSessionFile(sessionDir, session.path);
+        const manager = SessionManager.open(sessionFile, sessionDir, options.cwd);
+        return sessionManagerVisibleMessages(manager);
+      },
+    },
   });
 }
 
@@ -1395,6 +1449,14 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     },
     dispose: () => session.dispose(),
   };
+}
+
+/** 将 SessionManager 当前叶分支投影成带稳定节点 ID 的消息。 */
+function sessionManagerVisibleMessages(sessionManager: SessionManager): unknown[] {
+  return sessionManager.getBranch().flatMap((entry) => {
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return [];
+    return [{ ...entry.message, __piEntryId: entry.id }];
+  });
 }
 
 /**
