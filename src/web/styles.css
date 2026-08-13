@@ -3868,7 +3868,7 @@ img.message-avatar {
 }
 
 .composer-session-control {
-  position: relative;
+  position: static;
 }
 
 .composer-model-control {
@@ -3959,7 +3959,7 @@ img.message-avatar {
 }
 
 .composer-thinking-menu {
-  left: 0;
+  left: 72px;
   width: 188px;
 }
 
@@ -3978,8 +3978,9 @@ img.message-avatar {
 }
 
 .composer-model-menu {
-  left: 0;
-  width: min(320px, calc(100vw - 40px));
+  right: 0;
+  left: auto;
+  width: min(320px, 100%);
   max-height: min(360px, 50vh);
   overflow-y: auto;
 }
@@ -4546,14 +4547,6 @@ img.message-avatar {
     padding-inline: 6px;
   }
 
-  .composer-thinking-menu {
-    left: -40px;
-  }
-
-  .composer-model-menu {
-    left: auto;
-    right: -44px;
-  }
 }
 
 /* 配置中心沿用现有工作台 token，只增加双层导航所需的结构样式。 */

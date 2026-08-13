@@ -2,11 +2,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AgentModelMenu } from "./agent-model-menu";
 
-const models = [
-  { provider: "openai", id: "gpt-5", name: "GPT-5" },
-  { provider: "anthropic", id: "claude-sonnet", name: "Claude Sonnet" },
-];
-
 describe("AgentModelMenu", () => {
   it("选择 Agent 后回调并关闭菜单，图片头像使用 Agent 资源地址", () => {
     const onSelectAgent = vi.fn();
@@ -30,7 +25,7 @@ describe("AgentModelMenu", () => {
         revision: "r2",
       },
     ];
-    render(<AgentModelMenu agents={agents} selectedAgentId="research" models={models} onSelectAgent={onSelectAgent} />);
+    render(<AgentModelMenu agents={agents} selectedAgentId="research" onSelectAgent={onSelectAgent} />);
 
     const trigger = screen.getByRole("button", { name: "切换 Agent" });
     expect(document.querySelector(".agent-model-menu__avatar")).toHaveAttribute("src", "/api/v1/agents/research/avatar?v=avatar-r1");
@@ -47,8 +42,6 @@ describe("AgentModelMenu", () => {
     render(
       <AgentModelMenu
         agent={{ id: "default", name: "默认 Agent", avatarText: "π" }}
-        models={models}
-        selectedModel={models[0]}
       />,
     );
 
@@ -57,7 +50,7 @@ describe("AgentModelMenu", () => {
     expect(trigger).not.toHaveTextContent("GPT-5");
     fireEvent.click(trigger);
 
-    expect(screen.queryByRole("option", { name: /Claude Sonnet/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option")).not.toBeInTheDocument();
   });
 
   it("支持打开并使用 Escape 关闭 Agent 菜单", async () => {
@@ -73,7 +66,6 @@ describe("AgentModelMenu", () => {
           revision: "r1",
         }]}
         selectedAgentId="default"
-        models={models}
       />,
     );
 
@@ -89,9 +81,6 @@ describe("AgentModelMenu", () => {
       <div>
         <AgentModelMenu
           agent={{ id: "default", name: "默认 Agent", avatarText: "π" }}
-          models={models}
-          selectedModel={models[0]}
-          onSelect={vi.fn()}
         />
         <button type="button">外部按钮</button>
       </div>,

@@ -245,6 +245,7 @@ beforeEach(() => {
         agentId: "default",
         messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
         history: { branchToken: "branch-session-2", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
+        thinkingLevel: "high",
         lastEventId: 1,
       }));
     }
@@ -376,6 +377,7 @@ describe("LiveChatPage 时间线", () => {
       expect(document.scrollingElement?.scrollTop ?? 0).toBe(0);
       expect(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2"))
         .toBeLessThan(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2"));
+      expect(screen.getByRole("button", { name: "思考深度：高" })).toBeInTheDocument();
       expect(screen.queryByRole("dialog", { name: "搜索聊天记录" })).not.toBeInTheDocument();
     } finally {
       rectSpy.mockRestore();
@@ -1030,6 +1032,38 @@ describe("LiveChatPage 时间线", () => {
       && request?.method === "PUT"
       && request.body === JSON.stringify({ thinkingLevel: "low" })
     ))).toBe(true));
+  });
+
+  it("草稿切换模型时按 Pi 规则选择最接近的可用深度", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{
+        profile: {
+          id: "default",
+          name: "默认 Agent",
+          avatar: { kind: "initial", value: "π" },
+          status: "active",
+          cwd: "/data/workspace",
+          defaultThinkingLevel: "max",
+          instructions: {},
+          allowedTools: [],
+        },
+        revision: "r1",
+      }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [
+        { provider: "openai", id: "full", name: "完整模型", thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { provider: "openai", id: "limited", name: "受限模型", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
+      ] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("button", { name: "思考深度：最大" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "切换模型，当前 完整模型" }));
+    fireEvent.click(screen.getByRole("option", { name: /受限模型/ }));
+
+    expect(screen.getByRole("button", { name: "思考深度：高" })).toBeInTheDocument();
   });
 
   it("在 Agent 选择框右侧提供快捷新建会话按钮", async () => {

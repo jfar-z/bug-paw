@@ -38,7 +38,7 @@ import {
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
-import type { ThinkingLevel } from "../../shared/configuration-contracts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/configuration-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
@@ -703,6 +703,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       sessionSnapshotRef.current = focusedSnapshot;
       setSession(focusedSnapshot);
       if (opened.model) setSelectedModel(opened.model);
+      if (opened.thinkingLevel) {
+        confirmedThinkingLevelRef.current = opened.thinkingLevel;
+        setSelectedThinkingLevel(opened.thinkingLevel);
+      }
       setActiveRun(opened.run?.status === "queued" || opened.run?.status === "running" ? opened.run : undefined);
       setTimeline(parsePiHistory(target.messages, false));
       if (!await focusSessionEntry(hit.entryId)) throw new Error("SESSION_ENTRY_NOT_FOUND");
@@ -1407,7 +1411,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
             <AgentModelMenu
               agents={agents}
               selectedAgentId={activeAgentId}
-              models={models}
               disabled={streaming || isOpeningSession}
               onSelectAgent={(agentId) => void selectAgent(agentId)}
             />
@@ -1653,7 +1656,16 @@ function findAgentThinkingLevel(agent: AgentProfileDocument | undefined, model: 
 function normalizeThinkingLevelForModel(thinkingLevel: ThinkingLevel, model: ModelSummary | undefined): ThinkingLevel {
   const available = model?.thinkingLevels;
   if (!available?.length || available.includes(thinkingLevel)) return thinkingLevel;
-  return available[0];
+  const requestedIndex = THINKING_LEVELS.indexOf(thinkingLevel);
+  for (let index = requestedIndex + 1; index < THINKING_LEVELS.length; index += 1) {
+    const candidate = THINKING_LEVELS[index]!;
+    if (available.includes(candidate)) return candidate;
+  }
+  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+    const candidate = THINKING_LEVELS[index]!;
+    if (available.includes(candidate)) return candidate;
+  }
+  return available[0] ?? "off";
 }
 
 /**

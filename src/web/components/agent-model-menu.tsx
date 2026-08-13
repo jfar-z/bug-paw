@@ -1,19 +1,14 @@
 import { Check, ChevronsUpDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
-import type { ModelSummary } from "../api";
 import { AgentAvatar } from "./agent-avatar";
 
 interface AgentModelMenuProps {
   agents?: AgentProfileDocument[];
   agent?: { id: string; name: string; avatarText: string };
   selectedAgentId?: string;
-  models: ModelSummary[];
-  selectedModel?: ModelSummary;
   disabled?: boolean;
   onSelectAgent?: (agentId: string) => void;
-  onSelectModel?: (model: ModelSummary) => void;
-  onSelect?: (model: ModelSummary) => void;
 }
 
 /**
