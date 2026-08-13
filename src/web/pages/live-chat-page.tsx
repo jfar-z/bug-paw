@@ -12,6 +12,7 @@ import { ReferenceComposer } from "../components/reference-composer";
 import { MediaLightbox } from "../components/media-lightbox";
 import { ArchivedSessionsDialog } from "../components/archived-sessions-dialog";
 import { SessionBulkConfirmationDialog } from "../components/session-bulk-confirmation-dialog";
+import { SessionSearchDialog } from "../components/session-search-dialog";
 import { QuickWorkspaceDrawer } from "../components/quick-workspace-drawer";
 import {
   parsePiHistory,
@@ -120,6 +121,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [archivedSessions, setArchivedSessions] = useState<SessionSummary[]>([]);
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const [sessionSelectionMode, setSessionSelectionMode] = useState(false);
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
   const [sessionBulkPreview, setSessionBulkPreview] = useState<SessionBulkPreview>();
@@ -1120,6 +1122,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onClose={closeSidebar}
         onEnterDraft={enterDraft}
         onRefresh={() => void refreshSessions()}
+        onSearch={() => setSessionSearchOpen(true)}
         onScroll={showSessionNavScrollbar}
         onPointerDown={startSessionLongPress}
         onPointerEnd={clearSessionLongPress}
@@ -1251,6 +1254,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onDelete={(sessionId) => deleteConversation(sessionId, true)}
         onRestoreAll={() => selectedAgentId && void previewSessionBulk("restore", { mode: "all_archived", agentId: selectedAgentId })}
         onDeleteAll={() => selectedAgentId && void previewSessionBulk("delete", { mode: "all_archived", agentId: selectedAgentId })}
+      />
+      <SessionSearchDialog
+        open={sessionSearchOpen}
+        agentId={selectedAgentId}
+        onClose={() => setSessionSearchOpen(false)}
+        onSelect={async (hit) => { await openConversation(hit.sessionId); }}
       />
       {sessionBulkPreview ? <SessionBulkConfirmationDialog
         preview={sessionBulkPreview}
