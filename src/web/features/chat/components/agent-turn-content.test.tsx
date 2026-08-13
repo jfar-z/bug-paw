@@ -17,6 +17,23 @@ const turn: AgentTurn = {
 };
 
 describe("AgentTurnContent", () => {
+  it("未指定搜索焦点时不高亮尚无 Pi entry ID 的流式正文", () => {
+    const streamingTurn: AgentTurn = {
+      id: "streaming-turn",
+      type: "agent",
+      blocks: [{ id: "streaming-markdown", type: "markdown", text: "正在生成回答", streaming: true }],
+    };
+    const { container } = render(<AgentTurnContent
+      turn={streamingTurn}
+      streaming
+      theme="light"
+      onResolved={vi.fn()}
+      onPreview={vi.fn()}
+    />);
+
+    expect(container.querySelector(".markdown-content")).not.toHaveClass("is-session-search-focus");
+  });
+
   it("按正文与活动段的原始顺序渲染并支持本轮整体折叠", () => {
     render(<AgentTurnContent
       turn={turn}
