@@ -405,6 +405,16 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         assistantMessageEvent: {
           type: "toolcall_delta",
           contentIndex: 0,
+          delta: "",
+          partial: assistantMessage,
+        },
+      } as never);
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
           delta: "x".repeat(512),
           partial: assistantMessage,
         },
