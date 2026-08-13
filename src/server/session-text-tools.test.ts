@@ -56,7 +56,7 @@ function toolNamed(service: ReturnType<typeof createService>, name: "session_lis
 }
 
 describe("会话文本 Pi 工具", () => {
-  it("三个工具都使用包含必填字段的根 Object Schema", () => {
+  it("三个工具都使用根 Object Schema 并要求显式传入可空 cursor", () => {
     const tools = createSessionTextTools(createService() as never);
 
     expect(tools.map(({ name }) => name)).toEqual(["session_list", "session_search", "session_read"]);
@@ -69,10 +69,19 @@ describe("会话文本 Pi 工具", () => {
       expect(schema).toHaveProperty("additionalProperties", false);
       expect(schema).toHaveProperty("required");
     });
-    expect((tools[0]!.parameters as { required?: string[] }).required).toEqual(["limit"]);
+    expect((tools[0]!.parameters as { required?: string[] }).required).toEqual(["limit", "cursor"]);
+    expect((tools[1]!.parameters as { required?: string[] }).required).toEqual(["query", "cursor"]);
+    expect((tools[2]!.parameters as { required?: string[] }).required).toEqual(["sessionId", "cursor"]);
+    tools.forEach((tool) => {
+      const cursor = (tool.parameters as { properties?: { cursor?: { anyOf?: unknown[] } } }).properties?.cursor;
+      expect(cursor?.anyOf).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "string" }),
+        expect.objectContaining({ type: "null" }),
+      ]));
+    });
   });
 
-  it.each([undefined, null, {}, { limit: 0 }, { limit: 21 }, { limit: 1.5 }, { limit: "10" }, { limit: 10, extra: true }])(
+  it.each([undefined, null, {}, { limit: 10 }, { limit: 0, cursor: null }, { limit: 21, cursor: null }, { limit: 1.5, cursor: null }, { limit: "10", cursor: null }, { limit: 10, cursor: null, extra: true }])(
     "session_list 在 execute 前拒绝坏参数 %#",
     async (parameters) => {
       const service = createService();
@@ -89,7 +98,7 @@ describe("会话文本 Pi 工具", () => {
     },
   );
 
-  it.each([undefined, null, {}, { query: "" }, { query: 1 }, { query: "x", extra: true }])(
+  it.each([undefined, null, {}, { query: "x" }, { query: "", cursor: null }, { query: 1, cursor: null }, { query: "x", cursor: null, extra: true }])(
     "session_search 在 execute 前拒绝坏参数 %#",
     async (parameters) => {
       const service = createService();
@@ -106,7 +115,7 @@ describe("会话文本 Pi 工具", () => {
     },
   );
 
-  it.each([undefined, null, {}, { sessionId: "" }, { sessionId: 1 }, { sessionId: "s", extra: true }])(
+  it.each([undefined, null, {}, { sessionId: "s" }, { sessionId: "", cursor: null }, { sessionId: 1, cursor: null }, { sessionId: "s", cursor: null, extra: true }])(
     "session_read 在 execute 前拒绝坏参数 %#",
     async (parameters) => {
       const service = createService();
@@ -128,7 +137,7 @@ describe("会话文本 Pi 工具", () => {
     const result = await toolNamed(service, "session_read").execute("call-1", {
       sessionId: "session-1",
       anchorEntryId: "assistant-1",
-      cursor: "cursor-1",
+      cursor: "00000000-0000-4000-8000-000000000001",
     }, undefined, undefined, {} as never);
 
     expect(parseResult(result)).toMatchObject({ status: "error", error: { code: "INVALID_TOOL_ARGUMENTS" } });
@@ -139,6 +148,7 @@ describe("会话文本 Pi 工具", () => {
     ["session_list", { limit: 10, cursor: " " }],
     ["session_search", { query: "needle", cursor: "initial" }],
     ["session_read", { sessionId: "session-1", cursor: "0" }],
+    ["session_list", { limit: 10, cursor: "null" }],
     ["session_search", { query: "needle", cursor: "not-a-server-cursor" }],
   ] as const)("%s 在进入服务前拒绝虚构游标", async (name, parameters) => {
     const service = createService();
@@ -154,12 +164,41 @@ describe("会话文本 Pi 工具", () => {
       status: "error",
       error: {
         code: "INVALID_TOOL_ARGUMENTS",
-        message: expect.stringContaining("首次调用请省略 cursor"),
+        message: expect.stringContaining("首次调用请传 JSON null"),
       },
     });
     expect(service.list).not.toHaveBeenCalled();
     expect(service.search).not.toHaveBeenCalled();
     expect(service.read).not.toHaveBeenCalled();
+  });
+
+  it("三个工具将首次调用的 null 规范化为未提供服务游标", async () => {
+    const service = createService();
+    await toolNamed(service, "session_list").execute(
+      "list-first",
+      { limit: 10, cursor: null },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await toolNamed(service, "session_search").execute(
+      "search-first",
+      { query: "needle", cursor: null },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    await toolNamed(service, "session_read").execute(
+      "read-first",
+      { sessionId: "session-1", anchorEntryId: "assistant-1", cursor: null },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(service.list).toHaveBeenCalledWith({ limit: 10 });
+    expect(service.search).toHaveBeenCalledWith({ query: "needle" });
+    expect(service.read).toHaveBeenCalledWith({ sessionId: "session-1", anchorEntryId: "assistant-1" });
   });
 
   it("列表、搜索与阅读只转发声明参数并将历史数据标记为不可信", async () => {
@@ -180,7 +219,7 @@ describe("会话文本 Pi 工具", () => {
     );
     const read = await toolNamed(service, "session_read").execute(
       "read-1",
-      { sessionId: "session-1", anchorEntryId: "assistant-1", maxMessages: 30 },
+      { sessionId: "session-1", cursor: "00000000-0000-4000-8000-000000000001", maxMessages: 30 },
       undefined,
       undefined,
       {} as never,
@@ -188,7 +227,7 @@ describe("会话文本 Pi 工具", () => {
 
     expect(service.list).toHaveBeenCalledWith({ limit: 10, cursor: "00000000-0000-4000-8000-000000000001" });
     expect(service.search).toHaveBeenCalledWith({ query: "needle", limit: 10, cursor: "00000000-0000-4000-8000-000000000001" });
-    expect(service.read).toHaveBeenCalledWith({ sessionId: "session-1", anchorEntryId: "assistant-1", maxMessages: 30 });
+    expect(service.read).toHaveBeenCalledWith({ sessionId: "session-1", cursor: "00000000-0000-4000-8000-000000000001", maxMessages: 30 });
     expect(parseResult(list)).toMatchObject({
       status: "ok",
       data: { recordTrust: "untrusted_historical_data", sessions: [{ sessionId: "session-1" }] },
@@ -215,7 +254,7 @@ describe("会话文本 Pi 工具", () => {
       cursor: (tool.parameters as { properties?: { cursor?: unknown } }).properties?.cursor,
     })));
 
-    expect(serialized).toContain("首次调用省略");
+    expect(serialized).toContain("首次调用传 JSON null");
     expect(serialized).toContain("session_list");
     expect(serialized).toContain("session_search");
     expect(serialized).toContain("session_read");
@@ -227,7 +266,7 @@ describe("会话文本 Pi 工具", () => {
 
     const result = await toolNamed(service, "session_read").execute(
       "read-1",
-      { sessionId: "missing" },
+      { sessionId: "missing", cursor: null },
       undefined,
       undefined,
       {} as never,
