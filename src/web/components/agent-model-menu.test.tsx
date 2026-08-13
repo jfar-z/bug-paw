@@ -32,7 +32,7 @@ describe("AgentModelMenu", () => {
     ];
     render(<AgentModelMenu agents={agents} selectedAgentId="research" models={models} onSelectAgent={onSelectAgent} />);
 
-    const trigger = screen.getByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = screen.getByRole("button", { name: "切换 Agent" });
     expect(document.querySelector(".agent-model-menu__avatar")).toHaveAttribute("src", "/api/v1/agents/research/avatar?v=avatar-r1");
     fireEvent.click(trigger);
     const writerOption = screen.getByRole("option", { name: /写作者/ });
@@ -43,47 +43,44 @@ describe("AgentModelMenu", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("展示当前 Agent 和模型，并可选择另一个模型", () => {
-    const onSelect = vi.fn();
+  it("顶部菜单只展示 Agent，不再混入模型选项", () => {
     render(
       <AgentModelMenu
         agent={{ id: "default", name: "默认 Agent", avatarText: "π" }}
         models={models}
         selectedModel={models[0]}
-        onSelect={onSelect}
       />,
     );
 
-    const trigger = screen.getByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = screen.getByRole("button", { name: "切换 Agent" });
     expect(trigger).toHaveTextContent("默认 Agent");
-    expect(trigger).toHaveTextContent("GPT-5");
+    expect(trigger).not.toHaveTextContent("GPT-5");
     fireEvent.click(trigger);
 
-    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet/ }));
-    expect(onSelect).toHaveBeenCalledWith(models[1]);
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("option", { name: /Claude Sonnet/ })).not.toBeInTheDocument();
   });
 
-  it("支持打开、选择和关闭菜单", async () => {
-    const onSelect = vi.fn();
+  it("支持打开并使用 Escape 关闭 Agent 菜单", async () => {
     render(
       <AgentModelMenu
-        agent={{ id: "default", name: "默认 Agent", avatarText: "π" }}
+        agents={[{
+          profile: {
+            id: "default", name: "默认 Agent", cwd: "/data/workspace", status: "active" as const,
+            avatar: { kind: "initial" as const, value: "π" }, description: "",
+            instructions: { role: "", behavior: "", rules: "", user: "" }, allowedTools: [],
+            version: 1 as const, createdAt: "2026-08-06T00:00:00.000Z", updatedAt: "2026-08-06T00:00:00.000Z",
+          },
+          revision: "r1",
+        }]}
+        selectedAgentId="default"
         models={models}
-        selectedModel={models[0]}
-        onSelect={onSelect}
       />,
     );
 
-    const trigger = screen.getByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = screen.getByRole("button", { name: "切换 Agent" });
     fireEvent.click(trigger);
-    const secondOption = screen.getByRole("option", { name: /Claude Sonnet/ });
-    await waitFor(() => expect(secondOption).toBeInTheDocument());
-    fireEvent.click(secondOption);
-    expect(onSelect).toHaveBeenCalledWith(models[1]);
-
-    fireEvent.click(trigger);
-    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.getByRole("option", { name: /默认 Agent/ })).toBeInTheDocument());
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 
@@ -100,7 +97,7 @@ describe("AgentModelMenu", () => {
       </div>,
     );
 
-    const trigger = screen.getByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = screen.getByRole("button", { name: "切换 Agent" });
     fireEvent.click(trigger);
     fireEvent.pointerDown(screen.getByRole("button", { name: "外部按钮" }));
     expect(trigger).toHaveAttribute("aria-expanded", "false");

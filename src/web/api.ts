@@ -52,6 +52,7 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+  thinkingLevels?: readonly ThinkingLevel[];
 }
 
 export interface SessionSummary {
