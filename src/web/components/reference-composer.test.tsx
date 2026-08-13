@@ -72,15 +72,22 @@ describe("ReferenceComposer", () => {
         onChange={vi.fn()}
         onReferencesChange={vi.fn()}
         attachmentControl={<button type="button" aria-label="添加附件">附件</button>}
+        railControls={<><button type="button" aria-label="思考深度：中">思考</button><button type="button" aria-label="切换模型">模型</button></>}
         bottomControls={<div className="composer-actions"><span /><button type="button" aria-label="发送消息">发送</button></div>}
       />,
     );
 
     const referenceButton = screen.getByRole("button", { name: "添加引用" });
     const attachmentButton = screen.getByRole("button", { name: "添加附件" });
+    const thinkingButton = screen.getByRole("button", { name: "思考深度：中" });
+    const modelButton = screen.getByRole("button", { name: "切换模型" });
     const sendButton = screen.getByRole("button", { name: "发送消息" });
     expect(referenceButton.closest(".reference-composer__footer")).toBe(attachmentButton.closest(".reference-composer__footer"));
     expect(referenceButton.closest(".reference-composer__footer")).toBe(sendButton.closest(".reference-composer__footer"));
+    expect(referenceButton.compareDocumentPosition(attachmentButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attachmentButton.compareDocumentPosition(thinkingButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(thinkingButton.compareDocumentPosition(modelButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(modelButton.compareDocumentPosition(sendButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.click(referenceButton);
     await screen.findByRole("menu");

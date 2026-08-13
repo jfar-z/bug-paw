@@ -341,6 +341,34 @@ describe("会话路由的定时任务联动", () => {
     await app.close();
   });
 
+  it("只接受规范思考深度并写入当前 Session", async () => {
+    const setThinkingLevel = vi.fn(async () => undefined);
+    const runtime = {
+      openSession: vi.fn(async (id: string) => ({ id, messages: [], lastEventId: 0 })),
+      setThinkingLevel,
+    } as unknown as PiRuntimeGateway;
+    const app = Fastify();
+    registerSessionRoutes(app, { authService, runtime });
+
+    const valid = await app.inject({
+      method: "PUT",
+      url: "/api/sessions/session-1/thinking-level",
+      payload: { thinkingLevel: "xhigh" },
+    });
+    const invalid = await app.inject({
+      method: "PUT",
+      url: "/api/sessions/session-1/thinking-level",
+      payload: { thinkingLevel: "extreme" },
+    });
+
+    expect(valid.statusCode).toBe(204);
+    expect(setThinkingLevel).toHaveBeenCalledWith("session-1", "xhigh");
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: { code: "VALIDATION_FAILED" } });
+    expect(setThinkingLevel).toHaveBeenCalledTimes(1);
+    await app.close();
+  });
+
   it("批量预览与执行接口透传确认指纹", async () => {
     const sessionBulk = bulkServiceDouble();
     const app = Fastify();

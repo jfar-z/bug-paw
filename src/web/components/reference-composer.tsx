@@ -19,6 +19,7 @@ interface ReferenceComposerProps {
   editingContext?: ReactNode;
   attachmentControl?: ReactNode;
   attachmentContent?: ReactNode;
+  railControls?: ReactNode;
   bottomControls?: ReactNode;
 }
 
@@ -31,7 +32,7 @@ type Candidate =
 /**
  * 支持 @ 资源引用、/ 安全命令补全与加号快捷选择的对话输入组件。
  */
-export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, onFilesInput, editingContext, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
+export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, onFilesInput, editingContext, attachmentControl, attachmentContent, railControls, bottomControls }: ReferenceComposerProps) {
   const { runApiTask } = useApiTask();
   const [text, setText] = useState(value);
   const [catalog, setCatalog] = useState<ComposerCatalog>();
@@ -256,6 +257,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
             </div> : null}
           </div>
           {attachmentControl}
+          {railControls}
         </div>
         {bottomControls}
       </div>

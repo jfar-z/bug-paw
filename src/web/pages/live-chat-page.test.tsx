@@ -201,7 +201,10 @@ beforeEach(() => {
       }));
     }
     if (url === "/api/v1/models") {
-      return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      return new Response(JSON.stringify({ models: [{
+        provider: "openai", id: "gpt-5", name: "GPT-5",
+        thinkingLevels: ["off", "minimal", "low", "medium", "high"],
+      }] }));
     }
     if (url.includes("/workspace/entries")) {
       return new Response(JSON.stringify({ entries: [] }));
@@ -231,7 +234,10 @@ beforeEach(() => {
       return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
-      return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
+      return new Response(JSON.stringify({ id: "session-1", messages: [], thinkingLevel: "medium", lastEventId: 0 }));
+    }
+    if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
+      return new Response(null, { status: 204 });
     }
     if (url === "/api/v1/sessions/session-2") {
       return new Response(JSON.stringify({
@@ -239,6 +245,7 @@ beforeEach(() => {
         agentId: "default",
         messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
         history: { branchToken: "branch-session-2", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
+        thinkingLevel: "high",
         lastEventId: 1,
       }));
     }
@@ -370,6 +377,7 @@ describe("LiveChatPage 时间线", () => {
       expect(document.scrollingElement?.scrollTop ?? 0).toBe(0);
       expect(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2"))
         .toBeLessThan(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2"));
+      expect(screen.getByRole("button", { name: "思考深度：高" })).toBeInTheDocument();
       expect(screen.queryByRole("dialog", { name: "搜索聊天记录" })).not.toBeInTheDocument();
     } finally {
       rectSpy.mockRestore();
@@ -950,7 +958,112 @@ describe("LiveChatPage 时间线", () => {
     const workspaceSwitcher = await screen.findByRole("button", { name: "打开工作台导航" });
 
     expect(workspaceSwitcher.closest(".chat-header")).toHaveClass("live-chat-header");
-    expect(screen.getByRole("button", { name: "切换 Agent 或模型" })).toHaveClass("agent-model-menu__trigger");
+    expect(screen.getByRole("button", { name: "切换 Agent" })).toHaveClass("agent-model-menu__trigger");
+  });
+
+  it("按固定顺序在输入区展示思考与模型选择并持久化当前会话深度", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    const reference = await screen.findByRole("button", { name: "添加引用" });
+    const attachment = screen.getByLabelText("添加附件");
+    const thinking = screen.getByRole("button", { name: "思考深度：中" });
+    const model = screen.getByRole("button", { name: "切换模型，当前 GPT-5" });
+    const send = screen.getByRole("button", { name: "发送消息" });
+    expect(reference.compareDocumentPosition(attachment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attachment.compareDocumentPosition(thinking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(thinking.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(model.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(thinking);
+    fireEvent.click(screen.getByRole("option", { name: "高 high" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => (
+      String(url) === "/api/v1/sessions/session-1/thinking-level"
+      && init?.method === "PUT"
+      && init.body === JSON.stringify({ thinkingLevel: "high" })
+    ))).toBe(true));
+  });
+
+  it("新对话继承 Agent 默认深度并在首次发送前持久化草稿选择", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{
+        profile: {
+          id: "default",
+          name: "默认 Agent",
+          avatar: { kind: "initial", value: "π" },
+          status: "active",
+          cwd: "/data/workspace",
+          defaultThinkingLevel: "high",
+          instructions: {},
+          allowedTools: [],
+        },
+        revision: "r1",
+      }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{
+        provider: "openai",
+        id: "gpt-5",
+        name: "GPT-5",
+        thinkingLevels: ["off", "minimal", "low", "medium", "high"],
+      }] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      if (url === "/api/v1/sessions" && init?.method === "POST") return new Response(JSON.stringify({
+        id: "session-new",
+        agentId: "default",
+        messages: [],
+        model: { provider: "openai", id: "gpt-5", name: "GPT-5", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
+        thinkingLevel: "high",
+        lastEventId: 0,
+      }));
+      if (url === "/api/v1/sessions/session-new/thinking-level" && init?.method === "PUT") return new Response(null, { status: 204 });
+      if (url === "/api/v1/sessions/session-new/messages") return new Response(JSON.stringify({ runId: "run-new", sessionId: "session-new", status: "running", startedAt: "2026-08-13T00:00:00.000Z" }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    const thinking = await screen.findByRole("button", { name: "思考深度：高" });
+    fireEvent.click(thinking);
+    fireEvent.click(screen.getByRole("option", { name: "低 low" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "使用低深度" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, request]) => (
+      String(url) === "/api/v1/sessions/session-new/thinking-level"
+      && request?.method === "PUT"
+      && request.body === JSON.stringify({ thinkingLevel: "low" })
+    ))).toBe(true));
+  });
+
+  it("草稿切换模型时按 Pi 规则选择最接近的可用深度", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{
+        profile: {
+          id: "default",
+          name: "默认 Agent",
+          avatar: { kind: "initial", value: "π" },
+          status: "active",
+          cwd: "/data/workspace",
+          defaultThinkingLevel: "max",
+          instructions: {},
+          allowedTools: [],
+        },
+        revision: "r1",
+      }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [
+        { provider: "openai", id: "full", name: "完整模型", thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { provider: "openai", id: "limited", name: "受限模型", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
+      ] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("button", { name: "思考深度：最大" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "切换模型，当前 完整模型" }));
+    fireEvent.click(screen.getByRole("option", { name: /受限模型/ }));
+
+    expect(screen.getByRole("button", { name: "思考深度：高" })).toBeInTheDocument();
   });
 
   it("在 Agent 选择框右侧提供快捷新建会话按钮", async () => {
@@ -970,7 +1083,7 @@ describe("LiveChatPage 时间线", () => {
   it("将快捷资源入口放在 Agent 选择框与新建会话之间", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
 
-    const agentTrigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const agentTrigger = await screen.findByRole("button", { name: "切换 Agent" });
     const resourcesTrigger = screen.getByRole("button", { name: "打开快捷资源管理" });
     const createTrigger = screen.getByRole("button", { name: "新建会话" });
 
@@ -1201,7 +1314,7 @@ describe("LiveChatPage 时间线", () => {
     }));
 
     const firstPage = renderLiveChatPage(<LiveChatPage {...props} />);
-    const trigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = await screen.findByRole("button", { name: "切换 Agent" });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("option", { name: /研究 Agent/ }));
     await waitFor(() => expect(trigger).toHaveTextContent("研究 Agent"));
@@ -1209,14 +1322,14 @@ describe("LiveChatPage 时间线", () => {
     firstPage.unmount();
     renderLiveChatPage(<LiveChatPage {...props} />);
 
-    expect(await screen.findByRole("button", { name: "切换 Agent 或模型" })).toHaveTextContent("研究 Agent");
+    expect(await screen.findByRole("button", { name: "切换 Agent" })).toHaveTextContent("研究 Agent");
   });
 
   it("缓存的 Agent 不存在时回退到第一个可用 Agent", async () => {
     window.sessionStorage.setItem("pi-agent-web.selected-agent-id", "deleted-agent");
     renderLiveChatPage(<LiveChatPage {...props} />);
 
-    expect(await screen.findByRole("button", { name: "切换 Agent 或模型" })).toHaveTextContent("默认 Agent");
+    expect(await screen.findByRole("button", { name: "切换 Agent" })).toHaveTextContent("默认 Agent");
     expect(window.sessionStorage.getItem("pi-agent-web.selected-agent-id")).toBeNull();
   });
 
@@ -1240,7 +1353,7 @@ describe("LiveChatPage 时间线", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     }));
     renderLiveChatPage(<LiveChatPage {...props} />);
-    const trigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = await screen.findByRole("button", { name: "切换 Agent" });
 
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("option", { name: /研究 Agent/ }));
@@ -2248,7 +2361,7 @@ describe("LiveChatPage TTS 自动播放资格", () => {
     expect(await screen.findByText("切换前回答。")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "朗读消息" }));
     await waitFor(() => expect(PageFakeAudio.instances[0]?.played).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "切换 Agent 或模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "切换 Agent" }));
     fireEvent.click(screen.getByRole("option", { name: /写作 Agent/ }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "写作 Agent" })).toBeInTheDocument());

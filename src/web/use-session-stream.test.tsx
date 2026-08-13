@@ -443,6 +443,27 @@ describe("useSessionStream", () => {
     expect(onModelChange).toHaveBeenCalledWith({ provider: "openai", id: "gpt", name: "GPT" });
   });
 
+  it("把其他客户端切换的思考深度同步到当前页面", () => {
+    const onThinkingLevelChange = vi.fn();
+    renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot: vi.fn(),
+      onTimelineEvent: vi.fn(),
+      onRunChange: vi.fn(),
+      onThinkingLevelChange,
+      onError: vi.fn(),
+    }));
+
+    act(() => FakeEventSource.instances[0].emit("thinking_level_changed", {
+      id: 1,
+      type: "thinking_level_changed",
+      sessionId: "session-1",
+      thinkingLevel: "high",
+    }));
+
+    expect(onThinkingLevelChange).toHaveBeenCalledWith("high");
+  });
+
   it("切换 Session 后拒绝旧 transport 已排队的事件且不污染新游标", () => {
     const onTimelineEvent = vi.fn();
     const onModelChange = vi.fn();

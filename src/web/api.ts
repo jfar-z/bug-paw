@@ -1,5 +1,5 @@
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
-import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, WebPiSettings } from "../shared/configuration-contracts";
+import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, ThinkingLevel, WebPiSettings } from "../shared/configuration-contracts";
 import type { ChatRunSummary, ComposerCatalog, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
 import type { AgentReference, AgentReferenceInput } from "../shared/agent-reference-contracts";
 import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateScheduledTaskInput } from "../shared/scheduled-task-contracts";
@@ -52,6 +52,7 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+  thinkingLevels?: readonly ThinkingLevel[];
 }
 
 export interface SessionSummary {
@@ -71,6 +72,7 @@ export interface SessionSnapshot {
   messages: unknown[];
   history: SessionHistoryPage;
   model?: ModelSummary;
+  thinkingLevel?: ThinkingLevel;
   run?: ChatRunSummary;
   lastEventId: number;
 }
@@ -493,6 +495,11 @@ export const api = {
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/model`, {
       method: "PUT",
       body: JSON.stringify({ provider, modelId }),
+    }),
+  setThinkingLevel: (sessionId: string, thinkingLevel: ThinkingLevel) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/thinking-level`, {
+      method: "PUT",
+      body: JSON.stringify({ thinkingLevel }),
     }),
   renameSession: (sessionId: string, name: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}`, {

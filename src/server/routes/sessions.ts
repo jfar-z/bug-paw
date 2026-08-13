@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionBulkAction, SessionBulkTarget } from "../../shared/session-bulk-contracts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/configuration-contracts";
 import { sortSessionsPinnedFirst } from "../../shared/session-sort";
 import type { PiRuntimeGateway } from "../pi-runtime";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
@@ -243,6 +244,28 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
   });
 
+  app.put<{ Params: { id: string } }>("/api/sessions/:id/thinking-level", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) {
+      return;
+    }
+    const body = isRecord(request.body) ? request.body : {};
+    if (!isThinkingLevel(body.thinkingLevel)) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "思考深度参数格式不正确");
+    }
+    try {
+      const acquired = await acquireRuntimeForSession(dependencies, request.params.id);
+      try {
+        await acquired.runtime.openSession(request.params.id);
+        await acquired.runtime.setThinkingLevel(request.params.id, body.thinkingLevel);
+        return reply.code(204).send();
+      } finally {
+        acquired.release();
+      }
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
   app.patch<{ Params: { id: string } }>("/api/sessions/:id", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;
@@ -342,6 +365,10 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
       return sendRuntimeError(reply, error);
     }
   });
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 async function acquireRuntimeForAgent(

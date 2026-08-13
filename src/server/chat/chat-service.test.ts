@@ -211,7 +211,8 @@ function fakeRuntime(): PiRuntimeGateway {
     openSession: async (id) => ({ id, messages: [], history: emptyHistory(), lastEventId: 0 }),
     startPrompt: vi.fn(async (sessionId: string) => ({ runId: "r1", sessionId, status: "running" as const, startedAt: "2026-08-07T00:00:00.000Z" })),
     prompt: async () => undefined, abort: vi.fn(async () => undefined), abortAll: async () => 0,
-    setModel: async () => undefined, renameSession: async () => undefined, archiveSession: async () => undefined,
+    setModel: async () => undefined, setThinkingLevel: async () => undefined,
+    renameSession: async () => undefined, archiveSession: async () => undefined,
     unarchiveSession: async () => undefined, deleteSession: async () => undefined,
     discardUnassignedSession: async () => undefined,
     subscribe(sessionId, _after, listener) {

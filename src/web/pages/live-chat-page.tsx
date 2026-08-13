@@ -38,6 +38,7 @@ import {
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/configuration-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
@@ -46,6 +47,7 @@ import { classifyWorkspaceLink } from "../workspace-links";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
+import { ComposerSessionControls } from "../components/composer-session-controls";
 
 interface LiveChatPageProps {
   theme: ThemePreference;
@@ -150,6 +152,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [selectedModel, setSelectedModel] = useState<ModelSummary>();
+  const [selectedThinkingLevel, setSelectedThinkingLevel] = useState<ThinkingLevel>("medium");
   const [globalDefaultModel, setGlobalDefaultModel] = useState<{ provider: string; id: string }>();
   const [openingSessionId, setOpeningSessionId] = useState<string>();
   const [session, setSession] = useState<SessionSnapshot>();
@@ -191,6 +194,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const agentSelectionGenerationRef = useRef(0);
   const modelChangeGenerationRef = useRef(0);
   const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const thinkingLevelChangeGenerationRef = useRef(0);
+  const thinkingLevelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const confirmedThinkingLevelRef = useRef<ThinkingLevel>("medium");
   const selectedAgentIdRef = useRef<string | undefined>(selectedAgentId);
   const sessionIdRef = useRef<string | undefined>(session?.id);
   const sessionSnapshotRef = useRef<SessionSnapshot | undefined>(session);
@@ -229,6 +235,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setSession(mergedSnapshot);
     setRunNotice(modelRunNotice(mergedSnapshot.messages));
     if (next.model) setSelectedModel(next.model);
+    if (next.thinkingLevel) {
+      confirmedThinkingLevelRef.current = next.thinkingLevel;
+      setSelectedThinkingLevel(next.thinkingLevel);
+    }
     const running = next.run?.status === "queued" || next.run?.status === "running";
     const pendingResult = reconcilePendingUserMessage(
       next.id,
@@ -251,6 +261,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         ...current,
         ...(next.agentId ? { agentId: next.agentId } : {}),
         ...(next.model ? { model: next.model } : {}),
+        ...(next.thinkingLevel ? { thinkingLevel: next.thinkingLevel } : {}),
         run: next.run,
         lastEventId: next.lastEventId,
       };
@@ -258,6 +269,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       return merged;
     });
     if (next.model) setSelectedModel(next.model);
+    if (next.thinkingLevel) {
+      confirmedThinkingLevelRef.current = next.thinkingLevel;
+      setSelectedThinkingLevel(next.thinkingLevel);
+    }
   }, [applySnapshot]);
 
   const historyLoader = useSessionHistory({
@@ -321,6 +336,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     onModelChange: (model) => {
       setSession((current) => current ? { ...current, model } : current);
       setSelectedModel(model);
+    },
+    onThinkingLevelChange: (thinkingLevel) => {
+      confirmedThinkingLevelRef.current = thinkingLevel;
+      setSession((current) => current ? { ...current, thinkingLevel } : current);
+      setSelectedThinkingLevel(thinkingLevel);
     },
     onSessionRenamed: (sessionId, name) => {
       setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
@@ -420,7 +440,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         setSelectedAgentId(initialAgentId);
         setModels(modelResult.models);
         setGlobalDefaultModel(inheritedModel);
-        setSelectedModel(findAgentModel(initialAgent, modelResult.models, inheritedModel));
+        const initialModel = findAgentModel(initialAgent, modelResult.models, inheritedModel);
+        setSelectedModel(initialModel);
+        setSelectedThinkingLevel(findAgentThinkingLevel(initialAgent, initialModel));
         if (!initialAgentId) return;
         const sessionResult = await api.listSessions(initialAgentId);
         if (!active || generation !== agentSelectionGenerationRef.current) return;
@@ -539,6 +561,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setError("");
     setRunNotice("");
     pendingUserMessageRef.current = undefined;
+    const draftAgent = agents.find((item) => item.profile.id === selectedAgentId);
+    const draftModel = findAgentModel(draftAgent, models, globalDefaultModel);
+    setSelectedModel(draftModel);
+    setSelectedThinkingLevel(findAgentThinkingLevel(draftAgent, draftModel));
     closeSidebar();
   };
 
@@ -677,6 +703,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       sessionSnapshotRef.current = focusedSnapshot;
       setSession(focusedSnapshot);
       if (opened.model) setSelectedModel(opened.model);
+      if (opened.thinkingLevel) {
+        confirmedThinkingLevelRef.current = opened.thinkingLevel;
+        setSelectedThinkingLevel(opened.thinkingLevel);
+      }
       setActiveRun(opened.run?.status === "queued" || opened.run?.status === "running" ? opened.run : undefined);
       setTimeline(parsePiHistory(target.messages, false));
       if (!await focusSessionEntry(hit.entryId)) throw new Error("SESSION_ENTRY_NOT_FOUND");
@@ -914,6 +944,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         await api.setModel(activeSession.id, selectedModel.provider, selectedModel.id);
         activeSession.model = selectedModel;
       }
+      if (wasDraft && activeSession.thinkingLevel !== selectedThinkingLevel) {
+        await api.setThinkingLevel(activeSession.id, selectedThinkingLevel);
+        activeSession.thinkingLevel = selectedThinkingLevel;
+      }
       await stream.ensureOpen();
       setDraft("");
       setDraftReferences([]);
@@ -1041,7 +1075,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const generation = ++modelChangeGenerationRef.current;
     const targetSessionId = session?.id;
     setSelectedModel(model);
-    if (!targetSessionId) return;
+    if (!targetSessionId) {
+      setSelectedThinkingLevel((current) => normalizeThinkingLevelForModel(current, model));
+      return;
+    }
     try {
       // 浏览器和服务端都按 Session 串行化，确保快速连续选择时最后一次选择最终生效。
       const request = modelChangeQueueRef.current
@@ -1054,6 +1091,28 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     } catch (reason) {
       if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
       await reportFailure(reason, "切换会话模型");
+    }
+  };
+
+  /** 串行持久化会话思考深度，快速切换时以最后一次选择为准。 */
+  const changeThinkingLevel = async (thinkingLevel: ThinkingLevel) => {
+    const generation = ++thinkingLevelChangeGenerationRef.current;
+    const targetSessionId = session?.id;
+    setSelectedThinkingLevel(thinkingLevel);
+    if (!targetSessionId) return;
+    try {
+      const request = thinkingLevelChangeQueueRef.current
+        .catch(() => undefined)
+        .then(() => api.setThinkingLevel(targetSessionId, thinkingLevel));
+      thinkingLevelChangeQueueRef.current = request.catch(() => undefined);
+      await request;
+      if (generation !== thinkingLevelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
+      confirmedThinkingLevelRef.current = thinkingLevel;
+      setSession((current) => current?.id === targetSessionId ? { ...current, thinkingLevel } : current);
+    } catch (reason) {
+      if (generation !== thinkingLevelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
+      setSelectedThinkingLevel(confirmedThinkingLevelRef.current);
+      await reportFailure(reason, "切换思考深度");
     }
   };
 
@@ -1244,8 +1303,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const nextAgent = agents.find((item) => item.profile.id === agentId);
     cacheSelectedAgentId(agentId);
     setSelectedAgentId(agentId);
-    setSelectedModel(findAgentModel(nextAgent, models, globalDefaultModel));
+    const nextModel = findAgentModel(nextAgent, models, globalDefaultModel);
     enterDraft();
+    setSelectedModel(nextModel);
+    setSelectedThinkingLevel(findAgentThinkingLevel(nextAgent, nextModel));
     try {
       const result = await api.listSessions(agentId);
       if (generation === agentSelectionGenerationRef.current) setSessions(result.sessions);
@@ -1350,11 +1411,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
             <AgentModelMenu
               agents={agents}
               selectedAgentId={activeAgentId}
-              models={models}
-              selectedModel={session?.model ?? selectedModel}
               disabled={streaming || isOpeningSession}
               onSelectAgent={(agentId) => void selectAgent(agentId)}
-              onSelectModel={(model) => void changeModel(model)}
             />
             <button type="button" className="icon-button quick-workspace-open-button" aria-label="打开快捷资源管理" title="快捷资源管理" disabled={!activeAgentId} onClick={(event) => { workspaceTriggerRef.current = event.currentTarget; setWorkspaceMessage(""); openDrawer("resources"); }}><FolderOpen size={18} aria-hidden="true" /></button>
             <button
@@ -1363,7 +1421,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               aria-label="新建会话"
               title="新建会话"
               disabled={noAvailableAgent || isOpeningSession}
-              onClick={enterDraft}
+              onClick={() => enterDraft()}
             >
               <MessageSquarePlus size={18} aria-hidden="true" />
             </button>
@@ -1424,6 +1482,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
                 <button type="button" onClick={cancelEditing}>取消编辑</button>
               </div> : undefined}
               attachmentControl={<AttachmentPickerButton items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} onFilesSelected={queueAttachmentFiles} onError={setError} />}
+              railControls={<ComposerSessionControls
+                models={models}
+                selectedModel={selectedModel}
+                thinkingLevel={selectedThinkingLevel}
+                disabled={streaming || isOpeningSession || !selectedAgentId}
+                onThinkingLevelChange={(thinkingLevel) => void changeThinkingLevel(thinkingLevel)}
+                onModelChange={(model) => void changeModel(model)}
+              />}
               attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
               bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
             />
@@ -1579,6 +1645,27 @@ function findAgentModel(
 ): ModelSummary | undefined {
   const defaultModel = agent?.profile.defaultModel ?? globalDefaultModel;
   return models.find((model) => model.provider === defaultModel?.provider && model.id === defaultModel.id) ?? models[0];
+}
+
+/** 根据模型归一化能力选择 Agent 的初始思考深度。 */
+function findAgentThinkingLevel(agent: AgentProfileDocument | undefined, model: ModelSummary | undefined): ThinkingLevel {
+  return normalizeThinkingLevelForModel(agent?.profile.defaultThinkingLevel ?? "medium", model);
+}
+
+/** 避免草稿态展示模型不支持的思考深度。 */
+function normalizeThinkingLevelForModel(thinkingLevel: ThinkingLevel, model: ModelSummary | undefined): ThinkingLevel {
+  const available = model?.thinkingLevels;
+  if (!available?.length || available.includes(thinkingLevel)) return thinkingLevel;
+  const requestedIndex = THINKING_LEVELS.indexOf(thinkingLevel);
+  for (let index = requestedIndex + 1; index < THINKING_LEVELS.length; index += 1) {
+    const candidate = THINKING_LEVELS[index]!;
+    if (available.includes(candidate)) return candidate;
+  }
+  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
+    const candidate = THINKING_LEVELS[index]!;
+    if (available.includes(candidate)) return candidate;
+  }
+  return available[0] ?? "off";
 }
 
 /**

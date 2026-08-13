@@ -21,6 +21,7 @@ import {
 } from "./pi-runtime";
 import type { RunCheckpoint } from "./runtime/checkpoint-store";
 import { SearchRunState } from "./web-research/search-run-state";
+import type { ThinkingLevel } from "../shared/configuration-contracts";
 
 const noRetrieval = {
   knowledgeSearch: false,
@@ -45,17 +46,24 @@ function createSession(
   prompt: () => Promise<void> = async () => undefined,
   messages: unknown[] = [],
   model: unknown = undefined,
+  initialThinkingLevel: ThinkingLevel = "medium",
 ): PiSessionAdapter & { setSessionName: ReturnType<typeof vi.fn> } {
+  let thinkingLevel = initialThinkingLevel;
   return {
     sessionId: "session-1",
     sessionFile: undefined,
     messages,
     model,
+    get thinkingLevel() {
+      return thinkingLevel;
+    },
+    availableThinkingLevels: ["off", "minimal", "low", "medium", "high"],
     isStreaming: false,
     subscribe: () => () => undefined,
     prompt,
     abort: async () => undefined,
     setModel: async () => undefined,
+    setThinkingLevel: vi.fn((level: ThinkingLevel) => { thinkingLevel = level; }),
     setSessionName: vi.fn<(name: string) => void>(),
     dispose: () => undefined,
   };
@@ -79,6 +87,43 @@ function createBackend(
 }
 
 describe("PiRuntimeGateway 提示词刷新", () => {
+  it("在快照中返回会话真实思考深度并发布切换事件", async () => {
+    const session = createSession(undefined, [], { provider: "openai", id: "gpt", name: "GPT" });
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    const initial = await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    expect(initial.thinkingLevel).toBe("medium");
+    await gateway.setThinkingLevel("session-1", "high");
+
+    expect(session.setThinkingLevel).toHaveBeenCalledWith("high");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "thinking_level_changed",
+      thinkingLevel: "high",
+    }));
+    await expect(gateway.openSession("session-1")).resolves.toMatchObject({ thinkingLevel: "high" });
+    gateway.dispose();
+  });
+
+  it("切换模型导致 SDK 校正深度时在模型事件后发布最终深度", async () => {
+    const session = createSession(undefined, [], { provider: "openai", id: "reasoner", name: "Reasoner" }, "max");
+    session.setModel = vi.fn(async () => { session.setThinkingLevel("high"); });
+    const backend = createBackend(session);
+    backend.findModel = () => ({ provider: "openai", id: "compact", name: "Compact", reasoning: true });
+    const gateway = createPiRuntimeGateway(backend);
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.setModel("session-1", "openai", "compact");
+
+    const changes = events.filter((event) => event.type !== "snapshot");
+    expect(changes.map((event) => event.type)).toEqual(["model_changed", "thinking_level_changed"]);
+    expect(changes[1]).toMatchObject({ thinkingLevel: "high" });
+    gateway.dispose();
+  });
+
   it("会话文本搜索固定 Agent 作用域并优先读取已打开的当前分支", async () => {
     const messages = [{ role: "assistant", content: "needle 实时分支", __piEntryId: "assistant-live" }];
     const session = createSession(undefined, messages);
