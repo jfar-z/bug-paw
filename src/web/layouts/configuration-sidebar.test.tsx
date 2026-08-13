@@ -6,6 +6,10 @@ describe("ConfigurationSidebar", () => {
   it("将运行设置作为 BugPaw 的产品入口呈现", () => {
     render(<ConfigurationSidebar route={{ page: "pi-settings" }} open onClose={vi.fn()} onNavigate={vi.fn()} />);
 
+    const header = document.querySelector(".configuration-sidebar__header")!;
+    expect(header).toHaveClass("secondary-sidebar-header");
+    expect([...header.querySelectorAll(".secondary-sidebar-header__eyebrow, .secondary-sidebar-header__title")]
+      .map((element) => element.textContent)).toEqual(["SETTINGS", "配置中心"]);
     expect(screen.getByRole("button", { name: "运行设置" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByText("核心配置为事实来源")).toBeInTheDocument();
     expect(screen.queryByText("Pi 运行设置")).not.toBeInTheDocument();

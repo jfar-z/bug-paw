@@ -12,6 +12,7 @@ import {
   SlidersHorizontal,
   X,
 } from "lucide-react";
+import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
 import type { AppRoute } from "../router";
 
 interface ConfigurationSidebarProps {
@@ -33,15 +34,14 @@ export function ConfigurationSidebar({ route, open, onClose, onNavigate }: Confi
 
   return (
     <aside className={open ? "configuration-sidebar is-open" : "configuration-sidebar"}>
-      <header className="configuration-sidebar__header">
-        <div>
-          <span>SETTINGS</span>
-          <strong>配置中心</strong>
-        </div>
-        <button type="button" className="icon-button configuration-sidebar__close" aria-label="关闭配置导航" onClick={onClose}>
+      <SecondarySidebarHeader
+        className="configuration-sidebar__header"
+        eyebrow="SETTINGS"
+        title="配置中心"
+        actions={<button type="button" className="icon-button configuration-sidebar__close" aria-label="关闭配置导航" onClick={onClose}>
           <X size={18} aria-hidden="true" />
-        </button>
-      </header>
+        </button>}
+      />
 
       <nav className="configuration-nav" aria-label="配置中心导航">
         <p>工作区</p>
