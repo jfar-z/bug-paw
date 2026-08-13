@@ -15,6 +15,8 @@ export const ApiErrorCodeSchema = Type.Union([
   Type.Literal("SESSION_HISTORY_STALE"),
   Type.Literal("SESSION_ENTRY_NOT_FOUND"),
   Type.Literal("SESSION_BRANCH_CHANGED"),
+  Type.Literal("SESSION_LIST_LIMIT_INVALID"),
+  Type.Literal("SESSION_LIST_CURSOR_INVALID"),
   Type.Literal("SESSION_SEARCH_QUERY_INVALID"),
   Type.Literal("SESSION_SEARCH_CURSOR_INVALID"),
   Type.Literal("SESSION_SEARCH_UNAVAILABLE"),

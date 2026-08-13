@@ -139,6 +139,87 @@ describe("SessionTextService 搜索", () => {
   });
 });
 
+describe("SessionTextService 列表", () => {
+  it("按更新时间和 Session ID 稳定列出普通与归档会话且不读取正文", async () => {
+    const sessionB = sourceSession("session-b", "2026-08-13T03:00:00.000Z");
+    const sessionA = sourceSession("session-a", "2026-08-13T03:00:00.000Z");
+    const sessionC = sourceSession("session-c", "2026-08-13T02:00:00.000Z");
+    sessionA.messageCount = 8;
+    const source = createSource({
+      sessions: [sessionB, sessionC, sessionA],
+      archived: ["session-b"],
+    });
+    const readPersistedBranch = vi.spyOn(source, "readPersistedBranch");
+    const service = new SessionTextService("agent-a", source);
+
+    const page = await service.list({ limit: 20 });
+
+    expect(page).toMatchObject({ hasMore: false });
+    expect(page.sessions).toEqual([
+      expect.objectContaining({ sessionId: "session-a", messageCount: 8, archived: false }),
+      expect.objectContaining({ sessionId: "session-b", archived: true }),
+      expect.objectContaining({ sessionId: "session-c", archived: false }),
+    ]);
+    expect(JSON.stringify(page)).not.toContain("/managed/");
+    expect(readPersistedBranch).not.toHaveBeenCalled();
+  });
+
+  it("使用 keyset 游标分页并允许前页 Session 在两页间更新", async () => {
+    const input = {
+      sessions: [
+        sourceSession("session-3", "2026-08-13T03:00:00.000Z"),
+        sourceSession("session-2", "2026-08-13T02:00:00.000Z"),
+        sourceSession("session-1", "2026-08-13T01:00:00.000Z"),
+      ],
+    };
+    const service = new SessionTextService("agent-a", createSource(input));
+
+    const first = await service.list({ limit: 2 });
+    expect(first.sessions.map(({ sessionId }) => sessionId)).toEqual(["session-3", "session-2"]);
+    expect(first).toMatchObject({ hasMore: true, nextCursor: expect.any(String) });
+
+    input.sessions[0]!.modified = "2026-08-13T04:00:00.000Z";
+    service.invalidate("session-3");
+    const second = await service.list({ limit: 2, cursor: first.nextCursor });
+
+    expect(second.sessions.map(({ sessionId }) => sessionId)).toEqual(["session-1"]);
+    expect(second.hasMore).toBe(false);
+  });
+
+  it("拒绝缺失或变化的 limit、跨工具游标和真正过期的列表游标", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T03:00:00.000Z"));
+    const sessions = [
+      sourceSession("session-2", "2026-08-13T02:00:00.000Z"),
+      sourceSession("session-1", "2026-08-13T01:00:00.000Z"),
+    ];
+    const service = new SessionTextService("agent-a", createSource({
+      sessions,
+      persisted: {
+        "session-2": [
+          { role: "user", content: "needle-a", __piEntryId: "entry-a" },
+          { role: "user", content: "needle-b", __piEntryId: "entry-b" },
+        ],
+      },
+    }));
+
+    await expect(service.list({} as never)).rejects.toMatchObject({ code: "SESSION_LIST_LIMIT_INVALID" });
+    await expect(service.list({ limit: 21 })).rejects.toMatchObject({ code: "SESSION_LIST_LIMIT_INVALID" });
+
+    const first = await service.list({ limit: 1 });
+    await expect(service.list({ limit: 2, cursor: first.nextCursor }))
+      .rejects.toMatchObject({ code: "SESSION_LIST_CURSOR_INVALID" });
+
+    const search = await service.search({ query: "needle", limit: 1 });
+    await expect(service.list({ limit: 1, cursor: search.nextCursor }))
+      .rejects.toMatchObject({ code: "SESSION_LIST_CURSOR_INVALID" });
+
+    vi.advanceTimersByTime(SESSION_TEXT_CURSOR_TTL_MS + 1);
+    await expect(service.list({ limit: 1, cursor: first.nextCursor }))
+      .rejects.toMatchObject({ code: "SESSION_LIST_CURSOR_INVALID" });
+  });
+});
+
 describe("SessionTextService 阅读", () => {
   it("读取最近文本、锚点窗口和两个方向的继续游标", async () => {
     const session = sourceSession("session-a", "2026-08-13T03:00:00.000Z");
