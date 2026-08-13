@@ -3974,7 +3974,7 @@ img.message-avatar {
 .composer-thinking-menu small {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .composer-model-menu {
@@ -4012,7 +4012,7 @@ img.message-avatar {
 .composer-model-menu small {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .agent-reference-chips {
