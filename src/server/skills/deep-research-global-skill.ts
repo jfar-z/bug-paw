@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const DEEP_RESEARCH_SKILL_NAME = "deep-research" as const;
@@ -37,6 +37,10 @@ export async function ensureDeepResearchGlobalSkill(agentDir: string): Promise<D
   const bundled = await readBundledDeepResearchSkill();
 
   await mkdir(skillsDirectory, { recursive: true, mode: 0o700 });
+  const skillsMetadata = await lstat(skillsDirectory);
+  if (!skillsMetadata.isDirectory()) {
+    return { name: DEEP_RESEARCH_SKILL_NAME, status: "preserved_existing" };
+  }
 
   try {
     await mkdir(directory, { mode: 0o700 });
@@ -48,7 +52,8 @@ export async function ensureDeepResearchGlobalSkill(agentDir: string): Promise<D
     if (!hasErrorCode(error, "EEXIST")) throw error;
   }
 
-  const metadata = await stat(directory);
+  // 符号链接可能指向数据目录之外；所有非普通目录节点都视为用户内容。
+  const metadata = await lstat(directory);
   if (!metadata.isDirectory()) {
     return { name: DEEP_RESEARCH_SKILL_NAME, status: "preserved_existing" };
   }
@@ -68,6 +73,11 @@ export async function ensureDeepResearchGlobalSkill(agentDir: string): Promise<D
 
   // 同名目录可能由用户维护；出现未知正文或任何额外资源时绝不覆盖。
   if (entries.length !== 1 || entries[0] !== "SKILL.md") {
+    return { name: DEEP_RESEARCH_SKILL_NAME, status: "preserved_existing" };
+  }
+
+  const targetMetadata = await lstat(target);
+  if (!targetMetadata.isFile()) {
     return { name: DEEP_RESEARCH_SKILL_NAME, status: "preserved_existing" };
   }
 

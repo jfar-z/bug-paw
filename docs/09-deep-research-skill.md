@@ -125,7 +125,7 @@ Entity + Version + Date + Claim
 | --- | --- | --- |
 | 不存在或为空目录 | 创建正文并设置目录 `0700`、文件 `0600` | `installed` |
 | 仅有与 bundled 完全相同的 `SKILL.md` | 修复权限，不重写正文 | `current` |
-| 路径是文件、正文不同或存在任何额外资源 | 不修改用户内容 | `preserved_existing` |
+| 路径是文件或符号链接、正文不同或存在任何额外资源 | 不修改用户内容 | `preserved_existing` |
 
 安装器故意不自动升级同名内容。BugPaw 无法可靠判断不同正文是旧内置版本还是用户维护版本，因此优先避免覆盖。
 
@@ -139,29 +139,32 @@ Entity + Version + Date + Claim
 - `sourceFamilies` 仅供评测者评分，永远不返回给模型。
 - 所有实体和保留域名均为合成内容，不访问真实网站。
 
-无 Skill 控制组命令模式：
+无 Skill 控制组使用生产一致的 Node 24 镜像、临时配置目录和 JSON 事件流。先准备一个只含评测所需 Pi 配置文件的只读目录，再从仓库根目录运行：
 
 ```bash
-DEEP_RESEARCH_EVAL_CASE=current-product \
-pi --provider local --model Qwen3.6-35B-A3B --thinking low \
-  --print --no-session --no-context-files --no-skills --no-extensions \
-  --extension scripts/deep-research-eval/extension.ts \
-  --no-builtin-tools --tools read,web_search,web_read \
+docker run --rm --user "$(id -u):$(id -g)" \
+  --tmpfs /pi-eval:rw,noexec,nosuid,size=16m,mode=700 \
+  -e PI_CODING_AGENT_DIR=/pi-eval \
+  -e DEEP_RESEARCH_EVAL_CASE=current-product \
+  -v /absolute/path/to/pi-eval-config:/pi-config-source:ro \
+  -v "$PWD":/workspace:ro -w /workspace \
+  node:24.19.0-bookworm-slim sh -c \
+  'cp /pi-config-source/auth.json /pi-config-source/models-store.json /pi-config-source/models.json /pi-config-source/settings.json /pi-eval/ && chmod 600 /pi-eval/* && exec ./node_modules/.bin/pi --provider local --model Qwen3.6-35B-A3B --thinking low --mode json --print --no-session --no-context-files --no-skills --no-extensions --extension scripts/deep-research-eval/extension.ts --no-builtin-tools --tools web_search,web_read "$@"' sh \
   '截至 2026-02-01，比较 Alpha v2 与 Beta 当前版本的开放权重状态，并快速给出完整结论。'
 ```
 
-有 Skill 组保持模型、思考级别、工具和案例完全一致，增加 Skill 路径，并通过 Pi 原生命令显式调用：
+显式有 Skill 组保持模型、思考级别、工具和案例完全一致，在 Pi 参数中增加 Skill 路径，并把末尾用户请求改为原生命令：
 
 ```text
 --skill src/server/skills/deep-research
 /skill:deep-research <原用户请求>
 ```
 
-必须保留只读内置工具 `read`。Pi 只有在 `read` 可用时才把可发现 Skill 列表放进系统提示词；只有 `web_read` 时，即使 `--skill` 路径已经加载，模型也看不到 Skill 列表。
+显式调用会先展开 Skill 正文，不需要开放通用文件读取工具。控制组和显式组都只选择 `web_search,web_read`，因此模型不能读取 `cases.ts` 中的评测者答案。
 
-自动发现组另行测试普通用户请求，用来衡量目标模型能否根据 description 主动读取 Skill。`local/Qwen3.6-35B-A3B` 在本次回归中能够看到列表，但没有稳定调用 `read`；因此正文效果以 `/skill:deep-research` 显式调用组为准，自动触发率作为独立兼容指标报告，不能把未读取正文的运行称为“有 Skill”。
+自动发现组另行测试普通用户请求，用来衡量目标模型能否根据 description 主动读取 Skill。此时把工具选择改为 `read,web_search,web_read`；评测 extension 注册的 `read` 只允许读取 `src/server/skills/deep-research/SKILL.md`，访问其他工作区文件会报错。Pi 只有在名为 `read` 的工具可用时才把可发现 Skill 列表放进系统提示词。`local/Qwen3.6-35B-A3B` 在本次回归中能够看到列表，但没有稳定调用 `read`；因此正文效果以 `/skill:deep-research` 显式调用组为准，自动触发率作为独立兼容指标报告，不能把未读取正文的运行称为“有 Skill”。
 
-评测配置应使用隔离的测试目录，不复制、打印或提交凭证。实际运行以 Pi 当前 CLI 帮助为准。
+`--mode json` 是人工审查查询、页面打开和工具错误轨迹的必要条件。评测配置应使用隔离目录，不打印或提交凭证；容器退出后 tmpfs 中的配置副本自动消失。实际运行以 Pi 当前 CLI 帮助为准。
 
 ## 七类回归案例
 

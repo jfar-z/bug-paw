@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -98,5 +98,58 @@ describe("通用深度研究全局 Skill", () => {
       status: "preserved_existing",
     });
     expect(await readFile(target, "utf8")).toBe("user file");
+  });
+
+  it("保留指向其他位置的技能目录符号链接", async () => {
+    const root = await createRoot();
+    const linkedDirectory = join(root, "user-skill");
+    await mkdir(join(root, "skills"), { recursive: true });
+    await mkdir(linkedDirectory);
+    await symlink(linkedDirectory, join(root, "skills", "deep-research"), "dir");
+
+    await expect(ensureDeepResearchGlobalSkill(root)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
+    await expect(readFile(join(linkedDirectory, "SKILL.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("保留指向其他位置的全局技能根目录符号链接", async () => {
+    const root = await createRoot();
+    const linkedSkillsDirectory = join(root, "user-skills");
+    await mkdir(linkedSkillsDirectory);
+    await symlink(linkedSkillsDirectory, join(root, "skills"), "dir");
+
+    await expect(ensureDeepResearchGlobalSkill(root)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
+    await expect(readFile(join(linkedSkillsDirectory, "deep-research", "SKILL.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("保留技能正文符号链接和断开的符号链接", async () => {
+    const root = await createRoot();
+    const directory = join(root, "skills", "deep-research");
+    const userSkill = join(root, "user-skill.md");
+    await mkdir(directory, { recursive: true });
+    await writeFile(userSkill, await readBundledDeepResearchSkill(), "utf8");
+    await symlink(userSkill, join(directory, "SKILL.md"), "file");
+
+    await expect(ensureDeepResearchGlobalSkill(root)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
+
+    const brokenRoot = await createRoot();
+    const brokenDirectory = join(brokenRoot, "skills", "deep-research");
+    await mkdir(brokenDirectory, { recursive: true });
+    await symlink(join(brokenRoot, "missing.md"), join(brokenDirectory, "SKILL.md"), "file");
+
+    await expect(ensureDeepResearchGlobalSkill(brokenRoot)).resolves.toEqual({
+      name: "deep-research",
+      status: "preserved_existing",
+    });
   });
 });
