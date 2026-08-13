@@ -1684,6 +1684,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function createMemorySessionMetadataStore(): SessionMetadataStore {
   const archived = new Set<string>();
+  const pinned = new Set<string>();
   const agents = new Map<string, string>();
   return {
     getAgentId: async (sessionId) => agents.get(sessionId),
@@ -1696,10 +1697,24 @@ function createMemorySessionMetadataStore(): SessionMetadataStore {
     },
     isArchived: async (sessionId) => archived.has(sessionId),
     listArchivedIds: async () => [...archived],
-    archive: async (sessionId) => { archived.add(sessionId); },
+    listPinnedIds: async (agentId) => [...pinned].filter((sessionId) => agents.get(sessionId) === agentId),
+    pin: async (sessionId) => {
+      if (!agents.has(sessionId)) throw new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+      if (archived.has(sessionId)) throw new DomainError("SESSION_ARCHIVED", "归档 Session 不能置顶");
+      pinned.add(sessionId);
+    },
+    unpin: async (sessionId) => {
+      if (!agents.has(sessionId)) throw new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+      pinned.delete(sessionId);
+    },
+    archive: async (sessionId) => {
+      archived.add(sessionId);
+      pinned.delete(sessionId);
+    },
     unarchive: async (sessionId) => { archived.delete(sessionId); },
     remove: async (sessionId) => {
       archived.delete(sessionId);
+      pinned.delete(sessionId);
       agents.delete(sessionId);
     },
     listIdsByAgent: async (agentId) => [...agents.entries()].filter(([, owner]) => owner === agentId).map(([sessionId]) => sessionId),
@@ -1708,6 +1723,7 @@ function createMemorySessionMetadataStore(): SessionMetadataStore {
         if (owner === agentId) {
           agents.delete(sessionId);
           archived.delete(sessionId);
+          pinned.delete(sessionId);
         }
       }
     },

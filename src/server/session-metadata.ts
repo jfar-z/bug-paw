@@ -6,6 +6,9 @@ export interface SessionMetadataStore {
   assignAgent(sessionId: string, agentId: string): Promise<void>;
   isArchived(sessionId: string): Promise<boolean>;
   listArchivedIds(): Promise<string[]>;
+  listPinnedIds(agentId: string): Promise<string[]>;
+  pin(sessionId: string): Promise<void>;
+  unpin(sessionId: string): Promise<void>;
   archive(sessionId: string, archivedAt?: string): Promise<void>;
   unarchive(sessionId: string): Promise<void>;
   remove(sessionId: string): Promise<void>;
@@ -29,6 +32,13 @@ export function createSessionMetadataStore(
       return Boolean((await repository.find(sessionId))?.archivedAt);
     },
     listArchivedIds: () => repository.listArchivedIds(),
+    listPinnedIds: (agentId) => repository.listPinnedIds(agentId),
+    async pin(sessionId) {
+      await repository.pin(sessionId, now().toISOString());
+    },
+    async unpin(sessionId) {
+      await repository.unpin(sessionId);
+    },
     async archive(sessionId, archivedAt = now().toISOString()) {
       await repository.archive(sessionId, archivedAt);
     },
