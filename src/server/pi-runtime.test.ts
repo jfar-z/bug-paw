@@ -69,6 +69,51 @@ function createBackend(
 }
 
 describe("PiRuntimeGateway 提示词刷新", () => {
+  it("会话文本搜索固定 Agent 作用域并优先读取已打开的当前分支", async () => {
+    const messages = [{ role: "assistant", content: "needle 实时分支", __piEntryId: "assistant-live" }];
+    const session = createSession(undefined, messages);
+    session.navigateTree = vi.fn(async () => ({ cancelled: false }));
+    const backend = createBackend(session);
+    backend.listSessions = async () => [{
+      id: "session-1",
+      path: "/managed/session-1.jsonl",
+      name: "测试会话",
+      created: "2026-08-13T00:00:00.000Z",
+      modified: "2026-08-13T01:00:00.000Z",
+      messageCount: 1,
+      firstMessage: "首条消息",
+    }];
+    const sessionMetadataStore = {
+      listIdsByAgent: vi.fn(async (agentId: string) => agentId === "agent-a" ? ["session-1"] : []),
+      listArchivedIds: vi.fn(async () => []),
+      isArchived: vi.fn(async () => false),
+    };
+    const readPersistedBranch = vi.fn(async () => [
+      { role: "assistant", content: "needle 持久化旧分支", __piEntryId: "assistant-old" },
+    ]);
+    const gateway = createPiRuntimeGateway(backend, {
+      sessionMetadataStore,
+      sessionText: { agentId: "agent-a", readPersistedBranch },
+    } as never);
+    await gateway.createSession();
+
+    const first = await gateway.searchSessionText!({ query: "needle" });
+    expect(first.hits).toMatchObject([{ entryId: "assistant-live", sessionId: "session-1" }]);
+    expect(readPersistedBranch).not.toHaveBeenCalled();
+
+    messages.splice(0, messages.length, {
+      role: "assistant",
+      content: "needle 新分支",
+      __piEntryId: "assistant-new",
+    });
+    const snapshot = await gateway.openSession("session-1");
+    await gateway.navigateTree!("session-1", "assistant-new");
+    const refreshed = await gateway.searchSessionText!({ query: "needle" });
+    expect(refreshed.hits).toMatchObject([{ entryId: "assistant-new" }]);
+    expect(snapshot.id).toBe("session-1");
+    gateway.dispose();
+  });
+
   it("快照只返回当前分支最近页并用稳定 token 加载上一页", async () => {
     const messages = Array.from({ length: 25 }, (_, index) => {
       const number = index + 1;
@@ -87,11 +132,27 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     const gateway = createPiRuntimeGateway(createBackend(session));
 
     const latest = await gateway.createSession();
-    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true });
+    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true, hasMoreAfter: false });
     expect(latest.messages[1]).toMatchObject({ content: [{ data: "<IMAGE_BASE64>" }] });
 
     const previous = await gateway.loadHistoryPage!("session-1", "user-6", latest.history.branchToken);
-    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false });
+    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false, hasMoreAfter: true });
+    expect((gateway as unknown as Record<string, unknown>).loadHistoryTarget).toBeTypeOf("function");
+    expect((gateway as unknown as Record<string, unknown>).loadHistoryPageAfter).toBeTypeOf("function");
+    const target = await gateway.loadHistoryTarget!("session-1", "assistant-10", latest.history.branchToken);
+    expect(target).toMatchObject({
+      targetEntryId: "assistant-10",
+      history: { startEntryId: "user-1", endEntryId: "assistant-20", hasMoreAfter: true },
+    });
+    const newer = await gateway.loadHistoryPageAfter!("session-1", "assistant-20", latest.history.branchToken);
+    expect(newer.history).toMatchObject({
+      startEntryId: "user-21",
+      endEntryId: "assistant-25",
+      hasMoreAfter: false,
+      turnCount: 5,
+    });
+    await expect(gateway.loadHistoryTarget!("session-1", "assistant-10", "stale-token"))
+      .rejects.toMatchObject({ code: "SESSION_BRANCH_CHANGED" });
     await expect(gateway.loadHistoryPage!("session-1", "user-6", "stale-token")).rejects.toMatchObject({ code: "SESSION_HISTORY_STALE" });
     gateway.dispose();
   });
@@ -327,7 +388,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     dateNow.mockRestore();
   });
 
-  it("第三次连续空参数工具事件终止当前 Run 并保留会话", async () => {
+  it("最终合并工具第三次连续空参数事件终止当前 Run 并保留会话", async () => {
     let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
     let aborted = false;
     const abort = vi.fn(() => {
@@ -339,13 +400,13 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         listener({
           type: "tool_execution_start",
           toolCallId: `call-${count}`,
-          toolName: "knowledge_manage",
+          toolName: "session_search",
           args: {},
         } as never);
         listener({
           type: "tool_execution_end",
           toolCallId: `call-${count}`,
-          toolName: "knowledge_manage",
+          toolName: "session_search",
           result: { content: [{ type: "text", text: aborted ? "Operation aborted" : "参数校验失败" }] },
           isError: true,
         } as never);
@@ -358,9 +419,9 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     session.abort = abort;
     const diagnostics: Array<{ count: number; action: string }> = [];
     const gateway = createPiRuntimeGateway(createBackend(session), {
-      toolCallCircuitBreakerTools: [{
-        name: "knowledge_manage",
-        label: "Knowledge Manage",
+      toolCallCircuitBreakerTools: () => [{
+        name: "session_search",
+        label: "Session Search",
         description: "测试工具",
         parameters: {
           type: "object",

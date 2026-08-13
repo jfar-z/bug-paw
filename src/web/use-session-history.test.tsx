@@ -23,7 +23,7 @@ class ObserverDouble {
 const snapshot = (): SessionSnapshot => ({
   id: "session-1",
   messages: [{ role: "user", __piEntryId: "user-21" }],
-  history: { startEntryId: "user-21", branchToken: "branch-a", hasMoreBefore: true, turnCount: 20 },
+  history: { startEntryId: "user-21", branchToken: "branch-a", hasMoreBefore: true, hasMoreAfter: false, turnCount: 20 },
   lastEventId: 0,
 });
 
@@ -37,7 +37,7 @@ describe("useSessionHistory", () => {
     vi.spyOn(api, "loadSessionHistory").mockResolvedValue({
       sessionId: "session-1",
       messages: [],
-      history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
     });
     const element = document.createElement("div");
     const { result } = renderHook(() => useSessionHistory({
@@ -63,7 +63,7 @@ describe("useSessionHistory", () => {
     vi.spyOn(api, "loadSessionHistory").mockResolvedValue({
       sessionId: "session-1",
       messages: [{ role: "user", __piEntryId: "user-1" }],
-      history: { startEntryId: "user-1", branchToken: "branch-a", hasMoreBefore: false, turnCount: 5 },
+      history: { startEntryId: "user-1", branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 5 },
     });
     const { result, rerender } = renderHook(() => useSessionHistory({
       snapshot: current,
@@ -81,5 +81,79 @@ describe("useSessionHistory", () => {
     });
     rerender();
     expect(element.scrollTop).toBe(720);
+  });
+
+  it("聚焦窗口底部进入预加载区时追加较新页且不抢占滚动位置", async () => {
+    const element = document.createElement("div");
+    Object.defineProperties(element, {
+      scrollTop: { value: 360, writable: true },
+      scrollHeight: { value: 1200, writable: true },
+    });
+    const current = {
+      ...snapshot(),
+      history: {
+        startEntryId: "user-21",
+        endEntryId: "assistant-40",
+        branchToken: "branch-a",
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        turnCount: 20,
+      },
+    };
+    const onAppend = vi.fn();
+    vi.spyOn(api, "loadSessionHistoryAfter").mockResolvedValue({
+      sessionId: "session-1",
+      messages: [{ role: "user", __piEntryId: "user-41" }],
+      history: { startEntryId: "user-41", endEntryId: "assistant-60", branchToken: "branch-a", hasMoreBefore: true, hasMoreAfter: false, turnCount: 20 },
+    });
+    const { result } = renderHook(() => useSessionHistory({
+      snapshot: current,
+      focused: true,
+      scrollRef: { current: element } as RefObject<HTMLDivElement | null>,
+      onPrepend: vi.fn(),
+      onAppend,
+      onError: vi.fn(),
+    }));
+    act(() => result.current.newerSentinelRef(element));
+    await act(async () => {
+      observerCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      await Promise.resolve();
+    });
+
+    expect(api.loadSessionHistoryAfter).toHaveBeenCalledWith("session-1", "assistant-40", "branch-a", expect.any(AbortSignal));
+    expect(onAppend).toHaveBeenCalledOnce();
+    expect(element.scrollTop).toBe(360);
+  });
+
+  it("较新页失败时使用独立错误回调", async () => {
+    const element = document.createElement("div");
+    const current = {
+      ...snapshot(),
+      history: {
+        startEntryId: "user-21",
+        endEntryId: "assistant-40",
+        branchToken: "branch-a",
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        turnCount: 20,
+      },
+    };
+    const onError = vi.fn();
+    const onNewerError = vi.fn();
+    vi.spyOn(api, "loadSessionHistoryAfter").mockRejectedValue(new Error("newer failed"));
+    const { result } = renderHook(() => useSessionHistory({
+      snapshot: current,
+      focused: true,
+      scrollRef: { current: element } as RefObject<HTMLDivElement | null>,
+      onPrepend: vi.fn(),
+      onAppend: vi.fn(),
+      onError,
+      onNewerError,
+    }));
+    act(() => result.current.newerSentinelRef(element));
+    act(() => observerCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+
+    await waitFor(() => expect(onNewerError).toHaveBeenCalledWith(expect.objectContaining({ message: "newer failed" })));
+    expect(onError).not.toHaveBeenCalled();
   });
 });

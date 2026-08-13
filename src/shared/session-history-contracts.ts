@@ -8,6 +8,7 @@ export const SessionHistoryPageSchema = Type.Object({
   branchToken: Type.String({ minLength: 1 }),
   branchLeafId: Type.Optional(Type.String({ minLength: 1 })),
   hasMoreBefore: Type.Boolean(),
+  hasMoreAfter: Type.Boolean(),
   turnCount: Type.Integer({ minimum: 0, maximum: SESSION_HISTORY_TURNS_PER_PAGE }),
 }, { additionalProperties: false });
 
@@ -15,6 +16,7 @@ export interface SessionHistoryResult {
   sessionId: string;
   messages: unknown[];
   history: SessionHistoryPage;
+  targetEntryId?: string;
 }
 
 export type SessionHistoryPage = Static<typeof SessionHistoryPageSchema>;
@@ -28,6 +30,7 @@ export function isSessionHistoryPage(value: unknown): value is SessionHistoryPag
     && value.branchToken.length > 0
     && optionalNonEmptyString(value.branchLeafId)
     && typeof value.hasMoreBefore === "boolean"
+    && typeof value.hasMoreAfter === "boolean"
     && Number.isSafeInteger(value.turnCount)
     && Number(value.turnCount) >= 0
     && Number(value.turnCount) <= SESSION_HISTORY_TURNS_PER_PAGE;

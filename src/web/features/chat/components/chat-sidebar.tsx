@@ -1,4 +1,4 @@
-import { Archive, Clock3, MessageSquare, MessageSquarePlus, Pin, RefreshCw, Trash2, X } from "lucide-react";
+import { Archive, Clock3, MessageSquare, MessageSquarePlus, Pin, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { useRef, useState } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from "react";
 
@@ -27,6 +27,7 @@ interface ChatSidebarProps {
   onClose(): void;
   onEnterDraft(): void;
   onRefresh(): void;
+  onSearch(): void;
   onScroll(): void;
   onPointerDown(sessionId: string, event: ReactPointerEvent<HTMLButtonElement>): void;
   onPointerEnd(): void;
@@ -96,7 +97,13 @@ export function ChatSidebar(props: ChatSidebarProps) {
       className={`chat-sidebar${props.open ? " is-open" : ""}${props.swiping ? " is-swiping" : ""}`}
       style={sidebarStyle}
     >
-      <div className="sidebar-header live-session-header"><div><span>{props.selectionMode ? `已选 ${props.selectedSessionIds.length} 项` : "会话"}</span><small>{props.selectionMode ? "SELECT SESSIONS" : "SESSIONS"}</small></div><button type="button" className="session-refresh-button" aria-label="刷新会话列表" title="刷新会话列表" disabled={props.refreshing || isOpeningSession || props.selectionMode} onClick={props.onRefresh}><RefreshCw size={15} aria-hidden="true" className={props.refreshing ? "is-spinning" : undefined} /></button></div>
+      <div className="sidebar-header live-session-header">
+        <div className="live-session-header__heading"><span>{props.selectionMode ? `已选 ${props.selectedSessionIds.length} 项` : "会话"}</span><small>{props.selectionMode ? "SELECT SESSIONS" : "SESSIONS"}</small></div>
+        <div className="live-session-header__actions" role="group" aria-label="会话列表操作">
+          <button type="button" className="session-refresh-button session-search-button" aria-label="搜索聊天记录" title="搜索聊天记录" disabled={props.noAvailableAgent || isOpeningSession || props.selectionMode} onClick={props.onSearch}><Search size={15} aria-hidden="true" /></button>
+          <button type="button" className="session-refresh-button" aria-label="刷新会话列表" title="刷新会话列表" disabled={props.refreshing || isOpeningSession || props.selectionMode} onClick={props.onRefresh}><RefreshCw size={15} aria-hidden="true" className={props.refreshing ? "is-spinning" : undefined} /></button>
+        </div>
+      </div>
       <button type="button" className="new-chat-button" onClick={props.onEnterDraft} disabled={props.noAvailableAgent || isOpeningSession || props.selectionMode}>
         <MessageSquarePlus size={18} aria-hidden="true" /><span>新对话</span>
       </button>

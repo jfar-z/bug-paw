@@ -17,6 +17,7 @@ export interface MarkdownBlock {
   type: "markdown";
   text: string;
   streaming: boolean;
+  piEntryId?: string;
   revealStart?: number;
   revealPhase?: number;
 }
@@ -210,17 +211,30 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
       }
       return;
     }
-    if (message.role === "assistant" && Array.isArray(message.content)) {
+    if (message.role === "assistant" && (Array.isArray(message.content) || typeof message.content === "string")) {
       const ensured = ensureAgentTurn(entries);
       entries = ensured.next;
       const turn = entries[ensured.turnIndex] as AgentTurn;
       const blocks = [...turn.blocks];
-      message.content.forEach((part, partIndex) => {
+      const assistantEntryId = typeof message.__piEntryId === "string" ? message.__piEntryId : undefined;
+      let entryAnchorAssigned = false;
+      const assistantParts = typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : message.content;
+      assistantParts.forEach((part, partIndex) => {
         if (!isRecord(part)) {
           return;
         }
         if (part.type === "text" && typeof part.text === "string" && part.text) {
-          blocks.push(...splitAgentText(part.text, `history-${messageIndex}-${partIndex}`, false));
+          const parsedBlocks = splitAgentText(part.text, `history-${messageIndex}-${partIndex}`, false);
+          if (assistantEntryId && !entryAnchorAssigned) {
+            const markdownIndex = parsedBlocks.findIndex((block) => block.type === "markdown" && block.text.trim());
+            if (markdownIndex >= 0) {
+              parsedBlocks[markdownIndex] = { ...parsedBlocks[markdownIndex] as MarkdownBlock, piEntryId: assistantEntryId };
+              entryAnchorAssigned = true;
+            }
+          }
+          blocks.push(...parsedBlocks);
         }
         if (part.type === "thinking") {
           const text = extractThinkingText(part);

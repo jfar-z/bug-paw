@@ -4,6 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 import { ChatSidebar } from "./chat-sidebar";
 
 describe("ChatSidebar 会话多选", () => {
+  it("搜索按钮位于刷新左侧并按上下文禁用", () => {
+    const onSearch = vi.fn();
+    const { rerender } = render(<ChatSidebar {...baseProps()} onSearch={onSearch} />);
+
+    const actions = screen.getByRole("group", { name: "会话列表操作" });
+    const buttons = within(actions).getAllByRole("button");
+    expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(["搜索聊天记录", "刷新会话列表"]);
+    expect(buttons[0]).toHaveAttribute("title", "搜索聊天记录");
+    fireEvent.click(buttons[0]!);
+    expect(onSearch).toHaveBeenCalledOnce();
+
+    rerender(<ChatSidebar {...baseProps()} selectionMode onSearch={onSearch} />);
+    expect(screen.getByRole("button", { name: "搜索聊天记录" })).toBeDisabled();
+    rerender(<ChatSidebar {...baseProps()} noAvailableAgent onSearch={onSearch} />);
+    expect(screen.getByRole("button", { name: "搜索聊天记录" })).toBeDisabled();
+    rerender(<ChatSidebar {...baseProps()} openingSessionId="session-2" onSearch={onSearch} />);
+    expect(screen.getByRole("button", { name: "搜索聊天记录" })).toBeDisabled();
+  });
+
   it("为移动端关闭手势声明纵向触摸操作", () => {
     render(<ChatSidebar {...baseProps()} />);
 
@@ -106,6 +125,7 @@ function baseProps() {
     onClose: vi.fn(),
     onEnterDraft: vi.fn(),
     onRefresh: vi.fn(),
+    onSearch: vi.fn(),
     onScroll: vi.fn(),
     onPointerDown: vi.fn(),
     onPointerEnd: vi.fn(),

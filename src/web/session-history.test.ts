@@ -1,23 +1,36 @@
 import { describe, expect, it } from "vitest";
 
 import type { SessionSnapshot } from "./api";
-import { mergeOlderHistory, reconcileSnapshotMessages } from "./session-history";
+import * as sessionHistory from "./session-history";
+
+const { mergeNewerHistory, mergeOlderHistory, reconcileSnapshotMessages } = sessionHistory;
 
 const messages = (...ids: string[]) => ids.map((id) => ({ role: id.startsWith("user") ? "user" : "assistant", __piEntryId: id }));
 const entryIds = (items: unknown[]) => items.map((item) => (item as { __piEntryId?: string }).__piEntryId);
 const snapshot = (ids: string[], branchToken: string): SessionSnapshot => ({
   id: "session-1",
   messages: messages(...ids),
-  history: { branchToken, hasMoreBefore: true, turnCount: 20 },
+  history: { branchToken, hasMoreBefore: true, hasMoreAfter: false, turnCount: 20 },
   lastEventId: 0,
 });
 
 describe("浏览器会话历史合并", () => {
+  it("提供较新历史页合并器", () => {
+    expect((sessionHistory as Record<string, unknown>).mergeNewerHistory).toBeTypeOf("function");
+  });
+
   it("更早页按 entry ID 去重前置", () => {
     expect(entryIds(mergeOlderHistory(
       messages("user-21", "assistant-40"),
       messages("user-1", "assistant-20", "user-21"),
     ))).toEqual(["user-1", "assistant-20", "user-21", "assistant-40"]);
+  });
+
+  it("较新页按 entry ID 去重追加", () => {
+    expect(entryIds(mergeNewerHistory(
+      messages("user-1", "assistant-1", "user-2"),
+      messages("user-2", "assistant-2", "user-3", "assistant-3"),
+    ))).toEqual(["user-1", "assistant-1", "user-2", "assistant-2", "user-3", "assistant-3"]);
   });
 
   it("同分支权威快照保留已加载历史", () => {

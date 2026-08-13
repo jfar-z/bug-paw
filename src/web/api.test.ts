@@ -98,6 +98,50 @@ describe("会话批量 API", () => {
   });
 });
 
+describe("会话文本检索 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("编码搜索参数并保留取消信号", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ hits: [], hasMore: false }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await api.searchSessions("agent/a", { query: "中文 & text", cursor: "cursor/1" }, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/search?agentId=agent%2Fa&query=%E4%B8%AD%E6%96%87%20%26%20text&cursor=cursor%2F1",
+      expect.objectContaining({ credentials: "same-origin", signal: controller.signal }),
+    );
+  });
+
+  it("编码目标窗口和向后分页参数", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      sessionId: "session/a",
+      messages: [],
+      history: { branchToken: "branch/a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await api.loadSessionHistoryTarget("session/a", "assistant/10", "branch/a", controller.signal);
+    await api.loadSessionHistoryAfter("session/a", "assistant/20", "branch/a", controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/sessions/session%2Fa/history-window?entryId=assistant%2F10&branch=branch%2Fa",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/sessions/session%2Fa/history?after=assistant%2F20&branch=branch%2Fa",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
+
 describe("会话置顶 API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
