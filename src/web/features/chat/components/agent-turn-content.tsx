@@ -1,6 +1,7 @@
 import type { WorkspaceFileSummary } from "../../../../shared/contracts";
 import type { AgentTurn, FileBlock, MarkdownBlock } from "../../../conversation-timeline";
 import type { ThemePreference } from "../../../theme";
+import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { MarkdownContent } from "../../../components/markdown-content";
 import { MessageAttachments } from "../../../components/message-attachments";
@@ -16,6 +17,7 @@ interface AgentTurnContentProps {
   onPreview(summary: WorkspaceFileSummary): void;
   onLinkActivate?(href: string): boolean;
   focusedEntryId?: string;
+  actions?: ReactNode;
 }
 
 /** 按原始顺序渲染 Agent 正文、附件与派生活动段。 */
@@ -28,6 +30,7 @@ export function AgentTurnContent({
   onPreview,
   onLinkActivate,
   focusedEntryId,
+  actions,
 }: AgentTurnContentProps) {
   const items = useMemo(() => groupAgentBlocks(turn.blocks), [turn.blocks]);
   const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
@@ -62,11 +65,14 @@ export function AgentTurnContent({
         onPreview={onPreview}
       />;
     })}
-    {activityItems.length > 0 ? <div className="agent-turn-activity-controls message-actions--separated">
-      <button type="button" onClick={() => setAllExpanded(!anyExpanded)}>
-        {anyExpanded ? "收起本轮全部活动" : "展开本轮全部活动"}
-      </button>
-    </div> : null}
+    {activityItems.length > 0 ? <div className="agent-turn-footer message-actions--separated">
+      {actions}
+      <div className="agent-turn-activity-controls">
+        <button type="button" onClick={() => setAllExpanded(!anyExpanded)}>
+          {anyExpanded ? "收起本轮全部活动" : "展开本轮全部活动"}
+        </button>
+      </div>
+    </div> : actions}
   </>;
 }
 

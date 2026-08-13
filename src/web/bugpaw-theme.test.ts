@@ -132,8 +132,11 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".reference-composer__control-rail", "flex")).toBe("1 1 auto");
     expect(declaration(rules, ".user-message-text", "white-space")).toBe("pre-wrap");
     expect(declaration(rules, ".user-message-text", "overflow-wrap")).toBe("anywhere");
-    expect(declaration(rules, ".agent-turn-activity-controls.message-actions--separated", "margin-top")).toBe("8px");
-    expect(declaration(rules, ".agent-turn-activity-controls.message-actions--separated", "padding-top")).toBe("6px");
+    expect(declaration(rules, ".agent-turn-footer", "display")).toBe("flex");
+    expect(declaration(rules, ".agent-turn-footer", "justify-content")).toBe("space-between");
+    expect(declaration(rules, ".agent-turn-footer.message-actions--separated", "margin-top")).toBe("8px");
+    expect(declaration(rules, ".agent-turn-footer.message-actions--separated", "padding-top")).toBe("6px");
+    expect(declaration(rules, ".agent-turn-footer .agent-turn-activity-controls", "display")).toBe("flex");
     expect(mediaDeclaration(source, "(max-width: 760px)", ".composer-model-control", "flex"))
       .toBe("1 1 156px");
     expect(mediaDeclaration(source, "(max-width: 760px)", ".composer-model-trigger", "max-width"))
