@@ -399,6 +399,8 @@ textarea:focus-visible {
 }
 
 .composer,
+.question-composer,
+.question-timeline-card,
 .configuration-section,
 .settings-section,
 .knowledge-base-overview,
@@ -605,9 +607,15 @@ textarea:focus-visible {
   border-radius: 4px;
 }
 
+:root[data-theme="bug"] .question-composer,
+:root[data-theme="bug"] .question-timeline-card {
+  border-radius: 4px;
+}
+
 :root[data-theme="bug"] .primary-button,
 :root[data-theme="bug"] .configuration-primary-action,
 :root[data-theme="bug"] .send-button,
+:root[data-theme="bug"] .question-composer__submit,
 :root[data-theme="bug"] .new-chat-button {
   border: 2px solid var(--deep-brown);
   border-radius: 4px;
@@ -622,6 +630,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .primary-button:active:not(:disabled),
 :root[data-theme="bug"] .configuration-primary-action:active:not(:disabled),
 :root[data-theme="bug"] .send-button:active:not(:disabled),
+:root[data-theme="bug"] .question-composer__submit:active:not(:disabled),
 :root[data-theme="bug"] .new-chat-button:active:not(:disabled) {
   box-shadow: 1px 1px 0 var(--tabby);
   transform: translate(2px, 2px);

@@ -58,7 +58,7 @@ class FakeEventSource {
     const suppliedId = typeof original.id === "number" ? original.id : undefined;
     const id = suppliedId ?? this.nextEventId;
     this.nextEventId = Math.max(this.nextEventId, id + 1);
-    const isRunScopedEvent = type !== "snapshot" && type !== "session_renamed";
+    const isRunScopedEvent = !["snapshot", "session_renamed", "question_pending", "question_resolved"].includes(type);
     const normalized = {
       id,
       type,
@@ -125,6 +125,32 @@ const props = {
   agentIdentity: { displayName: "默认 Agent", avatarText: "π" },
 };
 
+const pendingQuestion = {
+  id: "question-1",
+  version: 1,
+  toolCallId: "ask-1",
+  createdAt: "2026-08-13T08:00:00.000Z",
+  questions: [{
+    id: "q-1",
+    header: "范围",
+    question: "需要处理哪些内容？",
+    multiSelect: false,
+    options: [
+      { id: "o-1", label: "全部", description: "处理全部内容" },
+      { id: "o-2", label: "部分", description: "只处理一部分" },
+    ],
+  }, {
+    id: "q-2",
+    header: "格式",
+    question: "需要哪种格式？",
+    multiSelect: true,
+    options: [
+      { id: "o-3", label: "Markdown", description: "生成 Markdown" },
+      { id: "o-4", label: "HTML", description: "生成 HTML" },
+    ],
+  }],
+};
+
 /** 使用生产环境一致的异步任务和错误提示上下文渲染聊天页面。 */
 function renderLiveChatPage(element: ReactElement) {
   return render(
@@ -163,6 +189,7 @@ beforeEach(() => {
   historyWindowResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
+  window.localStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("BroadcastChannel", RecordingBroadcastChannel);
   vi.stubGlobal("IntersectionObserver", HistoryObserverDouble);
@@ -316,6 +343,14 @@ beforeEach(() => {
           status: "running",
           startedAt: "2026-08-05T08:00:00.000Z",
         },
+      }));
+    }
+    if (url === "/api/v1/sessions/session-1/questions/question-1/answers" && init?.method === "POST") {
+      return new Response(JSON.stringify({
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-13T08:10:00.000Z",
       }));
     }
     if (url.endsWith("/messages")) {
@@ -2475,3 +2510,62 @@ function installPageAudio(): void {
 function ttsRequests(): Array<[input: string | URL | Request, init?: RequestInit]> {
   return vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/agents/default/tts");
 }
+
+describe("LiveChatPage 提问处理", () => {
+  it("收到提问后切换处理框，并支持收起后继续回答", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+
+    expect(screen.getByText("问题 1/2")).toBeVisible();
+    expect(screen.queryByPlaceholderText("给 Agent 发消息…（输入 @ 引用资源）")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /全部/ }));
+    fireEvent.click(screen.getByRole("button", { name: "收起提问处理框" }));
+
+    expect(screen.getByPlaceholderText("给 Agent 发消息…（输入 @ 引用资源）")).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续回答 · 1/2" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "继续回答 · 1/2" }));
+    expect(screen.getByRole("radio", { name: /全部/ })).toBeChecked();
+  });
+
+  it("提交部分答案后只调用 answers API 并进入下一次运行", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+
+    await screen.findByRole("button", { name: "停止生成" });
+    const answerCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/questions/question-1/answers"));
+    expect(answerCalls).toHaveLength(1);
+    expect(JSON.parse(String(answerCalls[0]?.[1]?.body))).toEqual({
+      version: 1,
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+    });
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/messages"))).toHaveLength(0);
+  });
+
+  it("收起后发送普通消息视为放弃，并只调用一次 messages API", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /全部/ }));
+    fireEvent.click(screen.getByRole("button", { name: "收起提问处理框" }));
+    fireEvent.change(screen.getByPlaceholderText("给 Agent 发消息…（输入 @ 引用资源）"), { target: { value: "不用问了，直接处理" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await screen.findByRole("button", { name: "停止生成" });
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1/messages")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /继续回答/ })).not.toBeInTheDocument();
+  });
+});
