@@ -5,6 +5,7 @@ import {
   MODEL_RESPONSE_TRUNCATED_MESSAGE,
 } from "../../shared/assistant-run-outcome";
 import { projectSessionMessages, projectSessionToolResult } from "./session-message-projection";
+import { compileQuestionResponseProtocol } from "../../shared/question-response-protocol";
 
 describe("会话消息浏览器投影", () => {
   it("替换图片和超长工具文本但不修改原消息", () => {
@@ -111,5 +112,26 @@ describe("会话消息浏览器投影", () => {
       content: [{ type: "text", text: "partial answer" }],
       errorMessage: MODEL_RESPONSE_TRUNCATED_MESSAGE,
     }]);
+  });
+
+  it("隐藏内部问题响应协议但保留同一用户消息的普通正文", () => {
+    const protocol = compileQuestionResponseProtocol({
+      resolutionId: "resolution-1",
+      questionRecordId: "record-1",
+      status: "discarded",
+      discardReason: "new_message",
+      answers: [],
+      unansweredQuestionIds: ["question-1"],
+    });
+
+    expect(projectSessionMessages([
+      { role: "user", content: protocol },
+      { role: "user", content: `${protocol}\n\n请改做另一件事` },
+      { role: "user", content: [{ type: "text", text: `${protocol}\n\n保留数组正文` }] },
+    ])).toEqual([
+      { role: "user", content: "" },
+      { role: "user", content: "请改做另一件事" },
+      { role: "user", content: [{ type: "text", text: "保留数组正文" }] },
+    ]);
   });
 });

@@ -23,6 +23,7 @@ export const BUILTIN_TOOL_CATALOG: ToolCatalogItem[] = [
 
 /** Web 系统注入、但同样必须获得 Agent 授权的工具。 */
 export const SYSTEM_TOOL_CATALOG: ToolCatalogItem[] = [
+  { name: "ask_user", description: "向用户提交结构化问题并等待回答", source: "system", highRisk: false },
   { name: "session_list", description: "列出当前 Agent 的历史会话摘要", source: "system", highRisk: false },
   { name: "session_search", description: "搜索当前 Agent 的历史会话文本", source: "system", highRisk: false },
   { name: "session_read", description: "读取当前 Agent 的历史会话文本上下文", source: "system", highRisk: false },
@@ -57,3 +58,7 @@ export const DEFAULT_AGENT_TOOL_NAMES = [...BUILTIN_TOOL_CATALOG, ...SYSTEM_TOOL
 
 /** 历史 Agent 升级时需要补齐的系统工具权限。 */
 export const SYSTEM_TOOL_NAMES = SYSTEM_TOOL_CATALOG.map(({ name }) => name);
+
+/** 每次启动强制补齐的历史系统工具；ask_user 只由 Migration 一次性授予。 */
+export const STARTUP_ENFORCED_SYSTEM_TOOL_NAMES = SYSTEM_TOOL_NAMES
+  .filter((name) => name !== "ask_user");

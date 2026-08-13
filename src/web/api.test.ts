@@ -181,6 +181,41 @@ describe("会话思考深度 API", () => {
   });
 });
 
+describe("会话提问 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("提交带版本号的结构化答案并返回下一次运行", async () => {
+    const run = {
+      runId: "run-next",
+      sessionId: "session/a",
+      status: "queued",
+      startedAt: "2026-08-13T08:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(run), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.submitQuestionAnswers("session/a", "question/1", {
+      version: 2,
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+    });
+
+    expect(result).toEqual(run);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session%2Fa/questions/question%2F1/answers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          version: 2,
+          answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+        }),
+      }),
+    );
+  });
+});
+
 describe("联网搜索 Provider API", () => {
   afterEach(() => vi.unstubAllGlobals());
 

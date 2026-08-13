@@ -49,10 +49,10 @@ function mediaDeclaration(source: string, condition: string, selector: string, p
   const style = document.createElement("style");
   style.textContent = source;
   document.head.append(style);
-  const media = [...style.sheet!.cssRules]
-    .find((rule): rule is CSSMediaRule => rule instanceof CSSMediaRule && rule.conditionText === condition);
-  const rule = media ? [...media.cssRules]
-    .find((candidate): candidate is CSSStyleRule => candidate instanceof CSSStyleRule && candidate.selectorText === selector) : undefined;
+  const rule = [...style.sheet!.cssRules]
+    .filter((candidate): candidate is CSSMediaRule => candidate instanceof CSSMediaRule && candidate.conditionText === condition)
+    .flatMap((media) => [...media.cssRules])
+    .find((candidate): candidate is CSSStyleRule => candidate instanceof CSSStyleRule && candidate.selectorText === selector);
   const value = rule?.style.getPropertyValue(property).trim() ?? "";
   style.remove();
   return value;
@@ -143,6 +143,21 @@ describe("BugPaw 生产视觉合同", () => {
       .toBe("156px");
     expect(mediaDeclaration(source, "(max-width: 760px)", ".composer-model-trigger", "width"))
       .toBe("100%");
+  });
+
+  it("提问处理框保持触控目标和窄屏单列布局", async () => {
+    const [source, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const rules = parseStyleRules(source);
+    const themeRules = parseStyleRules(themeSource);
+
+    expect(declaration(rules, ".question-composer", "width")).toBe("min(100%, 790px)");
+    expect(groupedDeclaration(rules, ".question-composer__footer button", "min-height")).toBe("44px");
+    expect(declaration(rules, ".question-composer__question legend", "overflow-wrap")).toBe("anywhere");
+    expect(mediaDeclaration(source, "(max-width: 760px)", ".question-composer__footer", "grid-template-columns")).toBe("1fr");
+    expect(groupedDeclaration(themeRules, ".question-composer", "background")).toBe("var(--surface)");
   });
 
   it("BUG 主题的会话菜单和账户信息在深色侧栏中保持可读", async () => {

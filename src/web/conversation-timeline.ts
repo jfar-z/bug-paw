@@ -1,5 +1,6 @@
 import type { WorkspaceFileRef } from "../shared/contracts";
 import { parseAgentReferences, type AgentReference } from "../shared/agent-reference-contracts";
+import { parseQuestionResponseProtocol, type QuestionResolution } from "../shared/question-response-protocol";
 
 export interface UserEntry {
   id: string;
@@ -170,6 +171,10 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
     });
   }
 
+  if (event.type === "tool_preparing" && event.toolName === "ask_user") {
+    entries = removeUnexecutedSiblingTools(entries, event.callId);
+  }
+
   const existing = findTool(entries, event.callId);
   if (existing) {
     const turn = entries[existing.turnIndex] as AgentTurn;
@@ -198,6 +203,9 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
     }
     if (message.role === "user") {
       const parsed = parseUserContext(extractContentText(message.content));
+      if (parsed.resolution) {
+        entries = applyQuestionResolution(entries, parsed.resolution);
+      }
       if (parsed.text || parsed.files.length > 0 || parsed.references.length > 0) {
         sourceUserEntryId = typeof message.__piEntryId === "string" ? message.__piEntryId : undefined;
         entries = [...entries, {
@@ -350,15 +358,52 @@ function extractThinkingText(part: Record<string, unknown>): string | undefined 
   return typeof part.text === "string" ? part.text : undefined;
 }
 
-function parseUserContext(text: string): { text: string; files: WorkspaceFileRef[]; references: AgentReference[] } {
-  const parsedReferences = parseAgentReferences(text);
+function parseUserContext(text: string): { text: string; files: WorkspaceFileRef[]; references: AgentReference[]; resolution?: QuestionResolution } {
+  const response = parseQuestionResponseProtocol(text);
+  const parsedReferences = parseAgentReferences(response.visibleText);
   const parsedFiles = parseUserFiles(parsedReferences.text);
   const referenceFiles = parsedReferences.references.flatMap((reference) => reference.type === "file" ? [{ path: reference.path }] : []);
   return {
     text: parsedFiles.text,
     files: mergeFiles(parsedFiles.files, referenceFiles),
     references: parsedReferences.references,
+    ...(response.resolution ? { resolution: response.resolution } : {}),
   };
+}
+
+/** 将回答协议归并到历史中对应的提问工具块。 */
+function applyQuestionResolution(entries: ConversationEntry[], resolution: QuestionResolution): ConversationEntry[] {
+  for (let turnIndex = entries.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const entry = entries[turnIndex];
+    if (entry.type !== "agent") continue;
+    const blockIndex = entry.blocks.findIndex((block) => block.type === "tool"
+      && block.name === "ask_user"
+      && isRecord(block.details)
+      && isRecord(block.details.pendingQuestion)
+      && block.details.pendingQuestion.id === resolution.questionRecordId);
+    if (blockIndex < 0) continue;
+    const blocks = [...entry.blocks];
+    const tool = blocks[blockIndex] as ToolBlock;
+    blocks[blockIndex] = {
+      ...tool,
+      details: { ...(isRecord(tool.details) ? tool.details : {}), resolution },
+    };
+    return replaceTurn(entries, turnIndex, { ...entry, blocks });
+  }
+  return entries;
+}
+
+/** ask_user 成为终止点时，清理同回合中 Pi 已声明但从未执行的兄弟工具。 */
+function removeUnexecutedSiblingTools(entries: ConversationEntry[], askCallId: string): ConversationEntry[] {
+  const turnIndex = findLastAgentTurn(entries);
+  if (turnIndex < 0) return entries;
+  const turn = entries[turnIndex] as AgentTurn;
+  const blocks = turn.blocks.filter((block) => block.type !== "tool"
+    || block.callId === askCallId
+    || block.status !== "preparing" && block.status !== "parameterizing");
+  return blocks.length === turn.blocks.length
+    ? entries
+    : replaceTurn(entries, turnIndex, { ...turn, blocks });
 }
 
 function parseUserFiles(text: string): { text: string; files: WorkspaceFileRef[] } {

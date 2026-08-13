@@ -10,6 +10,7 @@ function renderApp() {
 describe("App 首次初始化", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    window.localStorage.clear();
     window.history.replaceState({}, "", "/chat");
   });
 
@@ -114,6 +115,7 @@ describe("App 首次初始化", () => {
   });
 
   it("退出登录失败时保留工作台并显示统一错误提示", async () => {
+    window.localStorage.setItem("bug-paw.question-draft.v1:test", "draft");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/v1/status") return new Response(JSON.stringify({ initialized: true, authenticated: true }));
@@ -131,5 +133,43 @@ describe("App 首次初始化", () => {
 
     expect(await screen.findByRole("group", { name: "操作未完成" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "工作台主导航" })).toBeInTheDocument();
+    expect(window.localStorage.getItem("bug-paw.question-draft.v1:test")).toBe("draft");
+  });
+
+  it("退出登录成功后只清除问题草稿", async () => {
+    window.localStorage.setItem("bug-paw.question-draft.v1:test", "draft");
+    window.localStorage.setItem("bugpaw:theme", "bug");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/status") return new Response(JSON.stringify({ initialized: true, authenticated: true }));
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [] }));
+      if (url === "/api/v1/logout") return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "退出登录" }));
+
+    await screen.findByRole("heading", { name: "回到你的工作区" });
+    expect(window.localStorage.getItem("bug-paw.question-draft.v1:test")).toBeNull();
+    expect(window.localStorage.getItem("bugpaw:theme")).toBe("bug");
+  });
+
+  it("统一认证失效回调在跳转登录前清除问题草稿", async () => {
+    window.localStorage.setItem("bug-paw.question-draft.v1:test", "draft");
+    window.history.replaceState({}, "", "/settings/agents");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/status") return new Response(JSON.stringify({ initialized: true, authenticated: true }));
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({
+        error: { code: "AUTH_REQUIRED", message: "请重新登录", requestId: "request-auth" },
+      }), { status: 401, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderApp();
+
+    await screen.findByRole("heading", { name: "回到你的工作区" });
+    expect(window.localStorage.getItem("bug-paw.question-draft.v1:test")).toBeNull();
   });
 });

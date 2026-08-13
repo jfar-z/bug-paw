@@ -15,6 +15,7 @@ import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionB
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument } from "../shared/browser-automation-contracts";
 import type { SessionTextSearchPage } from "../shared/session-text-search";
+import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared/session-question-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -74,6 +75,7 @@ export interface SessionSnapshot {
   model?: ModelSummary;
   thinkingLevel?: ThinkingLevel;
   run?: ChatRunSummary;
+  pendingQuestion?: PendingQuestionProjection;
   lastEventId: number;
 }
 
@@ -443,6 +445,11 @@ export const api = {
     request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ text, filePaths, references }),
+    }),
+  submitQuestionAnswers: (sessionId: string, questionRecordId: string, input: SubmitQuestionAnswers) =>
+    request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionRecordId)}/answers`, {
+      method: "POST",
+      body: JSON.stringify(input),
     }),
   sendBranchMessage: (sessionId: string, entryId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
     request<{ snapshot: SessionSnapshot; run: ChatRunSummary }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/messages`, {

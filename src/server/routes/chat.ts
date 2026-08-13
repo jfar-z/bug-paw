@@ -13,6 +13,11 @@ import { sendRuntimeError } from "./runtime-error";
 import type { ChatApplicationService } from "../chat/chat-service";
 import { SseConnection } from "../http/sse-connection";
 import { DomainError } from "../core/errors";
+import { Check } from "typebox/value";
+import {
+  SubmitQuestionAnswersSchema,
+  type SubmitQuestionAnswers,
+} from "../../shared/session-question-contracts";
 
 interface ChatRouteDependencies {
   authService: AuthService;
@@ -29,6 +34,29 @@ interface ChatRouteDependencies {
  * 注册消息生成、终止和 SSE 事件流接口。
  */
 export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRouteDependencies): void {
+  app.post<{ Params: { sessionId: string; questionRecordId: string } }>(
+    "/api/sessions/:sessionId/questions/:questionRecordId/answers",
+    async (request, reply) => {
+      if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+      if (!Check(SubmitQuestionAnswersSchema, request.body)) {
+        return sendApiError(reply, 400, "QUESTION_ANSWER_INVALID", "答案格式不符合约束");
+      }
+      try {
+        if (!dependencies.chatService) {
+          return sendApiError(reply, 503, "REQUEST_FAILED", "问题服务尚未就绪");
+        }
+        const run = await dependencies.chatService.submitQuestionAnswers(
+          request.params.sessionId,
+          request.params.questionRecordId,
+          request.body as SubmitQuestionAnswers,
+        );
+        return reply.code(202).send(run);
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      }
+    },
+  );
+
   app.post<{ Params: { id: string } }>("/api/sessions/:id/messages", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;

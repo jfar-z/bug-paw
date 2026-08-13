@@ -46,4 +46,14 @@ describe("聊天活动段分组", () => {
       expect(grouped[0].blocks[1]).toBe(blocks[1]);
     }
   });
+
+  it("将提问工具提升为独立卡片并切断相邻活动段", () => {
+    const blocks: AgentBlock[] = [thinking("t1", "分析"), tool("ask", "ask_user"), tool("r1", "read")];
+
+    expect(groupAgentBlocks(blocks)).toMatchObject([
+      { type: "activity", blocks: [{ id: "t1" }] },
+      { type: "question", id: "ask", tool: { name: "ask_user" } },
+      { type: "activity", blocks: [{ id: "r1" }] },
+    ]);
+  });
 });

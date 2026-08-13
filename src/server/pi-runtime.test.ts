@@ -22,6 +22,9 @@ import {
 import type { RunCheckpoint } from "./runtime/checkpoint-store";
 import { SearchRunState } from "./web-research/search-run-state";
 import type { ThinkingLevel } from "../shared/configuration-contracts";
+import { AskUserRunState } from "./questions/ask-user-run-state";
+import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
+import type { PendingQuestionProjection } from "../shared/session-question-contracts";
 
 const noRetrieval = {
   knowledgeSearch: false,
@@ -39,6 +42,39 @@ function createDeferred<T>() {
     reject = fail;
   });
   return { promise, resolve, reject };
+}
+
+/** 创建包含累计 Assistant 内容的工具调用流事件。 */
+function toolCallUpdate(type: "toolcall_start" | "toolcall_delta", id: string, name: string) {
+  const message = {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name, arguments: {} }],
+  };
+  return {
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type, contentIndex: 0, delta: "{}", partial: message },
+  } as never;
+}
+
+/** 创建用于 Runtime 投影测试的最小待回答问题。 */
+function pendingQuestionProjection(): PendingQuestionProjection {
+  return {
+    id: "record-1",
+    version: 1,
+    toolCallId: "call-1",
+    createdAt: "2026-08-13T00:00:00.000Z",
+    questions: [{
+      id: "question-1",
+      header: "方案",
+      question: "请选择方案",
+      multiSelect: false,
+      options: [
+        { id: "option-1", label: "A", description: "方案 A" },
+        { id: "option-2", label: "B", description: "方案 B" },
+      ],
+    }],
+  };
 }
 
 /** 以最小实现模拟 SDK 会话。 */
@@ -331,6 +367,123 @@ describe("PiRuntimeGateway 提示词刷新", () => {
       "<inline:bug-paw-search-run-circuit>",
     ]);
     expect(loader.getExtensions().errors).toEqual([]);
+  });
+
+  it("资源加载器可为单个 Pi Session 注册提问消息防护", async () => {
+    const loader = createWorkspaceResourceLoader(
+      "/tmp",
+      "/tmp",
+      [],
+      noRetrieval,
+      new SearchRunState(),
+      undefined,
+      [createAskUserMessageGuardExtension(new AskUserRunState())],
+    );
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions.map(({ path }) => path)).toContain(
+      "<inline:bug-paw-ask-user-message-guard>",
+    );
+  });
+
+  it("提问开始后不再发布尾随文本和兄弟工具流事件", async () => {
+    let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
+    const session = {
+      ...createSession(),
+      askUserRunState: new AskUserRunState(),
+      subscribe(next: Parameters<PiSessionAdapter["subscribe"]>[0]) {
+        listener = next;
+        return () => undefined;
+      },
+    };
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    listener(toolCallUpdate("toolcall_start", "ask-1", "ask_user"));
+    listener({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "不应公开" }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "不应公开" },
+    } as never);
+    listener(toolCallUpdate("toolcall_start", "write-1", "write"));
+    listener({
+      type: "tool_execution_start",
+      toolCallId: "ask-1",
+      toolName: "ask_user",
+      args: {},
+    } as never);
+
+    expect(events.filter((event) => event.type !== "snapshot").map((event) => event.type)).toEqual([
+      "tool_preparing",
+      "tool_started",
+    ]);
+    expect(events).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "text_delta" }),
+      expect.objectContaining({ toolName: "write" }),
+    ]));
+    gateway.dispose();
+  });
+
+  it("在 Snapshot 和 Run 释放后的控制事件中恢复待回答问题", async () => {
+    let pending: PendingQuestionProjection | undefined;
+    const session = createSession(async () => {
+      pending = pendingQuestionProjection();
+    });
+    const gateway = createPiRuntimeGateway(createBackend(session), {
+      questionState: {
+        findPending: () => pending,
+        reconcile: vi.fn(),
+        consumeResolvedEvent: () => undefined,
+      },
+    });
+    const initial = await gateway.createSession();
+    const events: ChatEvent[] = [];
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    expect(initial.pendingQuestion).toBeUndefined();
+    await gateway.prompt("session-1", "需要确认");
+
+    const pendingEvent = events.find((event) => event.type === "question_pending");
+    expect(pendingEvent).toMatchObject({ type: "question_pending", pendingQuestion: pending });
+    expect(pendingEvent).not.toHaveProperty("runId");
+    expect(events.map((event) => event.type).indexOf("question_pending"))
+      .toBeGreaterThan(events.map((event) => event.type).indexOf("completed"));
+    await expect(gateway.openSession("session-1")).resolves.toMatchObject({ pendingQuestion: pending });
+    gateway.dispose();
+  });
+
+  it("question_resolved 控制事件不携带答案正文", async () => {
+    const session = createSession();
+    let notice = { questionRecordId: "record-1", state: "submitted" as const };
+    const gateway = createPiRuntimeGateway(createBackend(session), {
+      questionState: {
+        findPending: () => undefined,
+        reconcile: vi.fn(),
+        consumeResolvedEvent: () => {
+          const current = notice;
+          notice = undefined as never;
+          return current;
+        },
+      },
+    });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.prompt("session-1", "继续");
+
+    const resolved = events.find((event) => event.type === "question_resolved");
+    expect(resolved).toMatchObject({
+      type: "question_resolved",
+      questionRecordId: "record-1",
+      state: "submitted",
+    });
+    expect(resolved).not.toHaveProperty("answers");
+    expect(resolved).not.toHaveProperty("runId");
+    gateway.dispose();
   });
 
   it("未授权 web_search 时不注册搜索断路扩展", async () => {

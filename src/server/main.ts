@@ -33,7 +33,7 @@ import { createRuntimeCoordinator, type RuntimeCoordinator } from "./runtime-coo
 import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
-import { RETIRED_AGENT_TOOL_NAMES, SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { RETIRED_AGENT_TOOL_NAMES, STARTUP_ENFORCED_SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
 import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
@@ -100,6 +100,10 @@ import { BrowserPreviewService } from "./browser-automation/browser-preview-serv
 import { BrowserAuditRepository } from "./browser-automation/browser-audit-repository";
 import { BrowserAutomationService } from "./browser-automation/browser-automation-service";
 import { createBrowserTools } from "./browser-automation/browser-tools";
+import { SessionQuestionRepository } from "./questions/session-question-repository";
+import { createAskUserTool } from "./questions/ask-user-tool";
+import { SessionQuestionRuntimeState } from "./questions/session-question-reconciliation";
+import { SessionQuestionService } from "./questions/session-question-service";
 import { resolveBrowserCapabilities } from "./browser-automation/browser-capabilities";
 import { registerBrowserAutomationRoutes } from "./routes/browser-automation";
 import { registerBrowserPreviewRoutes } from "./routes/browser-preview";
@@ -152,6 +156,16 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const authService = createAuthService(paths, { identityRepository: identities });
   registerOriginProtection(app);
   const sessionRepository = createSessionRepository(applicationDatabase);
+  const sessionQuestions = new SessionQuestionRepository(applicationDatabase);
+  const questionRuntimeStates = new Map<string, SessionQuestionRuntimeState>();
+  const questionStateFor = (agentId: string) => {
+    const existing = questionRuntimeStates.get(agentId);
+    if (existing) return existing;
+    const created = new SessionQuestionRuntimeState(agentId, sessionQuestions);
+    questionRuntimeStates.set(agentId, created);
+    return created;
+  };
+  const questionService = new SessionQuestionService(sessionQuestions, questionStateFor);
   const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
@@ -341,7 +355,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
-          createSessionTools: ({ searchRunState, sessionId }) => [
+          createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...(profile.profile.allowedTools.includes("ask_user")
+              ? [createAskUserTool({ agentId, sessionId, branchAnchorId, repository: sessionQuestions })]
+              : []),
             ...(retrievalCapabilities.webSearch
               ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
               : []),
@@ -356,6 +373,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
+          questionState: questionStateFor(agentId),
           onToolCallCircuitBreak: (event) => {
             app.log.warn(event, "重复空参数工具调用已限制");
           },
@@ -419,6 +437,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     assignSession: (sessionId, agentId) => sessionMetadataStore.assignAgent(sessionId, agentId),
     archiveSession: (sessionId) => sessionMetadataStore.archive(sessionId),
     sessionIsPersisted: (agentId, sessionId) => hasPersistedSessionFile(paths, agentId, sessionId),
+    assertSessionRunnable: (agentId, sessionId) => questionService.assertAutomationCanStart(agentId, sessionId),
     onBackgroundError: (error) => {
       backgroundErrors.record(error.code, { taskId: error.taskId });
       app.log.error(error, "定时任务后台执行失败");
@@ -429,9 +448,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     sessionAgent: (sessionId) => resolveSessionAgentId(sessionId, sessionMetadataStore),
     workspaceFiles,
     referenceResolver,
+    questions: questionService,
   });
   await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);
-  await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
+  await agentStore.ensureSystemToolPermissions(STARTUP_ENFORCED_SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureSkillCreatorGlobalSkill(paths.piDir);
   const deepResearchSkill = await ensureDeepResearchGlobalSkill(paths.piDir);

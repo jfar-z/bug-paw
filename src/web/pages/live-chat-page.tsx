@@ -48,6 +48,10 @@ import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
 import { ComposerSessionControls } from "../components/composer-session-controls";
+import { QuestionComposer } from "../components/question-composer";
+import { useQuestionDraft } from "../use-question-draft";
+import { removeQuestionDraft } from "../question-draft-store";
+import type { PendingQuestionProjection, SubmittedQuestionAnswer } from "../../shared/session-question-contracts";
 
 interface LiveChatPageProps {
   theme: ThemePreference;
@@ -89,6 +93,22 @@ const SESSION_SCROLLBAR_HIDE_DELAY_MS = 700;
 const SESSION_SEARCH_FOCUS_OFFSET = 24;
 const SESSION_SEARCH_TARGET_ATTEMPTS = 12;
 const SESSION_SEARCH_HIGHLIGHT_DURATION_MS = 1_600;
+const EMPTY_PENDING_QUESTION: PendingQuestionProjection = {
+  id: "none",
+  version: 1,
+  toolCallId: "none",
+  createdAt: "1970-01-01T00:00:00.000Z",
+  questions: [{
+    id: "none",
+    header: "提问",
+    question: "暂无问题",
+    multiSelect: false,
+    options: [
+      { id: "none-1", label: "选项一", description: "占位选项" },
+      { id: "none-2", label: "选项二", description: "占位选项" },
+    ],
+  }],
+};
 
 /** 将聊天、会话、模型和附件的可恢复业务错误保留在编辑器附近。 */
 function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
@@ -99,6 +119,12 @@ function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expec
     INVALID_REFERENCE: show,
     UNKNOWN_COMMAND: show,
     SESSION_BUSY: show,
+    SESSION_AWAITING_USER: show,
+    QUESTION_NOT_FOUND: show,
+    QUESTION_STATE_CONFLICT: show,
+    QUESTION_VERSION_CONFLICT: show,
+    QUESTION_BRANCH_CHANGED: show,
+    QUESTION_ANSWER_INVALID: show,
     SESSION_NOT_FOUND: show,
     SESSION_ARCHIVED: show,
     SESSION_AGENT_CONFLICT: show,
@@ -166,6 +192,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [editingEntryId, setEditingEntryId] = useState<string>();
   const [draftReferences, setDraftReferences] = useState<AgentReference[]>([]);
   const [activeRun, setActiveRun] = useState<ChatRunSummary>();
+  const [questionSubmitting, setQuestionSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [runNotice, setRunNotice] = useState("");
   const reportFailure = useCallback((reason: unknown, operation: string) => runApiTask(
@@ -209,6 +236,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   sessionIdRef.current = session?.id;
   sessionSnapshotRef.current = session;
   focusedHistoryRef.current = focusedHistory;
+  const pendingQuestion = session?.pendingQuestion;
+  const questionDraft = useQuestionDraft(session?.id ?? "none", pendingQuestion ?? EMPTY_PENDING_QUESTION);
+  const previousPendingRef = useRef<{ sessionId: string; pending: PendingQuestionProjection } | undefined>(undefined);
   const {
     scrollContainerRef: messageScrollRef,
     contentRef: messageContentRef,
@@ -249,6 +279,18 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setTimeline(pendingResult.timeline);
   }, [alignAfterNextContentCommit, resumeFollowing]);
 
+  useEffect(() => {
+    const previous = previousPendingRef.current;
+    if (previous && (previous.sessionId !== session?.id
+      || previous.pending.id !== pendingQuestion?.id
+      || previous.pending.version !== pendingQuestion?.version)) {
+      removeQuestionDraft(previous.sessionId, previous.pending);
+    }
+    previousPendingRef.current = session && pendingQuestion
+      ? { sessionId: session.id, pending: pendingQuestion }
+      : undefined;
+  }, [pendingQuestion, session]);
+
   /** 聚焦阅读期间只接收实时状态字段，避免最新正文覆盖当前历史窗口。 */
   const applyStreamSnapshot = useCallback((next: SessionSnapshot) => {
     if (focusedHistoryRef.current?.sessionId !== next.id) {
@@ -263,6 +305,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         ...(next.model ? { model: next.model } : {}),
         ...(next.thinkingLevel ? { thinkingLevel: next.thinkingLevel } : {}),
         run: next.run,
+        pendingQuestion: next.pendingQuestion,
         lastEventId: next.lastEventId,
       };
       sessionSnapshotRef.current = merged;
@@ -345,6 +388,26 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     onSessionRenamed: (sessionId, name) => {
       setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
       sessionSyncRef.current?.notify();
+    },
+    onPendingQuestion: (nextPending) => {
+      setQuestionSubmitting(false);
+      setSession((current) => {
+        if (!current) return current;
+        const next = { ...current, pendingQuestion: nextPending };
+        sessionSnapshotRef.current = next;
+        return next;
+      });
+    },
+    onQuestionResolved: ({ questionRecordId }) => {
+      if (sessionSnapshotRef.current?.pendingQuestion?.id !== questionRecordId) return;
+      questionDraft.clear();
+      setQuestionSubmitting(false);
+      setSession((current) => {
+        if (!current || current.pendingQuestion?.id !== questionRecordId) return current;
+        const next = { ...current, pendingQuestion: undefined };
+        sessionSnapshotRef.current = next;
+        return next;
+      });
     },
     onError: setRunNotice,
     onUnexpectedError: (reason) => void reportFailure(reason, "恢复会话实时连接"),
@@ -1008,6 +1071,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       } else {
         setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
       }
+      if (activeSession.pendingQuestion) {
+        questionDraft.clear();
+        const next = { ...activeSession, pendingQuestion: undefined };
+        sessionSnapshotRef.current = next;
+        setSession(next);
+      }
     } catch (reason) {
       autoSpeechEligibilityRef.current = undefined;
       pendingUserMessageRef.current = undefined;
@@ -1018,6 +1087,31 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setAttachmentItems(previousAttachmentItems);
       if (branchEntryId) setEditingEntryId(branchEntryId);
       await reportFailure(reason, branchEntryId ? "编辑并重新发送消息" : "发送消息");
+    }
+  };
+
+  /** 提交当前浏览器草稿并把返回的 Run 设为活动运行。 */
+  const submitQuestionAnswers = async (answers: SubmittedQuestionAnswer[]) => {
+    if (!session || !pendingQuestion || questionSubmitting) return;
+    setQuestionSubmitting(true);
+    setError("");
+    setRunNotice("");
+    try {
+      await stream.ensureOpen();
+      const run = await api.submitQuestionAnswers(session.id, pendingQuestion.id, {
+        version: pendingQuestion.version,
+        answers,
+      });
+      questionDraft.clear();
+      const next = { ...session, pendingQuestion: undefined };
+      sessionSnapshotRef.current = next;
+      setSession(next);
+      setActiveRun(run);
+      resumeFollowing();
+    } catch (reason) {
+      await reportFailure(reason, "提交提问回答");
+    } finally {
+      setQuestionSubmitting(false);
     }
   };
 
@@ -1465,7 +1559,19 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
 
         <footer className="composer-dock">
           {composerError && <p className="live-chat-error" role="alert">{composerError}</p>}
-          <div className="composer">
+          {pendingQuestion && !questionDraft.draft.collapsed ? <QuestionComposer
+            pending={pendingQuestion}
+            draft={questionDraft}
+            submitting={questionSubmitting}
+            error={composerError || undefined}
+            onCollapse={() => questionDraft.setCollapsed(true)}
+            onSubmit={(answers) => void submitQuestionAnswers(answers)}
+          /> : <div className="composer">
+            {pendingQuestion ? <button
+              type="button"
+              className="question-composer-resume"
+              onClick={() => questionDraft.setCollapsed(false)}
+            >继续回答 · {questionDraft.answeredCount}/{pendingQuestion.questions.length}</button> : null}
             <ReferenceComposer
               value={draft}
               references={draftReferences}
@@ -1493,7 +1599,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
               bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
             />
-          </div>
+          </div>}
           <p>Agent 可以在容器权限范围内读取、修改文件和执行命令。</p>
         </footer>
       </section>

@@ -13,7 +13,8 @@ export function isSessionSnapshotEvent(value: unknown): value is SessionSnapshot
     && isSafeInteger(value.lastEventId, 0)
     && (value.model === undefined || isModel(value.model))
     && (value.thinkingLevel === undefined || isThinkingLevel(value.thinkingLevel))
-    && (value.run === undefined || isRun(value.run));
+    && (value.run === undefined || isRun(value.run))
+    && (value.pendingQuestion === undefined || isPendingQuestion(value.pendingQuestion));
 }
 
 /** 校验要求客户端重新读取 Projection 的轻量控制事件。 */
@@ -33,6 +34,15 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     || typeof value.type !== "string") return false;
   if (value.type === "model_changed") return isModel(value.model);
   if (value.type === "thinking_level_changed") return isThinkingLevel(value.thinkingLevel);
+  if (value.type === "question_pending") {
+    return hasOnlyKeys(value, ["id", "sessionId", "type", "pendingQuestion"])
+      && isPendingQuestion(value.pendingQuestion);
+  }
+  if (value.type === "question_resolved") {
+    return hasOnlyKeys(value, ["id", "sessionId", "type", "questionRecordId", "state"])
+      && isNonEmptyString(value.questionRecordId)
+      && (value.state === "submitted" || value.state === "discarded");
+  }
   // 自动标题可能在所属 Run 结束后才到达，因此不绑定任何 Run。
   if (value.type === "session_renamed") {
     return value.runId === undefined
@@ -85,6 +95,45 @@ function isRun(value: unknown): boolean {
     && isNonEmptyString(value.startedAt)
     && (value.finishedAt === undefined || isNonEmptyString(value.finishedAt))
     && (value.error === undefined || typeof value.error === "string");
+}
+
+function isPendingQuestion(value: unknown): boolean {
+  if (!isRecord(value)
+    || !hasOnlyKeys(value, ["id", "version", "toolCallId", "questions", "createdAt"])
+    || !isNonEmptyString(value.id)
+    || !isSafeInteger(value.version, 1)
+    || !isNonEmptyString(value.toolCallId)
+    || !isNonEmptyString(value.createdAt)
+    || !Array.isArray(value.questions)
+    || value.questions.length < 1
+    || value.questions.length > 4) return false;
+
+  return value.questions.every((question) => {
+    if (!isRecord(question)
+      || !hasOnlyKeys(question, ["id", "header", "question", "options", "multiSelect"])
+      || !isNonEmptyString(question.id)
+      || !isBoundedString(question.header, 12)
+      || !isBoundedString(question.question, 1_000)
+      || typeof question.multiSelect !== "boolean"
+      || !Array.isArray(question.options)
+      || question.options.length < 2
+      || question.options.length > 4) return false;
+
+    return question.options.every((option) => isRecord(option)
+      && hasOnlyKeys(option, ["id", "label", "description"])
+      && isNonEmptyString(option.id)
+      && isBoundedString(option.label, 80)
+      && isBoundedString(option.description, 500));
+  });
+}
+
+function isBoundedString(value: unknown, maximum: number): value is string {
+  return isNonEmptyString(value) && Array.from(value).length <= maximum;
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 function isSafeInteger(value: unknown, minimum: number): value is number {

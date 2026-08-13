@@ -6,6 +6,7 @@ import { createTestDatabase } from "../database/test-database";
 import { createAgentRepository } from "../agents/agent-repository";
 import { createScheduledTaskRepository } from "./scheduled-task-repository";
 import { createScheduledTaskService } from "./scheduled-task-service";
+import { DomainError } from "../core/errors";
 
 const databases: Database[] = [];
 afterEach(() => { databases.splice(0).forEach((database) => database.close()); vi.useRealTimers(); });
@@ -39,6 +40,44 @@ describe("定时任务执行服务", () => {
     })).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     await expect(store.listAllTasks()).resolves.toEqual([]);
     expect(sessionIsPersisted).toHaveBeenCalledWith("writer", "empty-session");
+  });
+
+  it("已有会话等待用户回答时不启动定时任务", async () => {
+    const database = createTestDatabase();
+    databases.push(database);
+    await createAgentRepository(database).insert({
+      version: 1, id: "writer", name: "Writer", avatar: { kind: "initial", value: "W" }, description: "", status: "active",
+      cwd: "/workspace/writer", allowedTools: [], createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z",
+    });
+    database.write(
+      "INSERT INTO sessions(id, agent_id, projection_version, created_at, updated_at) VALUES ('session-pending', 'writer', 0, ?, ?)",
+      ["2026-08-07T00:00:00.000Z", "2026-08-07T00:00:00.000Z"],
+    );
+    const store = createScheduledTaskRepository(database);
+    const task = await store.createTask({
+      agentId: "writer",
+      name: "等待中的会话",
+      prompt: "不应执行",
+      enabled: true,
+      schedule: { type: "interval", unit: "hour", value: 1 },
+      target: { type: "existing_session", sessionId: "session-pending" },
+    });
+    const startPrompt = vi.fn();
+    const assertSessionRunnable = vi.fn(() => {
+      throw new DomainError("SESSION_AWAITING_USER", "Session 正在等待用户回答");
+    });
+    const service = createScheduledTaskService({
+      store,
+      assertSessionRunnable,
+      acquireRuntime: async () => ({
+        runtime: { createSession: async () => ({ id: "unused" }), startPrompt },
+        release: vi.fn(),
+      }),
+    });
+
+    await expect(service.runNow(task.id)).rejects.toMatchObject({ code: "SESSION_AWAITING_USER" });
+    expect(assertSessionRunnable).toHaveBeenCalledWith("writer", "session-pending");
+    expect(startPrompt).not.toHaveBeenCalled();
   });
 
   it("原目标会话已删除时拒绝手动执行", async () => {
