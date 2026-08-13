@@ -15,6 +15,7 @@ interface AgentTurnContentProps {
   onResolved(summary: WorkspaceFileSummary): void;
   onPreview(summary: WorkspaceFileSummary): void;
   onLinkActivate?(href: string): boolean;
+  focusedEntryId?: string;
 }
 
 /** 按原始顺序渲染 Agent 正文、附件与派生活动段。 */
@@ -26,6 +27,7 @@ export function AgentTurnContent({
   onResolved,
   onPreview,
   onLinkActivate,
+  focusedEntryId,
 }: AgentTurnContentProps) {
   const items = useMemo(() => groupAgentBlocks(turn.blocks), [turn.blocks]);
   const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
@@ -51,7 +53,7 @@ export function AgentTurnContent({
           onExpandedChange={(expanded) => setExpandedOverrides((current) => ({ ...current, [item.id]: expanded }))}
         />;
       }
-      if (item.block.type === "markdown") return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} />;
+      if (item.block.type === "markdown") return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={item.block.piEntryId === focusedEntryId} />;
       return <FileBlockView
         key={item.id}
         block={item.block}
@@ -68,9 +70,11 @@ export function AgentTurnContent({
   </>;
 }
 
-function MarkdownBlockView({ block, theme, onLinkActivate }: { block: MarkdownBlock; theme: ThemePreference; onLinkActivate?: (href: string) => boolean }) {
+function MarkdownBlockView({ block, theme, onLinkActivate, focused }: { block: MarkdownBlock; theme: ThemePreference; onLinkActivate?: (href: string) => boolean; focused: boolean }) {
   return <MarkdownContent
     text={block.text}
+    sessionEntryId={block.piEntryId}
+    focused={focused}
     streaming={block.streaming}
     revealStart={block.revealStart}
     revealPhase={block.revealPhase}

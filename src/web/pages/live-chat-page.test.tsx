@@ -183,6 +183,21 @@ beforeEach(() => {
     if (url === "/api/v1/sessions?agentId=default&archived=true") {
       return new Response(JSON.stringify({ sessions: [{ id: "archived-1", name: "旧会话", firstMessage: "旧问题", modified: "", messageCount: 2 }] }));
     }
+    if (url.startsWith("/api/v1/sessions/search?agentId=default&query=")) {
+      return new Response(JSON.stringify({
+        hits: [{
+          sessionId: "session-2",
+          sessionFirstMessage: "第二会话",
+          archived: false,
+          entryId: "assistant-25",
+          role: "assistant",
+          timestamp: "2026-08-13T01:00:00.000Z",
+          snippet: "包含 needle 的回答",
+          matchRanges: [{ start: 3, end: 9 }],
+        }],
+        hasMore: false,
+      }));
+    }
     if (url === "/api/v1/models") {
       return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
     }
@@ -223,6 +238,24 @@ beforeEach(() => {
         messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
         history: { branchToken: "branch-session-2", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
         lastEventId: 1,
+      }));
+    }
+    if (url === "/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2") {
+      return new Response(JSON.stringify({
+        sessionId: "session-2",
+        targetEntryId: "assistant-25",
+        messages: [
+          { role: "user", content: "窗口问题", __piEntryId: "user-25" },
+          { role: "assistant", content: [{ type: "text", text: "包含 needle 的回答" }], __piEntryId: "assistant-25" },
+        ],
+        history: {
+          startEntryId: "user-25",
+          endEntryId: "assistant-25",
+          branchToken: "branch-session-2",
+          hasMoreBefore: true,
+          hasMoreAfter: true,
+          turnCount: 1,
+        },
       }));
     }
     if (url === "/api/v1/sessions/archived-1") {
@@ -310,6 +343,82 @@ beforeEach(() => {
 });
 
 describe("LiveChatPage 时间线", () => {
+  it("从搜索结果打开目标窗口并只滚动消息容器到精确 entry", async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function getRect(this: HTMLElement) {
+      const top = this.classList.contains("message-scroll")
+        ? 100
+        : this.dataset.sessionEntryId === "assistant-25" ? 420 : 0;
+      return { top, bottom: top + 40, left: 0, right: 640, width: 640, height: 40, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    try {
+      renderLiveChatPage(<LiveChatPage {...props} />);
+      await screen.findByRole("button", { name: "测试" });
+      fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+      const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+      fireEvent.change(searchbox, { target: { value: "needle" } });
+      fireEvent.keyDown(searchbox, { key: "Enter" });
+
+      const result = await screen.findByRole("option", { name: /第二会话/ });
+      const container = screen.getByTestId("message-scroll");
+      Object.defineProperty(container, "scrollTop", { configurable: true, value: 0, writable: true });
+      fireEvent.click(result);
+
+      await waitFor(() => expect(container.querySelector('[data-session-entry-id="assistant-25"]')).not.toBeNull());
+      expect(container.scrollTop).toBe(296);
+      expect(document.scrollingElement?.scrollTop ?? 0).toBe(0);
+      expect(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2"))
+        .toBeLessThan(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2"));
+      expect(screen.queryByRole("dialog", { name: "搜索聊天记录" })).not.toBeInTheDocument();
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("聚焦历史时隔离 SSE 正文增量，并可返回最新窗口", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+    fireEvent.change(searchbox, { target: { value: "needle" } });
+    fireEvent.keyDown(searchbox, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /第二会话/ }));
+    await screen.findByText("包含 needle 的回答");
+    await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toContain("/sessions/session-2/events"));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("run_started", {
+      type: "run_started",
+      run: { runId: "run-focus", sessionId: "session-2", status: "running", startedAt: "2026-08-13T01:01:00.000Z" },
+    }));
+    act(() => FakeEventSource.instances.at(-1)!.emit("text_delta", { type: "text_delta", delta: "不应拼接的最新正文" }));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+
+    expect(screen.getByLabelText("Agent 正在处理")).toBeInTheDocument();
+    expect(screen.queryByText(/不应拼接的最新正文/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "回到最新消息" }));
+    await waitFor(() => expect(screen.queryByText("包含 needle 的回答")).not.toBeInTheDocument());
+    expect(operationLog.filter((item) => item === "fetch:GET:/api/v1/sessions/session-2")).toHaveLength(2);
+  });
+
+  it("从聚焦历史发送消息前先恢复最新窗口", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+    fireEvent.change(searchbox, { target: { value: "needle" } });
+    fireEvent.keyDown(searchbox, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /第二会话/ }));
+    await screen.findByText("包含 needle 的回答");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "从历史继续提问" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-2/messages"));
+    expect(operationLog.filter((item) => item === "fetch:GET:/api/v1/sessions/session-2")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "回到最新消息" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("从历史继续提问")).toHaveLength(2);
+  });
+
   it("实时连接自动重连成功后撤销中断提示", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));

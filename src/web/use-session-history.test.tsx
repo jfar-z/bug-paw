@@ -82,4 +82,46 @@ describe("useSessionHistory", () => {
     rerender();
     expect(element.scrollTop).toBe(720);
   });
+
+  it("聚焦窗口底部进入预加载区时追加较新页且不抢占滚动位置", async () => {
+    const element = document.createElement("div");
+    Object.defineProperties(element, {
+      scrollTop: { value: 360, writable: true },
+      scrollHeight: { value: 1200, writable: true },
+    });
+    const current = {
+      ...snapshot(),
+      history: {
+        startEntryId: "user-21",
+        endEntryId: "assistant-40",
+        branchToken: "branch-a",
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        turnCount: 20,
+      },
+    };
+    const onAppend = vi.fn();
+    vi.spyOn(api, "loadSessionHistoryAfter").mockResolvedValue({
+      sessionId: "session-1",
+      messages: [{ role: "user", __piEntryId: "user-41" }],
+      history: { startEntryId: "user-41", endEntryId: "assistant-60", branchToken: "branch-a", hasMoreBefore: true, hasMoreAfter: false, turnCount: 20 },
+    });
+    const { result } = renderHook(() => useSessionHistory({
+      snapshot: current,
+      focused: true,
+      scrollRef: { current: element } as RefObject<HTMLDivElement | null>,
+      onPrepend: vi.fn(),
+      onAppend,
+      onError: vi.fn(),
+    }));
+    act(() => result.current.newerSentinelRef(element));
+    await act(async () => {
+      observerCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+      await Promise.resolve();
+    });
+
+    expect(api.loadSessionHistoryAfter).toHaveBeenCalledWith("session-1", "assistant-40", "branch-a", expect.any(AbortSignal));
+    expect(onAppend).toHaveBeenCalledOnce();
+    expect(element.scrollTop).toBe(360);
+  });
 });

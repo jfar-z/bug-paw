@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
+import type { SessionTextSearchHit } from "../../shared/session-text-search";
 import { sortSessionsPinnedFirst } from "../../shared/session-sort";
 import { api, type ModelSummary, type SessionBulkAction, type SessionBulkPreview, type SessionBulkTarget, type SessionSnapshot, type SessionSummary } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
@@ -27,7 +28,7 @@ import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
 import { useSessionHistory } from "../use-session-history";
-import { mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
+import { mergeNewerHistory, mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
 import {
   createPendingUserMessage,
   reconcilePendingUserMessage,
@@ -71,9 +72,20 @@ interface SpeechControllerEntry {
 
 type SnapshotAlignment = "follow" | "once";
 
+interface FocusedHistory {
+  /** 当前聚焦读取的 Session。 */
+  sessionId: string;
+
+  /** 搜索命中的稳定 Pi entry ID。 */
+  entryId: string;
+}
+
 const SELECTED_AGENT_STORAGE_KEY = "pi-agent-web.selected-agent-id";
 const SESSION_LONG_PRESS_DURATION_MS = 450;
 const SESSION_SCROLLBAR_HIDE_DELAY_MS = 700;
+const SESSION_SEARCH_FOCUS_OFFSET = 24;
+const SESSION_SEARCH_TARGET_ATTEMPTS = 12;
+const SESSION_SEARCH_HIGHLIGHT_DURATION_MS = 1_600;
 
 /** 将聊天、会话、模型和附件的可恢复业务错误保留在编辑器附近。 */
 function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
@@ -134,6 +146,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [openingSessionId, setOpeningSessionId] = useState<string>();
   const [session, setSession] = useState<SessionSnapshot>();
   const [timeline, setTimeline] = useState<ConversationEntry[]>([]);
+  const [focusedHistory, setFocusedHistory] = useState<FocusedHistory>();
+  const [focusedEntryId, setFocusedEntryId] = useState<string>();
   const [mediaSummaries, setMediaSummaries] = useState<Record<string, WorkspaceFileSummary>>({});
   const [previewImage, setPreviewImage] = useState<WorkspaceFileSummary>();
   const [draft, setDraft] = useState("");
@@ -171,12 +185,15 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const selectedAgentIdRef = useRef<string | undefined>(selectedAgentId);
   const sessionIdRef = useRef<string | undefined>(session?.id);
   const sessionSnapshotRef = useRef<SessionSnapshot | undefined>(session);
+  const focusedHistoryRef = useRef<FocusedHistory | undefined>(focusedHistory);
+  const focusHighlightTimerRef = useRef<number | undefined>(undefined);
   const autoSpeechEligibilityRef = useRef<AutoSpeechEligibility | undefined>(undefined);
   const speechControllerRef = useRef<SpeechControllerEntry | undefined>(undefined);
   const [speechState, setSpeechState] = useState<SpeechPlaybackState>({ phase: "idle" });
   selectedAgentIdRef.current = selectedAgentId;
   sessionIdRef.current = session?.id;
   sessionSnapshotRef.current = session;
+  focusedHistoryRef.current = focusedHistory;
   const {
     scrollContainerRef: messageScrollRef,
     contentRef: messageContentRef,
@@ -212,15 +229,45 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setTimeline(pendingResult.timeline);
   }, [alignAfterNextContentCommit, resumeFollowing]);
 
+  /** 聚焦阅读期间只接收实时状态字段，避免最新正文覆盖当前历史窗口。 */
+  const applyStreamSnapshot = useCallback((next: SessionSnapshot) => {
+    if (focusedHistoryRef.current?.sessionId !== next.id) {
+      applySnapshot(next);
+      return;
+    }
+    setSession((current) => {
+      if (!current || current.id !== next.id) return current;
+      const merged = {
+        ...current,
+        ...(next.agentId ? { agentId: next.agentId } : {}),
+        ...(next.model ? { model: next.model } : {}),
+        run: next.run,
+        lastEventId: next.lastEventId,
+      };
+      sessionSnapshotRef.current = merged;
+      return merged;
+    });
+    if (next.model) setSelectedModel(next.model);
+  }, [applySnapshot]);
+
   const historyLoader = useSessionHistory({
     snapshot: session,
+    focused: Boolean(focusedHistory),
     scrollRef: messageScrollRef,
     onBeforePrepend: pauseFollowing,
     onPrepend: (page) => {
       setSession((current) => {
         if (!current || current.id !== page.sessionId || current.history.branchToken !== page.history.branchToken) return current;
         const messages = mergeOlderHistory(current.messages, page.messages);
-        const merged = { ...current, messages, history: page.history };
+        const merged = {
+          ...current,
+          messages,
+          history: {
+            ...page.history,
+            endEntryId: current.history.endEntryId,
+            hasMoreAfter: current.history.hasMoreAfter,
+          },
+        };
         sessionSnapshotRef.current = merged;
         const pendingResult = reconcilePendingUserMessage(
           current.id,
@@ -232,13 +279,33 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         return merged;
       });
     },
+    onAppend: (page) => {
+      setSession((current) => {
+        if (!current || current.id !== page.sessionId || current.history.branchToken !== page.history.branchToken) return current;
+        const messages = mergeNewerHistory(current.messages, page.messages);
+        const merged = {
+          ...current,
+          messages,
+          history: {
+            ...page.history,
+            startEntryId: current.history.startEntryId,
+            hasMoreBefore: current.history.hasMoreBefore,
+          },
+        };
+        sessionSnapshotRef.current = merged;
+        setTimeline(parsePiHistory(messages, false));
+        return merged;
+      });
+    },
     onError: (reason) => { void reportFailure(reason, "加载更早消息"); },
   });
 
   const stream = useSessionStream({
     sessionId: session?.id,
-    onSnapshot: applySnapshot,
-    onTimelineEvent: (event) => setTimeline((current) => reduceTimeline(current, event)),
+    onSnapshot: applyStreamSnapshot,
+    onTimelineEvent: (event) => {
+      if (!focusedHistoryRef.current) setTimeline((current) => reduceTimeline(current, event));
+    },
     onRunChange: setActiveRun,
     onModelChange: (model) => {
       setSession((current) => current ? { ...current, model } : current);
@@ -445,6 +512,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const enterDraft = () => {
     stopSpeech();
     stream.close();
+    focusedHistoryRef.current = undefined;
+    setFocusedHistory(undefined);
+    setFocusedEntryId(undefined);
+    sessionSnapshotRef.current = undefined;
     setSession(undefined);
     setEditingEntryId(undefined);
     setTimeline([]);
@@ -501,10 +572,47 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useEffect(() => () => {
     clearSessionLongPress();
     clearSessionScrollbarTimer();
+    if (focusHighlightTimerRef.current !== undefined) window.clearTimeout(focusHighlightTimerRef.current);
   }, []);
 
+  /** 在有限提交周期内寻找稳定 entry 锚点，并只移动消息滚动容器。 */
+  const focusSessionEntry = async (entryId: string): Promise<boolean> => {
+    for (let attempt = 0; attempt < SESSION_SEARCH_TARGET_ATTEMPTS; attempt += 1) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      const container = messageScrollRef.current;
+      const target = container
+        ? [...container.querySelectorAll<HTMLElement>("[data-session-entry-id]")]
+          .find((element) => element.dataset.sessionEntryId === entryId)
+        : undefined;
+      if (!container || !target) continue;
+      container.scrollTop = container.scrollTop
+        + target.getBoundingClientRect().top
+        - container.getBoundingClientRect().top
+        - SESSION_SEARCH_FOCUS_OFFSET;
+      setFocusedEntryId(entryId);
+      if (focusHighlightTimerRef.current !== undefined) window.clearTimeout(focusHighlightTimerRef.current);
+      focusHighlightTimerRef.current = window.setTimeout(() => {
+        setFocusedEntryId((current) => current === entryId ? undefined : current);
+        focusHighlightTimerRef.current = undefined;
+      }, SESSION_SEARCH_HIGHLIGHT_DURATION_MS);
+      return true;
+    }
+    return false;
+  };
+
+  /** 丢弃聚焦窗口并重新读取 Session 的最新活动分支。 */
+  const restoreLatestConversation = async (sessionId: string): Promise<SessionSnapshot> => {
+    const latest = await api.openSession(sessionId);
+    focusedHistoryRef.current = undefined;
+    setFocusedHistory(undefined);
+    setFocusedEntryId(undefined);
+    sessionSnapshotRef.current = undefined;
+    applySnapshot(latest, "once");
+    return latest;
+  };
+
   const openConversation = async (sessionId: string) => {
-    if (openingSessionRef.current || session?.id === sessionId) return;
+    if (openingSessionRef.current || (session?.id === sessionId && !focusedHistoryRef.current)) return;
     stopSpeech();
     pendingUserMessageRef.current = undefined;
     setError("");
@@ -514,10 +622,70 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     openingSessionRef.current = sessionId;
     setOpeningSessionId(sessionId);
     try {
+      focusedHistoryRef.current = undefined;
+      setFocusedHistory(undefined);
+      setFocusedEntryId(undefined);
+      sessionSnapshotRef.current = undefined;
       applySnapshot(await api.openSession(sessionId), "once");
       closeSidebar();
     } catch (reason) {
       await reportFailure(reason, "打开会话");
+    } finally {
+      openingSessionRef.current = undefined;
+      setOpeningSessionId(undefined);
+    }
+  };
+
+  /** 打开搜索命中的 Session，并用稳定 entry ID 切换到目标历史窗口。 */
+  const openSearchHit = async (hit: SessionTextSearchHit): Promise<void> => {
+    if (openingSessionRef.current) throw new Error("正在打开其他会话，请稍后重试");
+    stopSpeech();
+    pendingUserMessageRef.current = undefined;
+    setError("");
+    setEditingEntryId(undefined);
+    setMediaSummaries({});
+    setPreviewImage(undefined);
+    openingSessionRef.current = hit.sessionId;
+    setOpeningSessionId(hit.sessionId);
+    try {
+      const opened = await api.openSession(hit.sessionId);
+      const branchToken = opened.history?.branchToken;
+      if (!branchToken) throw new Error("SESSION_BRANCH_CHANGED");
+      const target = await api.loadSessionHistoryTarget(hit.sessionId, hit.entryId, branchToken);
+      if (target.sessionId !== hit.sessionId || target.targetEntryId !== hit.entryId || target.history.branchToken !== branchToken) {
+        throw new Error("SESSION_ENTRY_NOT_FOUND");
+      }
+      pauseFollowing();
+      const focusedSnapshot: SessionSnapshot = { ...opened, messages: target.messages, history: target.history };
+      const nextFocus = { sessionId: hit.sessionId, entryId: hit.entryId };
+      focusedHistoryRef.current = nextFocus;
+      setFocusedHistory(nextFocus);
+      setFocusedEntryId(hit.entryId);
+      sessionSnapshotRef.current = focusedSnapshot;
+      setSession(focusedSnapshot);
+      if (opened.model) setSelectedModel(opened.model);
+      setActiveRun(opened.run?.status === "queued" || opened.run?.status === "running" ? opened.run : undefined);
+      setTimeline(parsePiHistory(target.messages, false));
+      if (!await focusSessionEntry(hit.entryId)) throw new Error("SESSION_ENTRY_NOT_FOUND");
+      closeSidebar();
+      setSessionSearchOpen(false);
+    } catch {
+      throw new Error("记录已变化，请重新搜索");
+    } finally {
+      openingSessionRef.current = undefined;
+      setOpeningSessionId(undefined);
+    }
+  };
+
+  const returnToLatest = async () => {
+    const targetSessionId = focusedHistoryRef.current?.sessionId;
+    if (!targetSessionId || openingSessionRef.current) return;
+    openingSessionRef.current = targetSessionId;
+    setOpeningSessionId(targetSessionId);
+    try {
+      await restoreLatestConversation(targetSessionId);
+    } catch (reason) {
+      await reportFailure(reason, "返回最新消息");
     } finally {
       openingSessionRef.current = undefined;
       setOpeningSessionId(undefined);
@@ -716,10 +884,19 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const previousAttachmentItems = attachmentItems;
     try {
       stopSpeech();
+      let baseSession = session;
+      let baseTimeline = timeline;
+      if (focusedHistoryRef.current) {
+        baseSession = await restoreLatestConversation(focusedHistoryRef.current.sessionId);
+        baseTimeline = parsePiHistory(
+          baseSession.messages,
+          baseSession.run?.status === "queued" || baseSession.run?.status === "running",
+        );
+      }
       // 分支请求尚未返回前即退出编辑态，避免来源消息持续显示“编辑中”。
       if (branchEntryId) setEditingEntryId(undefined);
-      const wasDraft = !session;
-      const activeSession = session ?? await createConversation(selectedAgentId);
+      const wasDraft = !baseSession;
+      const activeSession = baseSession ?? await createConversation(selectedAgentId);
       if (wasDraft && !isSameModel(activeSession.model, selectedModel)) {
         await api.setModel(activeSession.id, selectedModel.provider, selectedModel.id);
         activeSession.model = selectedModel;
@@ -749,13 +926,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         && sendingAgent.profile.ttsAutoPlay === true
         ? {
           sessionId: activeSession.id,
-          previousTurnId: findLastAgentTurnId(timeline),
+          previousTurnId: findLastAgentTurnId(baseTimeline),
         }
         : undefined;
       pendingUserMessageRef.current = createPendingUserMessage(
         activeSession.id,
         pendingEntry,
-        timeline,
+        baseTimeline,
         branchEntryId,
       );
       setTimeline((current) => reduceTimeline(reduceTimeline(current, {
@@ -1196,7 +1373,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           contentRef={messageContentRef}
           historyState={historyLoader.state}
           historySentinelRef={historyLoader.sentinelRef}
+          newerHistoryState={historyLoader.newerState}
+          newerHistorySentinelRef={historyLoader.newerSentinelRef}
+          focusedHistory={Boolean(focusedHistory)}
+          focusedEntryId={focusedEntryId}
           onRetryHistory={historyLoader.retry}
+          onRetryNewerHistory={historyLoader.retryNewer}
+          onReturnLatest={() => void returnToLatest()}
           onResolved={registerMediaSummary}
           onPreview={openImagePreview}
           onWorkspaceLink={activateWorkspaceLink}
@@ -1259,7 +1442,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         open={sessionSearchOpen}
         agentId={selectedAgentId}
         onClose={() => setSessionSearchOpen(false)}
-        onSelect={async (hit) => { await openConversation(hit.sessionId); }}
+        onSelect={openSearchHit}
       />
       {sessionBulkPreview ? <SessionBulkConfirmationDialog
         preview={sessionBulkPreview}

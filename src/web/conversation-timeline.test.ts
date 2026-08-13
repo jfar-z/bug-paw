@@ -77,6 +77,38 @@ describe("对话时间线", () => {
     expect((entries[0] as AgentTurn).blocks.map((block) => block.type)).toEqual(["thinking", "markdown"]);
   });
 
+  it("把 Assistant 的 Pi entry ID 只投影到首个可见正文块", () => {
+    const timeline = parsePiHistory([{
+      role: "assistant",
+      __piEntryId: "assistant-25",
+      content: [
+        { type: "thinking", thinking: "内部思考" },
+        { type: "text", text: "第一段正文" },
+        { type: "text", text: "第二段正文" },
+      ],
+    }]);
+
+    const turn = timeline[0] as AgentTurn;
+    const markdown = turn.blocks.filter((block) => block.type === "markdown");
+    expect(markdown[0]).toMatchObject({ text: "第一段正文", piEntryId: "assistant-25" });
+    expect(markdown[1]).toMatchObject({ text: "第二段正文" });
+    expect(markdown[1]).not.toHaveProperty("piEntryId");
+  });
+
+  it("兼容字符串格式的历史 Assistant 正文锚点", () => {
+    const timeline = parsePiHistory([{
+      role: "assistant",
+      __piEntryId: "assistant-legacy",
+      content: "旧格式正文",
+    }]);
+
+    expect((timeline[0] as AgentTurn).blocks[0]).toMatchObject({
+      type: "markdown",
+      text: "旧格式正文",
+      piEntryId: "assistant-legacy",
+    });
+  });
+
   it("连续文本增量拼接且重复工具开始事件不会产生重复卡片", () => {
     const entries = reduceEvents([
       { type: "text_delta", delta: "第一段" },

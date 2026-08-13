@@ -2625,6 +2625,44 @@ img.message-avatar {
   background: var(--surface-hover);
 }
 
+.session-history-sentinel--newer {
+  margin-top: 12px;
+  padding-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.session-history-return-latest {
+  border-color: color-mix(in srgb, var(--accent-strong) 38%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.message-row.is-session-search-focus,
+.markdown-content.is-session-search-focus {
+  outline: 2px solid color-mix(in srgb, var(--accent-strong) 58%, transparent);
+  outline-offset: 5px;
+  animation: session-search-focus-in 360ms ease-out both;
+}
+
+@keyframes session-search-focus-in {
+  from {
+    opacity: 0.72;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-row.is-session-search-focus,
+  .markdown-content.is-session-search-focus {
+    animation: none;
+  }
+}
+
 .session-intro {
   max-width: 560px;
   margin: 16px 0 64px;
