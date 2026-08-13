@@ -1,5 +1,5 @@
 import { ChevronLeft, Database, File, Folder, Plus, Terminal, WandSparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import type { AgentReference, FileReference } from "../../shared/agent-reference-contracts";
 import type { ComposerCatalog, WorkspaceEntry } from "../../shared/contracts";
 import { useApiTask } from "../api-task-provider";
@@ -30,7 +30,7 @@ type Candidate =
   | { type: "command"; name: string; description: string };
 
 /** 判断当前回车是否应提交消息，移动端和组合输入统一保留原生换行。 */
-function shouldSubmitComposerOnEnter(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+function shouldSubmitComposerOnEnter(event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean {
   if (event.key !== "Enter") return false;
   if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
   if (event.shiftKey || event.ctrlKey || event.metaKey) return false;
