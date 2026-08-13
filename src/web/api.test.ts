@@ -165,6 +165,22 @@ describe("会话置顶 API", () => {
   });
 });
 
+describe("会话思考深度 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("使用编码后的会话 ID 写入规范思考深度", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.setThinkingLevel("session/a", "low");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session%2Fa/thinking-level",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ thinkingLevel: "low" }) }),
+    );
+  });
+});
+
 describe("联网搜索 Provider API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
