@@ -53,7 +53,7 @@ export function AgentTurnContent({
           onExpandedChange={(expanded) => setExpandedOverrides((current) => ({ ...current, [item.id]: expanded }))}
         />;
       }
-      if (item.block.type === "markdown") return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={item.block.piEntryId === focusedEntryId} />;
+      if (item.block.type === "markdown") return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={Boolean(focusedEntryId) && item.block.piEntryId === focusedEntryId} />;
       return <FileBlockView
         key={item.id}
         block={item.block}
