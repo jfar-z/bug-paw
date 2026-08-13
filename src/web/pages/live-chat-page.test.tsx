@@ -385,6 +385,19 @@ describe("LiveChatPage 时间线", () => {
       lastEventId: 4,
     }));
     await waitFor(() => expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument());
+
+    act(() => source.emit("error", { code: "AGENT_EXECUTION_FAILED", message: "模型请求失败" }));
+    expect(screen.getByText("模型请求失败")).toHaveClass("live-chat-error");
+    act(() => source.emit("snapshot", {
+      id: 6,
+      messages: [
+        { role: "user", content: "重新提问" },
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "正常回答" }] },
+      ],
+      lastEventId: 6,
+    }));
+    await screen.findByText("正常回答");
+    expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument();
   });
 
   it("长度截断显示固定提示并保留已有回答", async () => {
