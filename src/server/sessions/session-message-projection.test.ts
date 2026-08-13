@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  MODEL_REQUEST_FAILED_MESSAGE,
+  MODEL_RESPONSE_TRUNCATED_MESSAGE,
+} from "../../shared/assistant-run-outcome";
 import { projectSessionMessages, projectSessionToolResult } from "./session-message-projection";
 
 describe("会话消息浏览器投影", () => {
@@ -70,5 +74,42 @@ describe("会话消息浏览器投影", () => {
       content: [{ type: "image", data: "<IMAGE_BASE64>", originalBytes: 8 }],
       details: { source: "read" },
     });
+  });
+
+  it("固定脱敏 Assistant 错误且不修改原消息", () => {
+    const original = [{
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "Bearer clearly-fake-token https://fake-user@example.invalid /fake/private/path vendor-body",
+    }];
+    const before = structuredClone(original);
+
+    const projected = projectSessionMessages(original);
+
+    expect(projected).toEqual([{
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: MODEL_REQUEST_FAILED_MESSAGE,
+    }]);
+    const serialized = JSON.stringify(projected);
+    expect(serialized).not.toContain("clearly-fake-token");
+    expect(serialized).not.toContain("fake-user");
+    expect(serialized).not.toContain("/fake/private/path");
+    expect(serialized).not.toContain("vendor-body");
+    expect(original).toEqual(before);
+  });
+
+  it("固定长度截断提示并保留已有回答", () => {
+    expect(projectSessionMessages([{
+      role: "assistant",
+      stopReason: "length",
+      content: [{ type: "text", text: "partial answer" }],
+      errorMessage: "untrusted truncation detail",
+    }])).toEqual([{
+      role: "assistant",
+      stopReason: "length",
+      content: [{ type: "text", text: "partial answer" }],
+      errorMessage: MODEL_RESPONSE_TRUNCATED_MESSAGE,
+    }]);
   });
 });
