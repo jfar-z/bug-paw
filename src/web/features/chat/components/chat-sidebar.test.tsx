@@ -1,7 +1,19 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ChatSidebar } from "./chat-sidebar";
+
+let applicationStyle: HTMLStyleElement;
+
+/** 注入真实应用样式，确保回归测试覆盖 CSS 级联优先级。 */
+beforeAll(() => {
+  applicationStyle = document.createElement("style");
+  applicationStyle.textContent = readFileSync("src/web/styles.css", "utf8");
+  document.head.append(applicationStyle);
+});
+
+afterAll(() => applicationStyle.remove());
 
 describe("ChatSidebar 会话多选", () => {
   it("搜索按钮位于刷新左侧并按上下文禁用", () => {
@@ -10,6 +22,7 @@ describe("ChatSidebar 会话多选", () => {
 
     const actions = screen.getByRole("group", { name: "会话列表操作" });
     const buttons = within(actions).getAllByRole("button");
+    expect(getComputedStyle(actions).display).toBe("flex");
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(["搜索聊天记录", "刷新会话列表"]);
     expect(buttons[0]).toHaveAttribute("title", "搜索聊天记录");
     fireEvent.click(buttons[0]!);
