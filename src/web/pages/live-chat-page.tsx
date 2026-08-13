@@ -298,6 +298,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       });
     },
     onError: (reason) => { void reportFailure(reason, "加载更早消息"); },
+    onNewerError: (reason) => { void reportFailure(reason, "加载较新消息"); },
   });
 
   const stream = useSessionStream({

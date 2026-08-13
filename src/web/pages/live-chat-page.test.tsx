@@ -10,6 +10,7 @@ type EventListener = (event: MessageEvent) => void;
 const operationLog: string[] = [];
 let regenerateResponse: Promise<Response> | undefined;
 let historyResponse: Response | undefined;
+let historyWindowResponse: Response | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 class HistoryObserverDouble {
@@ -159,6 +160,7 @@ beforeEach(() => {
   operationLog.length = 0;
   regenerateResponse = undefined;
   historyResponse = undefined;
+  historyWindowResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -241,7 +243,7 @@ beforeEach(() => {
       }));
     }
     if (url === "/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2") {
-      return new Response(JSON.stringify({
+      return historyWindowResponse ?? new Response(JSON.stringify({
         sessionId: "session-2",
         targetEntryId: "assistant-25",
         messages: [
@@ -417,6 +419,26 @@ describe("LiveChatPage 时间线", () => {
     expect(operationLog.filter((item) => item === "fetch:GET:/api/v1/sessions/session-2")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "回到最新消息" })).not.toBeInTheDocument();
     expect(screen.getAllByText("从历史继续提问")).toHaveLength(2);
+  });
+
+  it("搜索命中已删除时保留弹层和当前消息且不误定位", async () => {
+    historyWindowResponse = new Response(JSON.stringify({
+      code: "SESSION_ENTRY_NOT_FOUND",
+      message: "目标会话记录不存在",
+    }), { status: 404, headers: { "Content-Type": "application/json" } });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+    fireEvent.change(searchbox, { target: { value: "needle" } });
+    fireEvent.keyDown(searchbox, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /第二会话/ }));
+
+    expect((await screen.findByText("记录已变化，请重新搜索")).closest('[role="alert"]')).not.toBeNull();
+    expect(screen.getByRole("dialog", { name: "搜索聊天记录" })).toBeInTheDocument();
+    expect(screen.getByTestId("message-scroll").querySelector('[data-session-entry-id="assistant-25"]')).toBeNull();
+    expect(screen.getByRole("heading", { name: "默认 Agent" })).toBeInTheDocument();
+    expect(FakeEventSource.instances.at(-1)?.url).toContain("/sessions/session-1/events");
   });
 
   it("实时连接自动重连成功后撤销中断提示", async () => {

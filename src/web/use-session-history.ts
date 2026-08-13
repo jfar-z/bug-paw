@@ -13,6 +13,7 @@ interface UseSessionHistoryOptions {
   onAppend?(page: SessionHistoryResult): void;
   onBeforePrepend?(): void;
   onError(error: unknown): void;
+  onNewerError?(error: unknown): void;
 }
 
 interface ScrollAnchor {
@@ -102,7 +103,7 @@ export function useSessionHistory(options: UseSessionHistoryOptions) {
     } catch (error) {
       if (controller.signal.aborted) return;
       setNewerState("error");
-      latestRef.current.onError(error);
+      (latestRef.current.onNewerError ?? latestRef.current.onError)(error);
     } finally {
       if (newerRequestRef.current === controller) newerRequestRef.current = undefined;
     }

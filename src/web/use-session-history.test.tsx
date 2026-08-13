@@ -124,4 +124,36 @@ describe("useSessionHistory", () => {
     expect(onAppend).toHaveBeenCalledOnce();
     expect(element.scrollTop).toBe(360);
   });
+
+  it("较新页失败时使用独立错误回调", async () => {
+    const element = document.createElement("div");
+    const current = {
+      ...snapshot(),
+      history: {
+        startEntryId: "user-21",
+        endEntryId: "assistant-40",
+        branchToken: "branch-a",
+        hasMoreBefore: true,
+        hasMoreAfter: true,
+        turnCount: 20,
+      },
+    };
+    const onError = vi.fn();
+    const onNewerError = vi.fn();
+    vi.spyOn(api, "loadSessionHistoryAfter").mockRejectedValue(new Error("newer failed"));
+    const { result } = renderHook(() => useSessionHistory({
+      snapshot: current,
+      focused: true,
+      scrollRef: { current: element } as RefObject<HTMLDivElement | null>,
+      onPrepend: vi.fn(),
+      onAppend: vi.fn(),
+      onError,
+      onNewerError,
+    }));
+    act(() => result.current.newerSentinelRef(element));
+    act(() => observerCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+
+    await waitFor(() => expect(onNewerError).toHaveBeenCalledWith(expect.objectContaining({ message: "newer failed" })));
+    expect(onError).not.toHaveBeenCalled();
+  });
 });
