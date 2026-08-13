@@ -101,7 +101,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
             <div className="user-message-body">
               {props.editingEntryId && entry.piEntryId === props.editingEntryId ? <span className="user-message-editing-label">编辑中</span> : null}
               <div className="message-content">
-                {entry.text && <p>{entry.text}</p>}
+                {entry.text && <p className="user-message-text">{entry.text}</p>}
                 <AgentReferenceChips references={entry.references} />
                 {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
               </div>
@@ -131,7 +131,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
                 focusedEntryId={props.focusedEntryId}
               />
               {(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
-                <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
+                <div className={`message-actions message-actions--speech${agentTurnHasActivity(entry) ? "" : " message-actions--separated"}`} aria-label="Agent 消息操作">
                   {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
                   {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
                   {props.speechEnabled && agentTurnSpeechText(entry) ? <MessageSpeechButton
@@ -158,6 +158,11 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
 
 function userMessageDomId(entryId: string): string {
   return `live-user-message-${entryId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+/** 判断 Agent 本轮是否包含需要整体展开控制的思考或工具活动。 */
+function agentTurnHasActivity(turn: AgentTurn): boolean {
+  return turn.blocks.some((block) => block.type === "thinking" || block.type === "tool");
 }
 
 /** 流式正文尚未形成稳定语音片段时暂不允许手动朗读。 */

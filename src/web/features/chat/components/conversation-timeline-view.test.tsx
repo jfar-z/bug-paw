@@ -130,6 +130,50 @@ describe("ConversationTimelineView 消息复制", () => {
   });
 });
 
+describe("ConversationTimelineView 消息排版", () => {
+  it("有活动时由本轮活动控制承担唯一分割线", () => {
+    const turn: AgentTurn = {
+      id: "agent-activity",
+      type: "agent",
+      sourceUserEntryId: "user-activity",
+      blocks: [
+        { id: "text", type: "markdown", text: "回答正文", streaming: false },
+        { id: "tool", type: "tool", callId: "call", name: "read", args: {}, status: "completed" },
+      ],
+    };
+    render(<ConversationTimelineView {...baseProps()} timeline={[turn]} />);
+
+    expect(screen.getByRole("button", { name: "展开本轮全部活动" }).parentElement)
+      .toHaveClass("message-actions--separated");
+    expect(screen.getByLabelText("Agent 消息操作"))
+      .not.toHaveClass("message-actions--separated");
+  });
+
+  it("无活动时保留 Agent 操作区原有分割线", () => {
+    render(<ConversationTimelineView {...baseProps()} timeline={[firstTurn]} />);
+
+    expect(screen.getByLabelText("Agent 消息操作"))
+      .toHaveClass("message-actions--separated");
+  });
+
+  it("用户消息保留原始多行文本并提供专用排版钩子", () => {
+    const user: UserEntry = {
+      id: "user-multiline",
+      type: "user",
+      text: "第一行\n  第二行\n第三行",
+      files: [],
+      references: [],
+    };
+    const { container } = render(<ConversationTimelineView
+      {...baseProps()}
+      timeline={[user]}
+    />);
+
+    const paragraph = container.querySelector(".user-message-text");
+    expect(paragraph?.textContent).toBe("第一行\n  第二行\n第三行");
+  });
+});
+
 describe("ConversationTimelineView 历史加载状态", () => {
   it("为用户行和 Assistant 正文提供稳定 Session entry 锚点", () => {
     const user: UserEntry = {

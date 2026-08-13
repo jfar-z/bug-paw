@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { ApiTaskProvider } from "../api-task-provider";
 import { ErrorToastProvider } from "../error-toast-provider";
@@ -19,10 +19,81 @@ const emptyCatalog = {
 };
 
 describe("ReferenceComposer", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it("消息输入框保留纵向原生手势并允许页面识别横划", () => {
     renderReferenceComposer(<ReferenceComposer value="" references={[]} disabled={false} loadCatalog={async () => emptyCatalog} onChange={vi.fn()} onReferencesChange={vi.fn()} />);
 
     expect(screen.getByRole("textbox")).toHaveStyle({ touchAction: "pan-y" });
+  });
+
+  it("桌面裸 Enter 发送，组合快捷键保留给换行", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false }) as unknown as MediaQueryList));
+    const onSubmit = vi.fn();
+    renderReferenceComposer(<ReferenceComposer
+      value="第一行"
+      references={[]}
+      disabled={false}
+      loadCatalog={async () => emptyCatalog}
+      onChange={vi.fn()}
+      onReferencesChange={vi.fn()}
+      onSubmit={onSubmit}
+    />);
+    const textbox = screen.getByRole("textbox");
+
+    expect(fireEvent.keyDown(textbox, { key: "Enter" })).toBe(false);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+
+    for (const modifier of [
+      { shiftKey: true },
+      { ctrlKey: true },
+      { metaKey: true },
+    ]) {
+      expect(fireEvent.keyDown(textbox, { key: "Enter", ...modifier })).toBe(true);
+    }
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("粗指针设备的 Enter 只换行并提示软键盘显示回车", () => {
+    vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+      matches: query === "(pointer: coarse)",
+    }) as unknown as MediaQueryList));
+    const onSubmit = vi.fn();
+    renderReferenceComposer(<ReferenceComposer
+      value="移动端"
+      references={[]}
+      disabled={false}
+      loadCatalog={async () => emptyCatalog}
+      onChange={vi.fn()}
+      onReferencesChange={vi.fn()}
+      onSubmit={onSubmit}
+    />);
+    const textbox = screen.getByRole("textbox");
+
+    expect(textbox).toHaveAttribute("enterkeyhint", "enter");
+    expect(fireEvent.keyDown(textbox, { key: "Enter" })).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("输入法组合输入确认时不误发送", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false }) as unknown as MediaQueryList));
+    const onSubmit = vi.fn();
+    renderReferenceComposer(<ReferenceComposer
+      value="拼音"
+      references={[]}
+      disabled={false}
+      loadCatalog={async () => emptyCatalog}
+      onChange={vi.fn()}
+      onReferencesChange={vi.fn()}
+      onSubmit={onSubmit}
+    />);
+
+    expect(fireEvent.keyDown(screen.getByRole("textbox"), {
+      key: "Enter",
+      isComposing: true,
+      keyCode: 229,
+    })).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("同一个 @ 引用会话只读取一次目录并通过 Tab 选中候选", async () => {
