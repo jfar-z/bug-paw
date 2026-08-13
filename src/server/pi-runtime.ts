@@ -51,6 +51,7 @@ import type {
   SessionTextSearchPage,
   SessionTextSearchRequest,
 } from "../shared/session-text-search";
+import { THINKING_LEVELS, type ThinkingLevel } from "../shared/configuration-contracts";
 
 const DEFAULT_RETRIEVAL_CAPABILITIES: EffectiveRetrievalCapabilities = {
   knowledgeSearch: false,
@@ -86,9 +87,8 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+  thinkingLevels?: ThinkingLevel[];
 }
-
-type ThinkingLevel = NonNullable<AgentProfile["defaultThinkingLevel"]>;
 
 /**
  * 标题请求使用的已解析模型与统一思考参数。
@@ -171,6 +171,7 @@ export interface SessionSnapshot {
   messages: unknown[];
   history: SessionHistoryPage;
   model?: ModelSummary;
+  thinkingLevel?: ThinkingLevel;
   run?: ChatRunSummary;
   lastEventId: number;
 }
@@ -191,9 +192,10 @@ interface ChatEventBase {
 }
 
 export type ChatEvent = ChatEventBase & (
-  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; thinkingLevel?: ThinkingLevel; run?: ChatRunSummary; lastEventId: number }
   | { type: "projection_required"; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
+  | { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
@@ -211,8 +213,9 @@ export type ChatEvent = ChatEventBase & (
 );
 
 type UnsequencedChatEvent =
-  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; thinkingLevel?: ThinkingLevel; run?: ChatRunSummary; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
+  | { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
@@ -235,11 +238,14 @@ export interface PiSessionAdapter {
   readonly branchLeafId?: string;
   readonly streamingMessage?: unknown;
   readonly model: unknown;
+  readonly thinkingLevel: ThinkingLevel;
+  readonly availableThinkingLevels: ThinkingLevel[];
   readonly isStreaming: boolean;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   prompt(text: string): Promise<void>;
   abort(): Promise<void>;
   setModel(model: unknown): Promise<void>;
+  setThinkingLevel(level: ThinkingLevel): void;
   setSessionName(name: string): void;
   /** 跳转 Pi 会话树中的节点，供历史消息编辑和分支切换使用。 */
   navigateTree?(entryId: string): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
@@ -283,6 +289,7 @@ export interface PiRuntimeGateway {
   abort(sessionId: string): Promise<void>;
   abortAll(): Promise<number>;
   setModel(sessionId: string, provider: string, modelId: string): Promise<void>;
+  setThinkingLevel(sessionId: string, thinkingLevel: ThinkingLevel): Promise<void>;
   renameSession(sessionId: string, name: string): Promise<void>;
   archiveSession(sessionId: string): Promise<void>;
   unarchiveSession(sessionId: string): Promise<void>;
@@ -548,6 +555,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       messages: page.messages,
       history: page.history,
       model: toModelSummary(session.model),
+      thinkingLevel: session.thinkingLevel,
       run,
       lastEventId: nextEventId,
     });
@@ -936,10 +944,29 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         if (!model) {
           throw new PiRuntimeError("MODEL_NOT_FOUND", "模型不存在或不可用");
         }
+        const previousThinkingLevel = session.thinkingLevel;
         await session.setModel(model);
         const summary = toModelSummary(model);
         if (!summary) throw new PiRuntimeError("MODEL_NOT_FOUND", "模型信息无效");
-        publishSequenced(sessionId, { type: "model_changed", model: summary });
+        publishSequenced(sessionId, { type: "model_changed", model: summary }, { associateCurrentRun: false });
+        if (session.thinkingLevel !== previousThinkingLevel) {
+          publishSequenced(sessionId, {
+            type: "thinking_level_changed",
+            thinkingLevel: session.thinkingLevel,
+          }, { associateCurrentRun: false });
+        }
+      });
+    },
+
+    async setThinkingLevel(sessionId, thinkingLevel) {
+      await sessionMutations.run(sessionId, async () => {
+        const session = requireSession(sessionId);
+        requireIdleSession(sessionId);
+        session.setThinkingLevel(thinkingLevel);
+        publishSequenced(sessionId, {
+          type: "thinking_level_changed",
+          thinkingLevel: session.thinkingLevel,
+        }, { associateCurrentRun: false });
       });
     },
 
@@ -1102,6 +1129,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             messages: page.messages,
             history: page.history,
             model: toModelSummary(session.model),
+            thinkingLevel: session.thinkingLevel,
             run: currentRunSummary(sessionId),
             lastEventId: lastEventId(sessionId),
           };
@@ -1271,7 +1299,10 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   const backend: PiRuntimeBackend = {
     async listModels() {
       const models = await modelRuntime.getAvailable();
-      return models.map((model) => ({ provider: model.provider, id: model.id, name: model.name }));
+      return models.flatMap((model) => {
+        const summary = toModelSummary(model);
+        return summary ? [summary] : [];
+      });
     },
     async listCommands() {
       if (commandCatalog) {
@@ -1409,6 +1440,12 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     get model() {
       return session.model;
     },
+    get thinkingLevel() {
+      return session.thinkingLevel;
+    },
+    get availableThinkingLevels() {
+      return session.getAvailableThinkingLevels();
+    },
     get isStreaming() {
       return session.isStreaming;
     },
@@ -1416,6 +1453,7 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     prompt: (text) => session.prompt(text),
     abort: () => session.abort(),
     setModel: (model) => session.setModel(model as Parameters<AgentSession["setModel"]>[0]),
+    setThinkingLevel: (level) => session.setThinkingLevel(level),
     setSessionName: (name) => session.setSessionName(name),
     navigateTree: (entryId) => session.navigateTree(entryId, { summarize: false }),
     readMessage: (entryId) => {
@@ -1529,6 +1567,7 @@ function snapshotSession(
     messages: page.messages,
     history: page.history,
     model: toModelSummary(session.model),
+    thinkingLevel: session.thinkingLevel,
     run,
     lastEventId,
   };
@@ -1555,11 +1594,26 @@ function toModelSummary(value: unknown): ModelSummary | undefined {
   if (!isRecord(value) || typeof value.provider !== "string" || typeof value.id !== "string") {
     return undefined;
   }
+  const thinkingLevels = availableThinkingLevelsForModel(value);
   return {
     provider: value.provider,
     id: value.id,
     name: typeof value.name === "string" ? value.name : value.id,
+    ...(thinkingLevels ? { thinkingLevels } : {}),
   };
+}
+
+/** 根据模型公开能力生成输入区允许选择的思考深度。 */
+function availableThinkingLevelsForModel(model: Record<string, unknown>): ThinkingLevel[] | undefined {
+  if (typeof model.reasoning !== "boolean") return undefined;
+  if (!model.reasoning) return ["off"];
+  const levelMap = isRecord(model.thinkingLevelMap) ? model.thinkingLevelMap : {};
+  return THINKING_LEVELS.filter((level) => {
+    const mapped = levelMap[level];
+    if (mapped === null) return false;
+    if (level === "xhigh" || level === "max") return mapped !== undefined;
+    return true;
+  });
 }
 
 function normalizeSessionEvent(
