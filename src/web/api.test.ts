@@ -98,6 +98,29 @@ describe("会话批量 API", () => {
   });
 });
 
+describe("会话置顶 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("使用编码后的会话 ID 发起置顶与取消置顶请求", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.pinSession("session/a");
+    await api.unpinSession("session/a");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/sessions/session%2Fa/pin",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/sessions/session%2Fa/pin",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
 describe("联网搜索 Provider API", () => {
   afterEach(() => vi.unstubAllGlobals());
 

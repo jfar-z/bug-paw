@@ -60,6 +60,7 @@ export interface SessionSummary {
   firstMessage: string;
   modified: string;
   messageCount: number;
+  pinned?: boolean;
   scheduledTaskCount?: number;
 }
 
@@ -482,6 +483,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
+  pinSession: (sessionId: string) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, { method: "PUT" }),
+  unpinSession: (sessionId: string) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, { method: "DELETE" }),
   archiveSession: (sessionId: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" }),
   unarchiveSession: (sessionId: string) =>
