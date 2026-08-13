@@ -21,6 +21,7 @@ describe("深度研究回归语料", () => {
     const result = searchFixture("current-product", "当前开放权重");
 
     expect(result.results.length).toBeGreaterThan(1);
+    expect(result).not.toHaveProperty("sourceFamilies");
     expect(result.results[0]).toEqual(
       expect.objectContaining({
         title: expect.any(String),
@@ -38,6 +39,14 @@ describe("深度研究回归语料", () => {
         content: expect.any(String),
       }),
     );
+  });
+
+  it("评测器保留来源链标准答案但不会通过搜索结果泄露", () => {
+    const evaluationCase = getEvaluationCase("syndication-pollution");
+    const result = searchFixture(evaluationCase.id, "Luma 72% 来源");
+
+    expect(new Set(Object.values(evaluationCase.sourceFamilies)).size).toBeLessThan(result.results.length);
+    expect(JSON.stringify(result)).not.toContain("anonymous-luma-post");
   });
 
   it("拒绝跨案例或不存在的页面地址", () => {

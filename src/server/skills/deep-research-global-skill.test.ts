@@ -32,7 +32,13 @@ describe("通用深度研究全局 Skill", () => {
 
     const directory = join(root, "skills", "deep-research");
     const target = join(directory, "SKILL.md");
-    expect(await readFile(target, "utf8")).toBe(await readBundledDeepResearchSkill());
+    const content = await readFile(target, "utf8");
+    expect(content).toBe(await readBundledDeepResearchSkill());
+    expect(content).toContain("让下一轮检索由上一轮证据决定");
+    expect(content).toContain("禁止证据升级");
+    expect(content).toContain("独立证据按证据生成过程计算，不按 URL 数量计算");
+    expect(content).toContain("Entity + Version + Date + Claim");
+    expect(content).toContain("解决剩余未知会显著改变主结论吗");
 
     await expect(ensureDeepResearchGlobalSkill(root)).resolves.toEqual({
       name: "deep-research",

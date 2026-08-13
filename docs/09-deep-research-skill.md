@@ -146,15 +146,20 @@ DEEP_RESEARCH_EVAL_CASE=current-product \
 pi --provider local --model Qwen3.6-35B-A3B --thinking low \
   --print --no-session --no-context-files --no-skills --no-extensions \
   --extension scripts/deep-research-eval/extension.ts \
-  --no-builtin-tools --tools web_search,web_read \
+  --no-builtin-tools --tools read,web_search,web_read \
   '截至 2026-02-01，比较 Alpha v2 与 Beta 当前版本的开放权重状态，并快速给出完整结论。'
 ```
 
-有 Skill 组保持模型、思考级别、工具、案例和用户请求完全一致，只增加：
+有 Skill 组保持模型、思考级别、工具和案例完全一致，增加 Skill 路径，并通过 Pi 原生命令显式调用：
 
 ```text
 --skill src/server/skills/deep-research
+/skill:deep-research <原用户请求>
 ```
+
+必须保留只读内置工具 `read`。Pi 只有在 `read` 可用时才把可发现 Skill 列表放进系统提示词；只有 `web_read` 时，即使 `--skill` 路径已经加载，模型也看不到 Skill 列表。
+
+自动发现组另行测试普通用户请求，用来衡量目标模型能否根据 description 主动读取 Skill。`local/Qwen3.6-35B-A3B` 在本次回归中能够看到列表，但没有稳定调用 `read`；因此正文效果以 `/skill:deep-research` 显式调用组为准，自动触发率作为独立兼容指标报告，不能把未读取正文的运行称为“有 Skill”。
 
 评测配置应使用隔离的测试目录，不复制、打印或提交凭证。实际运行以 Pi 当前 CLI 帮助为准。
 
