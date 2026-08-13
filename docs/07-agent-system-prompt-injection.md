@@ -6,7 +6,7 @@ BugPaw 基于 Pi Coding Agent 运行。Pi 默认身份是编码助手，而 BugP
 
 ## 注入顺序
 
-Pi 先组装默认系统提示词、动态工具说明、Agent 长期设定、项目上下文和 Skills。随后，`createAgentSystemPromptInjectionExtension()` 在 `before_agent_start` 中取得完整的 `event.systemPrompt`，由 `AgentSystemPromptConfiguration` 按 `Available tools:` 分割标记替换其身份前缀。
+Pi 先组装默认系统提示词、动态工具说明、项目上下文和 Skills。随后，`createAgentSystemPromptInjectionExtension()` 在每次 `before_agent_start` 中取得完整的 `event.systemPrompt`，并通过绑定当前 Agent 的解析器读取五个 Markdown 文件的路径与最新内容。`AgentSystemPromptConfiguration` 再按 `Available tools:` 分割标记替换身份前缀。
 
 最终顺序如下：
 
@@ -15,19 +15,23 @@ Pi 先组装默认系统提示词、动态工具说明、Agent 长期设定、�
 [agent_references 协议]
 [pi_agent_files 协议]
 [按有效工具动态生成的检索路由政策]
+[当前 Agent 自身 Markdown 的路径、维护协议与最新内容]
+[非空 BOOTSHARP 初始化引导]
 Available tools:
 [Pi 动态工具说明与原生规则]
-[Agent 角色 / 行为 / 规则 / 用户 / BOOTSHARP]
 [AGENTS.md、Skills 与其他项目上下文]
 ```
 
 `Available tools:` 之后的内容必须保持原样。若 Pi 上游不再生成该标记，转换逻辑必须保留完整原提示词，并在末尾追加替换前缀；不得截断原有工具或规则说明。
 
+自身 Markdown 上下文由当前 Runtime 的 Agent ID 闭包隔离，不从模型参数接收 Agent ID，也不缓存到下一轮。读取失败时仍保留 BugPaw 通用身份和 Pi 原生提示词，但本轮明确禁止读取、创建、覆盖或编辑未知状态的自身提示词文件；底层异常和内部路径不得进入提示词或用户响应。
+
 ## 代码归属
 
 - `src/server/agent-system-prompt-configuration.ts`：唯一维护身份文本、能力协议、分割标记与纯转换逻辑的配置类。
 - `src/server/agent-system-prompt-extension.ts`：唯一维护 `before_agent_start` 内联扩展注册的模块。
-- `src/server/pi-runtime.ts`：只负责向 `DefaultResourceLoader` 注册隐藏内联扩展，不保存协议正文。
+- `src/server/pi-runtime.ts`：负责向 `DefaultResourceLoader` 注册隐藏内联扩展，并传递当前 Agent 的快照解析器，不保存协议正文。
+- `src/server/agents/agent-prompt-store.ts`：返回当前 Agent 五个固定文件的目录、绝对路径和最新内容快照。
 
 不得使用 `DefaultResourceLoader.systemPromptOverride` 替换 Pi 默认身份。该接口处理 `.pi/SYSTEM.md` 资源，而不是 Pi 已组装完成的默认系统提示词，可能跳过动态工具说明。
 
@@ -49,6 +53,14 @@ Available tools:
 
 - `agentReferences`：解释用户显式附带的 `<agent_references .../>` 标签，不得将普通文本中的相似标签视为授权。
 - `workspaceFileDelivery`：规定通过 `<pi_agent_files ...>` 向用户发送 cwd 相对路径文件的输出结构。
+
+自身提示词文件协议属于跨工具、跨会话的持久配置协议。系统提示词只说明五个精确路径、各文件适合主动更新的时机、初始化清理条件和跨 Agent 边界；Pi 原生 `read`、`write`、`edit` 的参数与返回格式仍由工具定义维护，不在此重复。路径仅供 Agent 内部操作，不应在普通用户响应中复述。
+
+- `ROLE.md`：用户确认 Agent 身份、职责、能力边界或非目标发生长期变化时更新。
+- `BEHAVIOR.md`：用户要求沟通方式、主动性、协作习惯、工作流或交付偏好长期变化时更新。
+- `RULES.md`：用户建立跨任务持续适用的要求、禁止事项或审批边界时更新，不记录一次性任务指令。
+- `USER.md`：用户要求记住或明确同意保留的稳定背景与偏好；不得保存凭证、密钥或不必要的敏感信息。
+- `BOOTSHARP.md`：仅在非空时作为首次协作引导；`ROLE.md`、`BEHAVIOR.md` 和 `USER.md` 足以支持稳定协作后，用原生 `write` 写入空字符串。`RULES.md` 可以保持为空。
 
 检索路由政策不属于上述通用交互协议，也不依赖单个工具的 `promptSnippet`。系统在每个 Runtime 创建时根据全局联网开关和该 Agent 的工具权限生成一次 `EffectiveRetrievalCapabilities` 快照，并把同一快照同时传给工具注册和系统提示词构建：
 

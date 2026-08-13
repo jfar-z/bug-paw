@@ -9,6 +9,12 @@
 3. 在 `src/server/main.ts` 创建运行时时将工具传入 `customTools`。Pi SDK 的 `tools` 是包含内置工具和自定义工具的统一白名单；工具名只有已存在于 Agent Profile 的 `allowedTools` 时才允许调用，禁止在 Runtime 创建时自动扩权。
 4. 需要模型理解可选的领域工作流时，可以由用户或包在 `/data/pi/skills/<tool-name>/SKILL.md` 提供 Skill。BugPaw 预装通用 `deep-research` Skill，用于指导联网研究过程；知识库工作流仍不自动安装。Skill 是补充说明，不重复完整 JSON Schema，也不替代工具权限、服务端校验或网页内容不可信边界。
 
+## 自身提示词文件边界
+
+Agent 自身的 `ROLE.md`、`BEHAVIOR.md`、`RULES.md`、`USER.md` 和 `BOOTSHARP.md` 不是独立业务资源，不注册功能重复的自定义工具。系统在每次 Run 的 `before_agent_start` 中注入当前 Agent 的精确文件路径、维护时机和最新内容；Agent 使用 Pi 原生 `read`、`write`、`edit` 完成维护。
+
+不得重新引入 `edit_own_prompts` 或同义包装工具。文件更新前先读取现有内容，只修改当前 Agent 的精确路径；`BOOTSHARP.md` 初始化完成后通过 `write` 写入空字符串。Web 管理接口可以继续读写这些文件，但不需要触发 Session reload，因为下一次 Run 会重新读取快照。
+
 ## 参数 Schema 兼容性
 
 - 所有工具的 `parameters` 根节点必须使用 `Type.Object(...)`，序列化后必须包含 `type: "object"`。

@@ -142,13 +142,13 @@ Your persistent instruction files are unavailable. To avoid overwriting unknown 
       || capabilities.webSearch || capabilities.webRead;
     return [
       this.identityPrompt,
-      this.buildAgentPromptContext(context),
       this.capabilityPrompts.agentReferences,
       this.capabilityPrompts.workspaceFileDelivery,
       knowledgePolicy,
       webPolicy,
       capabilities.knowledgeSearch && capabilities.webSearch ? this.retrievalSourceCoordination : "",
       hasRetrieval ? this.retrievalControlBoundary : "",
+      this.buildAgentPromptContext(context),
     ].filter(Boolean).join("\n\n");
   }
 

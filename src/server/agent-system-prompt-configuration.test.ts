@@ -74,6 +74,8 @@ describe("AgentSystemPromptConfiguration", () => {
     expect(result).toContain("#### User context\n\n称呼用户为小嘉");
     expect(result).toContain("### Initialization guidance\n\n逐步确认协作方式");
     expect(result).toContain(piSuffix);
+    expect(result.indexOf("### Workspace file delivery"))
+      .toBeLessThan(result.indexOf("### Your persistent instruction files"));
   });
 
   it("BOOTSHARP 为空时保留路径说明但不注入初始化正文", () => {
