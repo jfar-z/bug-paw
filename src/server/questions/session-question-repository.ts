@@ -141,12 +141,15 @@ export class SessionQuestionRepository {
   /** 在续跑成功后把 resolving 问题提交为终态。 */
   completeResolution(id: string, resolutionId: string, resumedRunId: string): SessionQuestionRecord {
     const current = this.requireByRecordId(id);
+    if (!current.resolution) throw new DomainError("QUESTION_STATE_CONFLICT", "问题状态已变化");
+    const terminalState = current.resolution.status === "submitted" ? "submitted" : "discarded";
     const result = this.database.write(`
       UPDATE session_questions
-      SET state = 'submitted', version = version + 1, resumed_run_id = ?, updated_at = ?
+      SET state = ?, version = version + 1, resumed_run_id = ?, updated_at = ?
       WHERE id = ? AND agent_id = ? AND session_id = ? AND state = 'resolving'
         AND version = ? AND resolution_id = ?
     `, [
+      terminalState,
       resumedRunId,
       new Date().toISOString(),
       current.id,

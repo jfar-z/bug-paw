@@ -102,6 +102,7 @@ import { BrowserAutomationService } from "./browser-automation/browser-automatio
 import { createBrowserTools } from "./browser-automation/browser-tools";
 import { SessionQuestionRepository } from "./questions/session-question-repository";
 import { createAskUserTool } from "./questions/ask-user-tool";
+import { SessionQuestionRuntimeState } from "./questions/session-question-reconciliation";
 import { resolveBrowserCapabilities } from "./browser-automation/browser-capabilities";
 import { registerBrowserAutomationRoutes } from "./routes/browser-automation";
 import { registerBrowserPreviewRoutes } from "./routes/browser-preview";
@@ -155,6 +156,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerOriginProtection(app);
   const sessionRepository = createSessionRepository(applicationDatabase);
   const sessionQuestions = new SessionQuestionRepository(applicationDatabase);
+  const questionRuntimeStates = new Map<string, SessionQuestionRuntimeState>();
+  const questionStateFor = (agentId: string) => {
+    const existing = questionRuntimeStates.get(agentId);
+    if (existing) return existing;
+    const created = new SessionQuestionRuntimeState(agentId, sessionQuestions);
+    questionRuntimeStates.set(agentId, created);
+    return created;
+  };
   const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
@@ -362,6 +371,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
+          questionState: questionStateFor(agentId),
           onToolCallCircuitBreak: (event) => {
             app.log.warn(event, "重复空参数工具调用已限制");
           },
