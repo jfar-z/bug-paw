@@ -33,7 +33,7 @@ import { createRuntimeCoordinator, type RuntimeCoordinator } from "./runtime-coo
 import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
-import { RETIRED_AGENT_TOOL_NAMES, SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { RETIRED_AGENT_TOOL_NAMES, STARTUP_ENFORCED_SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
 import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
@@ -431,7 +431,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     referenceResolver,
   });
   await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);
-  await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
+  await agentStore.ensureSystemToolPermissions(STARTUP_ENFORCED_SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureSkillCreatorGlobalSkill(paths.piDir);
   const deepResearchSkill = await ensureDeepResearchGlobalSkill(paths.piDir);
