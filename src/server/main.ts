@@ -100,6 +100,8 @@ import { BrowserPreviewService } from "./browser-automation/browser-preview-serv
 import { BrowserAuditRepository } from "./browser-automation/browser-audit-repository";
 import { BrowserAutomationService } from "./browser-automation/browser-automation-service";
 import { createBrowserTools } from "./browser-automation/browser-tools";
+import { SessionQuestionRepository } from "./questions/session-question-repository";
+import { createAskUserTool } from "./questions/ask-user-tool";
 import { resolveBrowserCapabilities } from "./browser-automation/browser-capabilities";
 import { registerBrowserAutomationRoutes } from "./routes/browser-automation";
 import { registerBrowserPreviewRoutes } from "./routes/browser-preview";
@@ -152,6 +154,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const authService = createAuthService(paths, { identityRepository: identities });
   registerOriginProtection(app);
   const sessionRepository = createSessionRepository(applicationDatabase);
+  const sessionQuestions = new SessionQuestionRepository(applicationDatabase);
   const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
@@ -341,7 +344,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
-          createSessionTools: ({ searchRunState, sessionId }) => [
+          createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...(profile.profile.allowedTools.includes("ask_user")
+              ? [createAskUserTool({ agentId, sessionId, branchAnchorId, repository: sessionQuestions })]
+              : []),
             ...(retrievalCapabilities.webSearch
               ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
               : []),

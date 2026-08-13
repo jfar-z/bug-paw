@@ -22,6 +22,8 @@ import {
 import type { RunCheckpoint } from "./runtime/checkpoint-store";
 import { SearchRunState } from "./web-research/search-run-state";
 import type { ThinkingLevel } from "../shared/configuration-contracts";
+import { AskUserRunState } from "./questions/ask-user-run-state";
+import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
 
 const noRetrieval = {
   knowledgeSearch: false,
@@ -39,6 +41,19 @@ function createDeferred<T>() {
     reject = fail;
   });
   return { promise, resolve, reject };
+}
+
+/** 创建包含累计 Assistant 内容的工具调用流事件。 */
+function toolCallUpdate(type: "toolcall_start" | "toolcall_delta", id: string, name: string) {
+  const message = {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name, arguments: {} }],
+  };
+  return {
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type, contentIndex: 0, delta: "{}", partial: message },
+  } as never;
 }
 
 /** 以最小实现模拟 SDK 会话。 */
@@ -331,6 +346,64 @@ describe("PiRuntimeGateway 提示词刷新", () => {
       "<inline:bug-paw-search-run-circuit>",
     ]);
     expect(loader.getExtensions().errors).toEqual([]);
+  });
+
+  it("资源加载器可为单个 Pi Session 注册提问消息防护", async () => {
+    const loader = createWorkspaceResourceLoader(
+      "/tmp",
+      "/tmp",
+      [],
+      noRetrieval,
+      new SearchRunState(),
+      undefined,
+      [createAskUserMessageGuardExtension(new AskUserRunState())],
+    );
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions.map(({ path }) => path)).toContain(
+      "<inline:bug-paw-ask-user-message-guard>",
+    );
+  });
+
+  it("提问开始后不再发布尾随文本和兄弟工具流事件", async () => {
+    let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
+    const session = {
+      ...createSession(),
+      askUserRunState: new AskUserRunState(),
+      subscribe(next: Parameters<PiSessionAdapter["subscribe"]>[0]) {
+        listener = next;
+        return () => undefined;
+      },
+    };
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    listener(toolCallUpdate("toolcall_start", "ask-1", "ask_user"));
+    listener({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "不应公开" }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "不应公开" },
+    } as never);
+    listener(toolCallUpdate("toolcall_start", "write-1", "write"));
+    listener({
+      type: "tool_execution_start",
+      toolCallId: "ask-1",
+      toolName: "ask_user",
+      args: {},
+    } as never);
+
+    expect(events.filter((event) => event.type !== "snapshot").map((event) => event.type)).toEqual([
+      "tool_preparing",
+      "tool_started",
+    ]);
+    expect(events).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "text_delta" }),
+      expect.objectContaining({ toolName: "write" }),
+    ]));
+    gateway.dispose();
   });
 
   it("未授权 web_search 时不注册搜索断路扩展", async () => {

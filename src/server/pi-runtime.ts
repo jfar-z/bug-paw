@@ -5,6 +5,7 @@ import {
   SettingsManager,
   SessionManager,
   type ToolDefinition,
+  type InlineExtension,
   type AgentSession,
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -52,6 +53,8 @@ import type {
   SessionTextSearchRequest,
 } from "../shared/session-text-search";
 import { THINKING_LEVELS, type ThinkingLevel } from "../shared/configuration-contracts";
+import { AskUserRunState } from "./questions/ask-user-run-state";
+import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
 
 const DEFAULT_RETRIEVAL_CAPABILITIES: EffectiveRetrievalCapabilities = {
   knowledgeSearch: false,
@@ -70,6 +73,7 @@ export function createWorkspaceResourceLoader(
   retrievalCapabilities: EffectiveRetrievalCapabilities = DEFAULT_RETRIEVAL_CAPABILITIES,
   searchRunState = new SearchRunState(),
   resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>,
+  extensionFactories: InlineExtension[] = [],
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
@@ -77,6 +81,7 @@ export function createWorkspaceResourceLoader(
     extensionFactories: [
       createAgentSystemPromptInjectionExtension(retrievalCapabilities, resolveAgentPromptContext),
       ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension(searchRunState)] : []),
+      ...extensionFactories,
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
     appendSystemPrompt: additionalPrompts,
@@ -241,6 +246,7 @@ export interface PiSessionAdapter {
   readonly thinkingLevel: ThinkingLevel;
   readonly availableThinkingLevels: ThinkingLevel[];
   readonly isStreaming: boolean;
+  readonly askUserRunState?: AskUserRunState;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   prompt(text: string): Promise<void>;
   abort(): Promise<void>;
@@ -469,6 +475,11 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     );
     const toolParameterProgress = new Map<string, ToolParameterProgress>();
     const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
+        const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
+        if (toolCall) session.askUserRunState?.observeToolCallStart(toolCall.id, toolCall.name);
+      }
+      const shouldPublish = session.askUserRunState?.shouldPublish(event) ?? true;
       if (event.type === "tool_execution_start") {
         const model = toModelSummary(session.model);
         const decision = toolCallCircuitBreaker.observe({
@@ -484,6 +495,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           void session.abort().catch(() => undefined);
         }
       }
+      if (event.type === "tool_execution_end") {
+        session.askUserRunState?.finishTool(event.toolCallId, event.isError);
+      }
+      if (!shouldPublish) return;
       const normalized = normalizeSessionEvent(session.sessionId, event, toolParameterProgress);
       if (normalized) publishSequenced(session.sessionId, normalized);
     });
@@ -735,6 +750,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     } finally {
       sessionTextService?.invalidate(run.sessionId);
       abortRequested.delete(run.sessionId);
+      session.askUserRunState?.reset();
       await options.onRunFinished?.({
         runId: run.runId,
         sessionId: run.sessionId,
@@ -1209,7 +1225,11 @@ interface SdkPiRuntimeOptions {
   allowedTools?: string[];
   customTools?: ToolDefinition[];
   createRuntimeTools?: (services: { sessionText: SessionTextService }) => ToolDefinition[];
-  createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
+  createSessionTools?: (context: {
+    searchRunState: SearchRunState;
+    sessionId: string;
+    branchAnchorId(): string | undefined;
+  }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
   resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>;
@@ -1259,6 +1279,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       throw new PiRuntimeError("MODEL_NOT_FOUND", "默认模型不存在或不可用");
     }
     const searchRunState = new SearchRunState();
+    const askUserRunState = new AskUserRunState();
     const resourceLoader = createWorkspaceResourceLoader(
       options.cwd,
       options.agentDir,
@@ -1266,12 +1287,19 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       options.retrievalCapabilities,
       searchRunState,
       options.resolveAgentPromptContext,
+      options.allowedTools?.includes("ask_user")
+        ? [createAskUserMessageGuardExtension(askUserRunState)]
+        : [],
     );
     await resourceLoader.reload();
     const finalCustomTools = [
       ...(options.customTools ?? []),
       ...runtimeTools,
-      ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
+      ...(options.createSessionTools?.({
+        searchRunState,
+        sessionId: sessionManager.getSessionId(),
+        branchAnchorId: () => sessionManager.getLeafId() ?? undefined,
+      }) ?? []),
     ];
     finalCustomTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
     const { session, extensionsResult } = await createAgentSession({
@@ -1293,7 +1321,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       description: command.description,
       source: command.source,
     }));
-    return adaptAgentSession(session);
+    return adaptAgentSession(session, askUserRunState);
   }
 
   const backend: PiRuntimeBackend = {
@@ -1410,7 +1438,7 @@ export function assertManagedSessionFile(sessionDir: string, filePath: string): 
   return resolvedFile;
 }
 
-function adaptAgentSession(session: AgentSession): PiSessionAdapter {
+function adaptAgentSession(session: AgentSession, askUserRunState?: AskUserRunState): PiSessionAdapter {
   return {
     get sessionId() {
       return session.sessionId;
@@ -1449,6 +1477,7 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     get isStreaming() {
       return session.isStreaming;
     },
+    askUserRunState,
     subscribe: (listener) => session.subscribe(listener),
     prompt: (text) => session.prompt(text),
     abort: () => session.abort(),
