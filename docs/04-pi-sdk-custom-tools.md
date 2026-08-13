@@ -7,7 +7,7 @@
 1. 在 `src/server/<domain>/` 实现工具工厂，使用 Pi SDK 的 `defineTool` 定义名称、说明、`promptSnippet`、TypeBox 参数 Schema 与 `execute`。
 2. 工具执行必须由当前 Runtime 的 `agentId` 限定业务作用域；不得信任模型传入的 Agent ID，也不得跨 Agent 读取或修改数据。
 3. 在 `src/server/main.ts` 创建运行时时将工具传入 `customTools`。Pi SDK 的 `tools` 是包含内置工具和自定义工具的统一白名单；工具名只有已存在于 Agent Profile 的 `allowedTools` 时才允许调用，禁止在 Runtime 创建时自动扩权。
-4. 需要模型理解可选的领域工作流时，可以由用户或包在 `/data/pi/skills/<tool-name>/SKILL.md` 提供 Skill。Skill 是补充说明，不重复完整 JSON Schema，也不替代工具侧校验或必须始终生效的系统政策。BugPaw 不自动安装知识库或联网调研 Skill。
+4. 需要模型理解可选的领域工作流时，可以由用户或包在 `/data/pi/skills/<tool-name>/SKILL.md` 提供 Skill。BugPaw 预装通用 `deep-research` Skill，用于指导联网研究过程；知识库工作流仍不自动安装。Skill 是补充说明，不重复完整 JSON Schema，也不替代工具权限、服务端校验或网页内容不可信边界。
 
 ## 参数 Schema 兼容性
 
@@ -61,6 +61,7 @@ const tool = defineTool({
 ## 测试要求
 
 - 每个工具至少覆盖成功、参数错误、越权/资源不存在三个场景；有全局 Skill 时测试其关键章节或约束已落盘。
+- 内置 Skill 安装器必须测试首次安装、幂等权限修复和同名用户内容保留；不得用自动更新覆盖无法确认归属的正文或额外资源。
 - 测试必须断言 `tool.parameters.type === "object"`，并断言根节点不存在 `anyOf`、`oneOf` 或 `allOf`。
 - 含条件参数时，必须覆盖缺少条件必填字段且没有产生副作用的场景。
 - 新增 Provider 专用 Schema 关键字时，必须增加对应 Provider 的最小请求回归测试或记录可重复的人工验收步骤。
