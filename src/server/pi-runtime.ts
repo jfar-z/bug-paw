@@ -30,6 +30,7 @@ import {
   type ToolCallCircuitBreakerDiagnostic,
 } from "./retrieval/tool-call-circuit-breaker";
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
+import { classifyAssistantRunOutcome } from "../shared/assistant-run-outcome";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
 import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
@@ -677,12 +678,24 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   async function executeRun(run: ManagedRun, session: PiSessionAdapter, text: string): Promise<void> {
     try {
       await session.prompt(text);
-      run.status = abortRequested.has(run.sessionId) ? "aborted" : "completed";
+      const outcome = abortRequested.has(run.sessionId)
+        ? { status: "aborted" as const }
+        : classifyAssistantRunOutcome(session.messages);
+      run.status = outcome.status;
+      if (outcome.status === "error") run.error = outcome.message;
       run.finishedAt = new Date().toISOString();
-      if (run.status === "completed") {
+      if (run.status === "completed" || run.status === "error") {
         publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
       }
-      publishSequenced(run.sessionId, { type: run.status });
+      if (outcome.status === "error") {
+        publishSequenced(run.sessionId, {
+          type: "error",
+          code: "AGENT_EXECUTION_FAILED",
+          message: outcome.message,
+        });
+      } else {
+        publishSequenced(run.sessionId, { type: outcome.status });
+      }
       if (run.status === "completed") {
         scheduleSessionTitle(run, session);
       }

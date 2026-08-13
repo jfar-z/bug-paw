@@ -3,14 +3,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import {
+  MODEL_REQUEST_FAILED_MESSAGE,
+  MODEL_RESPONSE_TRUNCATED_MESSAGE,
+} from "../shared/assistant-run-outcome";
+import {
   createPiRuntimeGateway,
   createWorkspaceResourceLoader,
   getGlobalDefaultModel,
   resolveTitleGenerationRequest,
+  type ChatEvent,
   type ModelSummary,
   type PiRuntimeBackend,
   type PiSessionAdapter,
 } from "./pi-runtime";
+import type { RunCheckpoint } from "./runtime/checkpoint-store";
 
 /** 创建受测试控制的异步值。 */
 function createDeferred<T>() {
@@ -554,6 +560,146 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     await vi.waitFor(() => expect(session.setSessionName).toHaveBeenCalledOnce());
 
     expect(session.setSessionName).toHaveBeenCalledWith([...generatedTitle].slice(0, 50).join(""));
+    gateway.dispose();
+  });
+
+  it("prompt 以值语义返回模型错误时发布安全失败并保存一致终态", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push({
+        role: "assistant",
+        stopReason: "error",
+        content: [],
+        errorMessage: "Bearer clearly-fake-token vendor-body",
+      });
+    }, messages, { provider: "openai", id: "gpt-5" });
+    const generateSessionTitle = vi.fn(async () => "不应生成");
+    const onRunFinished = vi.fn(async () => undefined);
+    const checkpointStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async (_checkpoint: RunCheckpoint) => undefined),
+      remove: vi.fn(async () => undefined),
+      markInterrupted: vi.fn(async () => undefined),
+    };
+    const gateway = createPiRuntimeGateway(createBackend(session, generateSessionTitle), {
+      checkpointStore,
+      checkpointThrottleMs: 0,
+      onRunFinished,
+    });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "error")).toBe(true));
+
+    expect(events.filter((event) => ["completed", "aborted", "error"].includes(event.type)).map((event) => event.type))
+      .toEqual(["error"]);
+    expect(events.find((event) => event.type === "error")).toMatchObject({
+      code: "AGENT_EXECUTION_FAILED",
+      message: MODEL_REQUEST_FAILED_MESSAGE,
+    });
+    const terminalSnapshot = [...events].reverse().find((event) => event.type === "snapshot"
+      && JSON.stringify(event.messages).includes(MODEL_REQUEST_FAILED_MESSAGE));
+    expect(terminalSnapshot?.type).toBe("snapshot");
+    expect(JSON.stringify(terminalSnapshot)).not.toContain("clearly-fake-token");
+    expect(JSON.stringify(terminalSnapshot)).not.toContain("vendor-body");
+    expect(events.indexOf(terminalSnapshot!)).toBeLessThan(events.findIndex((event) => event.type === "error"));
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith(expect.objectContaining({ status: "error" })));
+    await vi.waitFor(() => expect(checkpointStore.save.mock.calls.at(-1)?.[0]).toMatchObject({
+      status: "error",
+      error: MODEL_REQUEST_FAILED_MESSAGE,
+    }));
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    gateway.dispose();
+  });
+
+  it("只按最终 Assistant 判断自动重试结果", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push(
+        { role: "assistant", stopReason: "error", errorMessage: "intermediate failure" },
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "最终成功" }] },
+      );
+    }, messages);
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "completed")).toBe(true));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    gateway.dispose();
+  });
+
+  it("按 Assistant 中止状态结束 Run", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push({ role: "assistant", stopReason: "aborted", content: [] });
+    }, messages);
+    const onRunFinished = vi.fn(async () => undefined);
+    const gateway = createPiRuntimeGateway(createBackend(session), { onRunFinished });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "aborted")).toBe(true));
+
+    expect(events.some((event) => event.type === "completed")).toBe(false);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith(expect.objectContaining({ status: "aborted" })));
+    gateway.dispose();
+  });
+
+  it("长度截断保留回答并以 completed 结束", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push({
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "部分回答" }],
+        errorMessage: "untrusted truncation detail",
+      });
+    }, messages, { provider: "openai", id: "gpt-5" });
+    const generateSessionTitle = vi.fn(async () => "截断回答");
+    const gateway = createPiRuntimeGateway(createBackend(session, generateSessionTitle));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "completed")).toBe(true));
+
+    const snapshot = [...events].reverse().find((event) => event.type === "snapshot"
+      && JSON.stringify(event.messages).includes(MODEL_RESPONSE_TRUNCATED_MESSAGE));
+    expect(snapshot?.type).toBe("snapshot");
+    expect(JSON.stringify(snapshot)).toContain("部分回答");
+    expect(events.indexOf(snapshot!)).toBeLessThan(events.findIndex((event) => event.type === "completed"));
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledWith(
+      { provider: "openai", id: "gpt-5" },
+      "用户原文",
+      "部分回答",
+    ));
+    gateway.dispose();
+  });
+
+  it("prompt reject 继续走异常终态", async () => {
+    const session = createSession(async () => { throw new Error("适配器故障"); });
+    const onRunFinished = vi.fn(async () => undefined);
+    const gateway = createPiRuntimeGateway(createBackend(session), { onRunFinished });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "error")).toBe(true));
+
+    expect(events.some((event) => event.type === "completed")).toBe(false);
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith(expect.objectContaining({ status: "error" })));
     gateway.dispose();
   });
 });

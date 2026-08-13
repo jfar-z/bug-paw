@@ -1,4 +1,8 @@
 import { SYSTEM_LIMITS } from "../core/limits";
+import {
+  MODEL_REQUEST_FAILED_MESSAGE,
+  MODEL_RESPONSE_TRUNCATED_MESSAGE,
+} from "../../shared/assistant-run-outcome";
 
 const IMAGE_PLACEHOLDER = "<IMAGE_BASE64>";
 const TOOL_TEXT_PLACEHOLDER = "<TOOL_RESULT_TOO_LONG>";
@@ -11,6 +15,11 @@ export function projectSessionMessages(messages: readonly unknown[]): unknown[] 
   return messages.map((message) => {
     if (!isRecord(message)) return message;
     const projected = { ...message };
+    if (message.role === "assistant" && message.stopReason === "error") {
+      projected.errorMessage = MODEL_REQUEST_FAILED_MESSAGE;
+    } else if (message.role === "assistant" && message.stopReason === "length") {
+      projected.errorMessage = MODEL_RESPONSE_TRUNCATED_MESSAGE;
+    }
     if (message.role !== "toolResult" || !Array.isArray(message.content)) return projected;
     projected.content = message.content.map((block) => {
       try {
