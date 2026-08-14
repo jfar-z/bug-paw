@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { ToolBlock } from "../conversation-timeline";
@@ -48,6 +48,35 @@ describe("QuestionTimelineCard", () => {
     expect(screen.getByText("等待回答")).toBeVisible();
     expect(screen.getByText("共 2 个问题")).toBeVisible();
     expect(screen.queryByText("不得展示")).not.toBeInTheDocument();
+  });
+
+  it("展开后逐题展示原始问题、全部选项和说明", () => {
+    render(<QuestionTimelineCard tool={block({
+      type: "question_pending",
+      pendingQuestion,
+      resolution: {
+        resolutionId: "r-audit",
+        questionRecordId: "question-1",
+        status: "submitted",
+        answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+        unansweredQuestionIds: ["q-2"],
+      },
+    })} />);
+
+    expect(screen.queryByText("处理范围？")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看问题" }));
+
+    expect(screen.getByText("处理范围？")).toBeVisible();
+    expect(screen.getByText("全部")).toBeVisible();
+    expect(screen.getByText("处理全部")).toBeVisible();
+    expect(screen.getByText("部分")).toBeVisible();
+    expect(screen.getByText("处理部分")).toBeVisible();
+    expect(screen.queryByText("已选择")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "2" }));
+    expect(screen.getByText("还有补充吗？")).toBeVisible();
+    expect(screen.getByText("没有补充")).toBeVisible();
+    expect(screen.getByText("补充说明")).toBeVisible();
   });
 
   it("回答后只显示 Agent 提问终态而不展开答案", () => {

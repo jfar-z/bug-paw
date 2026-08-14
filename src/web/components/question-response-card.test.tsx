@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { QuestionResponseCard } from "./question-response-card";
@@ -30,7 +30,7 @@ const pendingQuestion = {
 };
 
 describe("QuestionResponseCard", () => {
-  it("展示提交答案、自由文本与未回答数量", () => {
+  it("逐题展示问题原文和Agent实际收到的回答", () => {
     render(<QuestionResponseCard pendingQuestion={pendingQuestion} resolution={{
       resolutionId: "resolution-1",
       questionRecordId: "question-1",
@@ -44,9 +44,17 @@ describe("QuestionResponseCard", () => {
 
     expect(screen.getByRole("region", { name: "用户回答" })).toBeVisible();
     expect(screen.getByText("已提交回答")).toBeVisible();
+    expect(screen.getByText("处理范围？")).toBeVisible();
     expect(screen.getByText("部分")).toBeVisible();
-    expect(screen.getByText("保留现状")).toBeVisible();
+    expect(screen.getByText("处理部分")).toBeVisible();
+    expect(screen.queryByText("全部")).not.toBeInTheDocument();
+    expect(screen.queryByText("处理全部")).not.toBeInTheDocument();
     expect(screen.getByText("未回答 0 题")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("tab", { name: "2" }));
+    expect(screen.getByText("还有补充吗？")).toBeVisible();
+    expect(screen.getByText("保留现状")).toBeVisible();
+    expect(screen.queryByText("部分")).not.toBeInTheDocument();
   });
 
   it("展示放弃状态且不回显未知内部标识", () => {
@@ -60,8 +68,36 @@ describe("QuestionResponseCard", () => {
     }} />);
 
     expect(screen.getByText("已放弃回答")).toBeVisible();
+    expect(screen.getByText("未提交回答")).toBeVisible();
     expect(screen.getByText("未回答 2 题")).toBeVisible();
     expect(screen.queryByText("unknown-question")).not.toBeInTheDocument();
+    expect(screen.queryByText("unknown-option")).not.toBeInTheDocument();
+  });
+
+  it("部分回答时逐题明确展示未回答", () => {
+    render(<QuestionResponseCard pendingQuestion={pendingQuestion} resolution={{
+      resolutionId: "resolution-partial",
+      questionRecordId: "question-1",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: ["q-2"],
+    }} />);
+
+    fireEvent.click(screen.getByRole("tab", { name: "2" }));
+    expect(screen.getByText("还有补充吗？")).toBeVisible();
+    expect(screen.getByText("未回答")).toBeVisible();
+  });
+
+  it("未知选项不泄露内部标识并显示数据不可用", () => {
+    render(<QuestionResponseCard pendingQuestion={pendingQuestion} resolution={{
+      resolutionId: "resolution-invalid",
+      questionRecordId: "question-1",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["unknown-option"] }],
+      unansweredQuestionIds: ["q-2"],
+    }} />);
+
+    expect(screen.getByText("回答数据不可用")).toBeVisible();
     expect(screen.queryByText("unknown-option")).not.toBeInTheDocument();
   });
 });
