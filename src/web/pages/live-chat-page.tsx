@@ -36,6 +36,11 @@ import {
   reconcilePendingUserMessage,
   type PendingUserMessage,
 } from "../pending-user-message";
+import {
+  createPendingQuestionResponse,
+  reconcilePendingQuestionResponse,
+  type PendingQuestionResponse,
+} from "../pending-question-response";
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
@@ -236,6 +241,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [sessionActionsOpenRequest, setSessionActionsOpenRequest] = useState<{ sessionId: string; requestId: number }>();
   const initialSseSnapshotRef = useRef<{ id: string; lastEventId: number } | undefined>(undefined);
   const pendingUserMessageRef = useRef<PendingUserMessage | undefined>(undefined);
+  const pendingQuestionResponseRef = useRef<PendingQuestionResponse | undefined>(undefined);
   const questionSubmissionGenerationRef = useRef(0);
   const streamRunRevisionRef = useRef(0);
   const agentSelectionGenerationRef = useRef(0);
@@ -296,7 +302,20 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       pendingUserMessageRef.current,
     );
     pendingUserMessageRef.current = pendingResult.pending;
-    setTimeline(pendingResult.timeline);
+    const branchToken = mergedSnapshot.history?.branchToken;
+    if (branchToken) {
+      const responseResult = reconcilePendingQuestionResponse(
+        next.id,
+        branchToken,
+        pendingResult.timeline,
+        pendingQuestionResponseRef.current,
+      );
+      pendingQuestionResponseRef.current = responseResult.pending;
+      setTimeline(responseResult.timeline);
+    } else {
+      // 旧版快照缺少分支身份时不跨未知分支回填，仅保留原有投影行为。
+      setTimeline(pendingResult.timeline);
+    }
   }, [alignAfterNextContentCommit, resumeFollowing]);
 
   useEffect(() => {
@@ -1121,6 +1140,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if (!session || !pendingQuestion || questionSubmitting) return;
     const submittedSessionId = session.id;
     const submittedQuestionId = pendingQuestion.id;
+    const submittedBranchToken = session.history?.branchToken;
     const submissionGeneration = ++questionSubmissionGenerationRef.current;
     setQuestionSubmitting(true);
     setError("");
@@ -1135,6 +1155,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (questionSubmissionGenerationRef.current !== submissionGeneration
         || sessionIdRef.current !== submittedSessionId) return;
       // Run 启动快照可能先清除待答状态；成功响应仍需立即写入权威回答卡片。
+      pendingQuestionResponseRef.current = submittedBranchToken
+        ? createPendingQuestionResponse(submittedSessionId, submittedBranchToken, result.resolution)
+        : undefined;
       setTimeline((current) => reduceTimeline(current, {
         type: "question_resolved",
         resolution: result.resolution,
