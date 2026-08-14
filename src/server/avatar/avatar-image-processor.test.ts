@@ -122,6 +122,13 @@ describe("头像图片标准化", () => {
       .toThrowError(expect.objectContaining({ code: "INVALID_AVATAR_CROP" }));
   });
 
+  it("拒绝起点越过百分比边界的极小裁剪区域", () => {
+    const value = JSON.stringify({ x: 100 + 5e-8, y: 0, width: 1e-9, height: 1e-9 });
+
+    expect(() => parseAvatarCrop(value))
+      .toThrowError(expect.objectContaining({ code: "INVALID_AVATAR_CROP" }));
+  });
+
   it("拒绝换算后不是正方形的裁剪区域", async () => {
     const source = join(root, "wide.png");
     await sharp({ create: { width: 800, height: 400, channels: 3, background: "#4f5d75" } })

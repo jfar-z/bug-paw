@@ -4,7 +4,7 @@ import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomBytes } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -203,6 +203,64 @@ describe("首启与认证路由", () => {
     expect(image.headers["content-type"]).toBe("image/webp");
     expect(image.rawPayload.byteLength).toBeLessThanOrEqual(2 * 1024 * 1024);
     await expect(sharp(image.rawPayload).metadata()).resolves.toMatchObject({ format: "webp", width: 512, height: 512 });
+  });
+
+  it("头像上传失败时保留原资料、原文件和读取内容", async () => {
+    const { app, paths } = await createTestContext();
+    await app.inject({ method: "POST", url: "/api/setup", payload: validSetupBody });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/login",
+      payload: { password: "local-password-123", remember: true },
+    });
+    const cookieHeader = String(login.headers["set-cookie"]).split(";", 1)[0];
+    const initialProfile = await app.inject({ method: "GET", url: "/api/profile", headers: { cookie: cookieHeader } });
+    const validSource = await sharp({
+      create: { width: 160, height: 160, channels: 4, background: { r: 24, g: 144, b: 96, alpha: 0.7 } },
+    }).png().toBuffer();
+    const firstBoundary = "profile-avatar-first";
+    const stored = await app.inject({
+      method: "POST",
+      url: `/api/profile/avatar?revision=${initialProfile.json().revision as string}`,
+      headers: { cookie: cookieHeader, "content-type": `multipart/form-data; boundary=${firstBoundary}` },
+      payload: avatarMultipart(firstBoundary, validSource, { x: 0, y: 0, width: 100, height: 100 }),
+    });
+    expect(stored.statusCode).toBe(200);
+    const expectedProfile = stored.json();
+    const expectedImage = await app.inject({ method: "GET", url: "/api/profile/avatar", headers: { cookie: cookieHeader } });
+    const expectedFiles = (await readdir(paths.appDir)).filter((name) => name.startsWith("user-avatar")).sort();
+
+    const staleBoundary = "profile-avatar-stale";
+    const stale = await app.inject({
+      method: "POST",
+      url: `/api/profile/avatar?revision=${initialProfile.json().revision as string}`,
+      headers: { cookie: cookieHeader, "content-type": `multipart/form-data; boundary=${staleBoundary}` },
+      payload: avatarMultipart(staleBoundary, validSource, { x: 0, y: 0, width: 100, height: 100 }),
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: "VERSION_CONFLICT" } });
+
+    const brokenBoundary = "profile-avatar-broken";
+    const broken = await app.inject({
+      method: "POST",
+      url: `/api/profile/avatar?revision=${expectedProfile.revision as string}`,
+      headers: { cookie: cookieHeader, "content-type": `multipart/form-data; boundary=${brokenBoundary}` },
+      payload: avatarMultipart(
+        brokenBoundary,
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        { x: 0, y: 0, width: 100, height: 100 },
+      ),
+    });
+    expect(broken.statusCode).toBe(422);
+    expect(broken.json()).toMatchObject({ error: { code: "AVATAR_PROCESSING_FAILED" } });
+
+    const currentProfile = await app.inject({ method: "GET", url: "/api/profile", headers: { cookie: cookieHeader } });
+    const currentImage = await app.inject({ method: "GET", url: "/api/profile/avatar", headers: { cookie: cookieHeader } });
+    const currentFiles = (await readdir(paths.appDir)).filter((name) => name.startsWith("user-avatar")).sort();
+    expect(currentProfile.json()).toEqual(expectedProfile);
+    expect(currentImage.rawPayload).toEqual(expectedImage.rawPayload);
+    expect(currentFiles).toEqual(expectedFiles);
+    expect(currentFiles.every((name) => !name.endsWith(".tmp"))).toBe(true);
   });
 });
 

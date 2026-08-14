@@ -140,14 +140,17 @@ function toPixelCrop(crop: AvatarCropArea, width: number, height: number): Pixel
 function normalizeCrop(crop: AvatarCropArea): AvatarCropArea {
   if (!Object.values(crop).every(isFiniteNumber)) throw invalidCrop();
   if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0) throw invalidCrop();
+  if (crop.x > 100 || crop.y > 100) throw invalidCrop();
   const right = crop.x + crop.width;
   const bottom = crop.y + crop.height;
   if (right > 100 + CROP_BOUNDARY_EPSILON || bottom > 100 + CROP_BOUNDARY_EPSILON) throw invalidCrop();
-  return {
+  const normalized = {
     ...crop,
     width: right > 100 ? 100 - crop.x : crop.width,
     height: bottom > 100 ? 100 - crop.y : crop.height,
   };
+  if (normalized.width <= 0 || normalized.height <= 0) throw invalidCrop();
+  return normalized;
 }
 
 function isPng(value: Buffer): boolean {
