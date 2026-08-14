@@ -4,6 +4,16 @@ import { ApiTaskProvider } from "../api-task-provider";
 import { ErrorToastProvider } from "../error-toast-provider";
 import { AgentDetailPage } from "./agent-detail-page";
 
+vi.mock("../components/avatar/avatar-crop-dialog", () => ({
+  AvatarCropDialog: (props: {
+    onConfirm(crop: { x: number; y: number; width: number; height: number }): void;
+  }) => (
+    <section role="dialog" aria-label="调整头像">
+      <button type="button" onClick={() => props.onConfirm({ x: 10, y: 10, width: 80, height: 80 })}>裁剪并上传</button>
+    </section>
+  ),
+}));
+
 function renderAgentDetailPage(agentId: string) {
   return render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><AgentDetailPage agentId={agentId} onNavigate={vi.fn()} /></ApiTaskProvider></ErrorToastProvider>);
 }
@@ -331,7 +341,7 @@ describe("AgentDetailPage v0 身份结构", () => {
     }));
   });
 
-  it("可以上传本地图片作为头像", async () => {
+  it("选择本地图片后裁剪并上传原图与裁剪区域", async () => {
     const profile = {
       version: 1 as const, id: "avatar", name: "头像 Agent", avatar: { kind: "initial" as const, value: "头" },
       description: "", status: "active" as const, cwd: "/data/workspace/agents/avatar",
@@ -339,7 +349,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       createdAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z",
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => new Response(JSON.stringify({
-      profile: String(input).includes("/avatar?") ? { ...profile, avatar: { kind: "image", revision: "img1", mediaType: "image/png" } } : profile,
+      profile: String(input).includes("/avatar?") ? { ...profile, avatar: { kind: "image", revision: "img1", mediaType: "image/webp" } } : profile,
       revision: String(input).includes("/avatar?") ? "r2" : "r1",
     }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -348,8 +358,34 @@ describe("AgentDetailPage v0 身份结构", () => {
 
     const file = new File([new Uint8Array([137, 80, 78, 71])], "avatar.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("上传头像图片"), { target: { files: [file] } });
+    expect(await screen.findByRole("dialog", { name: "调整头像" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/avatar?"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "裁剪并上传" }));
 
     expect(await screen.findByRole("img", { name: "头像 Agent 的头像" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/agents/avatar/avatar?revision=r1", expect.objectContaining({ method: "POST" }));
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1/agents/avatar/avatar?revision=r1", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
+    const upload = fetchMock.mock.calls.find(([url]) => String(url).includes("/avatar?"));
+    const body = upload?.[1]?.body as FormData;
+    expect(body.get("crop")).toBe(JSON.stringify({ x: 10, y: 10, width: 80, height: 80 }));
+    expect(await screen.findByText("头像已更新")).toBeInTheDocument();
+  });
+
+  it("原图超过前端限制时在头像字段旁显示错误", async () => {
+    const profile = {
+      version: 1 as const, id: "avatar-limit", name: "头像限制 Agent", avatar: { kind: "initial" as const, value: "限" },
+      description: "", status: "active" as const, cwd: "/data/workspace/agents/avatar-limit",
+      instructions: { role: "", behavior: "", rules: "", user: "" }, allowedTools: [],
+      createdAt: "2026-08-05T00:00:00.000Z", updatedAt: "2026-08-05T00:00:00.000Z",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ profile, revision: "r1" }), { status: 200 })));
+    renderAgentDetailPage("avatar-limit");
+    await screen.findByText("头像限制 Agent");
+
+    const file = new File(["avatar"], "large.png", { type: "image/png" });
+    Object.defineProperty(file, "size", { value: 20 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText("上传头像图片"), { target: { files: [file] } });
+
+    expect(screen.getByText("原图不能超过 20 MB")).toHaveAttribute("role", "alert");
+    expect(screen.queryByRole("dialog", { name: "调整头像" })).not.toBeInTheDocument();
   });
 });

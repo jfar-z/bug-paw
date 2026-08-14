@@ -17,6 +17,7 @@ import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument } from 
 import type { SessionTextSearchPage } from "../shared/session-text-search";
 import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared/session-question-contracts";
 import type { QuestionAnswerSubmissionResult } from "../shared/question-response-protocol";
+import type { AvatarCropArea } from "../shared/avatar-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -286,9 +287,10 @@ export const api = {
   getProfile: () => request<UserProfileDocument>("/api/profile"),
   updateProfile: (revision: string, displayName: string) =>
     request<UserProfileDocument>("/api/profile", { method: "PATCH", body: JSON.stringify({ revision, displayName }) }),
-  uploadProfileAvatar: (revision: string, file: File) => {
+  uploadProfileAvatar: (revision: string, file: File, crop: AvatarCropArea) => {
     const form = new FormData();
     form.append("avatar", file, file.name);
+    form.append("crop", JSON.stringify(crop));
     return request<UserProfileDocument>(`/api/profile/avatar?revision=${encodeURIComponent(revision)}`, { method: "POST", body: form });
   },
   listAgents: () => request<{ agents: AgentProfileDocument[] }>("/api/agents"),
@@ -328,9 +330,10 @@ export const api = {
     request<{ trashPath?: string }>(`/api/agents/${encodeURIComponent(agentId)}`, {
       method: "DELETE", body: JSON.stringify({ removeSessions, removeWorkspace }),
     }),
-  uploadAgentAvatar: (agentId: string, revision: string, file: File) => {
+  uploadAgentAvatar: (agentId: string, revision: string, file: File, crop: AvatarCropArea) => {
     const form = new FormData();
     form.append("avatar", file, file.name);
+    form.append("crop", JSON.stringify(crop));
     return request<AgentProfileDocument>(`/api/agents/${encodeURIComponent(agentId)}/avatar?revision=${encodeURIComponent(revision)}`, {
       method: "POST",
       body: form,
