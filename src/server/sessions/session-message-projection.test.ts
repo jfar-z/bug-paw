@@ -8,6 +8,53 @@ import { projectSessionMessages, projectSessionToolResult } from "./session-mess
 import { compileQuestionResponseProtocol } from "../../shared/question-response-protocol";
 
 describe("会话消息浏览器投影", () => {
+  it("把当前分支后续回答合并回对应提问工具结果", () => {
+    const pendingQuestion = questionProjection("record-1", "call-1");
+    const resolution = submittedResolution("record-1", "resolution-1", "option-learning");
+    const protocol = compileQuestionResponseProtocol(resolution, pendingQuestion.questions);
+
+    expect(projectSessionMessages([
+      questionToolResult(pendingQuestion),
+      { role: "user", content: protocol },
+    ])).toEqual([
+      expect.objectContaining({
+        details: { type: "question_pending", pendingQuestion, resolution },
+      }),
+      { role: "user", content: "" },
+    ]);
+  });
+
+  it("按问题记录 ID 隔离同一分支中的多条回答", () => {
+    const firstPending = questionProjection("record-1", "call-1");
+    const secondPending = questionProjection("record-2", "call-2");
+    const firstResolution = submittedResolution("record-1", "resolution-1", "option-learning");
+    const secondResolution = submittedResolution("record-2", "resolution-2", "option-daily");
+
+    const projected = projectSessionMessages([
+      questionToolResult(firstPending),
+      questionToolResult(secondPending),
+      { role: "user", content: compileQuestionResponseProtocol(firstResolution, firstPending.questions) },
+      { role: "user", content: compileQuestionResponseProtocol(secondResolution, secondPending.questions) },
+    ]);
+
+    expect(projected[0]).toHaveProperty("details.resolution", firstResolution);
+    expect(projected[1]).toHaveProperty("details.resolution", secondResolution);
+  });
+
+  it("同一问题存在多个回答事实时使用当前分支最后一个", () => {
+    const pendingQuestion = questionProjection("record-1", "call-1");
+    const oldResolution = submittedResolution("record-1", "resolution-old", "option-daily");
+    const latestResolution = submittedResolution("record-1", "resolution-new", "option-learning");
+
+    const projected = projectSessionMessages([
+      questionToolResult(pendingQuestion),
+      { role: "user", content: compileQuestionResponseProtocol(oldResolution, pendingQuestion.questions) },
+      { role: "user", content: compileQuestionResponseProtocol(latestResolution, pendingQuestion.questions) },
+    ]);
+
+    expect(projected[0]).toHaveProperty("details.resolution", latestResolution);
+  });
+
   it("替换图片和超长工具文本但不修改原消息", () => {
     const original = [{
       role: "toolResult",
@@ -144,3 +191,43 @@ describe("会话消息浏览器投影", () => {
     ]);
   });
 });
+
+function questionProjection(id: string, toolCallId: string) {
+  return {
+    id,
+    version: 1,
+    toolCallId,
+    createdAt: "2026-08-14T03:00:00.000Z",
+    questions: [{
+      id: "question-1",
+      header: "范围",
+      question: "请选择范围",
+      multiSelect: false,
+      options: [
+        { id: "option-learning", label: "学习计划", description: "制定学习安排" },
+        { id: "option-daily", label: "日常事务", description: "处理日常任务" },
+      ],
+    }],
+  };
+}
+
+function submittedResolution(questionRecordId: string, resolutionId: string, optionId: string) {
+  return {
+    resolutionId,
+    questionRecordId,
+    status: "submitted" as const,
+    answers: [{ questionId: "question-1", kind: "options" as const, optionIds: [optionId] }],
+    unansweredQuestionIds: [],
+  };
+}
+
+function questionToolResult(pendingQuestion: ReturnType<typeof questionProjection>) {
+  return {
+    role: "toolResult",
+    toolCallId: pendingQuestion.toolCallId,
+    toolName: "ask_user",
+    isError: false,
+    content: [{ type: "text", text: "等待用户回答" }],
+    details: { type: "question_pending", pendingQuestion },
+  };
+}
