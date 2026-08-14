@@ -1,7 +1,7 @@
 import { createRef } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentTurn, UserEntry } from "../../../conversation-timeline";
+import type { AgentTurn, QuestionResponseEntry, UserEntry } from "../../../conversation-timeline";
 import { ConversationTimelineView } from "./conversation-timeline-view";
 
 const firstTurn: AgentTurn = {
@@ -131,6 +131,67 @@ describe("ConversationTimelineView 消息复制", () => {
 });
 
 describe("ConversationTimelineView 消息排版", () => {
+  it("把结构化回答放入独立用户气泡且不提供普通消息操作", () => {
+    const pendingQuestion = {
+      id: "question-1",
+      version: 1,
+      toolCallId: "ask-1",
+      createdAt: "2026-08-14T08:00:00.000Z",
+      questions: [{
+        id: "q-1",
+        header: "范围",
+        question: "处理范围？",
+        multiSelect: false,
+        options: [
+          { id: "o-1", label: "全部", description: "处理全部" },
+          { id: "o-2", label: "部分", description: "处理部分" },
+        ],
+      }],
+    };
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+    const questionTurn: AgentTurn = {
+      id: "agent-question",
+      type: "agent",
+      blocks: [{
+        id: "ask",
+        type: "tool",
+        callId: "ask-1",
+        name: "ask_user",
+        args: {},
+        status: "completed",
+        details: { type: "question_pending", pendingQuestion, resolution },
+      }],
+    };
+    const response: QuestionResponseEntry = {
+      id: "question-response-resolution-1",
+      type: "question_response",
+      pendingQuestion,
+      resolution,
+    };
+
+    let container!: HTMLElement;
+    expect(() => {
+      ({ container } = render(<ConversationTimelineView
+        {...baseProps()}
+        timeline={[questionTurn, response]}
+      />));
+    }).not.toThrow();
+
+    const row = container.querySelector<HTMLElement>('[data-question-resolution-id="resolution-1"]');
+    expect(row).toHaveClass("message-row", "is-user", "question-response-message");
+    expect(within(row!).getByText("已提交回答")).toBeVisible();
+    expect(within(row!).getByText("部分")).toBeVisible();
+    expect(within(row!).queryByLabelText("用户消息操作")).not.toBeInTheDocument();
+    const agentRow = container.querySelector<HTMLElement>(".message-row.is-assistant");
+    expect(within(agentRow!).queryByText("部分")).not.toBeInTheDocument();
+  });
+
   it("有活动时本轮活动控制与消息操作共用同一行底栏", () => {
     const turn: AgentTurn = {
       id: "agent-activity",
