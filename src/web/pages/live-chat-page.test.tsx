@@ -2698,6 +2698,73 @@ describe("LiveChatPage 提问处理", () => {
     expect(screen.getByRole("button", { name: "停止生成" })).toBeVisible();
   });
 
+  it("同一会话第二轮回答续跑正文先到时仍先展示用户卡片", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    sessionOneSnapshot = {
+      id: "session-1",
+      agentId: "default",
+      messages: [
+        { role: "user", content: "第一轮问题" },
+        { role: "assistant", content: [{ type: "text", text: "第一轮回答" }] },
+        { role: "user", content: "第二轮问题" },
+        { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+        {
+          role: "toolResult",
+          toolCallId: "ask-1",
+          toolName: "ask_user",
+          content: "等待用户回答",
+          details: { type: "question_pending", pendingQuestion },
+        },
+      ],
+      pendingQuestion,
+      thinkingLevel: "medium",
+      lastEventId: 4,
+    };
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    await screen.findAllByText("第二轮问题");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      ([input]) => String(input).endsWith("/questions/question-1/answers"),
+    )).toBe(true));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("run_started", {
+      type: "run_started",
+      run: {
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-14T08:10:00.000Z",
+      },
+    }));
+    act(() => FakeEventSource.instances.at(-1)!.emit("text_delta", {
+      type: "text_delta",
+      delta: "续跑回答",
+    }));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    const questionRow = screen.getByText("已回答").closest<HTMLElement>(".message-row");
+    const answerRow = screen.getByText("已提交回答").closest<HTMLElement>(".message-row");
+    const continuationRow = screen.getByText("续跑回答").closest<HTMLElement>(".message-row");
+    const rows = [...document.querySelectorAll<HTMLElement>(".message-row")];
+    expect(questionRow).not.toBeNull();
+    expect(answerRow).not.toBeNull();
+    expect(continuationRow).not.toBeNull();
+    expect(within(questionRow!).queryByText("续跑回答")).not.toBeInTheDocument();
+    expect(rows.indexOf(questionRow!)).toBeLessThan(rows.indexOf(answerRow!));
+    expect(rows.indexOf(answerRow!)).toBeLessThan(rows.indexOf(continuationRow!));
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeVisible();
+  });
+
   it("收到无答案的最终事件后刷新权威会话投影", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });

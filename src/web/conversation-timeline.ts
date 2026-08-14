@@ -112,6 +112,13 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
     }];
   }
   if (event.type === "generation_started") {
+    if (shouldStartAgentTurnAfterQuestion(entries)) {
+      return [...entries, {
+        id: createId("agent", entries),
+        type: "agent",
+        blocks: [],
+      }];
+    }
     return ensureAgentTurn(entries).next;
   }
   if (event.type === "text_delta") {
@@ -560,6 +567,17 @@ function ensureAgentTurn(entries: ConversationEntry[]): { next: ConversationEntr
     return { next: entries, turnIndex: lastIndex };
   }
   return { next: [...entries, { id: createId("agent", entries), type: "agent", blocks: [] }], turnIndex: entries.length };
+}
+
+/** ask_user 终止当前 Run 后，答案续跑必须进入新的 Agent 回合。 */
+function shouldStartAgentTurnAfterQuestion(entries: ConversationEntry[]): boolean {
+  const last = entries.at(-1);
+  if (last?.type !== "agent") return false;
+  return last.blocks.some((block) => block.type === "tool"
+    && block.name === "ask_user"
+    && block.status === "completed"
+    && isRecord(block.details)
+    && Check(PendingQuestionProjectionSchema, block.details.pendingQuestion));
 }
 
 function replaceTurn(entries: ConversationEntry[], index: number, turn: AgentTurn): ConversationEntry[] {

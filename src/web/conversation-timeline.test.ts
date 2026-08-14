@@ -338,6 +338,49 @@ describe("对话时间线", () => {
     expect(duplicate.filter((entry) => entry.type === "question_response")).toHaveLength(1);
   });
 
+  it("ask_user 续跑正文先到时仍保留用户回答回合边界", () => {
+    let entries = parsePiHistory([
+      { role: "user", content: "第一轮问题" },
+      { role: "assistant", content: [{ type: "text", text: "第一轮回答" }] },
+      { role: "user", content: "第二轮问题" },
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask_user",
+        content: "等待用户回答",
+        details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
+      },
+    ]);
+    const resolution = {
+      resolutionId: "resolution-late",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+
+    entries = reduceTimeline(entries, { type: "generation_started" });
+    entries = reduceTimeline(entries, { type: "generation_started" });
+    entries = reduceTimeline(entries, { type: "text_delta", delta: "续跑回答" });
+    entries = reduceTimeline(entries, { type: "question_resolved", resolution });
+
+    expect(entries.map((entry) => entry.type)).toEqual([
+      "user",
+      "agent",
+      "user",
+      "agent",
+      "question_response",
+      "agent",
+    ]);
+    expect((entries[3] as AgentTurn).blocks).toMatchObject([
+      { type: "tool", name: "ask_user" },
+    ]);
+    expect((entries[5] as AgentTurn).blocks).toMatchObject([
+      { type: "markdown", text: "续跑回答" },
+    ]);
+  });
+
   it("放弃协议只显示协议后的普通正文，损坏协议保留原文", () => {
     const discarded = compileQuestionResponseProtocol({
       resolutionId: "resolution-2",
