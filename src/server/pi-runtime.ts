@@ -566,8 +566,12 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     // Pi Session JSONL 是消息历史的唯一事实源；检查点只恢复活动 Run 元数据。
     const managed = sessionRegistry.peek(sessionId);
     if (!managed || managed.session !== session) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
-    const page = buildLatestHistoryPage(liveSessionMessages(session), managed.branchToken, session.branchLeafId);
-    return { ...page, messages: projectSessionMessages(page.messages) };
+    const branchMessages = liveSessionMessages(session);
+    const page = buildLatestHistoryPage(branchMessages, managed.branchToken, session.branchLeafId);
+    return {
+      ...page,
+      messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+    };
   }
 
   /**
@@ -880,12 +884,17 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化，请重新加载");
       }
       let page: SessionHistorySlice;
+      const branchMessages = session.messages;
       try {
-        page = buildHistoryPageBefore(session.messages, branchToken, session.branchLeafId, before);
+        page = buildHistoryPageBefore(branchMessages, branchToken, session.branchLeafId, before);
       } catch {
         throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
       }
-      return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
+      return {
+        sessionId,
+        messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+        history: page.history,
+      };
     },
 
     async loadHistoryTarget(sessionId, entryId, branchToken) {
@@ -895,14 +904,15 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         throw new PiRuntimeError("SESSION_BRANCH_CHANGED", "会话分支已变化，请重新搜索");
       }
       let page: SessionHistorySlice;
+      const branchMessages = session.messages;
       try {
-        page = buildHistoryPageAround(session.messages, branchToken, session.branchLeafId, entryId);
+        page = buildHistoryPageAround(branchMessages, branchToken, session.branchLeafId, entryId);
       } catch {
         throw new PiRuntimeError("SESSION_ENTRY_NOT_FOUND", "目标会话记录不存在");
       }
       return {
         sessionId,
-        messages: projectSessionMessages(page.messages),
+        messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
         history: page.history,
         targetEntryId: page.targetEntryId,
       };
@@ -915,12 +925,17 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         throw new PiRuntimeError("SESSION_BRANCH_CHANGED", "会话分支已变化，请重新加载");
       }
       let page: SessionHistorySlice;
+      const branchMessages = session.messages;
       try {
-        page = buildHistoryPageAfter(session.messages, branchToken, session.branchLeafId, after);
+        page = buildHistoryPageAfter(branchMessages, branchToken, session.branchLeafId, after);
       } catch {
         throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
       }
-      return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
+      return {
+        sessionId,
+        messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+        history: page.history,
+      };
     },
 
     ...(sessionTextService ? {
