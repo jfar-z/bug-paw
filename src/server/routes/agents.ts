@@ -2,6 +2,8 @@ import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CreateAgentInput, TitleGenerationConfig, UpdateAgentInput } from "../../shared/agent-contracts";
+import type { TtsCustomParameters } from "../../shared/tts-custom-parameters";
+import { normalizeTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import type { AgentStore } from "../agents/agent-store";
 import { AgentWorkspaceError } from "../agents/agent-workspace";
 import { type AgentPromptFile, AgentPromptStore } from "../agents/agent-prompt-store";
@@ -349,6 +351,9 @@ function readCreateInput(body: Record<string, unknown>): CreateAgentInput {
     titleGeneration: body.titleGeneration === undefined ? undefined : readTitleGeneration(body.titleGeneration),
     ttsProfileId: typeof body.ttsProfileId === "string" ? body.ttsProfileId : undefined,
     ttsVoice: typeof body.ttsVoice === "string" ? body.ttsVoice : undefined,
+    ttsCustomParameters: body.ttsCustomParameters === undefined
+      ? undefined
+      : readTtsCustomParameters(body.ttsCustomParameters),
     ttsAutoPlay: body.ttsAutoPlay === true,
     ttsStreamPlayback: body.ttsStreamPlayback === true,
     allowedTools: readStringArray(body.allowedTools),
@@ -371,6 +376,8 @@ function readUpdateInput(body: Record<string, unknown>): UpdateAgentInput {
   else if (typeof body.ttsProfileId === "string") input.ttsProfileId = body.ttsProfileId;
   if (body.ttsVoice === null) input.ttsVoice = null;
   else if (typeof body.ttsVoice === "string") input.ttsVoice = body.ttsVoice;
+  if (body.ttsCustomParameters === null) input.ttsCustomParameters = null;
+  else if (body.ttsCustomParameters !== undefined) input.ttsCustomParameters = readTtsCustomParameters(body.ttsCustomParameters);
   if (typeof body.ttsAutoPlay === "boolean") input.ttsAutoPlay = body.ttsAutoPlay;
   if (typeof body.ttsStreamPlayback === "boolean") input.ttsStreamPlayback = body.ttsStreamPlayback;
   if (body.allowedTools !== undefined) input.allowedTools = readStringArray(body.allowedTools);
@@ -455,6 +462,16 @@ function sendAgentError(reply: FastifyReply, error: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 把共享参数校验错误映射为稳定的 Agent API 业务错误。 */
+function readTtsCustomParameters(value: unknown): TtsCustomParameters {
+  try {
+    return normalizeTtsCustomParameters(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "TTS 自定义请求参数无效";
+    throw new DomainError("VALIDATION_FAILED", message);
+  }
 }
 
 /** 将路由参数限制为 Agent 可编辑的五个固定提示词文件。 */

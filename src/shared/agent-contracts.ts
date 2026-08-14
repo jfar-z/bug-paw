@@ -1,3 +1,5 @@
+import type { TtsCustomParameters } from "./tts-custom-parameters";
+
 /**
  * Agent 角色与行为的稳定系统指令分区。
  */
@@ -38,6 +40,8 @@ export interface AgentProfile {
   ttsProfileId?: string;
   /** 覆盖所选 TTS 配置默认音色的 Agent 级音色。 */
   ttsVoice?: string;
+  /** 覆盖所选 TTS 配置请求体的 Agent 级自定义参数。 */
+  ttsCustomParameters?: TtsCustomParameters;
   ttsAutoPlay?: boolean;
   ttsStreamPlayback?: boolean;
   instructions: AgentInstructions;
@@ -67,6 +71,7 @@ export interface CreateAgentInput {
   titleGeneration?: TitleGenerationConfig;
   ttsProfileId?: string;
   ttsVoice?: string;
+  ttsCustomParameters?: TtsCustomParameters;
   ttsAutoPlay?: boolean;
   ttsStreamPlayback?: boolean;
   allowedTools?: string[];
@@ -75,7 +80,7 @@ export interface CreateAgentInput {
 /**
  * 更新 Agent 时允许修改的字段。
  */
-export type UpdateAgentInput = Partial<Omit<CreateAgentInput, "name" | "avatar" | "defaultModel" | "defaultThinkingLevel" | "titleGeneration" | "ttsProfileId" | "ttsVoice">> & {
+export type UpdateAgentInput = Partial<Omit<CreateAgentInput, "name" | "avatar" | "defaultModel" | "defaultThinkingLevel" | "titleGeneration" | "ttsProfileId" | "ttsVoice" | "ttsCustomParameters">> & {
   name?: string;
   avatar?: AgentProfile["avatar"];
   defaultModel?: AgentProfile["defaultModel"] | null;
@@ -83,4 +88,5 @@ export type UpdateAgentInput = Partial<Omit<CreateAgentInput, "name" | "avatar" 
   titleGeneration?: AgentProfile["titleGeneration"] | null;
   ttsProfileId?: string | null;
   ttsVoice?: string | null;
+  ttsCustomParameters?: TtsCustomParameters | null;
 };
