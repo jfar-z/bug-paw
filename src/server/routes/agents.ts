@@ -5,6 +5,8 @@ import type { CreateAgentInput, TitleGenerationConfig, UpdateAgentInput } from "
 import type { AgentStore } from "../agents/agent-store";
 import { AgentWorkspaceError } from "../agents/agent-workspace";
 import { type AgentPromptFile, AgentPromptStore } from "../agents/agent-prompt-store";
+import { processAvatarImage } from "../avatar/avatar-image-processor";
+import { receiveAvatarUpload } from "../avatar/avatar-upload";
 import { VersionConflictError } from "../configuration/versioned-json-store";
 import { DomainError } from "../core/errors";
 import { SYSTEM_LIMITS } from "../core/limits";
@@ -126,24 +128,27 @@ export function registerAgentRoutes(app: FastifyInstance, dependencies: AgentRou
 
   app.post<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/agents/:id/avatar", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
-    if (!request.isMultipart()) return sendApiError(reply, 400, "INVALID_MULTIPART", "请上传图片文件");
     if (typeof request.query.revision !== "string") return sendApiError(reply, 400, "REVISION_REQUIRED", "上传头像必须携带 revision");
     try {
-      const part = await request.file({ limits: { files: 1, fileSize: 2 * 1024 * 1024 } });
-      if (!part) return sendApiError(reply, 400, "AVATAR_REQUIRED", "请选择头像图片");
-      const content = await part.toBuffer();
-      const mediaType = detectImageType(content);
-      if (!mediaType) return sendApiError(reply, 415, "INVALID_AVATAR_TYPE", "仅支持 PNG、JPEG 或 WebP 图片");
-      const updated = await runAgentMutation(
-        dependencies,
-        request.params.id,
-        () => dependencies.store.setImageAvatar(request.params.id, content, mediaType, request.query.revision!),
-      );
+      const upload = await receiveAvatarUpload(request);
+      let updated;
+      try {
+        const processed = await processAvatarImage(upload.sourcePath, upload.crop);
+        updated = await runAgentMutation(
+          dependencies,
+          request.params.id,
+          () => dependencies.store.setImageAvatar(
+            request.params.id,
+            processed.content,
+            processed.mediaType,
+            request.query.revision!,
+          ),
+        );
+      } finally {
+        await upload.cleanup();
+      }
       return reply.send(updated);
     } catch (error) {
-      if (error instanceof app.multipartErrors.RequestFileTooLargeError) {
-        return sendApiError(reply, 413, "AVATAR_TOO_LARGE", "头像不能超过 2 MB");
-      }
       return sendAgentError(reply, error);
     }
   });
@@ -282,13 +287,6 @@ function clampThinkingLevel(
   return all.slice(requestedIndex).find((level) => supported.includes(level))
     ?? all.slice(0, requestedIndex).reverse().find((level) => supported.includes(level))
     ?? "off";
-}
-
-function detectImageType(content: Buffer): "image/png" | "image/jpeg" | "image/webp" | undefined {
-  if (content.length >= 8 && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) return "image/jpeg";
-  if (content.length >= 12 && content.subarray(0, 4).toString("ascii") === "RIFF" && content.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
-  return undefined;
 }
 
 async function changeArchiveStatus(

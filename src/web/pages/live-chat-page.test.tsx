@@ -7,6 +7,18 @@ import { ErrorToastProvider } from "../error-toast-provider";
 import { compileQuestionResponseProtocol } from "../../shared/question-response-protocol";
 import { LiveChatPage } from "./live-chat-page";
 
+vi.mock("../components/avatar/avatar-crop-dialog", () => ({
+  AvatarCropDialog: (props: {
+    onCancel(): void;
+    onConfirm(crop: { x: number; y: number; width: number; height: number }): void;
+  }) => (
+    <section role="dialog" aria-label="调整头像">
+      <button type="button" onClick={props.onCancel}>取消裁剪</button>
+      <button type="button" onClick={() => props.onConfirm({ x: 10, y: 10, width: 80, height: 80 })}>裁剪并上传</button>
+    </section>
+  ),
+}));
+
 type EventListener = (event: MessageEvent) => void;
 const operationLog: string[] = [];
 let regenerateResponse: Promise<Response> | undefined;
@@ -1353,6 +1365,43 @@ describe("LiveChatPage 时间线", () => {
 
     expect(await screen.findByText("小嘉")).toBeInTheDocument();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/v1/profile", expect.objectContaining({ method: "PATCH" }));
+  });
+
+  it("选择个人头像后先裁剪，再上传原图和裁剪区域", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [] }));
+      if (url === "/api/v1/profile/avatar?revision=profile-r1" && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          revision: "profile-r2",
+          profile: { displayName: "管理员", avatar: { kind: "image", revision: "profile-r2", mediaType: "image/webp" } },
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url === "/api/v1/profile") {
+        return new Response(JSON.stringify({ revision: "profile-r1", profile: { displayName: "管理员" } }));
+      }
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑个人资料" }));
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("上传个人头像"), { target: { files: [file] } });
+    expect(await screen.findByRole("dialog", { name: "调整头像" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/profile/avatar"))).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "裁剪并上传" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/profile/avatar?revision=profile-r1",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    ));
+    const upload = fetchMock.mock.calls.find(([url]) => String(url).includes("/profile/avatar"));
+    const body = upload?.[1]?.body as FormData;
+    expect(body.get("crop")).toBe(JSON.stringify({ x: 10, y: 10, width: 80, height: 80 }));
+    expect(screen.queryByRole("dialog", { name: "调整头像" })).not.toBeInTheDocument();
   });
 
   it("重新进入会话页时恢复本页缓存的 Agent", async () => {

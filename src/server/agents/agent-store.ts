@@ -329,11 +329,16 @@ export class AgentStore {
     mediaType: "image/png" | "image/jpeg" | "image/webp",
     revision: string,
   ): Promise<AgentProfileDocument> {
+    const current = await this.get(agentId);
     const token = randomUUID();
     const path = this.avatarPath(agentId, token);
     await writeFile(path, content, { mode: 0o600, flag: "wx" });
     try {
       const updated = await this.update(agentId, { avatar: { kind: "image", revision: token, mediaType } }, revision);
+      if (current?.profile.avatar.kind === "image" && current.profile.avatar.revision !== token) {
+        // Profile 已原子指向新文件，旧文件清理失败不应把成功更新误报为失败。
+        await rm(this.avatarPath(agentId, current.profile.avatar.revision), { force: true }).catch(() => undefined);
+      }
       return updated;
     } catch (error) {
       await rm(path, { force: true });

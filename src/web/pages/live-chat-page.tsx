@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPoi
 import { flushSync } from "react-dom";
 import type { ChatRunSummary, WorkspaceFileSummary } from "../../shared/contracts";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
+import type { AvatarCropArea } from "../../shared/avatar-contracts";
 import { classifyAssistantRunOutcome } from "../../shared/assistant-run-outcome";
 import type { SessionTextSearchHit } from "../../shared/session-text-search";
 import { sortSessionsPinnedFirst } from "../../shared/session-sort";
@@ -49,6 +50,8 @@ import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-t
 import { PcmStreamAudio } from "../pcm-stream-audio";
 import { ComposerSessionControls } from "../components/composer-session-controls";
 import { QuestionComposer } from "../components/question-composer";
+import { AvatarCropDialog } from "../components/avatar/avatar-crop-dialog";
+import { validateAvatarFile } from "../components/avatar/avatar-file";
 import { useQuestionDraft } from "../use-question-draft";
 import { removeQuestionDraft } from "../question-draft-store";
 import type { PendingQuestionProjection, SubmittedQuestionAnswer } from "../../shared/session-question-contracts";
@@ -148,6 +151,19 @@ function chatExpected(setError: (message: string) => void): ApiTaskPolicy["expec
   };
 }
 
+/** 头像处理错误留在裁剪器内，便于用户保留位置和缩放后重试。 */
+function avatarExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_AVATAR_CROP: show,
+    AVATAR_TOO_LARGE: show,
+    INVALID_AVATAR_TYPE: show,
+    AVATAR_TOO_MANY_PIXELS: show,
+    AVATAR_PROCESSING_FAILED: show,
+    VERSION_CONFLICT: show,
+  };
+}
+
 /** 从权威快照提取当前一轮的安全模型提示。 */
 function modelRunNotice(messages: readonly unknown[]): string {
   const outcome = classifyAssistantRunOutcome(messages);
@@ -208,6 +224,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileDisplayName, setProfileDisplayName] = useState(userIdentity.displayName);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [profileAvatarFile, setProfileAvatarFile] = useState<File>();
+  const [profileAvatarError, setProfileAvatarError] = useState("");
   const [sessionNavScrolling, setSessionNavScrolling] = useState(false);
   const [refreshingSessions, setRefreshingSessions] = useState(false);
   const sessionSyncRef = useRef<SessionListSync | undefined>(undefined);
@@ -1452,18 +1470,28 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
   };
 
-  const uploadProfileAvatar = async (file: File | undefined) => {
-    if (!file || !profileRevision || profileSaving) return;
+  const selectProfileAvatar = (file: File | undefined) => {
+    if (!file) return;
+    const validation = validateAvatarFile(file);
+    setProfileAvatarError(validation ?? "");
+    if (!validation) setProfileAvatarFile(file);
+  };
+
+  const uploadProfileAvatar = async (crop: AvatarCropArea) => {
+    if (!profileAvatarFile || !profileRevision || profileSaving) return;
     setProfileSaving(true);
-    try {
-      const document = await api.uploadProfileAvatar(profileRevision, file);
+    const result = await runApiTask(
+      () => api.uploadProfileAvatar(profileRevision, profileAvatarFile, crop),
+      { operation: "上传个人头像", expected: avatarExpected(setProfileAvatarError) },
+    );
+    if (result.status === "success") {
+      const document = result.data;
       setProfileRevision(document.revision);
       setProfileIdentity(toIdentityPreview(document.profile));
-    } catch (reason) {
-      await reportFailure(reason, "上传个人头像");
-    } finally {
-      setProfileSaving(false);
+      setProfileAvatarFile(undefined);
+      setProfileAvatarError("");
     }
+    setProfileSaving(false);
   };
 
   const userNavigationItems = timeline.flatMap((entry) => entry.type === "user" ? [{
@@ -1668,11 +1696,20 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         displayName={profileDisplayName}
         saving={profileSaving}
         ready={Boolean(profileRevision)}
+        avatarError={profileAvatarError}
         onClose={() => setProfileOpen(false)}
         onDisplayNameChange={setProfileDisplayName}
-        onAvatarSelected={(file) => void uploadProfileAvatar(file)}
+        onAvatarSelected={selectProfileAvatar}
         onSave={() => void saveProfileName()}
       />
+      {profileAvatarFile ? <AvatarCropDialog
+        file={profileAvatarFile}
+        busy={profileSaving}
+        error={profileAvatarError || undefined}
+        onCancel={() => { setProfileAvatarFile(undefined); setProfileAvatarError(""); }}
+        onReplace={selectProfileAvatar}
+        onConfirm={(crop) => void uploadProfileAvatar(crop)}
+      /> : null}
     </main>
   );
 }

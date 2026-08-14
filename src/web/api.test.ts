@@ -1,6 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError, api } from "./api";
 
+describe("头像上传 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("用户和 Agent 上传都携带原图与百分比裁剪区域", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      revision: "r2",
+      profile: { displayName: "管理员", avatar: { kind: "image", revision: "r2", mediaType: "image/webp" } },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    const crop = { x: 12.5, y: 0, width: 75, height: 100 };
+
+    await api.uploadProfileAvatar("profile/r1", file, crop);
+    await api.uploadAgentAvatar("agent/a", "agent/r1", file, crop);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/profile/avatar?revision=profile%2Fr1",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/agents/agent%2Fa/avatar?revision=agent%2Fr1",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    );
+    for (const call of fetchMock.mock.calls) {
+      const body = call[1]?.body as FormData;
+      expect(body.get("avatar")).toMatchObject({ name: file.name, size: file.size, type: file.type });
+      expect(body.get("crop")).toBe(JSON.stringify(crop));
+    }
+  });
+});
+
 describe("知识库 API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
