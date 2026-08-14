@@ -10,6 +10,7 @@ import { AvatarCropDialog } from "../components/avatar/avatar-crop-dialog";
 import { validateAvatarFile } from "../components/avatar/avatar-file";
 import { InheritedField } from "../components/configuration/inherited-field";
 import type { AppRoute } from "../router";
+import { formatTtsCustomParameters, parseTtsCustomParametersText } from "../tts-custom-parameters-form";
 import { useOnlineStatus } from "../use-online-status";
 
 interface AgentDetailPageProps {
@@ -81,6 +82,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
   const [deletePreview, setDeletePreview] = useState<{ sessions: { count: number }; workspace: { files: number; bytes: number } }>();
   const [bootsharpOpen, setBootsharpOpen] = useState(false);
   const [bootsharp, setBootsharp] = useState("");
+  const [ttsCustomParametersText, setTtsCustomParametersText] = useState("{}");
 
   useEffect(() => {
     let active = true;
@@ -98,6 +100,10 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     void runOptionalApiTask(() => api.listResources(agentId), { operation: "加载 Agent 资源目录", fallbackReason: "资源目录不可用", fallback: () => ({ resources: [], tools: [], diagnostics: [] }) }).then((result) => { if (active && (result.status === "success" || result.status === "fallback")) setResources(result.data); });
     return () => { active = false; };
   }, [agentId, runApiTask, runOptionalApiTask]);
+
+  useEffect(() => {
+    setTtsCustomParametersText(formatTtsCustomParameters(document?.profile.ttsCustomParameters));
+  }, [agentId, document?.revision]);
 
   const agent = document?.profile;
   const toolCatalog = useMemo(() => {
@@ -135,6 +141,15 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
 
   async function save() {
     if (!document || document.revision === "fallback") return;
+    let ttsCustomParameters = document.profile.ttsCustomParameters;
+    if (activeTab === "runtime" && document.profile.ttsProfileId) {
+      try {
+        ttsCustomParameters = parseTtsCustomParametersText(ttsCustomParametersText);
+      } catch (validationError) {
+        setError(validationError instanceof Error ? validationError.message : "TTS 自定义请求参数无效");
+        return;
+      }
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -158,6 +173,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
         allowedTools: document.profile.allowedTools,
         ttsProfileId: document.profile.ttsProfileId ?? null,
         ttsVoice: document.profile.ttsVoice?.trim() || null,
+        ttsCustomParameters: document.profile.ttsProfileId ? ttsCustomParameters ?? {} : null,
         ttsAutoPlay: document.profile.ttsAutoPlay === true,
         ttsStreamPlayback: document.profile.ttsStreamPlayback === true,
       }), { operation: "保存 Agent", expected: agentDetailExpected(setError) });
@@ -339,7 +355,23 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
             </select></label> : null}
             <label><input aria-label="标题生成启用思考" type="checkbox" checked={titleGeneration.thinkingEnabled} onChange={(event) => updateProfile({ titleGeneration: { ...titleGeneration, thinkingEnabled: event.target.checked } })} />启用思考</label>
           </section>
-          <section className="configuration-form-card configuration-single-column"><h2>语音回答</h2><p className="configuration-help">选择已配置的语音模型后，可让 Agent 回答自动播放。</p><label><span>语音模型</span><select aria-label="Agent 语音模型" value={agent.ttsProfileId ?? ""} onChange={(event) => updateProfile(event.target.value ? { ttsProfileId: event.target.value } : { ttsProfileId: undefined, ttsVoice: undefined, ttsAutoPlay: false, ttsStreamPlayback: false })}><option value="">不使用语音</option>{ttsProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.voice}</option>)}</select></label><label><span>Agent 音色<small>留空则继承所选语音模型；填写后仅在此 Agent 运行时覆盖</small></span><input aria-label="Agent 音色" disabled={!agent.ttsProfileId} maxLength={160} placeholder={selectedTtsProfile ? `继承模型音色：${selectedTtsProfile.voice}` : "请先选择语音模型"} value={agent.ttsVoice ?? ""} onChange={(event) => updateProfile({ ttsVoice: event.target.value || undefined })} /></label><label><input aria-label="自动播放语音" type="checkbox" disabled={!agent.ttsProfileId} checked={agent.ttsAutoPlay === true} onChange={(event) => updateProfile({ ttsAutoPlay: event.target.checked, ttsStreamPlayback: event.target.checked ? agent.ttsStreamPlayback : false })} />自动播放语音</label><label><input aria-label="流式播放语音" type="checkbox" disabled={!agent.ttsProfileId || !agent.ttsAutoPlay} checked={agent.ttsStreamPlayback === true} onChange={(event) => updateProfile({ ttsStreamPlayback: event.target.checked })} />流式播放语音</label></section>
+          <section className="configuration-form-card configuration-single-column">
+            <h2>语音回答</h2>
+            <p className="configuration-help">选择已配置的语音模型后，可让 Agent 回答自动播放。</p>
+            <label><span>语音模型</span><select aria-label="Agent 语音模型" value={agent.ttsProfileId ?? ""} onChange={(event) => {
+              if (event.target.value) {
+                updateProfile({ ttsProfileId: event.target.value });
+                return;
+              }
+              setTtsCustomParametersText("{}");
+              updateProfile({ ttsProfileId: undefined, ttsVoice: undefined, ttsCustomParameters: undefined, ttsAutoPlay: false, ttsStreamPlayback: false });
+            }}><option value="">不使用语音</option>{ttsProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.voice}</option>)}</select></label>
+            <label><span>Agent 音色<small>留空则继承所选语音模型；填写后仅在此 Agent 运行时覆盖</small></span><input aria-label="Agent 音色" disabled={!agent.ttsProfileId} maxLength={160} placeholder={selectedTtsProfile ? `继承模型音色：${selectedTtsProfile.voice}` : "请先选择语音模型"} value={agent.ttsVoice ?? ""} onChange={(event) => updateProfile({ ttsVoice: event.target.value || undefined })} /></label>
+            <label><span>自定义请求参数（JSON）<small>Agent 参数覆盖模型参数，专用音色优先级最高</small></span><textarea aria-label="Agent TTS 自定义请求参数" disabled={!agent.ttsProfileId} rows={7} spellCheck={false} value={ttsCustomParametersText} onChange={(event) => { setTtsCustomParametersText(event.target.value); setNotice(""); }} /></label>
+            <p className="configuration-help">不能覆盖 <code>input</code>；不要填写 API Key、账号或身份信息。嵌套对象按顶层字段整体覆盖。</p>
+            <label><input aria-label="自动播放语音" type="checkbox" disabled={!agent.ttsProfileId} checked={agent.ttsAutoPlay === true} onChange={(event) => updateProfile({ ttsAutoPlay: event.target.checked, ttsStreamPlayback: event.target.checked ? agent.ttsStreamPlayback : false })} />自动播放语音</label>
+            <label><input aria-label="流式播放语音" type="checkbox" disabled={!agent.ttsProfileId || !agent.ttsAutoPlay} checked={agent.ttsStreamPlayback === true} onChange={(event) => updateProfile({ ttsStreamPlayback: event.target.checked })} />流式播放语音</label>
+          </section>
         </section>
       ) : null}
 
