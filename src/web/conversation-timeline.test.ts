@@ -274,7 +274,7 @@ describe("对话时间线", () => {
     expect(entries[0]).toMatchObject({ type: "user", source: "scheduled" });
   });
 
-  it("将纯内部回答协议归并到对应提问卡片且不创建用户气泡", () => {
+  it("将权威回答投影为 Agent 状态和独立用户回答条目", () => {
     const resolution = {
       resolutionId: "resolution-1",
       questionRecordId: "question-1",
@@ -287,21 +287,27 @@ describe("对话时间线", () => {
       {
         role: "toolResult",
         toolCallId: "ask-1",
-        toolName: "ask_user",
-        content: [{ type: "text", text: "等待用户回答" }],
-        details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
+      toolName: "ask_user",
+      content: [{ type: "text", text: "等待用户回答" }],
+      details: { type: "question_pending", pendingQuestion: historyPendingQuestion, resolution },
       },
-      { role: "user", content: compileQuestionResponseProtocol(resolution, historyPendingQuestion.questions) },
+      { role: "user", content: "" },
     ]);
 
-    expect(entries).toHaveLength(1);
+    expect(entries).toHaveLength(2);
     expect((entries[0] as AgentTurn).blocks[0]).toMatchObject({
       name: "ask_user",
       details: { resolution },
     });
+    expect(entries[1]).toMatchObject({
+      id: `question-response-${resolution.resolutionId}`,
+      type: "question_response",
+      pendingQuestion: historyPendingQuestion,
+      resolution,
+    });
   });
 
-  it("把答案提交响应立即归并到实时提问卡片", () => {
+  it("把实时回答插入提问之后且重复事件不重复创建", () => {
     const entries = parsePiHistory([
       { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
       {
@@ -320,12 +326,16 @@ describe("对话时间线", () => {
       unansweredQuestionIds: [],
     };
 
-    const resolved = reduceTimeline(entries, { type: "question_resolved", resolution });
+    const nextTurn: AgentTurn = { id: "agent-next", type: "agent", blocks: [] };
+    const resolved = reduceTimeline([...entries, nextTurn], { type: "question_resolved", resolution });
+    const duplicate = reduceTimeline(resolved, { type: "question_resolved", resolution });
 
-    expect((resolved[0] as AgentTurn).blocks[0]).toMatchObject({
+    expect((duplicate[0] as AgentTurn).blocks[0]).toMatchObject({
       name: "ask_user",
       details: { resolution },
     });
+    expect(duplicate.map((entry) => entry.type)).toEqual(["agent", "question_response", "agent"]);
+    expect(duplicate.filter((entry) => entry.type === "question_response")).toHaveLength(1);
   });
 
   it("放弃协议只显示协议后的普通正文，损坏协议保留原文", () => {
@@ -344,10 +354,32 @@ describe("对话时间线", () => {
       { role: "user", content: '<bug_paw_question_response version="1">\n{broken}\n</bug_paw_question_response>' },
     ]);
 
+    expect(entries.map((entry) => entry.type)).toEqual([
+      "agent",
+      "question_response",
+      "user",
+      "user",
+    ]);
+    expect(entries[1]).toMatchObject({
+      type: "question_response",
+      resolution: { status: "discarded" },
+    });
     expect(entries.filter((entry) => entry.type === "user")).toMatchObject([
       { text: "改为直接处理" },
       { text: '<bug_paw_question_response version="1">\n{broken}\n</bug_paw_question_response>' },
     ]);
+  });
+
+  it("找不到对应提问时隐藏内部协议且不创建无标签回答", () => {
+    const protocol = compileQuestionResponseProtocol({
+      resolutionId: "resolution-orphan",
+      questionRecordId: "question-missing",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    }, historyPendingQuestion.questions);
+
+    expect(parsePiHistory([{ role: "user", content: protocol }])).toEqual([]);
   });
 
   it("保留找不到调用记录的孤立工具结果", () => {

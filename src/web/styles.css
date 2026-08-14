@@ -8323,7 +8323,26 @@ a[aria-disabled="true"] {
   border-left-color: var(--danger);
 }
 
+/* 结构化回答使用用户气泡归属，缩减内层卡片的重复留白。 */
+.question-response-message .message-content {
+  width: min(100%, 620px);
+  padding: 6px;
+}
+
+.question-response-message .question-response-card {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  background: var(--surface);
+}
+
 @media (max-width: 760px) {
+  .question-response-message,
+  .question-response-message .user-message-body,
+  .question-response-message .message-content {
+    width: 100%;
+  }
+
   .question-composer {
     padding: 12px;
   }

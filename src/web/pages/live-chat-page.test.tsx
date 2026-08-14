@@ -2632,9 +2632,13 @@ describe("LiveChatPage 提问处理", () => {
       answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
     });
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/messages"))).toHaveLength(0);
-    expect(screen.getByText("已提交回答")).toBeVisible();
-    expect(screen.getByText("部分")).toBeVisible();
-    expect(screen.getByText("未回答 1 题")).toBeVisible();
+    const answerRow = screen.getByText("已提交回答").closest<HTMLElement>(".question-response-message");
+    expect(answerRow).not.toBeNull();
+    expect(within(answerRow!).getByText("部分")).toBeVisible();
+    expect(within(answerRow!).getByText("未回答 1 题")).toBeVisible();
+    const agentRow = screen.getByText("已回答").closest<HTMLElement>(".is-assistant");
+    expect(agentRow).not.toBeNull();
+    expect(within(agentRow!).queryByText("部分")).not.toBeInTheDocument();
   });
 
   it("收到无答案的最终事件后刷新权威会话投影", async () => {
@@ -2676,7 +2680,9 @@ describe("LiveChatPage 提问处理", () => {
     }));
 
     expect(await screen.findByText("已提交回答")).toBeVisible();
-    expect(screen.getByText("部分")).toBeVisible();
+    expect(document.querySelectorAll(".question-response-message")).toHaveLength(1);
+    expect(screen.getByText("已回答")).toBeVisible();
+    expect(screen.getByText("部分").closest(".question-response-message")).not.toBeNull();
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(2);
   });
 

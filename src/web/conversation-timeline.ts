@@ -1,6 +1,16 @@
+import { Check } from "typebox/value";
+
 import type { WorkspaceFileRef } from "../shared/contracts";
 import { parseAgentReferences, type AgentReference } from "../shared/agent-reference-contracts";
-import { parseQuestionResponseProtocol, type QuestionResolution } from "../shared/question-response-protocol";
+import {
+  parseQuestionResponseProtocol,
+  QuestionResolutionSchema,
+  type QuestionResolution,
+} from "../shared/question-response-protocol";
+import {
+  PendingQuestionProjectionSchema,
+  type PendingQuestionProjection,
+} from "../shared/session-question-contracts";
 
 export interface UserEntry {
   id: string;
@@ -61,7 +71,14 @@ export interface AgentTurn {
   sourceUserEntryId?: string;
 }
 
-export type ConversationEntry = UserEntry | AgentTurn;
+export interface QuestionResponseEntry {
+  id: string;
+  type: "question_response";
+  pendingQuestion: PendingQuestionProjection;
+  resolution: QuestionResolution;
+}
+
+export type ConversationEntry = UserEntry | QuestionResponseEntry | AgentTurn;
 
 export type TimelineEvent =
   | { type: "user_message"; text: string; files?: WorkspaceFileRef[]; references?: AgentReference[]; id?: string }
@@ -284,6 +301,10 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
           status: message.isError === true ? "error" : "completed",
         };
         entries = replaceTurn(entries, location.turnIndex, { ...turn, blocks });
+        const resolvedQuestion = readResolvedQuestion(blocks[location.blockIndex]);
+        if (resolvedQuestion) {
+          entries = applyQuestionResolution(entries, resolvedQuestion.resolution);
+        }
         return;
       }
       const ensured = ensureAgentTurn(entries);
@@ -375,7 +396,7 @@ function parseUserContext(text: string): { text: string; files: WorkspaceFileRef
   };
 }
 
-/** 将回答协议归并到历史中对应的提问工具块。 */
+/** 将权威回答归并到提问工具块，并投影为独立的用户回答条目。 */
 function applyQuestionResolution(entries: ConversationEntry[], resolution: QuestionResolution): ConversationEntry[] {
   for (let turnIndex = entries.length - 1; turnIndex >= 0; turnIndex -= 1) {
     const entry = entries[turnIndex];
@@ -383,18 +404,51 @@ function applyQuestionResolution(entries: ConversationEntry[], resolution: Quest
     const blockIndex = entry.blocks.findIndex((block) => block.type === "tool"
       && block.name === "ask_user"
       && isRecord(block.details)
-      && isRecord(block.details.pendingQuestion)
+      && Check(PendingQuestionProjectionSchema, block.details.pendingQuestion)
       && block.details.pendingQuestion.id === resolution.questionRecordId);
     if (blockIndex < 0) continue;
     const blocks = [...entry.blocks];
     const tool = blocks[blockIndex] as ToolBlock;
+    const pendingQuestion = (tool.details as { pendingQuestion: PendingQuestionProjection }).pendingQuestion;
     blocks[blockIndex] = {
       ...tool,
       details: { ...(isRecord(tool.details) ? tool.details : {}), resolution },
     };
-    return replaceTurn(entries, turnIndex, { ...entry, blocks });
+    const next = replaceTurn(entries, turnIndex, { ...entry, blocks });
+    const response: QuestionResponseEntry = {
+      id: `question-response-${resolution.resolutionId}`,
+      type: "question_response",
+      pendingQuestion,
+      resolution,
+    };
+    const existingIndex = next.findIndex((item) => item.type === "question_response"
+      && item.resolution.resolutionId === resolution.resolutionId);
+    if (existingIndex >= 0) {
+      const updated = [...next];
+      updated[existingIndex] = response;
+      return updated;
+    }
+    return [
+      ...next.slice(0, turnIndex + 1),
+      response,
+      ...next.slice(turnIndex + 1),
+    ];
   }
   return entries;
+}
+
+/** 从工具详情中读取经过共享 Schema 校验的提问终态。 */
+function readResolvedQuestion(block: AgentBlock): {
+  pendingQuestion: PendingQuestionProjection;
+  resolution: QuestionResolution;
+} | undefined {
+  if (block.type !== "tool" || block.name !== "ask_user" || !isRecord(block.details)) return undefined;
+  if (!Check(PendingQuestionProjectionSchema, block.details.pendingQuestion)
+    || !Check(QuestionResolutionSchema, block.details.resolution)) return undefined;
+  return {
+    pendingQuestion: block.details.pendingQuestion,
+    resolution: block.details.resolution,
+  };
 }
 
 /** ask_user 成为终止点时，清理同回合中 Pi 已声明但从未执行的兄弟工具。 */

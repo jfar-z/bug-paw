@@ -17,6 +17,7 @@ import { MessageSpeechButton } from "./message-speech-button";
 import { MessageCopyButton } from "./message-copy-button";
 import { copyTextForEntry } from "../message-copy";
 import { AgentTurnContent } from "./agent-turn-content";
+import { QuestionResponseMessage } from "./question-response-message";
 import type { SessionHistoryLoadState } from "../../../use-session-history";
 
 const SESSION_LOADING_NOTICE_EXIT_DELAY = 160;
@@ -112,6 +113,12 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               </div> : null}
             </div>
           </article>
+        ) : entry.type === "question_response" ? (
+          <QuestionResponseMessage
+            key={entry.id}
+            entry={entry}
+            profileIdentity={props.profileIdentity}
+          />
         ) : (
           <article className="message-row is-assistant" key={entry.id}>
             <div className="message-meta">
