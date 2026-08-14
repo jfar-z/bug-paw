@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AvatarCropArea } from "../../../shared/avatar-contracts";
@@ -30,6 +30,7 @@ describe("头像裁剪对话框", () => {
   const revokeObjectURL = vi.fn();
 
   beforeEach(() => {
+    createObjectURL.mockImplementation(() => "blob:avatar-preview");
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
   });
 
@@ -115,6 +116,7 @@ describe("头像裁剪对话框", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("图片处理失败");
+    expect(screen.getByRole("button", { name: "重新选择" })).toBeEnabled();
     const replacement = new File(["new"], "new.png", { type: "image/png" });
     fireEvent.change(screen.getByLabelText("重新选择头像"), { target: { files: [replacement] } });
     expect(onReplace).toHaveBeenCalledWith(replacement);
@@ -147,6 +149,73 @@ describe("头像裁剪对话框", () => {
     expect(screen.getByRole("button", { name: "关闭头像裁剪" })).toHaveStyle({ width: "44px", height: "44px" });
     unmount();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:avatar-preview");
+  });
+
+  it("严格模式和文件替换时逐一释放创建的对象 URL", () => {
+    let sequence = 0;
+    createObjectURL.mockImplementation(() => `blob:avatar-${sequence += 1}`);
+    const first = avatarFile();
+    const second = new File(["replacement"], "replacement.png", { type: "image/png" });
+    const view = render(
+      <StrictMode>
+        <AvatarCropDialog
+          file={first}
+          busy={false}
+          onCancel={vi.fn()}
+          onReplace={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      </StrictMode>,
+    );
+
+    view.rerender(
+      <StrictMode>
+        <AvatarCropDialog
+          file={second}
+          busy={false}
+          onCancel={vi.fn()}
+          onReplace={vi.fn()}
+          onConfirm={vi.fn()}
+        />
+      </StrictMode>,
+    );
+    view.unmount();
+
+    const createdUrls = createObjectURL.mock.results.map((result) => result.value as string);
+    expect(createdUrls.length).toBeGreaterThanOrEqual(2);
+    for (const url of createdUrls) {
+      expect(revokeObjectURL.mock.calls.filter(([revoked]) => revoked === url)).toHaveLength(1);
+    }
+  });
+
+  it("视口跨过移动端断点时实时切换全屏结构", () => {
+    let matches = false;
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      get matches() {
+        return matches;
+      },
+      media: "(max-width: 760px)",
+      addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener),
+    })));
+    render(
+      <AvatarCropDialog
+        file={avatarFile()}
+        busy={false}
+        onCancel={vi.fn()}
+        onReplace={vi.fn()}
+        onConfirm={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "调整头像" });
+    expect(dialog).not.toHaveClass("avatar-crop-dialog--mobile");
+
+    matches = true;
+    act(() => listeners.forEach((listener) => listener({ matches: true } as MediaQueryListEvent)));
+
+    expect(dialog).toHaveClass("avatar-crop-dialog--mobile");
+    expect(dialog).toHaveStyle({ width: "100%", minHeight: "100dvh" });
   });
 });
 

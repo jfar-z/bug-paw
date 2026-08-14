@@ -1,5 +1,5 @@
 import { ImagePlus, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import Cropper, { type Area } from "react-easy-crop";
 
 import type { AvatarCropArea } from "../../../shared/avatar-contracts";
@@ -19,6 +19,7 @@ const FOCUSABLE_SELECTOR = [
   "[href]",
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
+const MOBILE_MEDIA_QUERY = "(max-width: 760px)";
 
 /** 在桌面模态框或移动端全屏编辑器中完成固定 1:1 头像裁剪。 */
 export function AvatarCropDialog({ file, busy, error, onCancel, onReplace, onConfirm }: AvatarCropDialogProps) {
@@ -27,12 +28,17 @@ export function AvatarCropDialog({ file, busy, error, onCancel, onReplace, onCon
   const [cropArea, setCropArea] = useState<AvatarCropArea>();
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
-  const objectUrl = useMemo(() => URL.createObjectURL(file), [file]);
-  const mobile = window.matchMedia?.("(max-width: 760px)").matches ?? false;
+  const [objectUrl, setObjectUrl] = useState("");
+  const mobile = useMediaQuery(MOBILE_MEDIA_QUERY);
   const styles = cropDialogStyles(mobile);
 
-  useEffect(() => () => URL.revokeObjectURL(objectUrl), [objectUrl]);
+  useEffect(() => {
+    const nextObjectUrl = URL.createObjectURL(file);
+    setObjectUrl(nextObjectUrl);
+    return () => URL.revokeObjectURL(nextObjectUrl);
+  }, [file]);
 
   useEffect(() => {
     setCropPosition({ x: 0, y: 0 });
@@ -107,21 +113,23 @@ export function AvatarCropDialog({ file, busy, error, onCancel, onReplace, onCon
         <div style={styles.body}>
           <div style={styles.editor}>
             <div aria-label="头像裁剪画布" style={styles.stage}>
-              <Cropper
-                image={objectUrl}
-                crop={cropPosition}
-                zoom={zoom}
-                aspect={1}
-                cropShape="rect"
-                showGrid
-                restrictPosition
-                roundCropAreaPixels
-                objectFit="contain"
-                style={{ cropAreaStyle: styles.cropArea }}
-                onCropChange={setCropPosition}
-                onZoomChange={setZoom}
-                onCropComplete={(area: Area) => setCropArea(toCropArea(area))}
-              />
+              {objectUrl ? (
+                <Cropper
+                  image={objectUrl}
+                  crop={cropPosition}
+                  zoom={zoom}
+                  aspect={1}
+                  cropShape="rect"
+                  showGrid
+                  restrictPosition
+                  roundCropAreaPixels
+                  objectFit="contain"
+                  style={{ cropAreaStyle: styles.cropArea }}
+                  onCropChange={setCropPosition}
+                  onZoomChange={setZoom}
+                  onCropComplete={(area: Area) => setCropArea(toCropArea(area))}
+                />
+              ) : null}
             </div>
             <label style={styles.zoomControl}>
               <span>缩放</span>
@@ -141,26 +149,36 @@ export function AvatarCropDialog({ file, busy, error, onCancel, onReplace, onCon
 
           <aside aria-label="头像效果预览" style={styles.previewPanel}>
             <div style={styles.preview}>
-              <img
-                src={objectUrl}
-                alt="圆角方形头像预览"
-                style={{ ...styles.previewImage, ...previewStyle(cropArea) }}
-              />
+              {objectUrl ? (
+                <img
+                  src={objectUrl}
+                  alt="圆角方形头像预览"
+                  style={{ ...styles.previewImage, ...previewStyle(cropArea) }}
+                />
+              ) : null}
             </div>
             <strong style={styles.previewTitle}>圆角方形头像</strong>
             <small style={styles.previewHelp}>透明 PNG 会保留透明通道，最终统一保存为 WebP。</small>
-            <label className="configuration-secondary-action" style={styles.replaceButton}>
+            <button
+              type="button"
+              className="configuration-secondary-action"
+              disabled={busy}
+              style={styles.replaceButton}
+              onClick={() => replaceInputRef.current?.click()}
+            >
               <ImagePlus size={16} aria-hidden="true" />
               重新选择
-              <input
-                className="visually-hidden"
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                aria-label="重新选择头像"
-                disabled={busy}
-                onChange={replaceFile}
-              />
-            </label>
+            </button>
+            <input
+              ref={replaceInputRef}
+              className="visually-hidden"
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              aria-label="重新选择头像"
+              tabIndex={-1}
+              disabled={busy}
+              onChange={replaceFile}
+            />
           </aside>
         </div>
 
@@ -181,6 +199,22 @@ export function AvatarCropDialog({ file, busy, error, onCancel, onReplace, onCon
       </section>
     </div>
   );
+}
+
+/** 订阅断点变化，使设备旋转后无需重开裁剪器即可更新布局。 */
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches ?? false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia?.(query);
+    if (!mediaQuery) return undefined;
+    const handleChange = () => setMatches(mediaQuery.matches);
+    handleChange();
+    mediaQuery.addEventListener?.("change", handleChange);
+    return () => mediaQuery.removeEventListener?.("change", handleChange);
+  }, [query]);
+
+  return matches;
 }
 
 function toCropArea(area: Area): AvatarCropArea {

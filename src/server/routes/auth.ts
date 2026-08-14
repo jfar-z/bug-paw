@@ -70,6 +70,17 @@ interface AuthRouteDependencies {
 
 type AvatarMediaType = "image/png" | "image/jpeg" | "image/webp";
 
+/** 以同目录临时文件原子写入头像，并保证任意失败分支不残留临时文件。 */
+export async function persistAvatarFile(finalPath: string, content: Buffer): Promise<void> {
+  const temporaryPath = `${finalPath}.tmp`;
+  try {
+    await writeFile(temporaryPath, content, { mode: 0o600, flag: "wx" });
+    await rename(temporaryPath, finalPath);
+  } finally {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
 /**
  * 注册登录、退出和当前身份接口。
  */
@@ -164,9 +175,7 @@ export function registerAuthRoutes(app: FastifyInstance, dependencies: AuthRoute
         if (!current) throw new DomainError("PROFILE_NOT_FOUND", "个人资料不存在");
         const token = randomUUID();
         const finalPath = `${dependencies.paths.userAvatarFile}-${token}`;
-        const temporaryPath = `${finalPath}.tmp`;
-        await writeFile(temporaryPath, processed.content, { mode: 0o600, flag: "wx" });
-        await rename(temporaryPath, finalPath);
+        await persistAvatarFile(finalPath, processed.content);
         try {
           const updated = await dependencies.authService.updateProfile(request.query.revision, {
             avatar: { path: finalPath, mediaType: processed.mediaType },

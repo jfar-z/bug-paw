@@ -42,15 +42,26 @@ describe("头像图片标准化", () => {
 
   it("按 EXIF 视觉方向裁剪并移除元数据", async () => {
     const source = join(root, "oriented.jpg");
-    await sharp({ create: { width: 800, height: 1200, channels: 3, background: "#4682b4" } })
-      .jpeg()
+    await sharp({ create: { width: 200, height: 300, channels: 3, background: "#2554c7" } })
+      .composite([{
+        input: {
+          create: { width: 100, height: 150, channels: 3, background: "#ef233c" },
+        },
+        left: 0,
+        top: 150,
+      }])
+      .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
       .withMetadata({ orientation: 6 })
       .toFile(source);
 
-    const output = await processAvatarImage(source, { x: 0, y: 12.5, width: 50, height: 75 });
+    const output = await processAvatarImage(source, { x: 0, y: 0, width: 50, height: 75 });
     const metadata = await sharp(output.content).metadata();
+    const { data, info } = await sharp(output.content).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const centerOffset = (Math.floor(info.height / 2) * info.width + Math.floor(info.width / 2)) * info.channels;
 
-    expect(output).toMatchObject({ width: 512, height: 512 });
+    expect(output).toMatchObject({ width: 150, height: 150 });
+    expect(data[centerOffset]).toBeGreaterThan(200);
+    expect(data[centerOffset + 2]).toBeLessThan(90);
     expect(metadata.orientation).toBeUndefined();
     expect(metadata.exif).toBeUndefined();
     expect(metadata.icc).toBeUndefined();
@@ -90,6 +101,25 @@ describe("头像图片标准化", () => {
     ["零尺寸裁剪", JSON.stringify({ x: 0, y: 0, width: 0, height: 0 }), "INVALID_AVATAR_CROP"],
   ])("拒绝%s", (_name, value, code) => {
     expect(() => parseAvatarCrop(value)).toThrowError(expect.objectContaining({ code }));
+  });
+
+  it("容忍裁剪区域贴边时的浮点计算误差", () => {
+    const crop = parseAvatarCrop(JSON.stringify({
+      x: 33.33333333333334,
+      y: 0,
+      width: 66.66666666666667,
+      height: 66.66666666666667,
+    }));
+
+    expect(crop.x + crop.width).toBeLessThanOrEqual(100);
+    expect(crop.width).toBeCloseTo(66.66666666666666, 12);
+  });
+
+  it("仍拒绝明显超出图片边界的裁剪区域", () => {
+    const value = JSON.stringify({ x: 90, y: 0, width: 10.001, height: 10.001 });
+
+    expect(() => parseAvatarCrop(value))
+      .toThrowError(expect.objectContaining({ code: "INVALID_AVATAR_CROP" }));
   });
 
   it("拒绝换算后不是正方形的裁剪区域", async () => {

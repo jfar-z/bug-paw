@@ -18,6 +18,8 @@ const ENCODING_ATTEMPTS = [
   { size: 256, quality: 62 },
 ] as const;
 
+const CROP_BOUNDARY_EPSILON = 1e-7;
+
 /** 单次 WebP 编码使用的最大边长和质量。 */
 export interface AvatarEncodingAttempt {
   size: number;
@@ -56,10 +58,7 @@ export function parseAvatarCrop(value: string): AvatarCropArea {
   if (!isFiniteNumber(x) || !isFiniteNumber(y) || !isFiniteNumber(width) || !isFiniteNumber(height)) {
     throw invalidCrop();
   }
-  const crop = { x, y, width, height };
-  if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0) throw invalidCrop();
-  if (crop.x + crop.width > 100 || crop.y + crop.height > 100) throw invalidCrop();
-  return crop;
+  return normalizeCrop({ x, y, width, height });
 }
 
 /** 校验、裁剪并把头像标准化为受限体积的静态 WebP。 */
@@ -125,18 +124,30 @@ async function assertSupportedImageSignature(sourcePath: string): Promise<void> 
 }
 
 function toPixelCrop(crop: AvatarCropArea, width: number, height: number): PixelCropArea {
-  if (!Object.values(crop).every(isFiniteNumber)) throw invalidCrop();
-  if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0) throw invalidCrop();
-  if (crop.x + crop.width > 100 || crop.y + crop.height > 100) throw invalidCrop();
+  const normalizedCrop = normalizeCrop(crop);
 
-  const left = Math.round(width * crop.x / 100);
-  const top = Math.round(height * crop.y / 100);
-  const cropWidth = Math.round(width * crop.width / 100);
-  const cropHeight = Math.round(height * crop.height / 100);
+  const left = Math.round(width * normalizedCrop.x / 100);
+  const top = Math.round(height * normalizedCrop.y / 100);
+  const cropWidth = Math.round(width * normalizedCrop.width / 100);
+  const cropHeight = Math.round(height * normalizedCrop.height / 100);
   if (Math.abs(cropWidth - cropHeight) > 1) throw invalidCrop();
   const size = Math.min(cropWidth, cropHeight);
   if (size <= 0 || left + size > width || top + size > height) throw invalidCrop();
   return { left, top, size };
+}
+
+/** 容忍浏览器百分比换算的极小误差，但不放宽真实越界裁剪。 */
+function normalizeCrop(crop: AvatarCropArea): AvatarCropArea {
+  if (!Object.values(crop).every(isFiniteNumber)) throw invalidCrop();
+  if (crop.x < 0 || crop.y < 0 || crop.width <= 0 || crop.height <= 0) throw invalidCrop();
+  const right = crop.x + crop.width;
+  const bottom = crop.y + crop.height;
+  if (right > 100 + CROP_BOUNDARY_EPSILON || bottom > 100 + CROP_BOUNDARY_EPSILON) throw invalidCrop();
+  return {
+    ...crop,
+    width: right > 100 ? 100 - crop.x : crop.width,
+    height: bottom > 100 ? 100 - crop.y : crop.height,
+  };
 }
 
 function isPng(value: Buffer): boolean {
