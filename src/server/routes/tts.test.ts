@@ -37,14 +37,62 @@ describe("语音合成配置路由", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/v1/capabilities/tts",
-      payload: { name: "中文语音", baseUrl: "https://tts.example/v1", model: "tts-1", voice: "alloy", responseFormat: "mp3", apiKey: randomUUID() },
+      payload: {
+        name: "中文语音",
+        baseUrl: "https://tts.example/v1",
+        model: "tts-1",
+        voice: "alloy",
+        responseFormat: "mp3",
+        apiKey: randomUUID(),
+        customParameters: { response_format: "pcm", instructions: "用愉快语气朗读" },
+      },
     });
     const listed = await app.inject({ method: "GET", url: "/api/v1/capabilities/tts" });
 
     expect(created.statusCode).toBe(201);
     expect(listed.headers["cache-control"]).toBe("no-store");
-    expect(listed.json().profiles).toEqual([expect.objectContaining({ name: "中文语音", hasApiKey: true })]);
+    expect(listed.json().profiles).toEqual([expect.objectContaining({
+      name: "中文语音",
+      hasApiKey: true,
+      customParameters: { response_format: "pcm", instructions: "用愉快语气朗读" },
+    })]);
     expect(listed.json().profiles[0]).not.toHaveProperty("apiKey");
+    await app.close();
+  });
+
+  it("拒绝模型级自定义参数覆盖 input", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tts-routes-"));
+    roots.push(root);
+    const app = Fastify();
+    registerApiV1Namespace(app);
+    registerTtsRoutes(app, {
+      authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService,
+      configs: new TtsConfigService(join(root, "tts.json")),
+      synthesize: { synthesize: vi.fn() },
+      isProfileInUse: vi.fn(async () => false),
+      getAgentTtsProfile: vi.fn(async () => undefined),
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/tts",
+      payload: {
+        name: "无效语音",
+        baseUrl: "https://tts.example/v1",
+        model: "tts-1",
+        voice: "alloy",
+        responseFormat: "mp3",
+        apiKey: randomUUID(),
+        customParameters: { input: "覆盖" },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: "TTS 自定义请求参数不能覆盖 input",
+    });
     await app.close();
   });
 

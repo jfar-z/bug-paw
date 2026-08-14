@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -75,5 +75,78 @@ describe("语音合成配置服务", () => {
       responseFormat: "mp3",
       apiKey: randomUUID(),
     })).rejects.toThrow("地址必须不含凭证");
+  });
+
+  it("保存并返回模型级自定义请求参数", async () => {
+    const service = await fixture();
+
+    const created = await service.create({
+      name: "情绪语音",
+      baseUrl: "https://tts.example/v1",
+      model: "tts-1",
+      voice: "alloy",
+      responseFormat: "mp3",
+      apiKey: randomUUID(),
+      customParameters: { response_format: "pcm", instructions: "用愉快语气朗读" },
+    });
+
+    expect(created.profile.customParameters).toEqual({
+      response_format: "pcm",
+      instructions: "用愉快语气朗读",
+    });
+    await expect(service.getPrivate(created.profile.id)).resolves.toMatchObject({
+      customParameters: { response_format: "pcm", instructions: "用愉快语气朗读" },
+    });
+  });
+
+  it("兼容缺少自定义参数的旧配置并忽略旧记录中的非法参数", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tts-config-legacy-"));
+    roots.push(root);
+    const filePath = join(root, "tts.json");
+    await writeFile(filePath, JSON.stringify({
+      profiles: [
+        {
+          id: "legacy-valid",
+          name: "旧语音",
+          baseUrl: "https://tts.example/v1",
+          model: "tts-1",
+          voice: "alloy",
+          responseFormat: "mp3",
+          apiKey: "legacy-key",
+        },
+        {
+          id: "legacy-invalid",
+          name: "旧错误参数",
+          baseUrl: "https://tts.example/v1",
+          model: "tts-1",
+          voice: "alloy",
+          responseFormat: "mp3",
+          apiKey: "legacy-key",
+          customParameters: { input: "错误覆盖" },
+        },
+      ],
+    }), "utf8");
+
+    const listed = await new TtsConfigService(filePath).list();
+
+    expect(listed.profiles).toHaveLength(2);
+    expect(listed.profiles.map((profile) => profile.customParameters)).toEqual([{}, {}]);
+  });
+
+  it("拒绝受保护字段和超过上限的模型参数", async () => {
+    const service = await fixture();
+    const base = {
+      name: "无效参数",
+      baseUrl: "https://tts.example/v1",
+      model: "tts-1",
+      voice: "alloy",
+      responseFormat: "mp3" as const,
+      apiKey: randomUUID(),
+    };
+
+    await expect(service.create({ ...base, customParameters: { input: "覆盖" } }))
+      .rejects.toThrow("不能覆盖 input");
+    await expect(service.create({ ...base, customParameters: { instructions: "好".repeat(6_000) } }))
+      .rejects.toThrow("不能超过 16 KiB");
   });
 });
