@@ -34,7 +34,7 @@ describe("Session 提问历史对账", () => {
       status: "submitted",
       answers: [],
       unansweredQuestionIds: ["question-1"],
-    });
+    }, questionFixture);
     const facts = inspectQuestionFacts([
       toolResult("record-1", false),
       toolResult("record-error", true),
@@ -88,7 +88,7 @@ describe("Session 提问历史对账", () => {
     reconcileSessionQuestions({
       agentId: "agent-1",
       sessionId: "session-1",
-      messages: [{ role: "user", content: compileQuestionResponseProtocol(resolution) }],
+      messages: [{ role: "user", content: compileQuestionResponseProtocol(resolution, questionFixture) }],
       repository,
     });
     expect(repository.findById("agent-1", "session-1", "record-1")?.state).toBe("submitted");
@@ -133,6 +133,17 @@ describe("Session 提问历史对账", () => {
     });
   }
 });
+
+const questionFixture = [{
+  id: "question-1",
+  header: "方案",
+  question: "请选择方案",
+  multiSelect: false,
+  options: [
+    { id: "option-1", label: "A", description: "方案 A" },
+    { id: "option-2", label: "B", description: "方案 B" },
+  ],
+}];
 
 function toolResult(questionRecordId: string, isError: boolean) {
   return {

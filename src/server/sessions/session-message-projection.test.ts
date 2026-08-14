@@ -122,7 +122,16 @@ describe("会话消息浏览器投影", () => {
       discardReason: "new_message",
       answers: [],
       unansweredQuestionIds: ["question-1"],
-    });
+    }, [{
+      id: "question-1",
+      header: "方案",
+      question: "请选择方案",
+      multiSelect: false,
+      options: [
+        { id: "option-1", label: "A", description: "方案 A" },
+        { id: "option-2", label: "B", description: "方案 B" },
+      ],
+    }]);
 
     expect(projectSessionMessages([
       { role: "user", content: protocol },

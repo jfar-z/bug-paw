@@ -291,7 +291,7 @@ describe("对话时间线", () => {
         content: [{ type: "text", text: "等待用户回答" }],
         details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
       },
-      { role: "user", content: compileQuestionResponseProtocol(resolution) },
+      { role: "user", content: compileQuestionResponseProtocol(resolution, historyPendingQuestion.questions) },
     ]);
 
     expect(entries).toHaveLength(1);
@@ -309,7 +309,7 @@ describe("对话时间线", () => {
       discardReason: "new_message",
       answers: [],
       unansweredQuestionIds: ["q-1"],
-    });
+    }, historyPendingQuestion.questions);
     const entries = parsePiHistory([
       { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
       { role: "toolResult", toolCallId: "ask-1", toolName: "ask_user", content: "等待", details: { type: "question_pending", pendingQuestion: historyPendingQuestion } },

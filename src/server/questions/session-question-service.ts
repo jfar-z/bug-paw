@@ -83,7 +83,13 @@ export class SessionQuestionService {
         answers: validated.answers,
         unansweredQuestionIds: validated.unansweredQuestionIds,
       };
-      return this.resolveAndStart(current, resolution, compileQuestionResponseProtocol(resolution), "", startPrompt);
+      return this.resolveAndStart(
+        current,
+        resolution,
+        compileQuestionResponseProtocol(resolution, current.questions),
+        "",
+        startPrompt,
+      );
     });
   }
 
@@ -103,7 +109,7 @@ export class SessionQuestionService {
         answers: [],
         unansweredQuestionIds: current.questions.map((question) => question.id),
       };
-      const protocol = compileQuestionResponseProtocol(resolution);
+      const protocol = compileQuestionResponseProtocol(resolution, current.questions);
       const prompt = input.prompt ? `${protocol}\n\n${input.prompt}` : protocol;
       return this.resolveAndStart(current, resolution, prompt, input.userText, startPrompt);
     });

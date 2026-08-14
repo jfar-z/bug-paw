@@ -57,6 +57,25 @@ describe("SessionQuestionService", () => {
     expect(repository.findById("agent-1", "session-1", "record-1")?.state).toBe("submitted");
   });
 
+  it("提交选项后给下一 Run 的协议携带服务端解析标签", async () => {
+    createPending();
+    const startPrompt = vi.fn(async (_sessionId: string, _prompt: string, _userText?: string) => runSummary());
+
+    await service.submitAnswers({
+      agentId: "agent-1",
+      sessionId: "session-1",
+      questionRecordId: "record-1",
+      input: {
+        version: 1,
+        answers: [{ questionId: "question-1", kind: "options", optionIds: ["option-1"] }],
+      },
+    }, startPrompt);
+
+    const prompt = startPrompt.mock.calls[0][1];
+    expect(prompt).toContain('"optionId":"option-1","label":"学习计划","description":"学习、阅读或研究相关"');
+    expect(prompt).not.toContain('"label":"日常事务"');
+  });
+
   it("并发提交相同版本时只有一个请求获得下一 Run", async () => {
     createPending();
     const startPrompt = vi.fn(async (_sessionId: string, _prompt: string, _userText?: string) => runSummary());
@@ -140,8 +159,8 @@ function question(id: string) {
     question: "请选择方案",
     multiSelect: false,
     options: [
-      { id: "option-1", label: "A", description: "方案 A" },
-      { id: "option-2", label: "B", description: "方案 B" },
+      { id: "option-1", label: "学习计划", description: "学习、阅读或研究相关" },
+      { id: "option-2", label: "日常事务", description: "生活安排或日常决策" },
     ],
   };
 }
