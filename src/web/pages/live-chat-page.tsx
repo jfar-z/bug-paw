@@ -1736,7 +1736,9 @@ function collectTimelineImages(entries: ConversationEntry[], summaries: Record<s
   for (const entry of entries) {
     const files = entry.type === "user"
       ? entry.files
-      : entry.blocks.flatMap((block) => block.type === "files" ? block.files : []);
+      : entry.type === "agent"
+        ? entry.blocks.flatMap((block) => block.type === "files" ? block.files : [])
+        : [];
     for (const file of files) {
       if (paths.has(file.path)) continue;
       paths.add(file.path);

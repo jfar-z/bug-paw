@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { AgentTurn, UserEntry } from "../../conversation-timeline";
+import type { AgentTurn, QuestionResponseEntry, UserEntry } from "../../conversation-timeline";
 import { copyTextForEntry } from "./message-copy";
 
 describe("消息复制文本提取", () => {
@@ -48,5 +48,38 @@ describe("消息复制文本提取", () => {
 
     expect(copyTextForEntry(withEmptyTail)).toBe("最终文本");
     expect(copyTextForEntry(toolOnly)).toBe("");
+  });
+
+  it("结构化回答不生成可复制正文", () => {
+    const entry: QuestionResponseEntry = {
+      id: "question-response-resolution-1",
+      type: "question_response",
+      pendingQuestion: {
+        id: "question-1",
+        version: 1,
+        toolCallId: "ask-1",
+        createdAt: "2026-08-14T08:00:00.000Z",
+        questions: [{
+          id: "q-1",
+          header: "范围",
+          question: "处理范围？",
+          multiSelect: false,
+          options: [
+            { id: "o-1", label: "全部", description: "处理全部" },
+            { id: "o-2", label: "部分", description: "处理部分" },
+          ],
+        }],
+      },
+      resolution: {
+        resolutionId: "resolution-1",
+        questionRecordId: "question-1",
+        status: "submitted",
+        answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+        unansweredQuestionIds: [],
+      },
+    };
+
+    expect(() => copyTextForEntry(entry)).not.toThrow();
+    expect(copyTextForEntry(entry)).toBe("");
   });
 });
