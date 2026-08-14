@@ -55,6 +55,21 @@ describe("会话消息浏览器投影", () => {
     expect(projected[0]).toHaveProperty("details.resolution", latestResolution);
   });
 
+  it("分页消息使用完整当前分支中的后续回答事实", () => {
+    const pendingQuestion = questionProjection("record-1", "call-1");
+    const resolution = submittedResolution("record-1", "resolution-1", "option-learning");
+    const questionResult = questionToolResult(pendingQuestion);
+
+    const projected = projectSessionMessages([questionResult], {
+      questionResolutionMessages: [
+        questionResult,
+        { role: "user", content: compileQuestionResponseProtocol(resolution, pendingQuestion.questions) },
+      ],
+    });
+
+    expect(projected[0]).toHaveProperty("details.resolution", resolution);
+  });
+
   it("替换图片和超长工具文本但不修改原消息", () => {
     const original = [{
       role: "toolResult",

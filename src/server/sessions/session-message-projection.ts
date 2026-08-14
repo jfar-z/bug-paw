@@ -11,12 +11,22 @@ import {
 const IMAGE_PLACEHOLDER = "<IMAGE_BASE64>";
 const TOOL_TEXT_PLACEHOLDER = "<TOOL_RESULT_TOO_LONG>";
 
+export interface SessionMessageProjectionOptions {
+  /**
+   * 用于恢复提问终态的完整当前分支消息；分页展示时可与待投影消息不同。
+   */
+  questionResolutionMessages?: readonly unknown[];
+}
+
 /**
  * 创建仅供浏览器展示的消息副本，完整 Pi 消息和 JSONL 不会被修改。
  */
-export function projectSessionMessages(messages: readonly unknown[]): unknown[] {
+export function projectSessionMessages(
+  messages: readonly unknown[],
+  options: SessionMessageProjectionOptions = {},
+): unknown[] {
   let retainedToolTextBytes = 0;
-  const questionResolutions = collectQuestionResolutions(messages);
+  const questionResolutions = collectQuestionResolutions(options.questionResolutionMessages ?? messages);
   return messages.map((message) => {
     if (!isRecord(message)) return message;
     const projected = { ...message };

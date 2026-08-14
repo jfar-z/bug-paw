@@ -25,6 +25,7 @@ import type { ThinkingLevel } from "../shared/configuration-contracts";
 import { AskUserRunState } from "./questions/ask-user-run-state";
 import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
 import type { PendingQuestionProjection } from "../shared/session-question-contracts";
+import { compileQuestionResponseProtocol } from "../shared/question-response-protocol";
 
 const noRetrieval = {
   knowledgeSearch: false,
@@ -206,11 +207,33 @@ describe("PiRuntimeGateway 提示词刷新", () => {
   });
 
   it("快照只返回当前分支最近页并用稳定 token 加载上一页", async () => {
+    const pendingQuestion = pendingQuestionProjection();
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: pendingQuestion.id,
+      status: "submitted" as const,
+      answers: [{ questionId: "question-1", kind: "options" as const, optionIds: ["option-1"] }],
+      unansweredQuestionIds: [],
+    };
     const messages = Array.from({ length: 25 }, (_, index) => {
       const number = index + 1;
       return [
-        { role: "user", content: `question-${number}`, __piEntryId: `user-${number}` },
         {
+          role: "user",
+          content: number === 25
+            ? compileQuestionResponseProtocol(resolution, pendingQuestion.questions)
+            : `question-${number}`,
+          __piEntryId: `user-${number}`,
+        },
+        number === 1 ? {
+          role: "toolResult",
+          toolCallId: pendingQuestion.toolCallId,
+          toolName: "ask_user",
+          isError: false,
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+          __piEntryId: `tool-${number}`,
+        } : {
           role: "toolResult",
           content: [{ type: "image", data: "aGVsbG8=" }],
           __piEntryId: `tool-${number}`,
@@ -228,6 +251,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
 
     const previous = await gateway.loadHistoryPage!("session-1", "user-6", latest.history.branchToken);
     expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false, hasMoreAfter: true });
+    expect(previous.messages[1]).toHaveProperty("details.resolution", resolution);
     expect((gateway as unknown as Record<string, unknown>).loadHistoryTarget).toBeTypeOf("function");
     expect((gateway as unknown as Record<string, unknown>).loadHistoryPageAfter).toBeTypeOf("function");
     const target = await gateway.loadHistoryTarget!("session-1", "assistant-10", latest.history.branchToken);
