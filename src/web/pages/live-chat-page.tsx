@@ -218,6 +218,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [sessionActionsOpenRequest, setSessionActionsOpenRequest] = useState<{ sessionId: string; requestId: number }>();
   const initialSseSnapshotRef = useRef<{ id: string; lastEventId: number } | undefined>(undefined);
   const pendingUserMessageRef = useRef<PendingUserMessage | undefined>(undefined);
+  const questionSubmissionGenerationRef = useRef(0);
+  const streamRunRevisionRef = useRef(0);
   const agentSelectionGenerationRef = useRef(0);
   const modelChangeGenerationRef = useRef(0);
   const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -375,7 +377,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     onTimelineEvent: (event) => {
       if (!focusedHistoryRef.current) setTimeline((current) => reduceTimeline(current, event));
     },
-    onRunChange: setActiveRun,
+    onRunChange: (run) => {
+      streamRunRevisionRef.current += 1;
+      setActiveRun(run);
+    },
     onModelChange: (model) => {
       setSession((current) => current ? { ...current, model } : current);
       setSelectedModel(model);
@@ -409,14 +414,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           return next;
         });
       }
-      const resolvedSessionId = sessionIdRef.current;
-      if (!resolvedSessionId) return;
-      // SSE 不携带答案正文；最终事件到达后读取一次权威投影，供其他标签页同步展示。
-      void api.openSession(resolvedSessionId).then((snapshot) => {
-        if (sessionIdRef.current === resolvedSessionId) applyStreamSnapshot(snapshot);
-      }).catch((reason: unknown) => {
-        if (sessionIdRef.current === resolvedSessionId) void reportFailure(reason, "同步提问回答");
-      });
+      // SSE 不携带答案正文；复用游标保护流程暂停传输、刷新权威投影并续接后续事件。
+      stream.refreshProjection();
     },
     onError: setRunNotice,
     onUnexpectedError: (reason) => void reportFailure(reason, "恢复会话实时连接"),
@@ -1102,29 +1101,43 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   /** 提交当前浏览器草稿并把返回的 Run 设为活动运行。 */
   const submitQuestionAnswers = async (answers: SubmittedQuestionAnswer[]) => {
     if (!session || !pendingQuestion || questionSubmitting) return;
+    const submittedSessionId = session.id;
+    const submittedQuestionId = pendingQuestion.id;
+    const submissionGeneration = ++questionSubmissionGenerationRef.current;
     setQuestionSubmitting(true);
     setError("");
     setRunNotice("");
     try {
       await stream.ensureOpen();
-      const result = await api.submitQuestionAnswers(session.id, pendingQuestion.id, {
+      const runRevision = streamRunRevisionRef.current;
+      const result = await api.submitQuestionAnswers(submittedSessionId, submittedQuestionId, {
         version: pendingQuestion.version,
         answers,
       });
+      if (questionSubmissionGenerationRef.current !== submissionGeneration
+        || sessionIdRef.current !== submittedSessionId
+        || sessionSnapshotRef.current?.pendingQuestion?.id !== submittedQuestionId) return;
       setTimeline((current) => reduceTimeline(current, {
         type: "question_resolved",
         resolution: result.resolution,
       }));
       questionDraft.clear();
-      const next = { ...session, pendingQuestion: undefined };
-      sessionSnapshotRef.current = next;
-      setSession(next);
-      setActiveRun(result.run);
+      setSession((current) => {
+        if (!current || current.id !== submittedSessionId || current.pendingQuestion?.id !== submittedQuestionId) return current;
+        const next = { ...current, pendingQuestion: undefined };
+        sessionSnapshotRef.current = next;
+        return next;
+      });
+      // Run 事件比 POST 响应更权威；期间若已收到开始或终态事件，不再用迟到响应覆盖。
+      if (streamRunRevisionRef.current === runRevision) setActiveRun(result.run);
       resumeFollowing();
     } catch (reason) {
-      await reportFailure(reason, "提交提问回答");
+      if (questionSubmissionGenerationRef.current === submissionGeneration
+        && sessionIdRef.current === submittedSessionId) {
+        await reportFailure(reason, "提交提问回答");
+      }
     } finally {
-      setQuestionSubmitting(false);
+      if (questionSubmissionGenerationRef.current === submissionGeneration) setQuestionSubmitting(false);
     }
   };
 

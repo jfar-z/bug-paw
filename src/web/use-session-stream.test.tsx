@@ -537,6 +537,44 @@ describe("useSessionStream", () => {
     expect(FakeEventSource.instances[1]?.url).toBe("/api/v1/sessions/session-1/events?after=9");
   });
 
+  it("允许业务事件通过同一游标保护流程刷新权威投影", async () => {
+    const recovery = deferred<Awaited<ReturnType<typeof api.openSession>>>();
+    const openSession = vi.spyOn(api, "openSession").mockReturnValue(recovery.promise);
+    const onSnapshot = vi.fn();
+    const onTimelineEvent = vi.fn();
+    const { result } = renderHook(() => useSessionStream({
+      sessionId: "session-1",
+      onSnapshot,
+      onTimelineEvent,
+      onRunChange: vi.fn(),
+      onError: vi.fn(),
+    }));
+    const source = FakeEventSource.instances[0];
+
+    await act(async () => {
+      result.current.refreshProjection();
+      source.emitQueued("text_delta", {
+        id: 2,
+        type: "text_delta",
+        sessionId: "session-1",
+        delta: "恢复期间不得应用",
+      });
+      recovery.resolve({
+        id: "session-1",
+        messages: [],
+        history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+        lastEventId: 5,
+      });
+      await Promise.resolve();
+    });
+
+    expect(source.closed).toBe(true);
+    expect(openSession).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
+    expect(onTimelineEvent).not.toHaveBeenCalled();
+    expect(onSnapshot).toHaveBeenCalledWith(expect.objectContaining({ lastEventId: 5 }));
+    await waitFor(() => expect(FakeEventSource.instances[1]?.url).toBe("/api/v1/sessions/session-1/events?after=5"));
+  });
+
   it("Projection 快照请求永久挂起时按截止时间中止并恢复 SSE", async () => {
     vi.useFakeTimers();
     let recoverySignal: AbortSignal | undefined;

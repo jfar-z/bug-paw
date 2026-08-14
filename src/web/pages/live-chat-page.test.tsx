@@ -13,7 +13,14 @@ let regenerateResponse: Promise<Response> | undefined;
 let historyResponse: Response | undefined;
 let historyWindowResponse: Response | undefined;
 let sessionOneSnapshot: Record<string, unknown> | undefined;
+let questionAnswerResponse: Promise<Response> | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
+}
 
 class HistoryObserverDouble {
   constructor(callback: IntersectionObserverCallback) {
@@ -190,6 +197,7 @@ beforeEach(() => {
   historyResponse = undefined;
   historyWindowResponse = undefined;
   sessionOneSnapshot = undefined;
+  questionAnswerResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -349,7 +357,7 @@ beforeEach(() => {
       }));
     }
     if (url === "/api/v1/sessions/session-1/questions/question-1/answers" && init?.method === "POST") {
-      return new Response(JSON.stringify({
+      return questionAnswerResponse ?? new Response(JSON.stringify({
         run: {
           runId: "run-question-answer",
           sessionId: "session-1",
@@ -2527,6 +2535,7 @@ describe("LiveChatPage 提问处理", () => {
   it("收到提问后切换处理框，并支持收起后继续回答", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
 
     act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
       type: "question_pending",
@@ -2547,6 +2556,7 @@ describe("LiveChatPage 提问处理", () => {
   it("提交部分答案后只调用 answers API 并进入下一次运行", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     act(() => {
       const source = FakeEventSource.instances.at(-1)!;
       source.emit("tool_started", { type: "tool_started", callId: "ask-1", toolName: "ask_user", args: {} });
@@ -2581,6 +2591,7 @@ describe("LiveChatPage 提问处理", () => {
   it("收到无答案的最终事件后刷新权威会话投影", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
       type: "question_pending",
       pendingQuestion,
@@ -2620,9 +2631,70 @@ describe("LiveChatPage 提问处理", () => {
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(2);
   });
 
+  it("答案响应迟到时不会覆盖用户已经切换到的会话", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/questions/question-1/answers"))).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "第二会话已绑定 2 个定时任务" }));
+    expect(await screen.findAllByText("第二会话问题")).not.toHaveLength(0);
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByText("第二会话问题")).not.toHaveLength(0);
+    expect(screen.queryByText("已提交回答")).not.toBeInTheDocument();
+  });
+
+  it("Run 终态先于答案响应到达时不会恢复为运行中", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/questions/question-1/answers"))).toBe(true));
+    act(() => {
+      const source = FakeEventSource.instances.at(-1)!;
+      source.emit("run_started", {
+        type: "run_started",
+        run: {
+          runId: "run-question-answer",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-13T08:10:00.000Z",
+        },
+      });
+      source.emit("completed", { type: "completed" });
+    });
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
+  });
+
   it("收起后发送普通消息视为放弃，并只调用一次 messages API", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
     act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
       type: "question_pending",
       pendingQuestion,
@@ -2637,3 +2709,21 @@ describe("LiveChatPage 提问处理", () => {
     expect(screen.queryByRole("button", { name: /继续回答/ })).not.toBeInTheDocument();
   });
 });
+
+function questionAnswerResult(): Response {
+  return new Response(JSON.stringify({
+    run: {
+      runId: "run-question-answer",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-08-13T08:10:00.000Z",
+    },
+    resolution: {
+      resolutionId: "resolution-live",
+      questionRecordId: "question-1",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: ["q-2"],
+    },
+  }));
+}

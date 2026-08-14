@@ -29,6 +29,7 @@ interface SessionStreamOptions {
 
 export interface SessionStreamControl {
   ensureOpen(): Promise<void>;
+  refreshProjection(): void;
   close(): void;
   reconnecting: boolean;
 }
@@ -45,6 +46,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
   const lastEventIdRef = useRef(0);
   const callbacksRef = useRef<CallbackSet>(options);
   const pendingDeltasRef = useRef<Array<Extract<TimelineEvent, { type: "text_delta" }>>>([]);
+  const refreshProjectionRef = useRef<() => void>(() => undefined);
   const animationFrameRef = useRef<number | undefined>(undefined);
   const [reconnecting, setReconnecting] = useState(false);
   const [reconnectRequest, setReconnectRequest] = useState<{ sessionId: string; cursor: number; nonce: number }>();
@@ -139,6 +141,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         window.clearTimeout(recoveryTimeout);
       });
     };
+    refreshProjectionRef.current = recoverProjection;
     const reportInvalidEvent = (
       eventType: string,
       stage: "parse" | "schema" | "identity",
@@ -465,6 +468,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
 
     return () => {
       active = false;
+      if (refreshProjectionRef.current === recoverProjection) {
+        refreshProjectionRef.current = () => undefined;
+      }
       recoveryController?.abort();
       closeTransport();
     };
@@ -487,7 +493,11 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     });
   }, []);
 
-  return { ensureOpen, close, reconnecting };
+  const refreshProjection = useCallback(() => {
+    refreshProjectionRef.current();
+  }, []);
+
+  return { ensureOpen, refreshProjection, close, reconnecting };
 }
 
 function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undefined {
