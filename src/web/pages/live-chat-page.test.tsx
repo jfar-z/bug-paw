@@ -2641,6 +2641,63 @@ describe("LiveChatPage 提问处理", () => {
     expect(within(agentRow!).queryByText("部分")).not.toBeInTheDocument();
   });
 
+  it("Run 启动快照先清除待答状态时仍立即展示成功回答", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => {
+      const source = FakeEventSource.instances.at(-1)!;
+      source.emit("tool_started", { type: "tool_started", callId: "ask-1", toolName: "ask_user", args: {} });
+      source.emit("tool_finished", {
+        type: "tool_finished",
+        callId: "ask-1",
+        toolName: "ask_user",
+        result: {
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+        isError: false,
+      });
+      source.emit("question_pending", { type: "question_pending", pendingQuestion });
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      ([input]) => String(input).endsWith("/questions/question-1/answers"),
+    )).toBe(true));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("snapshot", {
+      type: "snapshot",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+        {
+          role: "toolResult",
+          toolCallId: "ask-1",
+          toolName: "ask_user",
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+      ],
+      run: {
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-14T08:10:00.000Z",
+      },
+    }));
+    expect(screen.queryByText("已提交回答")).not.toBeInTheDocument();
+
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText("已提交回答")).toBeVisible();
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeVisible();
+  });
+
   it("收到无答案的最终事件后刷新权威会话投影", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
