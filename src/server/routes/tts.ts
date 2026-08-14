@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 
 import type { TtsProfileInput } from "../../shared/tts-contracts";
+import type { TtsCustomParameters } from "../../shared/tts-custom-parameters";
 import { isTtsResponseFormat, normalizeTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import type { TtsConfigService } from "../tts/tts-config-service";
 import type { TtsSynthesisService } from "../tts/tts-synthesis-service";
@@ -13,7 +14,11 @@ interface TtsRouteDependencies {
   configs: TtsConfigService;
   synthesize: Pick<TtsSynthesisService, "synthesize">;
   isProfileInUse(profileId: string): Promise<boolean>;
-  getAgentTtsProfile(agentId: string): Promise<{ profileId: string; voice?: string } | undefined>;
+  getAgentTtsProfile(agentId: string): Promise<{
+    profileId: string;
+    voice?: string;
+    customParameters?: TtsCustomParameters;
+  } | undefined>;
 }
 
 /** 注册语音合成配置管理接口。 */
@@ -83,7 +88,10 @@ export function registerTtsRoutes(app: FastifyInstance, dependencies: TtsRouteDe
     // 浏览器停止朗读或切换上下文时会取消响应，必须同步终止上游生成。
     reply.raw.once("close", () => controller.abort());
     try {
-      const audio = await dependencies.synthesize.synthesize(settings.profileId, body.input, controller.signal, settings.voice);
+      const audio = await dependencies.synthesize.synthesize(settings.profileId, body.input, controller.signal, {
+        voice: settings.voice,
+        customParameters: settings.customParameters,
+      });
       return reply.type(audio.mediaType).header("Cache-Control", "no-store").send(audio.content);
     } catch (error) {
       if (controller.signal.aborted) return;

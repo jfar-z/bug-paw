@@ -604,7 +604,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     isProfileInUse: async (profileId) => (await agentStore.list()).some((agent) => agent.profile.ttsProfileId === profileId),
     getAgentTtsProfile: async (agentId) => {
       const profile = (await agentStore.get(agentId))?.profile;
-      return profile?.ttsProfileId ? { profileId: profile.ttsProfileId, voice: profile.ttsVoice } : undefined;
+      return profile?.ttsProfileId ? {
+        profileId: profile.ttsProfileId,
+        voice: profile.ttsVoice,
+        customParameters: profile.ttsCustomParameters,
+      } : undefined;
     },
   });
   registerKnowledgeRetrievalRoutes(app, {

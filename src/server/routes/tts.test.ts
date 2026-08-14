@@ -124,7 +124,7 @@ describe("语音合成配置路由", () => {
     await app.close();
   });
 
-  it("合成时把 Agent 音色覆盖传给服务，并流式返回音频", async () => {
+  it("合成时把 Agent 自定义参数和音色覆盖传给服务，并流式返回音频", async () => {
     const root = await mkdtemp(join(tmpdir(), "tts-routes-"));
     roots.push(root);
     const app = Fastify();
@@ -138,7 +138,11 @@ describe("语音合成配置路由", () => {
       configs: new TtsConfigService(join(root, "tts.json")),
       synthesize: { synthesize },
       isProfileInUse: vi.fn(async () => false),
-      getAgentTtsProfile: vi.fn(async () => ({ profileId: "profile-1", voice: "Cherry" })),
+      getAgentTtsProfile: vi.fn(async () => ({
+        profileId: "profile-1",
+        voice: "Cherry",
+        customParameters: { instructions: "Agent 情绪", response_format: "pcm" },
+      })),
     });
     await app.ready();
 
@@ -147,7 +151,10 @@ describe("语音合成配置路由", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("audio/pcm");
     expect([...response.rawPayload]).toEqual([1, 2, 3]);
-    expect(synthesize).toHaveBeenCalledWith("profile-1", "你好", expect.any(AbortSignal), "Cherry");
+    expect(synthesize).toHaveBeenCalledWith("profile-1", "你好", expect.any(AbortSignal), {
+      voice: "Cherry",
+      customParameters: { instructions: "Agent 情绪", response_format: "pcm" },
+    });
     await app.close();
   });
 
