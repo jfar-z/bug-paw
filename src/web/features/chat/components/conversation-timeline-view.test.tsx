@@ -146,13 +146,25 @@ describe("ConversationTimelineView 消息排版", () => {
           { id: "o-1", label: "全部", description: "处理全部" },
           { id: "o-2", label: "部分", description: "处理部分" },
         ],
+      }, {
+        id: "q-2",
+        header: "备注",
+        question: "还有补充吗？",
+        multiSelect: false,
+        options: [
+          { id: "o-3", label: "没有", description: "没有补充" },
+          { id: "o-4", label: "有", description: "补充说明" },
+        ],
       }],
     };
     const resolution = {
       resolutionId: "resolution-1",
       questionRecordId: "question-1",
       status: "submitted" as const,
-      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      answers: [
+        { questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] },
+        { questionId: "q-2", kind: "text" as const, text: "保留现状" },
+      ],
       unansweredQuestionIds: [],
     };
     const questionTurn: AgentTurn = {
@@ -187,9 +199,20 @@ describe("ConversationTimelineView 消息排版", () => {
     expect(row).toHaveClass("message-row", "is-user", "question-response-message");
     expect(within(row!).getByText("已提交回答")).toBeVisible();
     expect(within(row!).getByText("部分")).toBeVisible();
+    expect(within(row!).getByText("处理部分")).toBeVisible();
     expect(within(row!).queryByLabelText("用户消息操作")).not.toBeInTheDocument();
     const agentRow = container.querySelector<HTMLElement>(".message-row.is-assistant");
     expect(within(agentRow!).queryByText("部分")).not.toBeInTheDocument();
+
+    fireEvent.click(within(agentRow!).getByRole("button", { name: "查看问题" }));
+    fireEvent.click(within(agentRow!).getByRole("tab", { name: "2" }));
+    expect(within(agentRow!).getByText("还有补充吗？")).toBeVisible();
+    expect(within(row!).getByText("处理范围？")).toBeVisible();
+
+    fireEvent.click(within(row!).getByRole("tab", { name: "2" }));
+    expect(within(row!).getByText("还有补充吗？")).toBeVisible();
+    expect(within(row!).getByText("保留现状")).toBeVisible();
+    expect(within(agentRow!).queryByText("保留现状")).not.toBeInTheDocument();
   });
 
   it("有活动时本轮活动控制与消息操作共用同一行底栏", () => {
