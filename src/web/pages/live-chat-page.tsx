@@ -1133,8 +1133,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         answers,
       });
       if (questionSubmissionGenerationRef.current !== submissionGeneration
-        || sessionIdRef.current !== submittedSessionId
-        || sessionSnapshotRef.current?.pendingQuestion?.id !== submittedQuestionId) return;
+        || sessionIdRef.current !== submittedSessionId) return;
+      // Run 启动快照可能先清除待答状态；成功响应仍需立即写入权威回答卡片。
       setTimeline((current) => reduceTimeline(current, {
         type: "question_resolved",
         resolution: result.resolution,
