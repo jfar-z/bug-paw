@@ -144,6 +144,7 @@ describe("头像裁剪对话框", () => {
     );
 
     expect(screen.getByRole("dialog", { name: "调整头像" })).toHaveClass("avatar-crop-dialog--mobile");
+    expect(screen.getByRole("button", { name: "关闭头像裁剪" })).toHaveStyle({ width: "44px", height: "44px" });
     unmount();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:avatar-preview");
   });

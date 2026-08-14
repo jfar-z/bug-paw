@@ -222,7 +222,7 @@ function cropDialogStyles(mobile: boolean): Record<string, CSSProperties> {
     header: { justifyContent: "space-between" },
     title: { fontSize: 20 },
     description: { display: mobile ? "none" : undefined, marginTop: 5, color: "var(--text-secondary)", fontSize: 12 },
-    closeButton: { flex: "0 0 auto" },
+    closeButton: { flex: "0 0 auto", width: 44, height: 44 },
     body: {
       display: "grid",
       gridTemplateColumns: mobile ? "1fr" : "minmax(0, 1fr) 220px",
