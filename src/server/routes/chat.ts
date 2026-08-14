@@ -45,12 +45,12 @@ export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRoute
         if (!dependencies.chatService) {
           return sendApiError(reply, 503, "REQUEST_FAILED", "问题服务尚未就绪");
         }
-        const run = await dependencies.chatService.submitQuestionAnswers(
+        const result = await dependencies.chatService.submitQuestionAnswers(
           request.params.sessionId,
           request.params.questionRecordId,
           request.body as SubmitQuestionAnswers,
         );
-        return reply.code(202).send(run);
+        return reply.code(202).send(result);
       } catch (error) {
         return sendRuntimeError(reply, error);
       }

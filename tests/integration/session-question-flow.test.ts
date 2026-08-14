@@ -40,7 +40,7 @@ describe("Session 结构化提问集成", () => {
     const startPrompt = vi.fn(async () => runSummary("session-flow"));
     const service = new SessionQuestionService(repository, () => state);
 
-    const run = await service.submitAnswers({
+    const result = await service.submitAnswers({
       agentId: "agent-1",
       sessionId: "session-flow",
       questionRecordId: pending!.id,
@@ -54,7 +54,14 @@ describe("Session 结构化提问集成", () => {
       },
     }, startPrompt);
 
-    expect(run).toEqual(runSummary("session-flow"));
+    expect(result).toMatchObject({
+      run: runSummary("session-flow"),
+      resolution: {
+        status: "submitted",
+        questionRecordId: pending!.id,
+        unansweredQuestionIds: [pending!.questions[1].id],
+      },
+    });
     expect(startPrompt).toHaveBeenCalledOnce();
     const protocol = parseQuestionResponseProtocol(startPrompt.mock.calls[0][1]);
     expect(protocol.resolution).toMatchObject({

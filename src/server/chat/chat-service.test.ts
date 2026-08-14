@@ -205,9 +205,19 @@ describe("ChatApplicationService", () => {
 
   it("普通发送和答案提交都经过问题状态服务", async () => {
     const runtime = fakeRuntime();
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: "record-1",
+      status: "submitted" as const,
+      answers: [],
+      unansweredQuestionIds: ["question-1"],
+    };
     const questions = {
       startUserMessage: vi.fn(async (input, startPrompt) => startPrompt(input.sessionId, input.prompt, input.userText)),
-      submitAnswers: vi.fn(async (_input, startPrompt) => startPrompt("s1", "内部答案协议", "")),
+      submitAnswers: vi.fn(async (_input, startPrompt) => ({
+        run: await startPrompt("s1", "内部答案协议", ""),
+        resolution,
+      })),
     };
     const service = new ChatApplicationService({
       runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
@@ -216,7 +226,7 @@ describe("ChatApplicationService", () => {
     });
 
     await service.startTurn("s1", { text: "普通消息" });
-    await service.submitQuestionAnswers("s1", "record-1", { version: 1, answers: [] });
+    const result = await service.submitQuestionAnswers("s1", "record-1", { version: 1, answers: [] });
 
     expect(questions.startUserMessage).toHaveBeenCalledWith(expect.objectContaining({
       agentId: "a1",
@@ -230,6 +240,7 @@ describe("ChatApplicationService", () => {
       questionRecordId: "record-1",
       input: { version: 1, answers: [] },
     }), expect.any(Function));
+    expect(result).toMatchObject({ run: { runId: "r1" }, resolution });
   });
 });
 

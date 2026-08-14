@@ -12,6 +12,13 @@ interface QuestionTimelineCardProps {
 export function QuestionTimelineCard({ tool }: QuestionTimelineCardProps) {
   const state = readQuestionState(tool);
   if (!state.pending) {
+    // 工具进行中时问题详情可能尚未随流事件到达，这属于正常创建过程。
+    if (tool.status === "preparing" || tool.status === "parameterizing" || tool.status === "running") {
+      return <section className="question-timeline-card" aria-label="提问状态">
+        <strong>正在创建提问</strong>
+        <span>Agent 正在准备问题，请稍候。</span>
+      </section>;
+    }
     return <section className="question-timeline-card is-error" aria-label="提问状态">
       <strong>提问未能创建</strong>
       <span>请继续对话或重新发起提问。</span>

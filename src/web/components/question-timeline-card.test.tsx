@@ -35,6 +35,13 @@ function block(details: unknown, status: ToolBlock["status"] = "completed"): Too
 }
 
 describe("QuestionTimelineCard", () => {
+  it("提问仍在创建时展示中性等待状态而不是失败", () => {
+    render(<QuestionTimelineCard tool={block(undefined, "running")} />);
+
+    expect(screen.getByText("正在创建提问")).toBeVisible();
+    expect(screen.queryByText("提问未能创建")).not.toBeInTheDocument();
+  });
+
   it("展示待回答问题摘要且不泄露原始参数", () => {
     render(<QuestionTimelineCard tool={block({ type: "question_pending", pendingQuestion })} />);
 

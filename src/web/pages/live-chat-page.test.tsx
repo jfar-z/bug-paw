@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../styles.css";
 import { ApiTaskProvider } from "../api-task-provider";
 import { ErrorToastProvider } from "../error-toast-provider";
+import { compileQuestionResponseProtocol } from "../../shared/question-response-protocol";
 import { LiveChatPage } from "./live-chat-page";
 
 type EventListener = (event: MessageEvent) => void;
@@ -11,6 +12,7 @@ const operationLog: string[] = [];
 let regenerateResponse: Promise<Response> | undefined;
 let historyResponse: Response | undefined;
 let historyWindowResponse: Response | undefined;
+let sessionOneSnapshot: Record<string, unknown> | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 class HistoryObserverDouble {
@@ -187,6 +189,7 @@ beforeEach(() => {
   regenerateResponse = undefined;
   historyResponse = undefined;
   historyWindowResponse = undefined;
+  sessionOneSnapshot = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -261,7 +264,7 @@ beforeEach(() => {
       return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
-      return new Response(JSON.stringify({ id: "session-1", messages: [], thinkingLevel: "medium", lastEventId: 0 }));
+      return new Response(JSON.stringify(sessionOneSnapshot ?? { id: "session-1", messages: [], thinkingLevel: "medium", lastEventId: 0 }));
     }
     if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
       return new Response(null, { status: 204 });
@@ -347,10 +350,19 @@ beforeEach(() => {
     }
     if (url === "/api/v1/sessions/session-1/questions/question-1/answers" && init?.method === "POST") {
       return new Response(JSON.stringify({
-        runId: "run-question-answer",
-        sessionId: "session-1",
-        status: "running",
-        startedAt: "2026-08-13T08:10:00.000Z",
+        run: {
+          runId: "run-question-answer",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-13T08:10:00.000Z",
+        },
+        resolution: {
+          resolutionId: "resolution-live",
+          questionRecordId: "question-1",
+          status: "submitted",
+          answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+          unansweredQuestionIds: ["q-2"],
+        },
       }));
     }
     if (url.endsWith("/messages")) {
@@ -2535,10 +2547,21 @@ describe("LiveChatPage 提问处理", () => {
   it("提交部分答案后只调用 answers API 并进入下一次运行", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "测试" });
-    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
-      type: "question_pending",
-      pendingQuestion,
-    }));
+    act(() => {
+      const source = FakeEventSource.instances.at(-1)!;
+      source.emit("tool_started", { type: "tool_started", callId: "ask-1", toolName: "ask_user", args: {} });
+      source.emit("tool_finished", {
+        type: "tool_finished",
+        callId: "ask-1",
+        toolName: "ask_user",
+        result: {
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+        isError: false,
+      });
+      source.emit("question_pending", { type: "question_pending", pendingQuestion });
+    });
     fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
     fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
 
@@ -2550,6 +2573,51 @@ describe("LiveChatPage 提问处理", () => {
       answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
     });
     expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/messages"))).toHaveLength(0);
+    expect(screen.getByText("已提交回答")).toBeVisible();
+    expect(screen.getByText("部分")).toBeVisible();
+    expect(screen.getByText("未回答 1 题")).toBeVisible();
+  });
+
+  it("收到无答案的最终事件后刷新权威会话投影", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    const resolution = {
+      resolutionId: "resolution-remote",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: ["q-2"],
+    };
+    sessionOneSnapshot = {
+      id: "session-1",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+        {
+          role: "toolResult",
+          toolCallId: "ask-1",
+          toolName: "ask_user",
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+        { role: "user", content: compileQuestionResponseProtocol(resolution, pendingQuestion.questions) },
+      ],
+      thinkingLevel: "medium",
+      lastEventId: 4,
+    };
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_resolved", {
+      type: "question_resolved",
+      questionRecordId: "question-1",
+      state: "submitted",
+    }));
+
+    expect(await screen.findByText("已提交回答")).toBeVisible();
+    expect(screen.getByText("部分")).toBeVisible();
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(2);
   });
 
   it("收起后发送普通消息视为放弃，并只调用一次 messages API", async () => {

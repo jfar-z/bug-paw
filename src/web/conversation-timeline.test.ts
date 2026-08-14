@@ -301,6 +301,33 @@ describe("对话时间线", () => {
     });
   });
 
+  it("把答案提交响应立即归并到实时提问卡片", () => {
+    const entries = parsePiHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask_user",
+        content: [{ type: "text", text: "等待用户回答" }],
+        details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
+      },
+    ]);
+    const resolution = {
+      resolutionId: "resolution-live",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+
+    const resolved = reduceTimeline(entries, { type: "question_resolved", resolution });
+
+    expect((resolved[0] as AgentTurn).blocks[0]).toMatchObject({
+      name: "ask_user",
+      details: { resolution },
+    });
+  });
+
   it("放弃协议只显示协议后的普通正文，损坏协议保留原文", () => {
     const discarded = compileQuestionResponseProtocol({
       resolutionId: "resolution-2",

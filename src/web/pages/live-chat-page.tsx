@@ -399,14 +399,23 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       });
     },
     onQuestionResolved: ({ questionRecordId }) => {
-      if (sessionSnapshotRef.current?.pendingQuestion?.id !== questionRecordId) return;
-      questionDraft.clear();
-      setQuestionSubmitting(false);
-      setSession((current) => {
-        if (!current || current.pendingQuestion?.id !== questionRecordId) return current;
-        const next = { ...current, pendingQuestion: undefined };
-        sessionSnapshotRef.current = next;
-        return next;
+      if (sessionSnapshotRef.current?.pendingQuestion?.id === questionRecordId) {
+        questionDraft.clear();
+        setQuestionSubmitting(false);
+        setSession((current) => {
+          if (!current || current.pendingQuestion?.id !== questionRecordId) return current;
+          const next = { ...current, pendingQuestion: undefined };
+          sessionSnapshotRef.current = next;
+          return next;
+        });
+      }
+      const resolvedSessionId = sessionIdRef.current;
+      if (!resolvedSessionId) return;
+      // SSE 不携带答案正文；最终事件到达后读取一次权威投影，供其他标签页同步展示。
+      void api.openSession(resolvedSessionId).then((snapshot) => {
+        if (sessionIdRef.current === resolvedSessionId) applyStreamSnapshot(snapshot);
+      }).catch((reason: unknown) => {
+        if (sessionIdRef.current === resolvedSessionId) void reportFailure(reason, "同步提问回答");
       });
     },
     onError: setRunNotice,
@@ -1098,15 +1107,19 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setRunNotice("");
     try {
       await stream.ensureOpen();
-      const run = await api.submitQuestionAnswers(session.id, pendingQuestion.id, {
+      const result = await api.submitQuestionAnswers(session.id, pendingQuestion.id, {
         version: pendingQuestion.version,
         answers,
       });
+      setTimeline((current) => reduceTimeline(current, {
+        type: "question_resolved",
+        resolution: result.resolution,
+      }));
       questionDraft.clear();
       const next = { ...session, pendingQuestion: undefined };
       sessionSnapshotRef.current = next;
       setSession(next);
-      setActiveRun(run);
+      setActiveRun(result.run);
       resumeFollowing();
     } catch (reason) {
       await reportFailure(reason, "提交提问回答");

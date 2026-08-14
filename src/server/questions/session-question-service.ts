@@ -7,6 +7,7 @@ import {
 } from "../../shared/session-question-contracts";
 import {
   compileQuestionResponseProtocol,
+  type QuestionAnswerSubmissionResult,
   type QuestionResolution,
 } from "../../shared/question-response-protocol";
 import { DomainError } from "../core/errors";
@@ -57,7 +58,7 @@ export class SessionQuestionService {
   ) {}
 
   /** 提交零个、部分或全部答案，并自动启动下一 Run。 */
-  submitAnswers(input: SubmitAnswersCommand, startPrompt: StartQuestionPrompt): Promise<ChatRunSummary> {
+  submitAnswers(input: SubmitAnswersCommand, startPrompt: StartQuestionPrompt): Promise<QuestionAnswerSubmissionResult> {
     return this.mutations.run(input.sessionId, async () => {
       const current = this.requireOwnedRecord(input.agentId, input.sessionId, input.questionRecordId);
       if (current.state !== "pending") {
@@ -83,13 +84,14 @@ export class SessionQuestionService {
         answers: validated.answers,
         unansweredQuestionIds: validated.unansweredQuestionIds,
       };
-      return this.resolveAndStart(
+      const run = await this.resolveAndStart(
         current,
         resolution,
         compileQuestionResponseProtocol(resolution, current.questions),
         "",
         startPrompt,
       );
+      return { run, resolution };
     });
   }
 

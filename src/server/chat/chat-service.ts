@@ -8,6 +8,7 @@ import { compileAgentReferences, type AgentReferenceResolver } from "../agent-re
 import type { AgentReference, AgentReferenceInput } from "../../shared/agent-reference-contracts";
 import { parseSessionReplayContent } from "../../shared/session-message-context";
 import type { SubmitQuestionAnswers } from "../../shared/session-question-contracts";
+import type { QuestionAnswerSubmissionResult } from "../../shared/question-response-protocol";
 import type { SessionQuestionService } from "../questions/session-question-service";
 
 export interface SessionSubscription {
@@ -53,7 +54,7 @@ export class ChatApplicationService {
     sessionId: string,
     questionRecordId: string,
     input: SubmitQuestionAnswers,
-  ): Promise<ChatRunSummary> {
+  ): Promise<QuestionAnswerSubmissionResult> {
     if (!this.dependencies.questions) throw new DomainError("REQUEST_FAILED", "问题服务尚未就绪");
     const { agentId, lease } = await this.acquire(sessionId);
     try {

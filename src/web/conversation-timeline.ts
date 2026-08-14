@@ -65,6 +65,7 @@ export type ConversationEntry = UserEntry | AgentTurn;
 
 export type TimelineEvent =
   | { type: "user_message"; text: string; files?: WorkspaceFileRef[]; references?: AgentReference[]; id?: string }
+  | { type: "question_resolved"; resolution: QuestionResolution }
   | { type: "generation_started" }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
@@ -81,6 +82,9 @@ export type TimelineEvent =
  * 将实时事件归并到单一有序时间线，文件与工具更新保持原始位置。
  */
 export function reduceTimeline(entries: ConversationEntry[], event: TimelineEvent): ConversationEntry[] {
+  if (event.type === "question_resolved") {
+    return applyQuestionResolution(entries, event.resolution);
+  }
   if (event.type === "user_message") {
     return [...entries, {
       id: event.id ?? createId("user", entries),

@@ -16,6 +16,7 @@ import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session
 import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument } from "../shared/browser-automation-contracts";
 import type { SessionTextSearchPage } from "../shared/session-text-search";
 import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared/session-question-contracts";
+import type { QuestionAnswerSubmissionResult } from "../shared/question-response-protocol";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -447,7 +448,7 @@ export const api = {
       body: JSON.stringify({ text, filePaths, references }),
     }),
   submitQuestionAnswers: (sessionId: string, questionRecordId: string, input: SubmitQuestionAnswers) =>
-    request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionRecordId)}/answers`, {
+    request<QuestionAnswerSubmissionResult>(`/api/sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionRecordId)}/answers`, {
       method: "POST",
       body: JSON.stringify(input),
     }),

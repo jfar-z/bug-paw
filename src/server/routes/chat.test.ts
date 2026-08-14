@@ -14,10 +14,19 @@ const authService = {
 describe("Chat 问题答案路由", () => {
   it("严格校验答案并以 202 返回自动启动的下一 Run", async () => {
     const submitQuestionAnswers = vi.fn(async () => ({
-      runId: "run-2",
-      sessionId: "session-1",
-      status: "running",
-      startedAt: "2026-08-13T00:01:00.000Z",
+      run: {
+        runId: "run-2",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-13T00:01:00.000Z",
+      },
+      resolution: {
+        resolutionId: "resolution-1",
+        questionRecordId: "record-1",
+        status: "submitted",
+        answers: [],
+        unansweredQuestionIds: ["question-1"],
+      },
     }));
     const app = Fastify();
     registerChatRoutes(app, { authService, chatService: { submitQuestionAnswers } as never });
@@ -35,7 +44,10 @@ describe("Chat 问题答案路由", () => {
 
     expect(invalid.statusCode).toBe(400);
     expect(valid.statusCode).toBe(202);
-    expect(valid.json()).toMatchObject({ runId: "run-2" });
+    expect(valid.json()).toMatchObject({
+      run: { runId: "run-2" },
+      resolution: { questionRecordId: "record-1", status: "submitted" },
+    });
     expect(submitQuestionAnswers).toHaveBeenCalledWith(
       "session-1",
       "record-1",

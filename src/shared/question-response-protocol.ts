@@ -1,6 +1,7 @@
 import { Type, type Static, type TSchema } from "typebox";
 import { Check } from "typebox/value";
 
+import type { ChatRunSummary } from "./contracts";
 import {
   SubmittedQuestionAnswerSchema,
   type PendingQuestionProjection,
@@ -44,6 +45,12 @@ export const QuestionResolutionSchema = Type.Union([
 ]);
 
 export type QuestionResolution = Static<typeof QuestionResolutionSchema>;
+
+/** 提交问题答案后返回给客户端的权威结果。 */
+export interface QuestionAnswerSubmissionResult {
+  run: ChatRunSummary;
+  resolution: QuestionResolution;
+}
 
 const ResolvedOptionSchema = strictObject({
   optionId: Type.String({ minLength: 1 }),

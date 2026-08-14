@@ -38,14 +38,22 @@ describe("SessionQuestionService", () => {
     createPending();
     const startPrompt = vi.fn(async (_sessionId: string, _prompt: string, _userText?: string) => runSummary());
 
-    const run = await service.submitAnswers({
+    const result = await service.submitAnswers({
       agentId: "agent-1",
       sessionId: "session-1",
       questionRecordId: "record-1",
       input: { version: 1, answers },
     }, startPrompt);
 
-    expect(run).toEqual(runSummary());
+    expect(result).toEqual({
+      run: runSummary(),
+      resolution: expect.objectContaining({
+        questionRecordId: "record-1",
+        status: "submitted",
+        answers,
+        unansweredQuestionIds: answers.length === 0 ? ["question-1", "question-2"] : ["question-2"],
+      }),
+    });
     expect(startPrompt).toHaveBeenCalledOnce();
     const parsed = parseQuestionResponseProtocol(startPrompt.mock.calls[0][1]);
     expect(parsed.resolution).toMatchObject({

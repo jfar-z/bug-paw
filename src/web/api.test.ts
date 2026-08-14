@@ -191,7 +191,14 @@ describe("会话提问 API", () => {
       status: "queued",
       startedAt: "2026-08-13T08:00:00.000Z",
     };
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(run), {
+    const resolution = {
+      resolutionId: "resolution-next",
+      questionRecordId: "question/1",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ run, resolution }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }));
@@ -202,7 +209,7 @@ describe("会话提问 API", () => {
       answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
     });
 
-    expect(result).toEqual(run);
+    expect(result).toEqual({ run, resolution });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/sessions/session%2Fa/questions/question%2F1/answers",
       expect.objectContaining({
