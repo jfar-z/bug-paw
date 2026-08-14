@@ -50,7 +50,7 @@ describe("QuestionTimelineCard", () => {
     expect(screen.queryByText("不得展示")).not.toBeInTheDocument();
   });
 
-  it("按最终协议展示答案标签、自由文本与未回答数量", () => {
+  it("回答后只显示 Agent 提问终态而不展开答案", () => {
     render(<QuestionTimelineCard tool={block({
       type: "question_pending",
       pendingQuestion,
@@ -66,10 +66,29 @@ describe("QuestionTimelineCard", () => {
       },
     })} />);
 
-    expect(screen.getByText("已提交回答")).toBeVisible();
-    expect(screen.getByText("部分")).toBeVisible();
-    expect(screen.getByText("保留现状")).toBeVisible();
-    expect(screen.getByText("未回答 0 题")).toBeVisible();
+    expect(screen.getByText("已回答")).toBeVisible();
+    expect(screen.getByText("共 2 个问题")).toBeVisible();
+    expect(screen.queryByText("部分")).not.toBeInTheDocument();
+    expect(screen.queryByText("保留现状")).not.toBeInTheDocument();
+    expect(screen.queryByText("未回答 0 题")).not.toBeInTheDocument();
+  });
+
+  it("放弃回答后只显示 Agent 提问终态", () => {
+    render(<QuestionTimelineCard tool={block({
+      type: "question_pending",
+      pendingQuestion,
+      resolution: {
+        resolutionId: "r-2",
+        questionRecordId: "question-1",
+        status: "discarded",
+        discardReason: "new_message",
+        answers: [],
+        unansweredQuestionIds: ["q-1", "q-2"],
+      },
+    })} />);
+
+    expect(screen.getByText("已放弃")).toBeVisible();
+    expect(screen.queryByText("未回答 2 题")).not.toBeInTheDocument();
   });
 
   it("对损坏详情显示稳定错误状态而不转储对象", () => {
