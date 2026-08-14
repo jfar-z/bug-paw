@@ -8,6 +8,7 @@ import type {
   CreateAgentInput,
   UpdateAgentInput,
 } from "../../shared/agent-contracts";
+import { normalizeTtsCustomParameters, readTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import type { DataPaths } from "../paths";
 import { DomainError } from "../core/errors";
 import { KeyedMutex } from "../core/keyed-mutex";
@@ -266,7 +267,7 @@ export class AgentStore {
     const migration = requestedCwd === current.profile.cwd
       ? undefined
       : await preparePiMigration(current.profile.cwd, requestedCwd);
-    const { cwd: _cwd, defaultModel, defaultThinkingLevel, titleGeneration, ttsProfileId, ttsVoice, ttsAutoPlay, ttsStreamPlayback, ...safePatch } = patch;
+    const { cwd: _cwd, defaultModel, defaultThinkingLevel, titleGeneration, ttsProfileId, ttsVoice, ttsCustomParameters, ttsAutoPlay, ttsStreamPlayback, ...safePatch } = patch;
     const next: AgentProfile = {
       ...current.profile,
       ...safePatch,
@@ -288,6 +289,7 @@ export class AgentStore {
     if (ttsProfileId === null) {
       delete next.ttsProfileId;
       delete next.ttsVoice;
+      delete next.ttsCustomParameters;
       delete next.ttsAutoPlay;
       delete next.ttsStreamPlayback;
     } else if (ttsProfileId !== undefined) {
@@ -302,8 +304,17 @@ export class AgentStore {
         if (normalizedVoice) next.ttsVoice = normalizedVoice;
         else delete next.ttsVoice;
       }
+      if (ttsCustomParameters === null) delete next.ttsCustomParameters;
+      else if (ttsCustomParameters !== undefined) {
+        const normalizedParameters = normalizeTtsCustomParameters(ttsCustomParameters);
+        if (Object.keys(normalizedParameters).length > 0) next.ttsCustomParameters = normalizedParameters;
+        else delete next.ttsCustomParameters;
+      }
     }
-    if (!next.ttsProfileId) delete next.ttsVoice;
+    if (!next.ttsProfileId) {
+      delete next.ttsVoice;
+      delete next.ttsCustomParameters;
+    }
     const { instructions: _instructions, ...storedNext } = next;
     const written = await this.repository.update(agentId, revision, storedNext)
       .catch(async (error: unknown) => {
@@ -531,9 +542,12 @@ export class AgentStore {
   }
 
   private async withInstructions(document: PersistedAgentDocument): Promise<AgentProfileDocument> {
+    const { ttsCustomParameters: storedTtsCustomParameters, ...storedProfile } = document.profile;
+    const ttsCustomParameters = readTtsCustomParameters(storedTtsCustomParameters);
     return {
       profile: {
-        ...document.profile,
+        ...storedProfile,
+        ...(Object.keys(ttsCustomParameters).length > 0 ? { ttsCustomParameters } : {}),
         instructions: await this.prompts.readLongTermInstructions(document.profile.id),
       },
       revision: document.revision,

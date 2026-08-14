@@ -50,6 +50,70 @@ describe("TtsPage", () => {
     expect(screen.getByLabelText("TTS API Key")).toHaveValue("tts-secret");
   });
 
+  it("格式化回显并以对象保存模型级自定义请求参数", async () => {
+    window.localStorage.clear();
+    const profile = {
+      id: "profile-1",
+      name: "默认语音",
+      baseUrl: "https://example.test/v1",
+      model: "speech",
+      voice: "alloy",
+      responseFormat: "mp3",
+      customParameters: { instructions: "模型情绪" },
+      hasApiKey: true,
+    };
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") return new Response(JSON.stringify({ revision: "r2" }), { status: 200 });
+      return new Response(JSON.stringify({ revision: "r1", profiles: [profile] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderTtsPage();
+
+    const parameters = await screen.findByRole("textbox", { name: "TTS 自定义请求参数" });
+    expect(parameters).toHaveValue('{\n  "instructions": "模型情绪"\n}');
+    fireEvent.change(parameters, {
+      target: { value: '{\n  "response_format": "pcm",\n  "instructions": "用愉快的情绪朗读"\n}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true));
+    const saved = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+    const body = JSON.parse(String(saved?.[1]?.body));
+    expect(body.customParameters).toEqual({
+      response_format: "pcm",
+      instructions: "用愉快的情绪朗读",
+    });
+  });
+
+  it("本地拒绝非法 JSON 和 input 覆盖且不发送保存请求", async () => {
+    window.localStorage.clear();
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      revision: "r1",
+      profiles: [{
+        id: "profile-1",
+        name: "默认语音",
+        baseUrl: "https://example.test/v1",
+        model: "speech",
+        voice: "alloy",
+        responseFormat: "mp3",
+        customParameters: {},
+        hasApiKey: true,
+      }],
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderTtsPage();
+
+    const parameters = await screen.findByRole("textbox", { name: "TTS 自定义请求参数" });
+    fireEvent.change(parameters, { target: { value: "{" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText("TTS 自定义请求参数必须是有效的 JSON")).toBeInTheDocument();
+
+    fireEvent.change(parameters, { target: { value: '{"input":"覆盖"}' } });
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+    expect(await screen.findByText("TTS 自定义请求参数不能覆盖 input")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH" || init?.method === "POST")).toBe(false);
+  });
+
   it("未声明的配置加载错误进入全局 Toast", async () => {
     window.localStorage.clear();
     vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("network secret"); }));

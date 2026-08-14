@@ -50,6 +50,27 @@ describe("AgentStore", () => {
     });
   });
 
+  it("读取历史 Profile 时忽略非法 TTS 自定义参数", async () => {
+    const { paths, store } = await fixture();
+    const created = await store.create({ name: "历史语音 Agent", ttsProfileId: "voice-a" });
+    const database = openDatabase(paths.databaseFile);
+    const stored = database.readOne<{ profile_json: string }>(
+      "SELECT profile_json FROM agents WHERE id = ?",
+      [created.profile.id],
+    );
+    const profile = JSON.parse(stored!.profile_json) as Record<string, unknown>;
+    database.write(
+      "UPDATE agents SET profile_json = ? WHERE id = ?",
+      [JSON.stringify({ ...profile, ttsCustomParameters: { input: "历史错误值" } }), created.profile.id],
+    );
+    database.close();
+
+    const loaded = await new AgentStore(paths).get(created.profile.id);
+
+    expect(loaded?.profile.name).toBe("历史语音 Agent");
+    expect(loaded?.profile).not.toHaveProperty("ttsCustomParameters");
+  });
+
   it("补齐历史 Agent 的系统工具权限且不移除既有选择", async () => {
     const { store } = await fixture();
     const created = await store.create({ name: "历史 Agent", allowedTools: ["read"] });

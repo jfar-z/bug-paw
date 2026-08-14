@@ -217,23 +217,37 @@ describe("Agent 配置路由", () => {
     await app.close();
   });
 
-  it("保存 Agent 的语音模型、音色覆盖和播放选项", async () => {
+  it("保存并清除 Agent 的语音模型、音色、自定义参数和播放选项", async () => {
     const { app, store } = await fixture();
     const created = await store.create({ name: "语音 Agent" });
     const response = await app.inject({
       method: "PATCH",
       url: `/api/agents/${created.profile.id}`,
-      payload: { revision: created.revision, ttsProfileId: "voice-a", ttsVoice: "Cherry", ttsAutoPlay: true, ttsStreamPlayback: true },
+      payload: {
+        revision: created.revision,
+        ttsProfileId: "voice-a",
+        ttsVoice: "Cherry",
+        ttsCustomParameters: { instructions: "温柔", response_format: "pcm" },
+        ttsAutoPlay: true,
+        ttsStreamPlayback: true,
+      },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().profile).toMatchObject({ ttsProfileId: "voice-a", ttsVoice: "Cherry", ttsAutoPlay: true, ttsStreamPlayback: true });
+    expect(response.json().profile).toMatchObject({
+      ttsProfileId: "voice-a",
+      ttsVoice: "Cherry",
+      ttsCustomParameters: { instructions: "温柔", response_format: "pcm" },
+      ttsAutoPlay: true,
+      ttsStreamPlayback: true,
+    });
     const cleared = await app.inject({
       method: "PATCH",
       url: `/api/agents/${created.profile.id}`,
       payload: { revision: response.json().revision, ttsProfileId: null },
     });
     expect(cleared.json().profile).not.toHaveProperty("ttsVoice");
+    expect(cleared.json().profile).not.toHaveProperty("ttsCustomParameters");
     await app.close();
   });
 
@@ -243,11 +257,34 @@ describe("Agent 配置路由", () => {
     const response = await app.inject({
       method: "PATCH",
       url: `/api/agents/${created.profile.id}`,
-      payload: { revision: created.revision, ttsVoice: "Cherry" },
+      payload: { revision: created.revision, ttsVoice: "Cherry", ttsCustomParameters: { instructions: "不会生效" } },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().profile).not.toHaveProperty("ttsVoice");
+    expect(response.json().profile).not.toHaveProperty("ttsCustomParameters");
+    await app.close();
+  });
+
+  it("以 VALIDATION_FAILED 拒绝 Agent 自定义参数覆盖 input", async () => {
+    const { app, store } = await fixture();
+    const created = await store.create({ name: "语音 Agent" });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/agents/${created.profile.id}`,
+      payload: {
+        revision: created.revision,
+        ttsProfileId: "voice-a",
+        ttsCustomParameters: { input: "覆盖" },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: "TTS 自定义请求参数不能覆盖 input",
+    });
     await app.close();
   });
 

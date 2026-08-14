@@ -29,6 +29,7 @@ describe("AgentDetailPage v0 身份结构", () => {
       status: "active" as const,
       cwd: "/data/workspace/agents/voice-agent",
       ttsProfileId: "tts-1",
+      ttsCustomParameters: { instructions: "模型情绪" },
       instructions: { role: "", behavior: "", rules: "", user: "" },
       allowedTools: ["read"],
       createdAt: "2026-08-09T00:00:00.000Z",
@@ -43,9 +44,11 @@ describe("AgentDetailPage v0 身份结构", () => {
         profiles: [{ id: "tts-1", name: "默认语音", model: "speech", voice: "alloy", responseFormat: "pcm", hasApiKey: true }],
       }));
       if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
-      const patch = init?.method === "PATCH" ? JSON.parse(String(init.body)) as { ttsVoice?: string } : undefined;
+      const patch = init?.method === "PATCH"
+        ? JSON.parse(String(init.body)) as { ttsVoice?: string; ttsCustomParameters?: Record<string, unknown> }
+        : undefined;
       return new Response(JSON.stringify({
-        profile: patch ? { ...profile, ttsVoice: patch.ttsVoice } : profile,
+        profile: patch ? { ...profile, ttsVoice: patch.ttsVoice, ttsCustomParameters: patch.ttsCustomParameters } : profile,
         revision: patch ? "r2" : "r1",
       }));
     });
@@ -55,8 +58,11 @@ describe("AgentDetailPage v0 身份结构", () => {
     await screen.findByText("语音 Agent");
     fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
     const voice = await screen.findByRole("textbox", { name: "Agent 音色" });
+    const parameters = screen.getByRole("textbox", { name: "Agent TTS 自定义请求参数" });
     expect(voice).toHaveAttribute("placeholder", "继承模型音色：alloy");
+    expect(parameters).toHaveValue('{\n  "instructions": "模型情绪"\n}');
     fireEvent.change(voice, { target: { value: "Cherry" } });
+    fireEvent.change(parameters, { target: { value: '{"instructions":"Agent 情绪","response_format":"pcm"}' } });
     fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
 
     await screen.findByText("已保存");
@@ -64,6 +70,96 @@ describe("AgentDetailPage v0 身份结构", () => {
       method: "PATCH",
       body: expect.stringContaining('"ttsVoice":"Cherry"'),
     }));
+    const saved = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+    expect(JSON.parse(String(saved?.[1]?.body)).ttsCustomParameters).toEqual({
+      instructions: "Agent 情绪",
+      response_format: "pcm",
+    });
+  });
+
+  it("本地拒绝非法 Agent TTS JSON 且不发送更新请求", async () => {
+    const profile = {
+      version: 1 as const,
+      id: "invalid-tts-agent",
+      name: "无效参数 Agent",
+      avatar: { kind: "initial" as const, value: "无" },
+      description: "",
+      status: "active" as const,
+      cwd: "/data/workspace/agents/invalid-tts-agent",
+      ttsProfileId: "tts-1",
+      instructions: { role: "", behavior: "", rules: "", user: "" },
+      allowedTools: ["read"],
+      createdAt: "2026-08-14T00:00:00.000Z",
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [] }));
+      if (url === "/api/v1/configuration/global") return new Response(JSON.stringify({ effective: {} }));
+      if (url === "/api/v1/capabilities/tts") return new Response(JSON.stringify({
+        revision: "tts-r1",
+        profiles: [{ id: "tts-1", name: "默认语音", baseUrl: "https://example.test/v1", model: "speech", voice: "alloy", responseFormat: "pcm", customParameters: {}, hasApiKey: true }],
+      }));
+      if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
+      return new Response(JSON.stringify({ profile, revision: "r1" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAgentDetailPage("invalid-tts-agent");
+
+    await screen.findByText("无效参数 Agent");
+    fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Agent TTS 自定义请求参数" }), { target: { value: "{" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    expect(await screen.findByText("TTS 自定义请求参数必须是有效的 JSON")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+  });
+
+  it("取消语音模型时清空并禁用 Agent 自定义参数", async () => {
+    const profile = {
+      version: 1 as const,
+      id: "clear-tts-agent",
+      name: "清理参数 Agent",
+      avatar: { kind: "initial" as const, value: "清" },
+      description: "",
+      status: "active" as const,
+      cwd: "/data/workspace/agents/clear-tts-agent",
+      ttsProfileId: "tts-1",
+      ttsCustomParameters: { instructions: "即将清除" },
+      instructions: { role: "", behavior: "", rules: "", user: "" },
+      allowedTools: ["read"],
+      createdAt: "2026-08-14T00:00:00.000Z",
+      updatedAt: "2026-08-14T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [] }));
+      if (url === "/api/v1/configuration/global") return new Response(JSON.stringify({ effective: {} }));
+      if (url === "/api/v1/capabilities/tts") return new Response(JSON.stringify({
+        revision: "tts-r1",
+        profiles: [{ id: "tts-1", name: "默认语音", baseUrl: "https://example.test/v1", model: "speech", voice: "alloy", responseFormat: "pcm", customParameters: {}, hasApiKey: true }],
+      }));
+      if (url.includes("/resources")) return new Response(JSON.stringify({ resources: [], tools: [] }));
+      const patch = init?.method === "PATCH" ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+      return new Response(JSON.stringify({ profile: patch ? { ...profile, ttsProfileId: undefined, ttsCustomParameters: undefined } : profile, revision: patch ? "r2" : "r1" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAgentDetailPage("clear-tts-agent");
+
+    await screen.findByText("清理参数 Agent");
+    fireEvent.click(screen.getByRole("button", { name: "模型与运行" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Agent 语音模型" }), { target: { value: "" } });
+    const parameters = screen.getByRole("textbox", { name: "Agent TTS 自定义请求参数" });
+    expect(parameters).toBeDisabled();
+    expect(parameters).toHaveValue("{}");
+    fireEvent.click(screen.getByRole("button", { name: "保存更改" }));
+
+    await screen.findByText("已保存");
+    const saved = fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH");
+    expect(JSON.parse(String(saved?.[1]?.body))).toMatchObject({
+      ttsProfileId: null,
+      ttsCustomParameters: null,
+    });
   });
 
   it("工具权限同时展示系统注入工具与已加载扩展工具，并保存选择", async () => {

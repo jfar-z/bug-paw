@@ -40,11 +40,27 @@ describe("createAgentProfile", () => {
       name: "语音 Agent",
       ttsProfileId: "voice-a",
       ttsVoice: "Cherry",
+      ttsCustomParameters: { instructions: "温柔", response_format: "pcm" },
       ttsAutoPlay: true,
       ttsStreamPlayback: true,
     }, "2026-08-07T00:00:00.000Z");
 
-    expect(profile).toMatchObject({ ttsProfileId: "voice-a", ttsVoice: "Cherry", ttsAutoPlay: true, ttsStreamPlayback: true });
+    expect(profile).toMatchObject({
+      ttsProfileId: "voice-a",
+      ttsVoice: "Cherry",
+      ttsCustomParameters: { instructions: "温柔", response_format: "pcm" },
+      ttsAutoPlay: true,
+      ttsStreamPlayback: true,
+    });
+  });
+
+  it("未选择语音模型时不保留孤立的自定义参数", () => {
+    const profile = createAgentProfile("agent-1", "/data/workspace/agents/agent-1", {
+      name: "无语音 Agent",
+      ttsCustomParameters: { instructions: "不会生效" },
+    }, "2026-08-14T00:00:00.000Z");
+
+    expect(profile).not.toHaveProperty("ttsCustomParameters");
   });
 
   it("新建 Agent 保留标题生成策略", () => {

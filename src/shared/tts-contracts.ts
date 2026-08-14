@@ -1,3 +1,5 @@
+import type { TtsCustomParameters } from "./tts-custom-parameters";
+
 /** 支持的 OpenAI 兼容语音响应格式。 */
 export type TtsResponseFormat = "mp3" | "opus" | "wav" | "pcm";
 
@@ -9,6 +11,7 @@ export interface TtsProfileSummary {
   model: string;
   voice: string;
   responseFormat: TtsResponseFormat;
+  customParameters: TtsCustomParameters;
   hasApiKey: boolean;
 }
 
@@ -19,6 +22,7 @@ export interface TtsProfileInput {
   model: string;
   voice: string;
   responseFormat: TtsResponseFormat;
+  customParameters?: TtsCustomParameters;
   /** 空字符串表示更新时保留已保存的密钥。 */
   apiKey: string;
 }
