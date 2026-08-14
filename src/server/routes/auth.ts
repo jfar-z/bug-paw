@@ -3,10 +3,14 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { DataPaths } from "../paths";
+import { processAvatarImage } from "../avatar/avatar-image-processor";
+import { receiveAvatarUpload } from "../avatar/avatar-upload";
+import { DomainError } from "../core/errors";
 import { openDatabase } from "../database/database";
 import { runMigrations } from "../database/migrator";
 import { createIdentityRepository, type IdentityRepository } from "../identity/identity-repository";
 import { createIdentityService, type IdentityService } from "../identity/identity-service";
+import { statusForDomainError } from "../http/error-handler";
 import { sendApiError } from "./http";
 
 const SESSION_COOKIE = "pi_agent_session";
@@ -148,37 +152,43 @@ export function registerAuthRoutes(app: FastifyInstance, dependencies: AuthRoute
 
   app.post<{ Querystring: { revision?: string } }>("/api/profile/avatar", async (request, reply) => {
     if (!(await requireUser(request, reply, dependencies.authService))) return;
-    if (!request.isMultipart() || typeof request.query.revision !== "string") {
+    if (typeof request.query.revision !== "string") {
       return sendApiError(reply, 400, "INVALID_AVATAR", "请上传头像图片并携带版本号");
     }
     try {
-      const part = await request.file({ limits: { files: 1, fileSize: 2 * 1024 * 1024 } });
-      if (!part) return sendApiError(reply, 400, "AVATAR_REQUIRED", "请选择头像图片");
-      const content = await part.toBuffer();
-      const mediaType = detectImageType(content);
-      if (!mediaType) return sendApiError(reply, 415, "INVALID_AVATAR_TYPE", "仅支持 PNG、JPEG 或 WebP 图片");
-      const current = await dependencies.authService.getProfile();
-      if (!current) return sendApiError(reply, 404, "PROFILE_NOT_FOUND", "个人资料不存在");
-      const token = randomUUID();
-      const finalPath = `${dependencies.paths.userAvatarFile}-${token}`;
-      const temporaryPath = `${finalPath}.tmp`;
-      await writeFile(temporaryPath, content, { mode: 0o600, flag: "wx" });
-      await rename(temporaryPath, finalPath);
+      const upload = await receiveAvatarUpload(request);
+      let response: { revision: string; profile: ReturnType<typeof toPublicProfile> };
       try {
-        const updated = await dependencies.authService.updateProfile(request.query.revision, {
-          avatar: { path: finalPath, mediaType },
-        });
-        if (current.avatar && current.avatar.path !== finalPath) {
-          await rm(current.avatar.path, { force: true }).catch(() => undefined);
+        const processed = await processAvatarImage(upload.sourcePath, upload.crop);
+        const current = await dependencies.authService.getProfile();
+        if (!current) throw new DomainError("PROFILE_NOT_FOUND", "个人资料不存在");
+        const token = randomUUID();
+        const finalPath = `${dependencies.paths.userAvatarFile}-${token}`;
+        const temporaryPath = `${finalPath}.tmp`;
+        await writeFile(temporaryPath, processed.content, { mode: 0o600, flag: "wx" });
+        await rename(temporaryPath, finalPath);
+        try {
+          const updated = await dependencies.authService.updateProfile(request.query.revision, {
+            avatar: { path: finalPath, mediaType: processed.mediaType },
+          });
+          if (current.avatar && current.avatar.path !== finalPath) {
+            // Profile 已指向新头像，旧文件清理失败不应回滚成功响应。
+            await rm(current.avatar.path, { force: true }).catch(() => undefined);
+          }
+          response = { revision: updated.revision, profile: toPublicProfile(updated) };
+        } catch (error) {
+          await rm(finalPath, { force: true });
+          throw error;
         }
-        return reply.send({ revision: updated.revision, profile: toPublicProfile(updated) });
-      } catch (error) {
-        await rm(finalPath, { force: true });
-        throw error;
+      } finally {
+        await upload.cleanup();
       }
+      return reply.send(response);
     } catch (error) {
-      if (error instanceof app.multipartErrors.RequestFileTooLargeError) return sendApiError(reply, 413, "AVATAR_TOO_LARGE", "头像不能超过 2 MB");
       if (isDomainCode(error, "VERSION_CONFLICT")) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
+      if (error instanceof DomainError) {
+        return sendApiError(reply, statusForDomainError(error.code), error.code, error.message);
+      }
       throw error;
     }
   });
@@ -196,13 +206,6 @@ function toPublicProfile(profile: Awaited<ReturnType<AuthService["getProfile"]>>
     displayName: profile.displayName || "本地管理员",
     ...(avatar ? { avatar: { kind: "image" as const, revision: profile.revision, mediaType: avatar.mediaType } } : {}),
   };
-}
-
-function detectImageType(content: Buffer): AvatarMediaType | undefined {
-  if (content.length >= 8 && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) return "image/jpeg";
-  if (content.length >= 12 && content.subarray(0, 4).toString("ascii") === "RIFF" && content.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
-  return undefined;
 }
 
 function isDomainCode(error: unknown, code: string): error is Error & { code: string } {

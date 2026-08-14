@@ -1,11 +1,15 @@
 // @vitest-environment node
 
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 import Fastify, { type FastifyInstance } from "fastify";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import sharp from "sharp";
+import type { AvatarCropArea } from "../../src/shared/avatar-contracts";
 import { createAuthService } from "../../src/server/routes/auth";
 import { registerAuthRoutes } from "../../src/server/routes/auth";
 import { registerSetupRoutes } from "../../src/server/routes/setup";
@@ -32,6 +36,7 @@ async function createTestContext(): Promise<TestContext> {
   const app = Fastify({ logger: false });
   apps.push(app);
   await app.register(cookie);
+  await app.register(multipart);
 
   const authService = createAuthService(paths, { now: () => fixedNow });
   registerStatusRoutes(app, { paths, authService });
@@ -178,5 +183,37 @@ describe("首启与认证路由", () => {
     expect(updated.json()).toMatchObject({ profile: { displayName: "小嘉" } });
     expect(updated.body).not.toContain("local-password-123");
     expect(updated.body).not.toContain("password-hash");
+
+    const source = await sharp(randomBytes(1_100 * 1_100 * 4), {
+      raw: { width: 1_100, height: 1_100, channels: 4 },
+    }).png().toBuffer();
+    expect(source.byteLength).toBeGreaterThan(2 * 1024 * 1024);
+    const boundary = "profile-avatar";
+    const avatar = await app.inject({
+      method: "POST",
+      url: `/api/profile/avatar?revision=${updated.json().revision as string}`,
+      headers: { cookie: cookieHeader, "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: avatarMultipart(boundary, source, { x: 10, y: 10, width: 80, height: 80 }),
+    });
+
+    expect(avatar.statusCode).toBe(200);
+    expect(avatar.json().profile.avatar).toMatchObject({ kind: "image", mediaType: "image/webp" });
+    const image = await app.inject({ method: "GET", url: "/api/profile/avatar", headers: { cookie: cookieHeader } });
+    expect(image.statusCode).toBe(200);
+    expect(image.headers["content-type"]).toBe("image/webp");
+    expect(image.rawPayload.byteLength).toBeLessThanOrEqual(2 * 1024 * 1024);
+    await expect(sharp(image.rawPayload).metadata()).resolves.toMatchObject({ format: "webp", width: 512, height: 512 });
   });
 });
+
+function avatarMultipart(boundary: string, content: Buffer, crop: AvatarCropArea): Buffer {
+  return Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="avatar"; filename="avatar.png"\r\nContent-Type: image/png\r\n\r\n`, "utf8"),
+    content,
+    Buffer.from(
+      `\r\n--${boundary}\r\nContent-Disposition: form-data; name="crop"\r\n\r\n`
+      + `${JSON.stringify(crop)}\r\n--${boundary}--\r\n`,
+      "utf8",
+    ),
+  ]);
+}
