@@ -86,17 +86,96 @@ function mediaDeclaration(source: string, condition: string, selector: string, p
 }
 
 describe("BugPaw 生产视觉合同", () => {
-  it("三套主题使用已确认的语义画布和 BUG 硬阴影", async () => {
+  it("主题画布与签名阴影使用已确认视觉方向", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8").catch(() => "");
     const rules = parseStyleRules(source);
 
     expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#151517");
-    expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f7f6f2");
-    expect(declaration(rules, ':root[data-theme="bug"]', "--canvas")).toBe("#ded2bf");
+    expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f3f2ee");
+    expect(declaration(rules, ':root[data-theme="bug"]', "--canvas")).toBe("#e9dfd1");
     expect(declaration(rules, ':root[data-theme="bug"]', "--shadow-pixel").replaceAll(" ", ""))
-      .toBe("4px4px0#7a5a3a");
+      .toBe("2px2px0#49392d");
     expect(declaration(rules, ".product-mark__image", "width")).toBe("36px");
     expect(declaration(rules, ".bugpaw-auth-visual img", "object-fit")).toBe("contain");
+  });
+
+  it("白色主题使用温润表面、灰蓝交互与猫眼绿状态", async () => {
+    const source = await readFile("src/web/bugpaw-theme.css", "utf8");
+    const rules = parseStyleRules(source);
+    const selector = ':root[data-theme="light"]';
+    const expectedTokens = new Map([
+      ["--eye", "#587b3e"],
+      ["--canvas", "#f3f2ee"],
+      ["--panel", "#faf9f6"],
+      ["--surface", "#ffffff"],
+      ["--surface-soft", "#e9e8e3"],
+      ["--surface-hover", "#e1e2df"],
+      ["--text-primary", "#252b33"],
+      ["--text-secondary", "#626b76"],
+      ["--text-tertiary", "#64707b"],
+      ["--border", "#d6d5cf"],
+      ["--border-strong", "#c1c2bf"],
+      ["--accent", "#5f7088"],
+      ["--accent-strong", "#475970"],
+      ["--fg", "var(--accent-strong)"],
+      ["--ok", "var(--eye)"],
+      ["--halo", "color-mix(in srgb,var(--eye) 16%,transparent)"],
+      ["--danger", "#b45d5d"],
+      ["--focus", "#587b3e"],
+      ["--primary-bg", "#43536a"],
+      ["--primary-text", "#ffffff"],
+      ["--rail", "#ecebe6"],
+      ["--backdrop", "#e4e3de"],
+    ]);
+
+    for (const [property, expected] of expectedTokens) {
+      expect(declaration(rules, selector, property), property).toBe(expected);
+    }
+
+    expect(contrastRatio("#252b33", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#626b76", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#64707b", "#f3f2ee")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#ffffff", "#43536a")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#587b3e", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("BUG 主题使用奶油表面、深棕结构与猫眼绿状态", async () => {
+    const source = await readFile("src/web/bugpaw-theme.css", "utf8");
+    const rules = parseStyleRules(source);
+    const selector = ':root[data-theme="bug"]';
+    const expectedTokens = new Map([
+      ["--eye", "#587b3e"],
+      ["--paw", "#bd686d"],
+      ["--canvas", "#e9dfd1"],
+      ["--panel", "#f5eee4"],
+      ["--surface", "#fffaf3"],
+      ["--surface-soft", "#ded0bc"],
+      ["--surface-hover", "#d4c2aa"],
+      ["--text-primary", "#30271f"],
+      ["--text-secondary", "#655545"],
+      ["--text-tertiary", "#705e4d"],
+      ["--border", "#c9b89f"],
+      ["--border-strong", "#9f876d"],
+      ["--accent", "#6e5948"],
+      ["--accent-strong", "#49392d"],
+      ["--fg", "var(--accent-strong)"],
+      ["--ok", "var(--eye)"],
+      ["--danger", "#bd686d"],
+      ["--primary-bg", "#34281f"],
+      ["--primary-text", "#fff8ee"],
+      ["--rail", "#34281f"],
+      ["--shadow-pixel", "2px 2px 0#49392d"],
+    ]);
+
+    for (const [property, expected] of expectedTokens) {
+      expect(declaration(rules, selector, property), property).toBe(expected);
+    }
+
+    expect(contrastRatio("#30271f", "#fffaf3")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#655545", "#fffaf3")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#705e4d", "#e9dfd1")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#fff8ee", "#34281f")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#587b3e", "#fffaf3")).toBeGreaterThanOrEqual(4.5);
   });
 
   it("暗色主题使用深海灰蓝色阶与猫眼绿状态信号", async () => {
@@ -246,7 +325,7 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ':root[data-theme="dark"]', "--scrollbar-track")).toBe("");
     expect(declaration(rules, ':root[data-theme="light"]', "--scrollbar-track")).toBe("");
     expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-track")).toBe("var(--surface-soft)");
-    expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-thumb")).toBe("var(--tabby)");
+    expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-thumb")).toBe("#8a715b");
     expect(declaration(rules, "*", "scrollbar-width")).toBe("thin");
     expect(declaration(rules, "*", "scrollbar-color")).toBe("var(--scrollbar-thumb) var(--scrollbar-track)");
     expect(declaration(rules, "::-webkit-scrollbar", "width")).toBe("8px");
@@ -264,8 +343,8 @@ describe("BugPaw 生产视觉合同", () => {
 
     expect(declaration(baseRules, ".composer-dock", "background")).toBe("var(--canvas)");
     expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#888d98");
-    expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#596676");
-    expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover', "background")).toBe("rgb(89, 70, 52)");
+    expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#64707b");
+    expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover', "background")).toBe("rgb(81, 64, 53)");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover .session-row__open', "background")).toBe("transparent");
   });
 
@@ -334,9 +413,9 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ':root[data-theme="bug"] .session-actions__popover .is-danger', "color"))
       .toBe("color-mix(in srgb, var(--danger) 90%, var(--deep-brown))");
     expect(declaration(rules, ':root[data-theme="bug"] .chat-sidebar .account-button strong', "color"))
-      .toBe("rgb(255, 249, 238)");
+      .toBe("rgb(255, 248, 238)");
     expect(declaration(rules, ':root[data-theme="bug"] .chat-sidebar .account-button small', "color"))
-      .toBe("rgb(222, 210, 191)");
+      .toBe("rgb(216, 203, 187)");
   });
 
   it("BUG 主题二级导航选中态在深色侧栏中保持可读", async () => {
@@ -350,9 +429,9 @@ describe("BugPaw 生产视觉合同", () => {
     ];
 
     for (const selector of activeSelectors) {
-      expect(groupedDeclaration(rules, selector, "color")).toBe("rgb(255, 249, 238)");
-      expect(groupedDeclaration(rules, selector, "background")).toBe("rgb(89, 70, 52)");
-      expect(groupedDeclaration(rules, selector, "box-shadow")).toBe("inset 4px 0 0 var(--paw)");
+      expect(groupedDeclaration(rules, selector, "color")).toBe("rgb(255, 248, 238)");
+      expect(groupedDeclaration(rules, selector, "background")).toBe("rgb(81, 64, 53)");
+      expect(groupedDeclaration(rules, selector, "box-shadow")).toBe("inset 4px 0 0 var(--eye)");
     }
 
     for (const selector of [
@@ -366,9 +445,37 @@ describe("BugPaw 生产视觉合同", () => {
     }
 
     expect(declaration(rules, ':root[data-theme="bug"] .session-row.is-active .session-actions__trigger:hover', "background"))
-      .toBe("rgb(122, 90, 58)");
+      .toBe("rgb(110, 89, 72)");
     expect(declaration(rules, ':root[data-theme="bug"] .session-row.is-active .session-actions__trigger:hover', "color"))
-      .toBe("rgb(255, 249, 238)");
+      .toBe("rgb(255, 248, 238)");
+  });
+
+  it("BUG 像素阴影只强调签名动作，日常容器回归柔和层级", async () => {
+    const source = await readFile("src/web/bugpaw-theme.css", "utf8");
+    const rules = parseStyleRules(source);
+
+    for (const selector of [
+      ':root[data-theme="bug"] .composer',
+      ':root[data-theme="bug"] .configuration-section',
+      ':root[data-theme="bug"] .settings-section',
+      ':root[data-theme="bug"] .resource-grid article',
+      ':root[data-theme="bug"] .configuration-dialog',
+    ]) {
+      expect(groupedDeclaration(rules, selector, "border")).toBe("1px solid var(--border)");
+      expect(groupedDeclaration(rules, selector, "border-radius")).toBe("10px");
+      expect(groupedDeclaration(rules, selector, "box-shadow")).toBe("var(--shadow-soft)");
+    }
+
+    for (const selector of [
+      ':root[data-theme="bug"] .send-button',
+      ':root[data-theme="bug"] .question-composer__submit',
+      ':root[data-theme="bug"] .new-chat-button',
+    ]) {
+      expect(groupedDeclaration(rules, selector, "box-shadow")).toBe("var(--shadow-pixel)");
+    }
+
+    expect(groupedDeclaration(rules, ':root[data-theme="bug"] input', "border-radius")).toBe("7px");
+    expect(groupedDeclaration(rules, ':root[data-theme="bug"] .session-row', "border-radius")).toBe("7px");
   });
 
   it("五个二级侧边栏共用宽度与标题视觉合同", async () => {
@@ -405,7 +512,7 @@ describe("BugPaw 生产视觉合同", () => {
       ':root[data-theme="bug"] .knowledge-base-navigation',
     ];
     for (const selector of bugSidebarSelectors) {
-      expect(groupedDeclaration(themeRules, selector, "color")).toBe("rgb(255, 249, 238)");
+      expect(groupedDeclaration(themeRules, selector, "color")).toBe("rgb(255, 248, 238)");
     }
   });
 
@@ -431,12 +538,12 @@ describe("BugPaw 生产视觉合同", () => {
     }
 
     for (const selector of headings.map((item) => `:root[data-theme="bug"] ${item}`)) {
-      expect(groupedDeclaration(rules, selector, "border")).toBe("2px solid var(--border-strong)");
-      expect(groupedDeclaration(rules, selector, "border-radius")).toBe("6px");
-      expect(groupedDeclaration(rules, selector, "box-shadow")).toBe("var(--shadow-pixel)");
+      expect(groupedDeclaration(rules, selector, "border")).toBe("1px solid var(--border)");
+      expect(groupedDeclaration(rules, selector, "border-radius")).toBe("10px");
+      expect(groupedDeclaration(rules, selector, "box-shadow")).toBe("var(--shadow-soft)");
     }
 
-    expect(declaration(rules, ':root[data-theme="bug"] .danger-button', "border-radius")).toBe("4px");
+    expect(groupedDeclaration(rules, ':root[data-theme="bug"] .danger-button', "border-radius")).toBe("7px");
   });
 
   it("配置概览入口留白充足，普通配置标题保持纵向文档流", async () => {
@@ -504,7 +611,7 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(baseRules, ".hero-art", "transform")).toBe("rotate(-2deg)");
     expect(declaration(baseRules, ".login-form-wrap", "max-width")).toBe("340px");
     expect(declaration(themeRules, ':root[data-theme="bug"] .login-brand-panel', "background"))
-      .toBe("rgb(47, 36, 27)");
+      .toBe("var(--rail)");
     expect(mediaDeclaration(baseSource, "(max-width: 860px)", ".login-brand-panel", "display")).toBe("none");
     expect(mediaDeclaration(baseSource, "(max-width: 860px)", ".mobile-brand", "display")).toBe("flex");
   });
