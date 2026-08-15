@@ -4,6 +4,52 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.5 - 2026-08-15
+
+### 新增 / Added
+
+- 增加会话置顶、会话文本搜索与结果定位，并提供按 Agent 范围列出、搜索和读取会话内容的工具；长历史使用稳定游标与当前分支投影恢复。
+- 增加 Agent 自身提示词文件的动态注入与原生文件工具维护能力，使每次运行读取最新工作区上下文。
+- 预装通用深度研究 Skill，支持规划、检索、证据整理与长文交付，并强化安装路径、权限和异常根目录保护。
+- 增加会话输入区的模型与思考深度控件，支持草稿继承 Agent 默认值、会话级持久化和模型能力降级。
+- 增加 Agent 主动向用户提问的完整流程，包括终止工具、消息防护、问题快照、跨标签页同步、草稿缓存和回答续跑协议。
+- 增加提问与回答的独立时间线展示、逐题审计卡片、实际答案标签解析，以及历史分支和分页后的回答状态恢复。
+- 增加用户与 Agent 头像原图上传、固定比例裁剪、EXIF 方向处理、透明通道保留、自动压缩和 WebP 持久化。
+- 增加模型级与 Agent 级 TTS 自定义请求参数，支持分层覆盖、专用音色优先和受保护字段校验。
+- 升级白色、暗色与 BUG 三套主题，统一语义颜色、状态信号、浏览器主题色、滚动条、侧边栏和工作区视觉层级。
+
+- Added pinned sessions, full-text session search and result navigation, plus Agent-scoped tools for listing, searching, and reading conversation content with stable history cursors and branch projections.
+- Added dynamic injection and native file-tool maintenance for each Agent's own prompt files, loading the latest workspace context on every run.
+- Bundled a general-purpose deep-research Skill for planning, retrieval, evidence synthesis, and long-form delivery, with hardened installation paths and permissions.
+- Added composer controls for model and thinking depth, including Agent-default inheritance, per-session persistence, and capability-aware fallback.
+- Added the complete Agent-to-user question workflow with a terminating tool, message guards, question snapshots, cross-tab synchronization, draft caching, and answer-resume protocols.
+- Added separate question and answer timeline entries, per-question audit cards, authoritative answer-label resolution, and answer-state recovery across branches and history pages.
+- Added user and Agent avatar uploads with fixed-ratio cropping, EXIF orientation, alpha preservation, automatic compression, and WebP persistence.
+- Added model-level and Agent-level custom TTS request parameters with layered overrides, dedicated voice precedence, and protected-field validation.
+- Refreshed the light, dark, and BUG themes with consistent semantic colors, status signals, browser theme colors, scrollbars, sidebars, and workspace hierarchy.
+
+### 修复 / Fixed
+
+- 修复聊天模型错误在快照、实时事件和新一轮生成之间的传播与清理，避免暴露上游错误正文或残留旧会话提示。
+- 修复会话检索首个游标、流式搜索焦点、搜索按钮布局和结果滚动，并限制工具详情与搜索结果各自在容器内滚动。
+- 修复会话实时事件误报、旧快照覆盖新状态、恢复游标失效，以及快速切换 Agent 或会话时迟到响应串入当前界面。
+- 修复输入区多行排版、活动操作栏、用户消息与 Agent 活动顺序、模型菜单定位，以及移动端触控和窄屏边界。
+- 修复提问创建中误报失败、答案提交后未立即回显、问题快照标签解析、未知选项保护，以及历史提问终态无法恢复。
+- 修复回答续跑中的多类竞态：Run 快照先到、正文先到、答案接口先到、迟到快照覆盖和第二轮以后回答卡片顺序错误。
+- 修复头像上传失败、旧 revision、损坏图片和写盘异常时的原文件保护与临时文件清理，并补充像素、体积和裁剪边界校验。
+- 修复暗色与 BUG 主题状态颜色、对比度、侧边栏可读性、白色主题表面层级和浏览器主题色同步。
+- 清理已失效、重复和过度绑定内部实现的测试，合并 CSS 布局回归，并将旧文案断言重写为公共交互与导航契约。
+
+- Fixed chat-model error propagation and cleanup across snapshots, realtime events, and subsequent runs without exposing upstream error bodies or leaking stale session state.
+- Fixed initial session-search cursors, streaming-search focus, search-button placement, and independent scrolling for results and tool details.
+- Fixed false realtime errors, stale snapshots overwriting newer state, invalid recovery cursors, and late responses leaking across rapid Agent or session switches.
+- Fixed multiline composer layout, activity controls, user/Agent timeline ordering, model-menu placement, and mobile touch and narrow-screen boundaries.
+- Fixed false failures during question creation, delayed answer feedback, snapshot-label resolution, unknown-option handling, and restoration of historical question terminal states.
+- Fixed answer-resume races involving run snapshots, streamed text, answer responses, late projections, and second-or-later turn answer-card ordering.
+- Fixed avatar rollback and temporary-file cleanup for stale revisions, corrupt images, and write failures, with stronger pixel, size, and crop-boundary validation.
+- Fixed dark and BUG theme status colors, contrast and sidebar readability, light-theme surface hierarchy, and synchronized browser theme colors.
+- Removed stale, duplicate, and implementation-bound tests, consolidated CSS layout regressions, and rewrote legacy copy assertions around public interaction and navigation contracts.
+
 ## 0.1.4 - 2026-08-12
 
 ### 新增 / Added
