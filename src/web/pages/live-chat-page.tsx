@@ -54,6 +54,7 @@ import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
 import { ComposerSessionControls } from "../components/composer-session-controls";
+import { LocalSpeechInputButton } from "../components/local-speech-input-button";
 import { QuestionComposer } from "../components/question-composer";
 import { AvatarCropDialog } from "../components/avatar/avatar-crop-dialog";
 import { validateAvatarFile } from "../components/avatar/avatar-file";
@@ -64,6 +65,15 @@ import type { PendingQuestionProjection, SubmittedQuestionAnswer } from "../../s
 interface LiveChatPageProps {
   theme: ThemePreference;
   userIdentity: IdentityPreview;
+}
+
+/** 将识别文本追加到草稿；仅在英文单词边界补空格，避免破坏中文语句。 */
+function appendSpeechTranscript(current: string, transcript: string): string {
+  const normalized = transcript.trim();
+  if (!normalized) return current;
+  if (!current) return normalized;
+  const needsSpace = /[a-z\d]$/iu.test(current) && /^[a-z\d]/iu.test(normalized);
+  return `${current}${needsSpace ? " " : ""}${normalized}`;
 }
 
 interface AutoSpeechEligibility {
@@ -1674,7 +1684,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
                 onModelChange={(model) => void changeModel(model)}
               />}
               attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
-              bottomControls={<div className="composer-actions"><span /><button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button></div>}
+              bottomControls={<div className="composer-actions">
+                <LocalSpeechInputButton
+                  disabled={noAvailableAgent || isOpeningSession}
+                  onTranscript={(transcript) => setDraft((current) => appendSpeechTranscript(current, transcript))}
+                  onError={setError}
+                />
+                <button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button>
+              </div>}
             />
           </div>}
           <p>Agent 可以在容器权限范围内读取、修改文件和执行命令。</p>
