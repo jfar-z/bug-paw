@@ -35,6 +35,22 @@ function declaration(rules: ParsedStyleRule[], selector: string, property: strin
   return rule?.declarations.getPropertyValue(property).trim() ?? "";
 }
 
+/** 把十六进制颜色转换为 WCAG 相对亮度。 */
+function relativeLuminance(hex: string): number {
+  const channels = hex.slice(1).match(/../gu)?.map((value) => Number.parseInt(value, 16) / 255) ?? [];
+  const [red = 0, green = 0, blue = 0] = channels.map((value) => (
+    value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  ));
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** 计算两种不透明颜色之间的 WCAG 对比度。 */
+function contrastRatio(foreground: string, background: string): number {
+  const values = [relativeLuminance(foreground), relativeLuminance(background)]
+    .sort((left, right) => right - left);
+  return ((values[0] ?? 0) + 0.05) / ((values[1] ?? 0) + 0.05);
+}
+
 /** 从组合选择器中读取指定元素的样式声明。 */
 function groupedDeclaration(rules: ParsedStyleRule[], selector: string, property: string): string {
   const rule = rules.find((candidate) => candidate.selector
@@ -63,13 +79,100 @@ describe("BugPaw 生产视觉合同", () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8").catch(() => "");
     const rules = parseStyleRules(source);
 
-    expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#171c22");
+    expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#151517");
     expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f7f6f2");
     expect(declaration(rules, ':root[data-theme="bug"]', "--canvas")).toBe("#ded2bf");
     expect(declaration(rules, ':root[data-theme="bug"]', "--shadow-pixel").replaceAll(" ", ""))
       .toBe("4px4px0#7a5a3a");
     expect(declaration(rules, ".product-mark__image", "width")).toBe("36px");
     expect(declaration(rules, ".bugpaw-auth-visual img", "object-fit")).toBe("contain");
+  });
+
+  it("暗色主题使用深海灰蓝色阶与猫眼绿状态信号", async () => {
+    const [baseSource, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const baseRules = parseStyleRules(baseSource);
+    const themeRules = parseStyleRules(themeSource);
+    const darkSelector = ':root[data-theme="dark"]';
+    const expectedThemeTokens = new Map([
+      ["--eye", "#a4c66d"],
+      ["--canvas", "#151517"],
+      ["--panel", "#1c1c1f"],
+      ["--surface", "#24252a"],
+      ["--surface-soft", "#2c2d32"],
+      ["--surface-hover", "#34353a"],
+      ["--text-primary", "#f4f1ec"],
+      ["--text-secondary", "#b7bac2"],
+      ["--text-tertiary", "#888d98"],
+      ["--border", "#383940"],
+      ["--border-strong", "#4a4d56"],
+      ["--accent", "#5f6d8a"],
+      ["--accent-strong", "#8190ad"],
+      ["--accent-soft", "rgba(95,109,138,0.18)"],
+      ["--danger", "#d77c78"],
+      ["--focus", "#a4c66d"],
+      ["--primary-bg", "#5f6d8a"],
+      ["--primary-text", "#f7f5f1"],
+      ["--rail", "#18191b"],
+      ["--backdrop", "#0f0f11"],
+    ]);
+
+    for (const [property, expected] of expectedThemeTokens) {
+      expect(declaration(themeRules, darkSelector, property), property).toBe(expected);
+    }
+
+    for (const property of [
+      "--canvas", "--panel", "--surface", "--surface-soft", "--surface-hover",
+      "--text-primary", "--text-secondary", "--text-tertiary", "--border",
+      "--border-strong", "--accent", "--accent-strong", "--accent-soft",
+      "--danger", "--focus", "--primary-bg", "--primary-text",
+    ]) {
+      expect(declaration(baseRules, darkSelector, property), property)
+        .toBe(expectedThemeTokens.get(property));
+    }
+
+    expect(contrastRatio("#f7f5f1", "#5f6d8a")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#888d98", "#151517")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#a4c66d", "#151517")).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
+    const source = await readFile("src/web/bugpaw-theme.css", "utf8");
+    const rules = parseStyleRules(source);
+    const backgroundSelectors = [
+      ':root[data-theme="dark"] .live-tool-card.is-preparing::before',
+      ':root[data-theme="dark"] .live-tool-card.is-running::before',
+      ':root[data-theme="dark"] .thinking-card.is-streaming::before',
+      ':root[data-theme="dark"] .service-state i',
+      ':root[data-theme="dark"] .agent-run-indicator::before',
+      ':root[data-theme="dark"] .tool-output.is-live code > span::after',
+      ':root[data-theme="dark"] .streaming-label i',
+      ':root[data-theme="dark"] .status-dot',
+      ':root[data-theme="dark"] .agent-card__title i',
+      ':root[data-theme="dark"] .agent-detail-header__status i',
+    ];
+    const colorSelectors = [
+      ':root[data-theme="dark"] .session-refresh-hint .is-ready',
+      ':root[data-theme="dark"] .session-row.is-opening .session-row__open svg',
+      ':root[data-theme="dark"] .tool-status.is-running',
+      ':root[data-theme="dark"] .spinner',
+      ':root[data-theme="dark"] .tool-output.is-live code > span',
+      ':root[data-theme="dark"] .streaming-label',
+      ':root[data-theme="dark"] .scheduled-task-state.is-enabled',
+      ':root[data-theme="dark"] .scheduled-task-runs li strong[data-status="completed"]',
+      ':root[data-theme="dark"] .knowledge-base-status.is-indexed',
+    ];
+
+    for (const selector of backgroundSelectors) {
+      expect(groupedDeclaration(rules, selector, "background"), selector).toBe("var(--eye)");
+    }
+    for (const selector of colorSelectors) {
+      expect(groupedDeclaration(rules, selector, "color"), selector).toBe("var(--eye)");
+    }
+    expect(declaration(rules, ':root[data-theme="dark"] .scheduled-task-state.is-enabled', "border-color"))
+      .toBe("color-mix(in srgb, var(--eye) 30%, var(--border))");
   });
 
   it("三套主题为全部滚动区域提供统一的非原生滚动条", async () => {
@@ -100,7 +203,7 @@ describe("BugPaw 生产视觉合同", () => {
     const themeRules = parseStyleRules(themeSource);
 
     expect(declaration(baseRules, ".composer-dock", "background")).toBe("var(--canvas)");
-    expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#98a4b2");
+    expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#888d98");
     expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#596676");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover', "background")).toBe("rgb(89, 70, 52)");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover .session-row__open', "background")).toBe("transparent");
