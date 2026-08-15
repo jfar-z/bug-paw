@@ -46,27 +46,31 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --canvas: #f7f6f2;
-  --panel: #ffffff;
+  --eye: #587b3e;
+  --canvas: #f3f2ee;
+  --panel: #faf9f6;
   --surface: #ffffff;
-  --surface-soft: #efeee9;
-  --surface-hover: #e8e7e1;
-  --text-primary: #283444;
-  --text-secondary: #5b6b7f;
-  --text-tertiary: #596676;
-  --border: #d8d6cf;
-  --border-strong: #c5c2b9;
-  --accent: #4f7f45;
-  --accent-strong: #3f6937;
-  --accent-soft: rgba(94, 154, 80, 0.1);
-  --danger: #b55353;
-  --focus: #5e9a50;
-  --primary-bg: #283444;
-  --primary-text: #f7f6f2;
-  --rail: #f0efea;
-  --backdrop: #e7e5df;
-  --shadow-soft: 0 18px 50px rgba(40, 52, 68, 0.12);
-  --shadow-float: 0 22px 70px rgba(40, 52, 68, 0.18);
+  --surface-soft: #e9e8e3;
+  --surface-hover: #e1e2df;
+  --text-primary: #252b33;
+  --text-secondary: #626b76;
+  --text-tertiary: #64707b;
+  --border: #d6d5cf;
+  --border-strong: #c1c2bf;
+  --accent: #5f7088;
+  --accent-strong: #475970;
+  --fg: var(--accent-strong);
+  --accent-soft: rgba(95, 112, 136, 0.12);
+  --ok: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 16%, transparent);
+  --danger: #b45d5d;
+  --focus: #587b3e;
+  --primary-bg: #43536a;
+  --primary-text: #ffffff;
+  --rail: #ecebe6;
+  --backdrop: #e4e3de;
+  --shadow-soft: 0 14px 36px rgba(50, 57, 66, 0.1);
+  --shadow-float: 0 22px 58px rgba(50, 57, 66, 0.16);
 }
 
 :root[data-theme="bug"] {

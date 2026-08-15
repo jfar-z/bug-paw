@@ -86,17 +86,57 @@ function mediaDeclaration(source: string, condition: string, selector: string, p
 }
 
 describe("BugPaw 生产视觉合同", () => {
-  it("三套主题使用已确认的语义画布和 BUG 硬阴影", async () => {
+  it("主题画布与签名阴影使用已确认视觉方向", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8").catch(() => "");
     const rules = parseStyleRules(source);
 
     expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#151517");
-    expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f7f6f2");
+    expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f3f2ee");
     expect(declaration(rules, ':root[data-theme="bug"]', "--canvas")).toBe("#ded2bf");
     expect(declaration(rules, ':root[data-theme="bug"]', "--shadow-pixel").replaceAll(" ", ""))
       .toBe("4px4px0#7a5a3a");
     expect(declaration(rules, ".product-mark__image", "width")).toBe("36px");
     expect(declaration(rules, ".bugpaw-auth-visual img", "object-fit")).toBe("contain");
+  });
+
+  it("白色主题使用温润表面、灰蓝交互与猫眼绿状态", async () => {
+    const source = await readFile("src/web/bugpaw-theme.css", "utf8");
+    const rules = parseStyleRules(source);
+    const selector = ':root[data-theme="light"]';
+    const expectedTokens = new Map([
+      ["--eye", "#587b3e"],
+      ["--canvas", "#f3f2ee"],
+      ["--panel", "#faf9f6"],
+      ["--surface", "#ffffff"],
+      ["--surface-soft", "#e9e8e3"],
+      ["--surface-hover", "#e1e2df"],
+      ["--text-primary", "#252b33"],
+      ["--text-secondary", "#626b76"],
+      ["--text-tertiary", "#64707b"],
+      ["--border", "#d6d5cf"],
+      ["--border-strong", "#c1c2bf"],
+      ["--accent", "#5f7088"],
+      ["--accent-strong", "#475970"],
+      ["--fg", "var(--accent-strong)"],
+      ["--ok", "var(--eye)"],
+      ["--halo", "color-mix(in srgb,var(--eye) 16%,transparent)"],
+      ["--danger", "#b45d5d"],
+      ["--focus", "#587b3e"],
+      ["--primary-bg", "#43536a"],
+      ["--primary-text", "#ffffff"],
+      ["--rail", "#ecebe6"],
+      ["--backdrop", "#e4e3de"],
+    ]);
+
+    for (const [property, expected] of expectedTokens) {
+      expect(declaration(rules, selector, property), property).toBe(expected);
+    }
+
+    expect(contrastRatio("#252b33", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#626b76", "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#64707b", "#f3f2ee")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#ffffff", "#43536a")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#587b3e", "#ffffff")).toBeGreaterThanOrEqual(4.5);
   });
 
   it("暗色主题使用深海灰蓝色阶与猫眼绿状态信号", async () => {
@@ -264,7 +304,7 @@ describe("BugPaw 生产视觉合同", () => {
 
     expect(declaration(baseRules, ".composer-dock", "background")).toBe("var(--canvas)");
     expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#888d98");
-    expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#596676");
+    expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#64707b");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover', "background")).toBe("rgb(89, 70, 52)");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover .session-row__open', "background")).toBe("transparent");
   });
