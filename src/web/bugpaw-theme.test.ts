@@ -121,9 +121,8 @@ describe("BugPaw 生产视觉合同", () => {
       ["--border-strong", "#4a4d56"],
       ["--accent", "#5f6d8a"],
       ["--accent-strong", "#94a4c4"],
-      ["--ink", "var(--accent-strong)"],
-      ["--state", "var(--eye)"],
-      ["--halo", "color-mix(in srgb,var(--eye) 18%,transparent)"],
+      ["--fg", "var(--accent-strong)"],
+      ["--ok", "var(--eye)"],
       ["--accent-soft", "rgba(95,109,138,0.18)"],
       ["--danger", "#d77c78"],
       ["--focus", "#a4c66d"],
@@ -146,13 +145,13 @@ describe("BugPaw 生产视觉合同", () => {
     }
     expect(contrastRatio("#888d98", "#151517")).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio("#a4c66d", "#151517")).toBeGreaterThanOrEqual(4.5);
-    expect(declaration(baseRules, ":root", "--ink")).toBe("var(--accent)");
-    expect(declaration(baseRules, ":root", "--state")).toBe("var(--accent)");
-    expect(declaration(baseRules, ":root", "--halo")).toBe("var(--accent-soft)");
-    expect(declaration(themeRules, ":root", "--ink")).toBe("");
-    expect(declaration(themeRules, ":root", "--state")).toBe("");
-    expect(declaration(themeRules, ":root", "--halo")).toBe("");
-    expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--ink)");
+    expect(declaration(baseRules, ":root", "--fg")).toBe("var(--accent)");
+    expect(declaration(baseRules, ":root", "--ok")).toBe("var(--accent)");
+    expect(declaration(baseRules, ":root", "--halo")).toBe("");
+    expect(declaration(themeRules, ":root", "--fg")).toBe("");
+    expect(declaration(themeRules, ":root", "--ok")).toBe("");
+    expect(declaration(themeRules, darkSelector, "--halo")).toBe("");
+    expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--fg)");
   });
 
   it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
@@ -188,40 +187,34 @@ describe("BugPaw 生产视觉合同", () => {
     ];
 
     for (const selector of backgroundSelectors) {
-      expect(groupedDeclaration(baseRules, selector, "background"), selector).toBe("var(--state)");
+      expect(groupedDeclaration(baseRules, selector, "background"), selector).toBe("var(--ok)");
     }
     for (const selector of colorSelectors) {
-      expect(groupedDeclaration(baseRules, selector, "color"), selector).toBe("var(--state)");
+      expect(groupedDeclaration(baseRules, selector, "color"), selector).toBe("var(--ok)");
     }
     for (const selector of [".service-state i", ".streaming-label i", ".status-dot", ".agent-card__title i", ".agent-detail-header__status i"]) {
-      expect(groupedDeclaration(baseRules, selector, "box-shadow"), selector).toContain("var(--halo)");
+      expect(groupedDeclaration(baseRules, selector, "box-shadow"), selector).toContain("var(--accent-soft)");
     }
     expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "border-color"))
-      .toBe("color-mix(in srgb, var(--state) 30%, var(--border))");
+      .toBe("color-mix(in srgb, var(--ok) 30%, var(--border))");
     expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "background"))
-      .toBe("color-mix(in srgb, var(--state) 8%, var(--panel))");
+      .toBe("color-mix(in srgb, var(--ok) 8%, var(--panel))");
     expect(declaration(baseRules, ".private-state i", "background")).toBe("rgb(124, 194, 107)");
     expect(declaration(baseRules, ".private-state i", "box-shadow"))
       .toBe("0 0 0 4px rgba(124, 194, 107, 0.12)");
     expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "background"))
-      .toBe("var(--state)");
+      .toBe("var(--ok)");
     expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "box-shadow"))
-      .toBe("0 0 0 4px var(--halo)");
+      .toBe("0 0 0 4px var(--accent-soft)");
   });
 
   it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
     const source = await readFile("src/web/styles.css", "utf8");
     const rules = parseStyleRules(source);
-    const selectors = [
-      ':root[data-theme="dark"] .primary-button',
-      ':root[data-theme="dark"] .send-button',
-      ':root[data-theme="dark"] .mobile-entry-gate__enter',
-    ];
+    const selector = ':root[data-theme="dark"] :is(.primary-button, .send-button, .mobile-entry-gate__enter, .question-composer__submit)';
 
-    for (const selector of selectors) {
-      expect(groupedDeclaration(rules, selector, "color"), selector).toBe("var(--primary-text)");
-      expect(groupedDeclaration(rules, selector, "background"), selector).toBe("var(--primary-bg)");
-    }
+    expect(declaration(rules, selector, "color")).toBe("var(--primary-text)");
+    expect(declaration(rules, selector, "background")).toBe("var(--primary-bg)");
     expect(source).not.toContain("#102018");
   });
 
@@ -233,8 +226,14 @@ describe("BugPaw 生产视觉合同", () => {
     const rules = parseStyleRules(source);
     const baseRules = parseStyleRules(baseSource);
 
-    expect(declaration(rules, ':root[data-theme="dark"]', "--scrollbar-track")).toBe("transparent");
-    expect(declaration(rules, ':root[data-theme="light"]', "--scrollbar-track")).toBe("transparent");
+    expect(declaration(rules, ":root", "--scrollbar-track")).toBe("transparent");
+    expect(declaration(rules, ":root", "--scrollbar-thumb"))
+      .toBe("color-mix(in srgb,var(--text-tertiary) 58%,transparent)");
+    expect(declaration(rules, ":root", "--scrollbar-thumb-hover"))
+      .toBe("color-mix(in srgb,var(--text-secondary) 72%,transparent)");
+    expect(declaration(rules, ":root", "--shadow-pixel")).toBe("none");
+    expect(declaration(rules, ':root[data-theme="dark"]', "--scrollbar-track")).toBe("");
+    expect(declaration(rules, ':root[data-theme="light"]', "--scrollbar-track")).toBe("");
     expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-track")).toBe("var(--surface-soft)");
     expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-thumb")).toBe("var(--tabby)");
     expect(declaration(rules, "*", "scrollbar-width")).toBe("thin");
@@ -380,7 +379,7 @@ describe("BugPaw 生产视觉合同", () => {
       .toBe("var(--secondary-sidebar-width) minmax(0, 1fr)");
     expect(declaration(rules, ".secondary-sidebar-header__heading", "gap")).toBe("3px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color"))
-      .toBe("var(--ink)");
+      .toBe("var(--fg)");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-size")).toBe("11px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-weight")).toBe("650");
     expect(declaration(rules, ".secondary-sidebar-header__title", "color")).toBe("inherit");
