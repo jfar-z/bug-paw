@@ -4012,6 +4012,17 @@ img.message-avatar {
   overflow-y: auto;
 }
 
+@media (min-width: 761px) {
+  /* 桌面端以模型按钮为定位基准，避免菜单偏移到输入框右上角。 */
+  .composer-model-control {
+    position: relative;
+  }
+
+  .composer-model-menu {
+    width: min(320px, calc(100vw - 40px));
+  }
+}
+
 .composer-model-menu button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 16px;
