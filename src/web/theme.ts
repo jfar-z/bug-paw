@@ -33,8 +33,8 @@ export function applyTheme(preference: ThemePreference): ResolvedTheme {
   const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
   const browserThemeColors: Record<ResolvedTheme, string> = {
     dark: "#151517",
-    light: "#f7f6f2",
-    bug: "#ded2bf",
+    light: "#f3f2ee",
+    bug: "#e9dfd1",
   };
   themeColor?.setAttribute("content", browserThemeColors[resolved]);
   return resolved;
