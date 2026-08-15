@@ -5,6 +5,7 @@
   --tabby: #7a5a3a;
   --deep-brown: #2f241b;
   --bugpaw-danger: #df6b6b;
+  --accent-foreground: var(--accent);
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   color: var(--text-primary);
   background: var(--canvas);
@@ -26,6 +27,7 @@
   --border-strong: #4a4d56;
   --accent: #5f6d8a;
   --accent-strong: #8190ad;
+  --accent-foreground: var(--accent-strong);
   --accent-soft: rgba(95, 109, 138, 0.18);
   --danger: #d77c78;
   --focus: #a4c66d;
@@ -429,6 +431,11 @@ textarea:focus-visible {
 }
 
 /* 暗色主题用猫眼绿表达运行与成功，主要交互继续使用灰蓝强调色。 */
+:root[data-theme="dark"] .private-state i {
+  background: var(--eye);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent);
+}
+
 :root[data-theme="dark"] .live-tool-card.is-preparing::before,
 :root[data-theme="dark"] .live-tool-card.is-running::before,
 :root[data-theme="dark"] .thinking-card.is-streaming::before,
@@ -450,7 +457,8 @@ textarea:focus-visible {
 :root[data-theme="dark"] .streaming-label,
 :root[data-theme="dark"] .scheduled-task-state.is-enabled,
 :root[data-theme="dark"] .scheduled-task-runs li strong[data-status="completed"],
-:root[data-theme="dark"] .knowledge-base-status.is-indexed {
+:root[data-theme="dark"] .knowledge-base-status.is-indexed,
+:root[data-theme="dark"] .task-log li[data-status="completed"] {
   color: var(--eye);
 }
 

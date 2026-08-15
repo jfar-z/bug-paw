@@ -110,6 +110,7 @@ describe("BugPaw 生产视觉合同", () => {
       ["--border-strong", "#4a4d56"],
       ["--accent", "#5f6d8a"],
       ["--accent-strong", "#8190ad"],
+      ["--accent-foreground", "var(--accent-strong)"],
       ["--accent-soft", "rgba(95,109,138,0.18)"],
       ["--danger", "#d77c78"],
       ["--focus", "#a4c66d"],
@@ -126,7 +127,7 @@ describe("BugPaw 生产视觉合同", () => {
     for (const property of [
       "--canvas", "--panel", "--surface", "--surface-soft", "--surface-hover",
       "--text-primary", "--text-secondary", "--text-tertiary", "--border",
-      "--border-strong", "--accent", "--accent-strong", "--accent-soft",
+      "--border-strong", "--accent", "--accent-strong", "--accent-foreground", "--accent-soft",
       "--danger", "--focus", "--primary-bg", "--primary-text",
     ]) {
       expect(declaration(baseRules, darkSelector, property), property)
@@ -134,8 +135,14 @@ describe("BugPaw 生产视觉合同", () => {
     }
 
     expect(contrastRatio("#f7f5f1", "#5f6d8a")).toBeGreaterThanOrEqual(4.5);
+    for (const background of ["#151517", "#1c1c1f", "#24252a"]) {
+      expect(contrastRatio("#8190ad", background), background).toBeGreaterThanOrEqual(4.5);
+    }
     expect(contrastRatio("#888d98", "#151517")).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio("#a4c66d", "#151517")).toBeGreaterThanOrEqual(4.5);
+    expect(declaration(baseRules, ":root", "--accent-foreground")).toBe("var(--accent)");
+    expect(declaration(themeRules, ":root", "--accent-foreground")).toBe("var(--accent)");
+    expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--accent-foreground)");
   });
 
   it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
@@ -156,6 +163,7 @@ describe("BugPaw 生产视觉合同", () => {
       ':root[data-theme="dark"] .status-dot',
       ':root[data-theme="dark"] .agent-card__title i',
       ':root[data-theme="dark"] .agent-detail-header__status i',
+      ':root[data-theme="dark"] .private-state i',
     ];
     const colorSelectors = [
       ':root[data-theme="dark"] .session-refresh-hint .is-ready',
@@ -167,6 +175,7 @@ describe("BugPaw 生产视觉合同", () => {
       ':root[data-theme="dark"] .scheduled-task-state.is-enabled',
       ':root[data-theme="dark"] .scheduled-task-runs li strong[data-status="completed"]',
       ':root[data-theme="dark"] .knowledge-base-status.is-indexed',
+      ':root[data-theme="dark"] .task-log li[data-status="completed"]',
     ];
 
     for (const selector of backgroundSelectors) {
@@ -177,8 +186,10 @@ describe("BugPaw 生产视觉合同", () => {
     }
     expect(declaration(rules, ':root[data-theme="dark"] .scheduled-task-state.is-enabled', "border-color"))
       .toBe("color-mix(in srgb, var(--eye) 30%, var(--border))");
-    expect(declaration(baseRules, ".private-state i", "background")).toBe("var(--eye)");
+    expect(declaration(baseRules, ".private-state i", "background")).toBe("rgb(124, 194, 107)");
     expect(declaration(baseRules, ".private-state i", "box-shadow"))
+      .toBe("0 0 0 4px rgba(124, 194, 107, 0.12)");
+    expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "box-shadow"))
       .toBe("0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent)");
   });
 
@@ -195,6 +206,7 @@ describe("BugPaw 生产视觉合同", () => {
       expect(declaration(rules, selector, "color"), selector).toBe("var(--primary-text)");
       expect(declaration(rules, selector, "background"), selector).toBe("var(--primary-bg)");
     }
+    expect(source).not.toContain("#102018");
   });
 
   it("三套主题为全部滚动区域提供统一的非原生滚动条", async () => {
@@ -351,7 +363,8 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".knowledge-base-page", "grid-template-columns"))
       .toBe("var(--secondary-sidebar-width) minmax(0, 1fr)");
     expect(declaration(rules, ".secondary-sidebar-header__heading", "gap")).toBe("3px");
-    expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color")).toBe("var(--accent)");
+    expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color"))
+      .toBe("var(--accent-foreground)");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-size")).toBe("11px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-weight")).toBe("650");
     expect(declaration(rules, ".secondary-sidebar-header__title", "color")).toBe("inherit");
