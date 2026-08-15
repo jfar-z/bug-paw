@@ -1035,11 +1035,13 @@ describe("LiveChatPage 时间线", () => {
     const attachment = screen.getByLabelText("添加附件");
     const thinking = screen.getByRole("button", { name: "思考深度：中" });
     const model = screen.getByRole("button", { name: "切换模型，当前 GPT-5" });
+    const microphone = screen.getByRole("button", { name: "当前浏览器不支持 Chrome 本地语音识别" });
     const send = screen.getByRole("button", { name: "发送消息" });
     expect(reference.compareDocumentPosition(attachment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(attachment.compareDocumentPosition(thinking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(thinking.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(model.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(model.compareDocumentPosition(microphone) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(microphone.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.click(thinking);
     fireEvent.click(screen.getByRole("option", { name: "高 high" }));

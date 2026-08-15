@@ -620,6 +620,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .session-row,
 :root[data-theme="bug"] .session-nav > button,
 :root[data-theme="bug"] .configuration-nav > button,
+:root[data-theme="bug"] .local-speech-input__button,
 :root[data-theme="bug"] .danger-button {
   border-radius: 7px;
 }

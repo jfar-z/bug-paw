@@ -4193,6 +4193,7 @@ img.message-avatar {
 }
 
 .composer-actions {
+  gap: 4px;
   justify-content: space-between;
 }
 
@@ -4230,6 +4231,54 @@ img.message-avatar {
   background: var(--accent-strong);
   transition: 160ms ease;
   transition-property: filter, transform;
+}
+
+.local-speech-input {
+  position: relative;
+  display: inline-flex;
+}
+
+.local-speech-input__button {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  touch-action: none;
+  transition-property: color, background, box-shadow, transform;
+}
+
+.local-speech-input__button.is-listening {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--paw) 28%, var(--surface-hover));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--paw) 18%, transparent);
+  transform: scale(0.96);
+}
+
+.local-speech-input__status {
+  position: absolute;
+  right: -44px;
+  bottom: calc(100% + 10px);
+  z-index: 16;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  font-size: 11px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.local-speech-input__status::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--paw);
+  content: "";
 }
 
 .send-button:hover {
@@ -4562,6 +4611,16 @@ img.message-avatar {
 
   .composer-dock {
     padding: 10px 12px 12px;
+  }
+
+  .local-speech-input__button,
+  .send-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .local-speech-input__status {
+    right: 0;
   }
 
   .composer-session-controls {
