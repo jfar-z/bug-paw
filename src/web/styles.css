@@ -338,8 +338,8 @@ p {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #7cc26b;
-  box-shadow: 0 0 0 4px rgba(124, 194, 107, 0.12);
+  background: var(--eye);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent);
 }
 
 .hero-copy {

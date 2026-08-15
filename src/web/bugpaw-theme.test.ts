@@ -139,8 +139,12 @@ describe("BugPaw 生产视觉合同", () => {
   });
 
   it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
-    const source = await readFile("src/web/bugpaw-theme.css", "utf8");
-    const rules = parseStyleRules(source);
+    const [baseSource, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const baseRules = parseStyleRules(baseSource);
+    const rules = parseStyleRules(themeSource);
     const backgroundSelectors = [
       ':root[data-theme="dark"] .live-tool-card.is-preparing::before',
       ':root[data-theme="dark"] .live-tool-card.is-running::before',
@@ -173,6 +177,9 @@ describe("BugPaw 生产视觉合同", () => {
     }
     expect(declaration(rules, ':root[data-theme="dark"] .scheduled-task-state.is-enabled', "border-color"))
       .toBe("color-mix(in srgb, var(--eye) 30%, var(--border))");
+    expect(declaration(baseRules, ".private-state i", "background")).toBe("var(--eye)");
+    expect(declaration(baseRules, ".private-state i", "box-shadow"))
+      .toBe("0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent)");
   });
 
   it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
