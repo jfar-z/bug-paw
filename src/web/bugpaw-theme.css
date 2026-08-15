@@ -5,7 +5,6 @@
   --tabby: #7a5a3a;
   --deep-brown: #2f241b;
   --bugpaw-danger: #df6b6b;
-  --accent-foreground: var(--accent);
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   color: var(--text-primary);
   background: var(--canvas);
@@ -26,9 +25,11 @@
   --border: #383940;
   --border-strong: #4a4d56;
   --accent: #5f6d8a;
-  --accent-strong: #8190ad;
-  --accent-foreground: var(--accent-strong);
+  --accent-strong: #94a4c4;
+  --ink: var(--accent-strong);
   --accent-soft: rgba(95, 109, 138, 0.18);
+  --state: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 18%, transparent);
   --danger: #d77c78;
   --focus: #a4c66d;
   --primary-bg: #5f6d8a;
@@ -432,50 +433,8 @@ textarea:focus-visible {
 
 /* 暗色主题用猫眼绿表达运行与成功，主要交互继续使用灰蓝强调色。 */
 :root[data-theme="dark"] .private-state i {
-  background: var(--eye);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent);
-}
-
-:root[data-theme="dark"] .live-tool-card.is-preparing::before,
-:root[data-theme="dark"] .live-tool-card.is-running::before,
-:root[data-theme="dark"] .thinking-card.is-streaming::before,
-:root[data-theme="dark"] .service-state i,
-:root[data-theme="dark"] .agent-run-indicator::before,
-:root[data-theme="dark"] .tool-output.is-live code > span::after,
-:root[data-theme="dark"] .streaming-label i,
-:root[data-theme="dark"] .status-dot,
-:root[data-theme="dark"] .agent-card__title i,
-:root[data-theme="dark"] .agent-detail-header__status i {
-  background: var(--eye);
-}
-
-:root[data-theme="dark"] .session-refresh-hint .is-ready,
-:root[data-theme="dark"] .session-row.is-opening .session-row__open svg,
-:root[data-theme="dark"] .tool-status.is-running,
-:root[data-theme="dark"] .spinner,
-:root[data-theme="dark"] .tool-output.is-live code > span,
-:root[data-theme="dark"] .streaming-label,
-:root[data-theme="dark"] .scheduled-task-state.is-enabled,
-:root[data-theme="dark"] .scheduled-task-runs li strong[data-status="completed"],
-:root[data-theme="dark"] .knowledge-base-status.is-indexed,
-:root[data-theme="dark"] .task-log li[data-status="completed"] {
-  color: var(--eye);
-}
-
-:root[data-theme="dark"] .service-state i,
-:root[data-theme="dark"] .streaming-label i {
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent);
-}
-
-:root[data-theme="dark"] .status-dot,
-:root[data-theme="dark"] .agent-card__title i,
-:root[data-theme="dark"] .agent-detail-header__status i {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--eye) 18%, transparent);
-}
-
-:root[data-theme="dark"] .scheduled-task-state.is-enabled {
-  border-color: color-mix(in srgb, var(--eye) 30%, var(--border));
-  background: color-mix(in srgb, var(--eye) 8%, var(--panel));
+  background: var(--state);
+  box-shadow: 0 0 0 4px var(--halo);
 }
 
 .configuration-overview-page .configuration-page__heading {

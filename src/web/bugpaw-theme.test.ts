@@ -51,6 +51,17 @@ function contrastRatio(foreground: string, background: string): number {
   return ((values[0] ?? 0) + 0.05) / ((values[1] ?? 0) + 0.05);
 }
 
+/** 将半透明前景色叠加到不透明背景色，覆盖真实组件底色组合。 */
+function compositeHex(foreground: string, background: string, alpha: number): string {
+  const parse = (hex: string) => hex.slice(1).match(/../gu)?.map((value) => Number.parseInt(value, 16)) ?? [];
+  const foregroundChannels = parse(foreground);
+  const backgroundChannels = parse(background);
+  const channels = foregroundChannels.map((value, index) => (
+    Math.round(value * alpha + (backgroundChannels[index] ?? 0) * (1 - alpha))
+  ));
+  return `#${channels.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** 从组合选择器中读取指定元素的样式声明。 */
 function groupedDeclaration(rules: ParsedStyleRule[], selector: string, property: string): string {
   const rule = rules.find((candidate) => candidate.selector
@@ -109,8 +120,10 @@ describe("BugPaw 生产视觉合同", () => {
       ["--border", "#383940"],
       ["--border-strong", "#4a4d56"],
       ["--accent", "#5f6d8a"],
-      ["--accent-strong", "#8190ad"],
-      ["--accent-foreground", "var(--accent-strong)"],
+      ["--accent-strong", "#94a4c4"],
+      ["--ink", "var(--accent-strong)"],
+      ["--state", "var(--eye)"],
+      ["--halo", "color-mix(in srgb,var(--eye) 18%,transparent)"],
       ["--accent-soft", "rgba(95,109,138,0.18)"],
       ["--danger", "#d77c78"],
       ["--focus", "#a4c66d"],
@@ -124,25 +137,22 @@ describe("BugPaw 生产视觉合同", () => {
       expect(declaration(themeRules, darkSelector, property), property).toBe(expected);
     }
 
-    for (const property of [
-      "--canvas", "--panel", "--surface", "--surface-soft", "--surface-hover",
-      "--text-primary", "--text-secondary", "--text-tertiary", "--border",
-      "--border-strong", "--accent", "--accent-strong", "--accent-foreground", "--accent-soft",
-      "--danger", "--focus", "--primary-bg", "--primary-text",
-    ]) {
-      expect(declaration(baseRules, darkSelector, property), property)
-        .toBe(expectedThemeTokens.get(property));
-    }
+    expect(declaration(baseRules, darkSelector, "--canvas")).toBe("");
 
     expect(contrastRatio("#f7f5f1", "#5f6d8a")).toBeGreaterThanOrEqual(4.5);
-    for (const background of ["#151517", "#1c1c1f", "#24252a"]) {
-      expect(contrastRatio("#8190ad", background), background).toBeGreaterThanOrEqual(4.5);
+    const accentSoftOnSurfaceSoft = compositeHex("#5f6d8a", "#2c2d32", 0.18);
+    for (const background of ["#151517", "#1c1c1f", "#24252a", "#2c2d32", accentSoftOnSurfaceSoft]) {
+      expect(contrastRatio("#94a4c4", background), background).toBeGreaterThanOrEqual(4.5);
     }
     expect(contrastRatio("#888d98", "#151517")).toBeGreaterThanOrEqual(4.5);
     expect(contrastRatio("#a4c66d", "#151517")).toBeGreaterThanOrEqual(4.5);
-    expect(declaration(baseRules, ":root", "--accent-foreground")).toBe("var(--accent)");
-    expect(declaration(themeRules, ":root", "--accent-foreground")).toBe("var(--accent)");
-    expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--accent-foreground)");
+    expect(declaration(baseRules, ":root", "--ink")).toBe("var(--accent)");
+    expect(declaration(baseRules, ":root", "--state")).toBe("var(--accent)");
+    expect(declaration(baseRules, ":root", "--halo")).toBe("var(--accent-soft)");
+    expect(declaration(themeRules, ":root", "--ink")).toBe("");
+    expect(declaration(themeRules, ":root", "--state")).toBe("");
+    expect(declaration(themeRules, ":root", "--halo")).toBe("");
+    expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--ink)");
   });
 
   it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
@@ -153,44 +163,50 @@ describe("BugPaw 生产视觉合同", () => {
     const baseRules = parseStyleRules(baseSource);
     const rules = parseStyleRules(themeSource);
     const backgroundSelectors = [
-      ':root[data-theme="dark"] .live-tool-card.is-preparing::before',
-      ':root[data-theme="dark"] .live-tool-card.is-running::before',
-      ':root[data-theme="dark"] .thinking-card.is-streaming::before',
-      ':root[data-theme="dark"] .service-state i',
-      ':root[data-theme="dark"] .agent-run-indicator::before',
-      ':root[data-theme="dark"] .tool-output.is-live code > span::after',
-      ':root[data-theme="dark"] .streaming-label i',
-      ':root[data-theme="dark"] .status-dot',
-      ':root[data-theme="dark"] .agent-card__title i',
-      ':root[data-theme="dark"] .agent-detail-header__status i',
-      ':root[data-theme="dark"] .private-state i',
+      ".live-tool-card.is-preparing::before",
+      ".live-tool-card.is-running::before",
+      ".thinking-card.is-streaming::before",
+      ".service-state i",
+      ".agent-run-indicator::before",
+      ".tool-output.is-live code > span::after",
+      ".streaming-label i",
+      ".status-dot",
+      ".agent-card__title i",
+      ".agent-detail-header__status i",
     ];
     const colorSelectors = [
-      ':root[data-theme="dark"] .session-refresh-hint .is-ready',
-      ':root[data-theme="dark"] .session-row.is-opening .session-row__open svg',
-      ':root[data-theme="dark"] .tool-status.is-running',
-      ':root[data-theme="dark"] .spinner',
-      ':root[data-theme="dark"] .tool-output.is-live code > span',
-      ':root[data-theme="dark"] .streaming-label',
-      ':root[data-theme="dark"] .scheduled-task-state.is-enabled',
-      ':root[data-theme="dark"] .scheduled-task-runs li strong[data-status="completed"]',
-      ':root[data-theme="dark"] .knowledge-base-status.is-indexed',
-      ':root[data-theme="dark"] .task-log li[data-status="completed"]',
+      ".session-refresh-hint .is-ready",
+      ".session-row.is-opening .session-row__open svg",
+      ".tool-status.is-running",
+      ".spinner",
+      ".tool-output.is-live code > span",
+      ".streaming-label",
+      ".scheduled-task-state.is-enabled",
+      '.scheduled-task-runs li strong[data-status="completed"]',
+      ".knowledge-base-status.is-indexed",
+      '.task-log li[data-status="completed"]',
     ];
 
     for (const selector of backgroundSelectors) {
-      expect(groupedDeclaration(rules, selector, "background"), selector).toBe("var(--eye)");
+      expect(groupedDeclaration(baseRules, selector, "background"), selector).toBe("var(--state)");
     }
     for (const selector of colorSelectors) {
-      expect(groupedDeclaration(rules, selector, "color"), selector).toBe("var(--eye)");
+      expect(groupedDeclaration(baseRules, selector, "color"), selector).toBe("var(--state)");
     }
-    expect(declaration(rules, ':root[data-theme="dark"] .scheduled-task-state.is-enabled', "border-color"))
-      .toBe("color-mix(in srgb, var(--eye) 30%, var(--border))");
+    for (const selector of [".service-state i", ".streaming-label i", ".status-dot", ".agent-card__title i", ".agent-detail-header__status i"]) {
+      expect(groupedDeclaration(baseRules, selector, "box-shadow"), selector).toContain("var(--halo)");
+    }
+    expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "border-color"))
+      .toBe("color-mix(in srgb, var(--state) 30%, var(--border))");
+    expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "background"))
+      .toBe("color-mix(in srgb, var(--state) 8%, var(--panel))");
     expect(declaration(baseRules, ".private-state i", "background")).toBe("rgb(124, 194, 107)");
     expect(declaration(baseRules, ".private-state i", "box-shadow"))
       .toBe("0 0 0 4px rgba(124, 194, 107, 0.12)");
+    expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "background"))
+      .toBe("var(--state)");
     expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "box-shadow"))
-      .toBe("0 0 0 4px color-mix(in srgb, var(--eye) 18%, transparent)");
+      .toBe("0 0 0 4px var(--halo)");
   });
 
   it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
@@ -203,8 +219,8 @@ describe("BugPaw 生产视觉合同", () => {
     ];
 
     for (const selector of selectors) {
-      expect(declaration(rules, selector, "color"), selector).toBe("var(--primary-text)");
-      expect(declaration(rules, selector, "background"), selector).toBe("var(--primary-bg)");
+      expect(groupedDeclaration(rules, selector, "color"), selector).toBe("var(--primary-text)");
+      expect(groupedDeclaration(rules, selector, "background"), selector).toBe("var(--primary-bg)");
     }
     expect(source).not.toContain("#102018");
   });
@@ -364,7 +380,7 @@ describe("BugPaw 生产视觉合同", () => {
       .toBe("var(--secondary-sidebar-width) minmax(0, 1fr)");
     expect(declaration(rules, ".secondary-sidebar-header__heading", "gap")).toBe("3px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color"))
-      .toBe("var(--accent-foreground)");
+      .toBe("var(--ink)");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-size")).toBe("11px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-weight")).toBe("650");
     expect(declaration(rules, ".secondary-sidebar-header__title", "color")).toBe("inherit");
