@@ -5,6 +5,10 @@
   --tabby: #7a5a3a;
   --deep-brown: #2f241b;
   --bugpaw-danger: #df6b6b;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+  --shadow-pixel: none;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   color: var(--text-primary);
   background: var(--canvas);
@@ -13,31 +17,31 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #171c22;
-  --panel: #202630;
-  --surface: #252d38;
-  --surface-soft: #283444;
-  --surface-hover: #303a47;
-  --text-primary: #f7f6f2;
-  --text-secondary: #b9c0c7;
-  --text-tertiary: #98a4b2;
-  --border: #35404d;
-  --border-strong: #465363;
-  --accent: #7cc26b;
-  --accent-strong: #96d685;
-  --accent-soft: rgba(124, 194, 107, 0.11);
-  --danger: #df7777;
-  --focus: #7cc26b;
-  --primary-bg: #f7f6f2;
-  --primary-text: #283444;
-  --rail: #1b2129;
-  --backdrop: #11161c;
-  --scrollbar-track: transparent;
-  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
-  --shadow-soft: 0 18px 50px rgba(4, 8, 13, 0.24);
-  --shadow-float: 0 22px 70px rgba(4, 8, 13, 0.34);
-  --shadow-pixel: none;
+  --eye: #a4c66d;
+  --canvas: #151517;
+  --panel: #1c1c1f;
+  --surface: #24252a;
+  --surface-soft: #2c2d32;
+  --surface-hover: #34353a;
+  --text-primary: #f4f1ec;
+  --text-secondary: #b7bac2;
+  --text-tertiary: #888d98;
+  --border: #383940;
+  --border-strong: #4a4d56;
+  --accent: #5f6d8a;
+  --accent-strong: #94a4c4;
+  --fg: var(--accent-strong);
+  --accent-soft: rgba(95, 109, 138, 0.18);
+  --ok: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 18%, transparent);
+  --danger: #d77c78;
+  --focus: #a4c66d;
+  --primary-bg: #5f6d8a;
+  --primary-text: #f7f5f1;
+  --rail: #18191b;
+  --backdrop: #0f0f11;
+  --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.28);
+  --shadow-float: 0 22px 70px rgba(0, 0, 0, 0.42);
 }
 
 :root[data-theme="light"] {
@@ -61,12 +65,8 @@
   --primary-text: #f7f6f2;
   --rail: #f0efea;
   --backdrop: #e7e5df;
-  --scrollbar-track: transparent;
-  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
   --shadow-soft: 0 18px 50px rgba(40, 52, 68, 0.12);
   --shadow-float: 0 22px 70px rgba(40, 52, 68, 0.18);
-  --shadow-pixel: none;
 }
 
 :root[data-theme="bug"] {
@@ -237,7 +237,9 @@ textarea:focus-visible {
 .primary-button,
 .configuration-primary-action,
 .send-button,
-.new-chat-button {
+.new-chat-button,
+[data-theme=dark] .mobile-entry-gate__enter,
+[data-theme=dark] .question-composer__submit {
   color: var(--primary-text);
   background: var(--primary-bg);
   border-color: var(--primary-bg);
@@ -425,6 +427,12 @@ textarea:focus-visible {
 
 .message-row.is-assistant .message-content {
   background: transparent;
+}
+
+/* 暗色主题用猫眼绿表达运行与成功，主要交互继续使用灰蓝强调色。 */
+[data-theme=dark] .private-state i {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px var(--halo);
 }
 
 .configuration-overview-page .configuration-page__heading {

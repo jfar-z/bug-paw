@@ -35,6 +35,33 @@ function declaration(rules: ParsedStyleRule[], selector: string, property: strin
   return rule?.declarations.getPropertyValue(property).trim() ?? "";
 }
 
+/** 把十六进制颜色转换为 WCAG 相对亮度。 */
+function relativeLuminance(hex: string): number {
+  const channels = hex.slice(1).match(/../gu)?.map((value) => Number.parseInt(value, 16) / 255) ?? [];
+  const [red = 0, green = 0, blue = 0] = channels.map((value) => (
+    value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  ));
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+/** 计算两种不透明颜色之间的 WCAG 对比度。 */
+function contrastRatio(foreground: string, background: string): number {
+  const values = [relativeLuminance(foreground), relativeLuminance(background)]
+    .sort((left, right) => right - left);
+  return ((values[0] ?? 0) + 0.05) / ((values[1] ?? 0) + 0.05);
+}
+
+/** 将半透明前景色叠加到不透明背景色，覆盖真实组件底色组合。 */
+function compositeHex(foreground: string, background: string, alpha: number): string {
+  const parse = (hex: string) => hex.slice(1).match(/../gu)?.map((value) => Number.parseInt(value, 16)) ?? [];
+  const foregroundChannels = parse(foreground);
+  const backgroundChannels = parse(background);
+  const channels = foregroundChannels.map((value, index) => (
+    Math.round(value * alpha + (backgroundChannels[index] ?? 0) * (1 - alpha))
+  ));
+  return `#${channels.map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
 /** 从组合选择器中读取指定元素的样式声明。 */
 function groupedDeclaration(rules: ParsedStyleRule[], selector: string, property: string): string {
   const rule = rules.find((candidate) => candidate.selector
@@ -63,13 +90,143 @@ describe("BugPaw 生产视觉合同", () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8").catch(() => "");
     const rules = parseStyleRules(source);
 
-    expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#171c22");
+    expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#151517");
     expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f7f6f2");
     expect(declaration(rules, ':root[data-theme="bug"]', "--canvas")).toBe("#ded2bf");
     expect(declaration(rules, ':root[data-theme="bug"]', "--shadow-pixel").replaceAll(" ", ""))
       .toBe("4px4px0#7a5a3a");
     expect(declaration(rules, ".product-mark__image", "width")).toBe("36px");
     expect(declaration(rules, ".bugpaw-auth-visual img", "object-fit")).toBe("contain");
+  });
+
+  it("暗色主题使用深海灰蓝色阶与猫眼绿状态信号", async () => {
+    const [baseSource, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const baseRules = parseStyleRules(baseSource);
+    const themeRules = parseStyleRules(themeSource);
+    const darkSelector = ':root[data-theme="dark"]';
+    const expectedThemeTokens = new Map([
+      ["--eye", "#a4c66d"],
+      ["--canvas", "#151517"],
+      ["--panel", "#1c1c1f"],
+      ["--surface", "#24252a"],
+      ["--surface-soft", "#2c2d32"],
+      ["--surface-hover", "#34353a"],
+      ["--text-primary", "#f4f1ec"],
+      ["--text-secondary", "#b7bac2"],
+      ["--text-tertiary", "#888d98"],
+      ["--border", "#383940"],
+      ["--border-strong", "#4a4d56"],
+      ["--accent", "#5f6d8a"],
+      ["--accent-strong", "#94a4c4"],
+      ["--fg", "var(--accent-strong)"],
+      ["--ok", "var(--eye)"],
+      ["--halo", "color-mix(in srgb,var(--eye) 18%,transparent)"],
+      ["--accent-soft", "rgba(95,109,138,0.18)"],
+      ["--danger", "#d77c78"],
+      ["--focus", "#a4c66d"],
+      ["--primary-bg", "#5f6d8a"],
+      ["--primary-text", "#f7f5f1"],
+      ["--rail", "#18191b"],
+      ["--backdrop", "#0f0f11"],
+    ]);
+
+    for (const [property, expected] of expectedThemeTokens) {
+      expect(declaration(themeRules, darkSelector, property), property).toBe(expected);
+    }
+
+    expect(declaration(baseRules, darkSelector, "--canvas")).toBe("");
+
+    expect(contrastRatio("#f7f5f1", "#5f6d8a")).toBeGreaterThanOrEqual(4.5);
+    const accentSoftOnSurfaceSoft = compositeHex("#5f6d8a", "#2c2d32", 0.18);
+    for (const background of ["#151517", "#1c1c1f", "#24252a", "#2c2d32", accentSoftOnSurfaceSoft]) {
+      expect(contrastRatio("#94a4c4", background), background).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(contrastRatio("#888d98", "#151517")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#a4c66d", "#151517")).toBeGreaterThanOrEqual(4.5);
+    expect(declaration(baseRules, ":root", "--fg")).toBe("var(--accent)");
+    expect(declaration(baseRules, ":root", "--ok")).toBe("var(--accent)");
+    expect(declaration(baseRules, ":root", "--halo")).toBe("var(--accent-soft)");
+    expect(declaration(themeRules, ":root", "--fg")).toBe("");
+    expect(declaration(themeRules, ":root", "--ok")).toBe("");
+    expect(declaration(themeRules, darkSelector, "--halo"))
+      .toBe("color-mix(in srgb,var(--eye) 18%,transparent)");
+    expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--fg)");
+  });
+
+  it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
+    const [baseSource, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const baseRules = parseStyleRules(baseSource);
+    const rules = parseStyleRules(themeSource);
+    const backgroundSelectors = [
+      ".live-tool-card.is-preparing::before",
+      ".live-tool-card.is-running::before",
+      ".thinking-card.is-streaming::before",
+      ".service-state i",
+      ".agent-run-indicator::before",
+      ".tool-output.is-live code > span::after",
+      ".streaming-label i",
+      ".status-dot",
+      ".agent-card__title i",
+      ".agent-detail-header__status i",
+    ];
+    const colorSelectors = [
+      ".session-refresh-hint .is-ready",
+      ".session-row.is-opening .session-row__open svg",
+      ".tool-status.is-running",
+      ".spinner",
+      ".tool-output.is-live code > span",
+      ".streaming-label",
+      ".scheduled-task-state.is-enabled",
+      '.scheduled-task-runs li strong[data-status="completed"]',
+      ".knowledge-base-status.is-indexed",
+      '.task-log li[data-status="completed"]',
+    ];
+
+    for (const selector of backgroundSelectors) {
+      expect(groupedDeclaration(baseRules, selector, "background"), selector).toBe("var(--ok)");
+    }
+    for (const selector of colorSelectors) {
+      expect(groupedDeclaration(baseRules, selector, "color"), selector).toBe("var(--ok)");
+    }
+    for (const selector of [".service-state i", ".streaming-label i", ".status-dot", ".agent-card__title i", ".agent-detail-header__status i"]) {
+      expect(groupedDeclaration(baseRules, selector, "box-shadow"), selector).toContain("var(--halo)");
+    }
+    expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "border-color"))
+      .toBe("color-mix(in srgb, var(--ok) 30%, var(--border))");
+    expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "background"))
+      .toBe("color-mix(in srgb, var(--ok) 8%, var(--panel))");
+    expect(declaration(baseRules, ".private-state i", "background")).toBe("rgb(124, 194, 107)");
+    expect(declaration(baseRules, ".private-state i", "box-shadow"))
+      .toBe("0 0 0 4px rgba(124, 194, 107, 0.12)");
+    expect(declaration(rules, "[data-theme=dark] .private-state i", "background"))
+      .toBe("var(--ok)");
+    expect(declaration(rules, "[data-theme=dark] .private-state i", "box-shadow"))
+      .toBe("0 0 0 4px var(--halo)");
+  });
+
+  it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
+    const [source, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const themeRules = parseStyleRules(themeSource);
+    for (const themedSelector of [
+      ".primary-button",
+      ".send-button",
+      "[data-theme=dark] .mobile-entry-gate__enter",
+      "[data-theme=dark] .question-composer__submit",
+    ]) {
+      expect(groupedDeclaration(themeRules, themedSelector, "color")).toBe("var(--primary-text)");
+      expect(groupedDeclaration(themeRules, themedSelector, "background")).toBe("var(--primary-bg)");
+      expect(groupedDeclaration(themeRules, themedSelector, "border-color")).toBe("var(--primary-bg)");
+    }
+    expect(source).not.toContain("#102018");
   });
 
   it("三套主题为全部滚动区域提供统一的非原生滚动条", async () => {
@@ -80,8 +237,14 @@ describe("BugPaw 生产视觉合同", () => {
     const rules = parseStyleRules(source);
     const baseRules = parseStyleRules(baseSource);
 
-    expect(declaration(rules, ':root[data-theme="dark"]', "--scrollbar-track")).toBe("transparent");
-    expect(declaration(rules, ':root[data-theme="light"]', "--scrollbar-track")).toBe("transparent");
+    expect(declaration(rules, ":root", "--scrollbar-track")).toBe("transparent");
+    expect(declaration(rules, ":root", "--scrollbar-thumb"))
+      .toBe("color-mix(in srgb,var(--text-tertiary) 58%,transparent)");
+    expect(declaration(rules, ":root", "--scrollbar-thumb-hover"))
+      .toBe("color-mix(in srgb,var(--text-secondary) 72%,transparent)");
+    expect(declaration(rules, ":root", "--shadow-pixel")).toBe("none");
+    expect(declaration(rules, ':root[data-theme="dark"]', "--scrollbar-track")).toBe("");
+    expect(declaration(rules, ':root[data-theme="light"]', "--scrollbar-track")).toBe("");
     expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-track")).toBe("var(--surface-soft)");
     expect(declaration(rules, ':root[data-theme="bug"]', "--scrollbar-thumb")).toBe("var(--tabby)");
     expect(declaration(rules, "*", "scrollbar-width")).toBe("thin");
@@ -100,7 +263,7 @@ describe("BugPaw 生产视觉合同", () => {
     const themeRules = parseStyleRules(themeSource);
 
     expect(declaration(baseRules, ".composer-dock", "background")).toBe("var(--canvas)");
-    expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#98a4b2");
+    expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#888d98");
     expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#596676");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover', "background")).toBe("rgb(89, 70, 52)");
     expect(declaration(themeRules, ':root[data-theme="bug"] .session-row:hover .session-row__open', "background")).toBe("transparent");
@@ -226,7 +389,8 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".knowledge-base-page", "grid-template-columns"))
       .toBe("var(--secondary-sidebar-width) minmax(0, 1fr)");
     expect(declaration(rules, ".secondary-sidebar-header__heading", "gap")).toBe("3px");
-    expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color")).toBe("var(--accent)");
+    expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "color"))
+      .toBe("var(--fg)");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-size")).toBe("11px");
     expect(declaration(rules, ".secondary-sidebar-header__eyebrow", "font-weight")).toBe("650");
     expect(declaration(rules, ".secondary-sidebar-header__title", "color")).toBe("inherit");
