@@ -175,6 +175,21 @@ describe("BugPaw 生产视觉合同", () => {
       .toBe("color-mix(in srgb, var(--eye) 30%, var(--border))");
   });
 
+  it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
+    const source = await readFile("src/web/styles.css", "utf8");
+    const rules = parseStyleRules(source);
+    const selectors = [
+      ':root[data-theme="dark"] .primary-button',
+      ':root[data-theme="dark"] .send-button',
+      ':root[data-theme="dark"] .mobile-entry-gate__enter',
+    ];
+
+    for (const selector of selectors) {
+      expect(declaration(rules, selector, "color"), selector).toBe("var(--primary-text)");
+      expect(declaration(rules, selector, "background"), selector).toBe("var(--primary-bg)");
+    }
+  });
+
   it("三套主题为全部滚动区域提供统一的非原生滚动条", async () => {
     const [source, baseSource] = await Promise.all([
       readFile("src/web/bugpaw-theme.css", "utf8"),
