@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ComposerSessionControls } from "./composer-session-controls";
+
+const applicationStyles = readFileSync("src/web/styles.css", "utf8");
 
 const models = [
   { provider: "openai", id: "gpt-5", name: "GPT-5", thinkingLevels: ["off", "low", "medium", "high"] as const },
@@ -8,6 +11,15 @@ const models = [
 ];
 
 describe("ComposerSessionControls", () => {
+  it("桌面端模型菜单以模型按钮为定位基准", () => {
+    expect(applicationStyles).toMatch(
+      /@media \(min-width: 761px\)[\s\S]*?\.composer-model-control\s*\{\s*position:\s*relative;/u,
+    );
+    expect(applicationStyles).toMatch(
+      /@media \(min-width: 761px\)[\s\S]*?\.composer-model-menu\s*\{\s*width:\s*min\(320px, calc\(100vw - 40px\)\);/u,
+    );
+  });
+
   it("思考按钮常态只显示图标并可从菜单切换深度", () => {
     const onThinkingLevelChange = vi.fn();
     render(<ComposerSessionControls
