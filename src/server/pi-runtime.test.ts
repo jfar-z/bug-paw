@@ -1,16 +1,38 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { createEditTool, createReadTool, createWriteTool, ExtensionRunner } from "@earendil-works/pi-coding-agent";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  MODEL_REQUEST_FAILED_MESSAGE,
+  MODEL_RESPONSE_TRUNCATED_MESSAGE,
+} from "../shared/assistant-run-outcome";
 import {
   createPiRuntimeGateway,
   createWorkspaceResourceLoader,
   getGlobalDefaultModel,
   resolveTitleGenerationRequest,
+  type ChatEvent,
   type ModelSummary,
   type PiRuntimeBackend,
   type PiSessionAdapter,
 } from "./pi-runtime";
+import type { RunCheckpoint } from "./runtime/checkpoint-store";
+import { SearchRunState } from "./web-research/search-run-state";
+import type { ThinkingLevel } from "../shared/configuration-contracts";
+import { AskUserRunState } from "./questions/ask-user-run-state";
+import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
+import type { PendingQuestionProjection } from "../shared/session-question-contracts";
+import { compileQuestionResponseProtocol } from "../shared/question-response-protocol";
+
+const noRetrieval = {
+  knowledgeSearch: false,
+  knowledgeRead: false,
+  webSearch: false,
+  webRead: false,
+};
 
 /** 创建受测试控制的异步值。 */
 function createDeferred<T>() {
@@ -23,23 +45,62 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
-/** 以最小实现模拟 SDK 会话，记录 reload 调用。 */
+/** 创建包含累计 Assistant 内容的工具调用流事件。 */
+function toolCallUpdate(type: "toolcall_start" | "toolcall_delta", id: string, name: string) {
+  const message = {
+    role: "assistant",
+    content: [{ type: "toolCall", id, name, arguments: {} }],
+  };
+  return {
+    type: "message_update",
+    message,
+    assistantMessageEvent: { type, contentIndex: 0, delta: "{}", partial: message },
+  } as never;
+}
+
+/** 创建用于 Runtime 投影测试的最小待回答问题。 */
+function pendingQuestionProjection(): PendingQuestionProjection {
+  return {
+    id: "record-1",
+    version: 1,
+    toolCallId: "call-1",
+    createdAt: "2026-08-13T00:00:00.000Z",
+    questions: [{
+      id: "question-1",
+      header: "方案",
+      question: "请选择方案",
+      multiSelect: false,
+      options: [
+        { id: "option-1", label: "A", description: "方案 A" },
+        { id: "option-2", label: "B", description: "方案 B" },
+      ],
+    }],
+  };
+}
+
+/** 以最小实现模拟 SDK 会话。 */
 function createSession(
   prompt: () => Promise<void> = async () => undefined,
   messages: unknown[] = [],
   model: unknown = undefined,
-): PiSessionAdapter & { reload: ReturnType<typeof vi.fn>; setSessionName: ReturnType<typeof vi.fn> } {
+  initialThinkingLevel: ThinkingLevel = "medium",
+): PiSessionAdapter & { setSessionName: ReturnType<typeof vi.fn> } {
+  let thinkingLevel = initialThinkingLevel;
   return {
     sessionId: "session-1",
     sessionFile: undefined,
     messages,
     model,
+    get thinkingLevel() {
+      return thinkingLevel;
+    },
+    availableThinkingLevels: ["off", "minimal", "low", "medium", "high"],
     isStreaming: false,
     subscribe: () => () => undefined,
     prompt,
-    reload: vi.fn(async () => undefined),
     abort: async () => undefined,
     setModel: async () => undefined,
+    setThinkingLevel: vi.fn((level: ThinkingLevel) => { thinkingLevel = level; }),
     setSessionName: vi.fn<(name: string) => void>(),
     dispose: () => undefined,
   };
@@ -63,12 +124,116 @@ function createBackend(
 }
 
 describe("PiRuntimeGateway 提示词刷新", () => {
+  it("在快照中返回会话真实思考深度并发布切换事件", async () => {
+    const session = createSession(undefined, [], { provider: "openai", id: "gpt", name: "GPT" });
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    const initial = await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    expect(initial.thinkingLevel).toBe("medium");
+    await gateway.setThinkingLevel("session-1", "high");
+
+    expect(session.setThinkingLevel).toHaveBeenCalledWith("high");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "thinking_level_changed",
+      thinkingLevel: "high",
+    }));
+    await expect(gateway.openSession("session-1")).resolves.toMatchObject({ thinkingLevel: "high" });
+    gateway.dispose();
+  });
+
+  it("切换模型导致 SDK 校正深度时在模型事件后发布最终深度", async () => {
+    const session = createSession(undefined, [], { provider: "openai", id: "reasoner", name: "Reasoner" }, "max");
+    session.setModel = vi.fn(async () => { session.setThinkingLevel("high"); });
+    const backend = createBackend(session);
+    backend.findModel = () => ({ provider: "openai", id: "compact", name: "Compact", reasoning: true });
+    const gateway = createPiRuntimeGateway(backend);
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.setModel("session-1", "openai", "compact");
+
+    const changes = events.filter((event) => event.type !== "snapshot");
+    expect(changes.map((event) => event.type)).toEqual(["model_changed", "thinking_level_changed"]);
+    expect(changes[1]).toMatchObject({ thinkingLevel: "high" });
+    gateway.dispose();
+  });
+
+  it("会话文本搜索固定 Agent 作用域并优先读取已打开的当前分支", async () => {
+    const messages = [{ role: "assistant", content: "needle 实时分支", __piEntryId: "assistant-live" }];
+    const session = createSession(undefined, messages);
+    session.navigateTree = vi.fn(async () => ({ cancelled: false }));
+    const backend = createBackend(session);
+    backend.listSessions = async () => [{
+      id: "session-1",
+      path: "/managed/session-1.jsonl",
+      name: "测试会话",
+      created: "2026-08-13T00:00:00.000Z",
+      modified: "2026-08-13T01:00:00.000Z",
+      messageCount: 1,
+      firstMessage: "首条消息",
+    }];
+    const sessionMetadataStore = {
+      listIdsByAgent: vi.fn(async (agentId: string) => agentId === "agent-a" ? ["session-1"] : []),
+      listArchivedIds: vi.fn(async () => []),
+      isArchived: vi.fn(async () => false),
+    };
+    const readPersistedBranch = vi.fn(async () => [
+      { role: "assistant", content: "needle 持久化旧分支", __piEntryId: "assistant-old" },
+    ]);
+    const gateway = createPiRuntimeGateway(backend, {
+      sessionMetadataStore,
+      sessionText: { agentId: "agent-a", readPersistedBranch },
+    } as never);
+    await gateway.createSession();
+
+    const first = await gateway.searchSessionText!({ query: "needle" });
+    expect(first.hits).toMatchObject([{ entryId: "assistant-live", sessionId: "session-1" }]);
+    expect(readPersistedBranch).not.toHaveBeenCalled();
+
+    messages.splice(0, messages.length, {
+      role: "assistant",
+      content: "needle 新分支",
+      __piEntryId: "assistant-new",
+    });
+    const snapshot = await gateway.openSession("session-1");
+    await gateway.navigateTree!("session-1", "assistant-new");
+    const refreshed = await gateway.searchSessionText!({ query: "needle" });
+    expect(refreshed.hits).toMatchObject([{ entryId: "assistant-new" }]);
+    expect(snapshot.id).toBe("session-1");
+    gateway.dispose();
+  });
+
   it("快照只返回当前分支最近页并用稳定 token 加载上一页", async () => {
+    const pendingQuestion = pendingQuestionProjection();
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: pendingQuestion.id,
+      status: "submitted" as const,
+      answers: [{ questionId: "question-1", kind: "options" as const, optionIds: ["option-1"] }],
+      unansweredQuestionIds: [],
+    };
     const messages = Array.from({ length: 25 }, (_, index) => {
       const number = index + 1;
       return [
-        { role: "user", content: `question-${number}`, __piEntryId: `user-${number}` },
         {
+          role: "user",
+          content: number === 25
+            ? compileQuestionResponseProtocol(resolution, pendingQuestion.questions)
+            : `question-${number}`,
+          __piEntryId: `user-${number}`,
+        },
+        number === 1 ? {
+          role: "toolResult",
+          toolCallId: pendingQuestion.toolCallId,
+          toolName: "ask_user",
+          isError: false,
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+          __piEntryId: `tool-${number}`,
+        } : {
           role: "toolResult",
           content: [{ type: "image", data: "aGVsbG8=" }],
           __piEntryId: `tool-${number}`,
@@ -81,11 +246,28 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     const gateway = createPiRuntimeGateway(createBackend(session));
 
     const latest = await gateway.createSession();
-    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true });
+    expect(latest.history).toMatchObject({ startEntryId: "user-6", turnCount: 20, hasMoreBefore: true, hasMoreAfter: false });
     expect(latest.messages[1]).toMatchObject({ content: [{ data: "<IMAGE_BASE64>" }] });
 
     const previous = await gateway.loadHistoryPage!("session-1", "user-6", latest.history.branchToken);
-    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false });
+    expect(previous.history).toMatchObject({ startEntryId: "user-1", turnCount: 5, hasMoreBefore: false, hasMoreAfter: true });
+    expect(previous.messages[1]).toHaveProperty("details.resolution", resolution);
+    expect((gateway as unknown as Record<string, unknown>).loadHistoryTarget).toBeTypeOf("function");
+    expect((gateway as unknown as Record<string, unknown>).loadHistoryPageAfter).toBeTypeOf("function");
+    const target = await gateway.loadHistoryTarget!("session-1", "assistant-10", latest.history.branchToken);
+    expect(target).toMatchObject({
+      targetEntryId: "assistant-10",
+      history: { startEntryId: "user-1", endEntryId: "assistant-20", hasMoreAfter: true },
+    });
+    const newer = await gateway.loadHistoryPageAfter!("session-1", "assistant-20", latest.history.branchToken);
+    expect(newer.history).toMatchObject({
+      startEntryId: "user-21",
+      endEntryId: "assistant-25",
+      hasMoreAfter: false,
+      turnCount: 5,
+    });
+    await expect(gateway.loadHistoryTarget!("session-1", "assistant-10", "stale-token"))
+      .rejects.toMatchObject({ code: "SESSION_BRANCH_CHANGED" });
     await expect(gateway.loadHistoryPage!("session-1", "user-6", "stale-token")).rejects.toMatchObject({ code: "SESSION_HISTORY_STALE" });
     gateway.dispose();
   });
@@ -102,25 +284,100 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     gateway.dispose();
   });
 
-  it("资源加载器 reload 时读取最新的动态提示词快照", async () => {
-    let prompts = ["第一版提示词"];
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], () => prompts, {
-      knowledgeSearch: false,
-      knowledgeRead: false,
-      webSearch: false,
-      webRead: false,
-    });
-
+  it("资源加载器在每个 Run 读取最新 Agent 提示词上下文", async () => {
+    let role = "第一版提示词";
+    const resolveAgentPromptContext = vi.fn(async () => ({
+      directory: "/data/app/agents/agent-a",
+      paths: {
+        role: "/data/app/agents/agent-a/ROLE.md",
+        behavior: "/data/app/agents/agent-a/BEHAVIOR.md",
+        rules: "/data/app/agents/agent-a/RULES.md",
+        user: "/data/app/agents/agent-a/USER.md",
+        bootsharp: "/data/app/agents/agent-a/BOOTSHARP.md",
+      },
+      instructions: { role, behavior: "", rules: "", user: "" },
+      bootsharp: "",
+    }));
+    const loader = createWorkspaceResourceLoader(
+      "/tmp",
+      "/tmp",
+      [],
+      noRetrieval,
+      new SearchRunState(),
+      resolveAgentPromptContext,
+    );
     await loader.reload();
-    expect(loader.getAppendSystemPrompt()).toEqual(["第一版提示词"]);
+    const loaded = loader.getExtensions();
+    const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, "/tmp", {} as never, {} as never);
 
-    prompts = ["第二版提示词"];
-    await loader.reload();
-    expect(loader.getAppendSystemPrompt()).toEqual(["第二版提示词"]);
+    const first = await runner.emitBeforeAgentStart("第一轮", undefined, "Old\n\nAvailable tools:\n- read", {} as never);
+    role = "第二版提示词";
+    const second = await runner.emitBeforeAgentStart("第二轮", undefined, "Old\n\nAvailable tools:\n- read", {} as never);
+
+    expect(first?.systemPrompt).toContain("第一版提示词");
+    expect(second?.systemPrompt).toContain("第二版提示词");
+    expect(second?.systemPrompt).not.toContain("第一版提示词");
+    expect(resolveAgentPromptContext).toHaveBeenCalledTimes(2);
+  });
+
+  it("Pi 原生 write 可通过绝对路径把 BOOTSHARP 写为空内容", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-native-write-"));
+    const cwd = join(root, "workspace");
+    const bootsharp = join(root, "app", "agents", "agent-a", "BOOTSHARP.md");
+    await Promise.all([
+      mkdir(cwd, { recursive: true }),
+      mkdir(dirname(bootsharp), { recursive: true }),
+    ]);
+    await writeFile(bootsharp, "初始化引导", "utf8");
+    try {
+      const tool = createWriteTool(cwd);
+      await tool.execute(
+        "write-bootsharp",
+        { path: bootsharp, content: "" },
+        undefined,
+        undefined,
+      );
+
+      await expect(readFile(bootsharp, "utf8")).resolves.toBe("");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("Pi 原生 read 与 edit 可通过绝对路径维护长期提示词", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-native-prompt-tools-"));
+    const cwd = join(root, "workspace");
+    const role = join(root, "app", "agents", "agent-a", "ROLE.md");
+    await Promise.all([
+      mkdir(cwd, { recursive: true }),
+      mkdir(dirname(role), { recursive: true }),
+    ]);
+    await writeFile(role, "研究助手", "utf8");
+    try {
+      const readTool = createReadTool(cwd);
+      const editTool = createEditTool(cwd);
+
+      await expect(readTool.execute(
+        "read-role",
+        { path: role },
+        undefined,
+        undefined,
+      )).resolves.toBeDefined();
+      await editTool.execute(
+        "edit-role",
+        { path: role, edits: [{ oldText: "研究助手", newText: "代码审查助手" }] },
+        undefined,
+        undefined,
+      );
+
+      await expect(readFile(role, "utf8")).resolves.toBe("代码审查助手");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("资源加载器注册提示词注入与搜索断路扩展", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], {
       knowledgeSearch: false,
       knowledgeRead: false,
       webSearch: true,
@@ -136,8 +393,125 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(loader.getExtensions().errors).toEqual([]);
   });
 
+  it("资源加载器可为单个 Pi Session 注册提问消息防护", async () => {
+    const loader = createWorkspaceResourceLoader(
+      "/tmp",
+      "/tmp",
+      [],
+      noRetrieval,
+      new SearchRunState(),
+      undefined,
+      [createAskUserMessageGuardExtension(new AskUserRunState())],
+    );
+
+    await loader.reload();
+
+    expect(loader.getExtensions().extensions.map(({ path }) => path)).toContain(
+      "<inline:bug-paw-ask-user-message-guard>",
+    );
+  });
+
+  it("提问开始后不再发布尾随文本和兄弟工具流事件", async () => {
+    let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
+    const session = {
+      ...createSession(),
+      askUserRunState: new AskUserRunState(),
+      subscribe(next: Parameters<PiSessionAdapter["subscribe"]>[0]) {
+        listener = next;
+        return () => undefined;
+      },
+    };
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    listener(toolCallUpdate("toolcall_start", "ask-1", "ask_user"));
+    listener({
+      type: "message_update",
+      message: { role: "assistant", content: [{ type: "text", text: "不应公开" }] },
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "不应公开" },
+    } as never);
+    listener(toolCallUpdate("toolcall_start", "write-1", "write"));
+    listener({
+      type: "tool_execution_start",
+      toolCallId: "ask-1",
+      toolName: "ask_user",
+      args: {},
+    } as never);
+
+    expect(events.filter((event) => event.type !== "snapshot").map((event) => event.type)).toEqual([
+      "tool_preparing",
+      "tool_started",
+    ]);
+    expect(events).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "text_delta" }),
+      expect.objectContaining({ toolName: "write" }),
+    ]));
+    gateway.dispose();
+  });
+
+  it("在 Snapshot 和 Run 释放后的控制事件中恢复待回答问题", async () => {
+    let pending: PendingQuestionProjection | undefined;
+    const session = createSession(async () => {
+      pending = pendingQuestionProjection();
+    });
+    const gateway = createPiRuntimeGateway(createBackend(session), {
+      questionState: {
+        findPending: () => pending,
+        reconcile: vi.fn(),
+        consumeResolvedEvent: () => undefined,
+      },
+    });
+    const initial = await gateway.createSession();
+    const events: ChatEvent[] = [];
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    expect(initial.pendingQuestion).toBeUndefined();
+    await gateway.prompt("session-1", "需要确认");
+
+    const pendingEvent = events.find((event) => event.type === "question_pending");
+    expect(pendingEvent).toMatchObject({ type: "question_pending", pendingQuestion: pending });
+    expect(pendingEvent).not.toHaveProperty("runId");
+    expect(events.map((event) => event.type).indexOf("question_pending"))
+      .toBeGreaterThan(events.map((event) => event.type).indexOf("completed"));
+    await expect(gateway.openSession("session-1")).resolves.toMatchObject({ pendingQuestion: pending });
+    gateway.dispose();
+  });
+
+  it("question_resolved 控制事件不携带答案正文", async () => {
+    const session = createSession();
+    let notice = { questionRecordId: "record-1", state: "submitted" as const };
+    const gateway = createPiRuntimeGateway(createBackend(session), {
+      questionState: {
+        findPending: () => undefined,
+        reconcile: vi.fn(),
+        consumeResolvedEvent: () => {
+          const current = notice;
+          notice = undefined as never;
+          return current;
+        },
+      },
+    });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.prompt("session-1", "继续");
+
+    const resolved = events.find((event) => event.type === "question_resolved");
+    expect(resolved).toMatchObject({
+      type: "question_resolved",
+      questionRecordId: "record-1",
+      state: "submitted",
+    });
+    expect(resolved).not.toHaveProperty("answers");
+    expect(resolved).not.toHaveProperty("runId");
+    gateway.dispose();
+  });
+
   it("未授权 web_search 时不注册搜索断路扩展", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], {
       knowledgeSearch: false,
       knowledgeRead: false,
       webSearch: false,
@@ -152,7 +526,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
   });
 
   it("通过 Pi ExtensionRunner 在新 Run 重置搜索断路且不影响其他工具", async () => {
-    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], undefined, {
+    const loader = createWorkspaceResourceLoader("/tmp", "/tmp", [], {
       knowledgeSearch: false,
       knowledgeRead: false,
       webSearch: true,
@@ -185,34 +559,6 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     expect(await runner.emitToolCall({ ...searchCall, toolCallId: "search-3" })).toBeUndefined();
   });
 
-  it("提示词被外部更新时立即 reload 空闲会话", async () => {
-    const session = createSession();
-    const refreshSessionContext = vi.fn(async () => undefined);
-    const gateway = createPiRuntimeGateway(createBackend(session), { refreshSessionContext });
-    await gateway.createSession();
-
-    await gateway.refreshPromptContext?.();
-
-    expect(refreshSessionContext).toHaveBeenCalledOnce();
-    expect(session.reload).toHaveBeenCalledOnce();
-    gateway.dispose();
-  });
-
-  it("生成中更新提示词，在本轮结束后才 reload 会话", async () => {
-    const deferred = createDeferred<void>();
-    const session = createSession(() => deferred.promise);
-    const gateway = createPiRuntimeGateway(createBackend(session));
-    await gateway.createSession();
-    await gateway.startPrompt("session-1", "正在执行");
-
-    await gateway.refreshPromptContext?.();
-    expect(session.reload).not.toHaveBeenCalled();
-
-    deferred.resolve(undefined);
-    await vi.waitFor(() => expect(session.reload).toHaveBeenCalledOnce());
-    gateway.dispose();
-  });
-
   it("在工具参数生成时发布节流进度且不转发原始正文", async () => {
     let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
     let now = 0;
@@ -229,6 +575,16 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         type: "message_update",
         message: assistantMessage,
         assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, partial: assistantMessage },
+      } as never);
+      listener({
+        type: "message_update",
+        message: assistantMessage,
+        assistantMessageEvent: {
+          type: "toolcall_delta",
+          contentIndex: 0,
+          delta: "",
+          partial: assistantMessage,
+        },
       } as never);
       listener({
         type: "message_update",
@@ -321,7 +677,7 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     dateNow.mockRestore();
   });
 
-  it("第三次连续空参数工具事件终止当前 Run 并保留会话", async () => {
+  it("最终合并工具第三次连续空参数事件终止当前 Run 并保留会话", async () => {
     let listener: Parameters<PiSessionAdapter["subscribe"]>[0] = () => undefined;
     let aborted = false;
     const abort = vi.fn(() => {
@@ -333,13 +689,13 @@ describe("PiRuntimeGateway 提示词刷新", () => {
         listener({
           type: "tool_execution_start",
           toolCallId: `call-${count}`,
-          toolName: "knowledge_manage",
+          toolName: "session_list",
           args: {},
         } as never);
         listener({
           type: "tool_execution_end",
           toolCallId: `call-${count}`,
-          toolName: "knowledge_manage",
+          toolName: "session_list",
           result: { content: [{ type: "text", text: aborted ? "Operation aborted" : "参数校验失败" }] },
           isError: true,
         } as never);
@@ -352,9 +708,9 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     session.abort = abort;
     const diagnostics: Array<{ count: number; action: string }> = [];
     const gateway = createPiRuntimeGateway(createBackend(session), {
-      toolCallCircuitBreakerTools: [{
-        name: "knowledge_manage",
-        label: "Knowledge Manage",
+      toolCallCircuitBreakerTools: () => [{
+        name: "session_list",
+        label: "Session List",
         description: "测试工具",
         parameters: {
           type: "object",
@@ -554,6 +910,146 @@ describe("PiRuntimeGateway 提示词刷新", () => {
     await vi.waitFor(() => expect(session.setSessionName).toHaveBeenCalledOnce());
 
     expect(session.setSessionName).toHaveBeenCalledWith([...generatedTitle].slice(0, 50).join(""));
+    gateway.dispose();
+  });
+
+  it("prompt 以值语义返回模型错误时发布安全失败并保存一致终态", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push({
+        role: "assistant",
+        stopReason: "error",
+        content: [],
+        errorMessage: "Bearer clearly-fake-token vendor-body",
+      });
+    }, messages, { provider: "openai", id: "gpt-5" });
+    const generateSessionTitle = vi.fn(async () => "不应生成");
+    const onRunFinished = vi.fn(async () => undefined);
+    const checkpointStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async (_checkpoint: RunCheckpoint) => undefined),
+      remove: vi.fn(async () => undefined),
+      markInterrupted: vi.fn(async () => undefined),
+    };
+    const gateway = createPiRuntimeGateway(createBackend(session, generateSessionTitle), {
+      checkpointStore,
+      checkpointThrottleMs: 0,
+      onRunFinished,
+    });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "error")).toBe(true));
+
+    expect(events.filter((event) => ["completed", "aborted", "error"].includes(event.type)).map((event) => event.type))
+      .toEqual(["error"]);
+    expect(events.find((event) => event.type === "error")).toMatchObject({
+      code: "AGENT_EXECUTION_FAILED",
+      message: MODEL_REQUEST_FAILED_MESSAGE,
+    });
+    const terminalSnapshot = [...events].reverse().find((event) => event.type === "snapshot"
+      && JSON.stringify(event.messages).includes(MODEL_REQUEST_FAILED_MESSAGE));
+    expect(terminalSnapshot?.type).toBe("snapshot");
+    expect(JSON.stringify(terminalSnapshot)).not.toContain("clearly-fake-token");
+    expect(JSON.stringify(terminalSnapshot)).not.toContain("vendor-body");
+    expect(events.indexOf(terminalSnapshot!)).toBeLessThan(events.findIndex((event) => event.type === "error"));
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith(expect.objectContaining({ status: "error" })));
+    await vi.waitFor(() => expect(checkpointStore.save.mock.calls.at(-1)?.[0]).toMatchObject({
+      status: "error",
+      error: MODEL_REQUEST_FAILED_MESSAGE,
+    }));
+    expect(generateSessionTitle).not.toHaveBeenCalled();
+    gateway.dispose();
+  });
+
+  it("只按最终 Assistant 判断自动重试结果", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push(
+        { role: "assistant", stopReason: "error", errorMessage: "intermediate failure" },
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "最终成功" }] },
+      );
+    }, messages);
+    const gateway = createPiRuntimeGateway(createBackend(session));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "completed")).toBe(true));
+
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    gateway.dispose();
+  });
+
+  it("按 Assistant 中止状态结束 Run", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push({ role: "assistant", stopReason: "aborted", content: [] });
+    }, messages);
+    const onRunFinished = vi.fn(async () => undefined);
+    const gateway = createPiRuntimeGateway(createBackend(session), { onRunFinished });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "aborted")).toBe(true));
+
+    expect(events.some((event) => event.type === "completed")).toBe(false);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith(expect.objectContaining({ status: "aborted" })));
+    gateway.dispose();
+  });
+
+  it("长度截断保留回答并以 completed 结束", async () => {
+    const messages: unknown[] = [];
+    const session = createSession(async () => {
+      messages.push({
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "部分回答" }],
+        errorMessage: "untrusted truncation detail",
+      });
+    }, messages, { provider: "openai", id: "gpt-5" });
+    const generateSessionTitle = vi.fn(async () => "截断回答");
+    const gateway = createPiRuntimeGateway(createBackend(session, generateSessionTitle));
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词", "用户原文");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "completed")).toBe(true));
+
+    const snapshot = [...events].reverse().find((event) => event.type === "snapshot"
+      && JSON.stringify(event.messages).includes(MODEL_RESPONSE_TRUNCATED_MESSAGE));
+    expect(snapshot?.type).toBe("snapshot");
+    expect(JSON.stringify(snapshot)).toContain("部分回答");
+    expect(events.indexOf(snapshot!)).toBeLessThan(events.findIndex((event) => event.type === "completed"));
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledWith(
+      { provider: "openai", id: "gpt-5" },
+      "用户原文",
+      "部分回答",
+    ));
+    gateway.dispose();
+  });
+
+  it("prompt reject 继续走异常终态", async () => {
+    const session = createSession(async () => { throw new Error("适配器故障"); });
+    const onRunFinished = vi.fn(async () => undefined);
+    const gateway = createPiRuntimeGateway(createBackend(session), { onRunFinished });
+    const events: ChatEvent[] = [];
+    await gateway.createSession();
+    gateway.subscribe("session-1", (event) => events.push(event));
+
+    await gateway.startPrompt("session-1", "运行时提示词");
+    await vi.waitFor(() => expect(events.some((event) => event.type === "error")).toBe(true));
+
+    expect(events.some((event) => event.type === "completed")).toBe(false);
+    await vi.waitFor(() => expect(onRunFinished).toHaveBeenCalledWith(expect.objectContaining({ status: "error" })));
     gateway.dispose();
   });
 });

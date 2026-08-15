@@ -5,6 +5,7 @@ import {
   SettingsManager,
   SessionManager,
   type ToolDefinition,
+  type InlineExtension,
   type AgentSession,
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -24,15 +25,45 @@ import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt
 import { createSearchRunCircuitExtension } from "./web-research/search-run-circuit-extension";
 import { SearchRunState } from "./web-research/search-run-state";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
+import type { AgentPromptContextSnapshot } from "./agents/agent-prompt-store";
 import {
   createToolCallCircuitBreaker,
   type ToolCallCircuitBreaker,
   type ToolCallCircuitBreakerDiagnostic,
 } from "./retrieval/tool-call-circuit-breaker";
 import type { AgentProfile, TitleGenerationConfig } from "../shared/agent-contracts";
+import { classifyAssistantRunOutcome } from "../shared/assistant-run-outcome";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
-import { buildHistoryPageBefore, buildLatestHistoryPage, type SessionHistorySlice } from "./sessions/session-history-page";
+import {
+  buildHistoryPageAfter,
+  buildHistoryPageAround,
+  buildHistoryPageBefore,
+  buildLatestHistoryPage,
+  type SessionHistorySlice,
+} from "./sessions/session-history-page";
 import { projectSessionMessages, projectSessionToolResult } from "./sessions/session-message-projection";
+import {
+  SessionTextService,
+  type SessionTextSourceSession,
+} from "./session-text-service";
+import type {
+  SessionTextReadPage,
+  SessionTextReadRequest,
+  SessionTextSearchPage,
+  SessionTextSearchRequest,
+} from "../shared/session-text-search";
+import { THINKING_LEVELS, type ThinkingLevel } from "../shared/configuration-contracts";
+import type { PendingQuestionProjection } from "../shared/session-question-contracts";
+import type { QuestionResolvedNotice } from "./questions/session-question-reconciliation";
+import { AskUserRunState } from "./questions/ask-user-run-state";
+import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
+
+const DEFAULT_RETRIEVAL_CAPABILITIES: EffectiveRetrievalCapabilities = {
+  knowledgeSearch: false,
+  knowledgeRead: false,
+  webSearch: false,
+  webRead: false,
+};
 
 /**
  * 复用 Pi 默认资源发现能力，并注册系统提示词注入扩展。
@@ -41,28 +72,21 @@ export function createWorkspaceResourceLoader(
   cwd: string,
   agentDir: string,
   additionalPrompts: string[] = [],
-  currentAdditionalPrompts?: () => string[],
-  retrievalCapabilities: EffectiveRetrievalCapabilities = {
-    knowledgeSearch: false,
-    knowledgeRead: false,
-    webSearch: false,
-    webRead: false,
-  },
+  retrievalCapabilities: EffectiveRetrievalCapabilities = DEFAULT_RETRIEVAL_CAPABILITIES,
   searchRunState = new SearchRunState(),
+  resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>,
+  extensionFactories: InlineExtension[] = [],
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
     extensionFactories: [
-      createAgentSystemPromptInjectionExtension(retrievalCapabilities),
+      createAgentSystemPromptInjectionExtension(retrievalCapabilities, resolveAgentPromptContext),
       ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension(searchRunState)] : []),
+      ...extensionFactories,
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。
-    appendSystemPrompt: currentAdditionalPrompts ? [] : additionalPrompts,
-    // 提示词文件可在会话存活期间更新，reload 时从闭包读取最新快照。
-    ...(currentAdditionalPrompts
-      ? { appendSystemPromptOverride: () => currentAdditionalPrompts() }
-      : {}),
+    appendSystemPrompt: additionalPrompts,
   });
 }
 
@@ -70,9 +94,8 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+  thinkingLevels?: ThinkingLevel[];
 }
-
-type ThinkingLevel = NonNullable<AgentProfile["defaultThinkingLevel"]>;
 
 /**
  * 标题请求使用的已解析模型与统一思考参数。
@@ -155,7 +178,9 @@ export interface SessionSnapshot {
   messages: unknown[];
   history: SessionHistoryPage;
   model?: ModelSummary;
+  thinkingLevel?: ThinkingLevel;
   run?: ChatRunSummary;
+  pendingQuestion?: PendingQuestionProjection;
   lastEventId: number;
 }
 
@@ -175,14 +200,17 @@ interface ChatEventBase {
 }
 
 export type ChatEvent = ChatEventBase & (
-  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; thinkingLevel?: ThinkingLevel; run?: ChatRunSummary; pendingQuestion?: PendingQuestionProjection; lastEventId: number }
   | { type: "projection_required"; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
+  | { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
+  | { type: "question_pending"; pendingQuestion: PendingQuestionProjection }
+  | { type: "question_resolved"; questionRecordId: string; state: "submitted" | "discarded" }
   | { type: "tool_preparing"; callId: string; toolName: string }
   | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
   | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
@@ -195,13 +223,16 @@ export type ChatEvent = ChatEventBase & (
 );
 
 type UnsequencedChatEvent =
-  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; run?: ChatRunSummary; lastEventId: number }
+  | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; thinkingLevel?: ThinkingLevel; run?: ChatRunSummary; pendingQuestion?: PendingQuestionProjection; lastEventId: number }
   | { type: "model_changed"; model: ModelSummary }
+  | { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel }
   | { type: "run_started"; run: ChatRunSummary }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
   | { type: "thinking_finished" }
   | { type: "session_renamed"; name: string }
+  | { type: "question_pending"; pendingQuestion: PendingQuestionProjection }
+  | { type: "question_resolved"; questionRecordId: string; state: "submitted" | "discarded" }
   | { type: "tool_preparing"; callId: string; toolName: string }
   | { type: "tool_parameters_streaming"; callId: string; toolName: string; generatedBytes: number; path?: string }
   | { type: "tool_prepared"; callId: string; toolName: string; args: unknown }
@@ -219,12 +250,15 @@ export interface PiSessionAdapter {
   readonly branchLeafId?: string;
   readonly streamingMessage?: unknown;
   readonly model: unknown;
+  readonly thinkingLevel: ThinkingLevel;
+  readonly availableThinkingLevels: ThinkingLevel[];
   readonly isStreaming: boolean;
+  readonly askUserRunState?: AskUserRunState;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   prompt(text: string): Promise<void>;
-  reload(): Promise<void>;
   abort(): Promise<void>;
   setModel(model: unknown): Promise<void>;
+  setThinkingLevel(level: ThinkingLevel): void;
   setSessionName(name: string): void;
   /** 跳转 Pi 会话树中的节点，供历史消息编辑和分支切换使用。 */
   navigateTree?(entryId: string): Promise<{ editorText?: string; cancelled: boolean; aborted?: boolean }>;
@@ -257,6 +291,10 @@ export interface PiRuntimeGateway {
   createSession(): Promise<SessionSnapshot>;
   openSession(sessionId: string): Promise<SessionSnapshot>;
   loadHistoryPage?(sessionId: string, before: string, branchToken: string): Promise<SessionHistoryResult>;
+  loadHistoryTarget?(sessionId: string, entryId: string, branchToken: string): Promise<SessionHistoryResult>;
+  loadHistoryPageAfter?(sessionId: string, after: string, branchToken: string): Promise<SessionHistoryResult>;
+  searchSessionText?(input: SessionTextSearchRequest): Promise<SessionTextSearchPage>;
+  readSessionText?(input: SessionTextReadRequest): Promise<SessionTextReadPage>;
   startPrompt(sessionId: string, text: string, userText?: string): Promise<ChatRunSummary>;
   prompt(sessionId: string, text: string): Promise<void>;
   navigateTree?(sessionId: string, entryId: string): Promise<{ snapshot: SessionSnapshot; editorText?: string }>;
@@ -264,6 +302,7 @@ export interface PiRuntimeGateway {
   abort(sessionId: string): Promise<void>;
   abortAll(): Promise<number>;
   setModel(sessionId: string, provider: string, modelId: string): Promise<void>;
+  setThinkingLevel(sessionId: string, thinkingLevel: ThinkingLevel): Promise<void>;
   renameSession(sessionId: string, name: string): Promise<void>;
   archiveSession(sessionId: string): Promise<void>;
   unarchiveSession(sessionId: string): Promise<void>;
@@ -278,7 +317,6 @@ export interface PiRuntimeGateway {
   ): () => void;
   isBusy?(): boolean;
   onIdle?(listener: () => void): () => void;
-  refreshPromptContext?(): Promise<void>;
   /** 刷新或关机前强制持久化尚未落盘的事件投影。 */
   drain?(): Promise<void>;
   dispose(): void;
@@ -286,7 +324,7 @@ export interface PiRuntimeGateway {
 
 export class PiRuntimeError extends Error {
   constructor(
-    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID",
+    readonly code: "SESSION_NOT_FOUND" | "SESSION_BUSY" | "MODEL_NOT_FOUND" | "INVALID_SESSION_NAME" | "SESSION_HISTORY_STALE" | "SESSION_HISTORY_CURSOR_INVALID" | "SESSION_ENTRY_NOT_FOUND" | "SESSION_BRANCH_CHANGED",
     message: string,
   ) {
     super(message);
@@ -320,13 +358,22 @@ interface PiRuntimeGatewayOptions {
   maxEventBytes?: number;
   checkpointThrottleMs?: number;
   sessionMetadataStore?: SessionMetadataStore;
-  refreshSessionContext?: () => Promise<void>;
   onBackgroundError?: (error: { code: "CHECKPOINT_WRITE_FAILED" | "SESSION_TITLE_GENERATION_FAILED" | "BROWSER_RUN_CLEANUP_FAILED"; sessionId?: string }) => void;
   onSessionTitleGenerated?: (event: { sessionId: string; elapsedMs: number; status: "renamed" | "empty" | "skipped" | "failed" }) => void;
   onRunStarted?: (run: { runId: string; sessionId: string }) => void;
   onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
-  toolCallCircuitBreakerTools?: readonly ToolDefinition[];
+  toolCallCircuitBreakerTools?: readonly ToolDefinition[] | (() => readonly ToolDefinition[]);
   onToolCallCircuitBreak?: (event: ToolCallCircuitBreakerDiagnostic) => void;
+  sessionText?: {
+    agentId: string;
+    readPersistedBranch(session: SessionTextSourceSession): Promise<unknown[]>;
+    registerService?(service: SessionTextService): void;
+  };
+  questionState?: {
+    findPending(sessionId: string): PendingQuestionProjection | undefined;
+    reconcile(sessionId: string, messages: readonly unknown[], missingReason?: "branch_changed" | "orphaned"): void;
+    consumeResolvedEvent(sessionId: string): QuestionResolvedNotice | undefined;
+  };
 }
 
 /**
@@ -341,7 +388,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const pendingSessionSummaries = new Map<string, SessionSummary>();
   const abortRequested = new Set<string>();
   const idleListeners = new Set<() => void>();
-  const pendingPromptReloads = new Set<string>();
   const deletingSessions = new Set<string>();
   const manuallyRenamedSessions = new Set<string>();
   const backgroundTitleTasks = new Set<Promise<void>>();
@@ -364,9 +410,21 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       listeners.delete(sessionId);
       eventLogs.delete(sessionId);
       recoveredCheckpoints.delete(sessionId);
-      pendingPromptReloads.delete(sessionId);
     },
   });
+  const sessionTextService = options.sessionText ? new SessionTextService(options.sessionText.agentId, {
+    listSessions: async () => {
+      const ownedIds = new Set(await sessionMetadataStore.listIdsByAgent(options.sessionText!.agentId));
+      const persisted = await backend.listSessions();
+      const persistedIds = new Set(persisted.map(({ id }) => id));
+      const sessions = [...persisted, ...[...pendingSessionSummaries.values()].filter(({ id }) => !persistedIds.has(id))];
+      return sessions.filter(({ id }) => ownedIds.has(id));
+    },
+    readPersistedBranch: (session) => options.sessionText!.readPersistedBranch(session),
+    readLiveBranch: (sessionId) => sessionRegistry.peek(sessionId)?.session.messages,
+    isArchived: (sessionId) => sessionMetadataStore.isArchived(sessionId),
+  }) : undefined;
+  if (sessionTextService) options.sessionText?.registerService?.(sessionTextService);
 
   function publish(event: ChatEvent): void {
     listeners.get(event.sessionId)?.forEach((listener) => listener(event));
@@ -410,21 +468,31 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       session.dispose();
     }
     const attached = sessionRegistry.peek(session.sessionId)!.session;
+    sessionTextService?.invalidate(session.sessionId);
     return snapshotSession(
       attached,
       snapshotMessages(session.sessionId, attached),
       runs.get(session.sessionId) ?? checkpointRun(recoveredCheckpoints.get(session.sessionId)),
       lastEventId(session.sessionId),
+      options.questionState?.findPending(session.sessionId),
     );
   }
 
   function manageSession(session: PiSessionAdapter): ManagedSession {
+    const circuitBreakerTools = typeof options.toolCallCircuitBreakerTools === "function"
+      ? options.toolCallCircuitBreakerTools()
+      : options.toolCallCircuitBreakerTools ?? [];
     const toolCallCircuitBreaker = createToolCallCircuitBreaker(
-      options.toolCallCircuitBreakerTools ?? [],
+      circuitBreakerTools,
       options.onToolCallCircuitBreak,
     );
     const toolParameterProgress = new Map<string, ToolParameterProgress>();
     const unsubscribe = session.subscribe((event) => {
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
+        const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
+        if (toolCall) session.askUserRunState?.observeToolCallStart(toolCall.id, toolCall.name);
+      }
+      const shouldPublish = session.askUserRunState?.shouldPublish(event) ?? true;
       if (event.type === "tool_execution_start") {
         const model = toModelSummary(session.model);
         const decision = toolCallCircuitBreaker.observe({
@@ -440,6 +508,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           void session.abort().catch(() => undefined);
         }
       }
+      if (event.type === "tool_execution_end") {
+        session.askUserRunState?.finishTool(event.toolCallId, event.isError);
+      }
+      if (!shouldPublish) return;
       const normalized = normalizeSessionEvent(session.sessionId, event, toolParameterProgress);
       if (normalized) publishSequenced(session.sessionId, normalized);
     });
@@ -494,8 +566,12 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     // Pi Session JSONL 是消息历史的唯一事实源；检查点只恢复活动 Run 元数据。
     const managed = sessionRegistry.peek(sessionId);
     if (!managed || managed.session !== session) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
-    const page = buildLatestHistoryPage(liveSessionMessages(session), managed.branchToken, session.branchLeafId);
-    return { ...page, messages: projectSessionMessages(page.messages) };
+    const branchMessages = liveSessionMessages(session);
+    const page = buildLatestHistoryPage(branchMessages, managed.branchToken, session.branchLeafId);
+    return {
+      ...page,
+      messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+    };
   }
 
   /**
@@ -511,7 +587,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       messages: page.messages,
       history: page.history,
       model: toModelSummary(session.model),
+      thinkingLevel: session.thinkingLevel,
       run,
+      pendingQuestion: options.questionState?.findPending(sessionId),
       lastEventId: nextEventId,
     });
   }
@@ -565,6 +643,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       ...(session.messages.length === 0 && titleInput?.trim() ? { titleInput: titleInput.trim() } : {}),
     };
     runs.set(sessionId, run);
+    sessionTextService?.invalidate(sessionId);
     try {
       options.onRunStarted?.({ runId: run.runId, sessionId: run.sessionId });
     } catch (error) {
@@ -582,30 +661,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       }
     });
     return run;
-  }
-
-  /** 在会话空闲时应用已更新的提示词文件；生成中的会话留待本轮结束。 */
-  async function reloadPromptContextForSession(sessionId: string): Promise<void> {
-    const managed = sessionRegistry.peek(sessionId);
-    if (!managed) return;
-    if (runs.has(sessionId) || managed.session.isStreaming) {
-      pendingPromptReloads.add(sessionId);
-      return;
-    }
-    pendingPromptReloads.delete(sessionId);
-    await managed.session.reload();
-  }
-
-  /** 仅在此前有写入操作时，在下一轮开始前补做重载。 */
-  function reloadPendingPromptContext(sessionId: string): Promise<void> | undefined {
-    if (!pendingPromptReloads.has(sessionId)) return undefined;
-    return reloadPromptContextForSession(sessionId);
-  }
-
-  /** 读取最新提示词快照，并刷新所有已打开的会话。 */
-  async function refreshPromptContext(): Promise<void> {
-    await options.refreshSessionContext?.();
-    await Promise.all(sessionRegistry.ids().map((sessionId) => reloadPromptContextForSession(sessionId)));
   }
 
   /** 在当前会话的活动 Run 结束后唤醒等待中的后台附属任务。 */
@@ -647,6 +702,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             if (runs.has(sessionId) || session.isStreaming) return false;
             if (disposed || deletingSessions.has(sessionId) || manuallyRenamedSessions.has(sessionId)) return false;
             session.setSessionName(sessionName);
+            sessionTextService?.invalidate(sessionId);
             publishSequenced(sessionId, { type: "session_renamed", name: sessionName }, { associateCurrentRun: false });
             return true;
           });
@@ -677,12 +733,24 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   async function executeRun(run: ManagedRun, session: PiSessionAdapter, text: string): Promise<void> {
     try {
       await session.prompt(text);
-      run.status = abortRequested.has(run.sessionId) ? "aborted" : "completed";
+      const outcome = abortRequested.has(run.sessionId)
+        ? { status: "aborted" as const }
+        : classifyAssistantRunOutcome(session.messages);
+      run.status = outcome.status;
+      if (outcome.status === "error") run.error = outcome.message;
       run.finishedAt = new Date().toISOString();
-      if (run.status === "completed") {
+      if (run.status === "completed" || run.status === "error") {
         publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
       }
-      publishSequenced(run.sessionId, { type: run.status });
+      if (outcome.status === "error") {
+        publishSequenced(run.sessionId, {
+          type: "error",
+          code: "AGENT_EXECUTION_FAILED",
+          message: outcome.message,
+        });
+      } else {
+        publishSequenced(run.sessionId, { type: outcome.status });
+      }
       if (run.status === "completed") {
         scheduleSessionTitle(run, session);
       }
@@ -698,7 +766,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       run.finishedAt = new Date().toISOString();
       publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: run.error });
     } finally {
+      sessionTextService?.invalidate(run.sessionId);
       abortRequested.delete(run.sessionId);
+      session.askUserRunState?.reset();
       await options.onRunFinished?.({
         runId: run.runId,
         sessionId: run.sessionId,
@@ -712,8 +782,20 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       });
       runs.delete(run.sessionId);
       notifySessionIdle(run.sessionId);
-      if (pendingPromptReloads.has(run.sessionId)) {
-        await reloadPromptContextForSession(run.sessionId).catch(() => undefined);
+      const resolvedNotice = options.questionState?.consumeResolvedEvent(run.sessionId);
+      if (resolvedNotice) {
+        publishSequenced(run.sessionId, {
+          type: "question_resolved",
+          ...resolvedNotice,
+        }, { associateCurrentRun: false });
+      } else {
+        const pendingQuestion = options.questionState?.findPending(run.sessionId);
+        if (pendingQuestion) {
+          publishSequenced(run.sessionId, {
+            type: "question_pending",
+            pendingQuestion,
+          }, { associateCurrentRun: false });
+        }
       }
       if (runs.size === 0) {
         idleListeners.forEach((listener) => listener());
@@ -783,11 +865,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         }
       }
       if (existing) {
-        return snapshotSession(existing.session, snapshotMessages(sessionId, existing.session), currentRunSummary(sessionId), lastEventId(sessionId));
+        options.questionState?.reconcile(sessionId, existing.session.messages);
+        return snapshotSession(existing.session, snapshotMessages(sessionId, existing.session), currentRunSummary(sessionId), lastEventId(sessionId), options.questionState?.findPending(sessionId));
       }
       const handle = await sessionRegistry.open(sessionId);
       try {
-        return snapshotSession(handle.session.session, snapshotMessages(sessionId, handle.session.session), currentRunSummary(sessionId), lastEventId(sessionId));
+        options.questionState?.reconcile(sessionId, handle.session.session.messages);
+        return snapshotSession(handle.session.session, snapshotMessages(sessionId, handle.session.session), currentRunSummary(sessionId), lastEventId(sessionId), options.questionState?.findPending(sessionId));
       } finally {
         handle.release();
       }
@@ -800,18 +884,67 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         throw new PiRuntimeError("SESSION_HISTORY_STALE", "会话分支已变化，请重新加载");
       }
       let page: SessionHistorySlice;
+      const branchMessages = session.messages;
       try {
-        page = buildHistoryPageBefore(session.messages, branchToken, session.branchLeafId, before);
+        page = buildHistoryPageBefore(branchMessages, branchToken, session.branchLeafId, before);
       } catch {
         throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
       }
-      return { sessionId, messages: projectSessionMessages(page.messages), history: page.history };
+      return {
+        sessionId,
+        messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+        history: page.history,
+      };
     },
+
+    async loadHistoryTarget(sessionId, entryId, branchToken) {
+      const session = requireSession(sessionId);
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed || managed.branchToken !== branchToken) {
+        throw new PiRuntimeError("SESSION_BRANCH_CHANGED", "会话分支已变化，请重新搜索");
+      }
+      let page: SessionHistorySlice;
+      const branchMessages = session.messages;
+      try {
+        page = buildHistoryPageAround(branchMessages, branchToken, session.branchLeafId, entryId);
+      } catch {
+        throw new PiRuntimeError("SESSION_ENTRY_NOT_FOUND", "目标会话记录不存在");
+      }
+      return {
+        sessionId,
+        messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+        history: page.history,
+        targetEntryId: page.targetEntryId,
+      };
+    },
+
+    async loadHistoryPageAfter(sessionId, after, branchToken) {
+      const session = requireSession(sessionId);
+      const managed = sessionRegistry.peek(sessionId);
+      if (!managed || managed.branchToken !== branchToken) {
+        throw new PiRuntimeError("SESSION_BRANCH_CHANGED", "会话分支已变化，请重新加载");
+      }
+      let page: SessionHistorySlice;
+      const branchMessages = session.messages;
+      try {
+        page = buildHistoryPageAfter(branchMessages, branchToken, session.branchLeafId, after);
+      } catch {
+        throw new PiRuntimeError("SESSION_HISTORY_CURSOR_INVALID", "历史分页游标无效");
+      }
+      return {
+        sessionId,
+        messages: projectSessionMessages(page.messages, { questionResolutionMessages: branchMessages }),
+        history: page.history,
+      };
+    },
+
+    ...(sessionTextService ? {
+      searchSessionText: (input: SessionTextSearchRequest) => sessionTextService.search(input),
+      readSessionText: (input: SessionTextReadRequest) => sessionTextService.read(input),
+    } : {}),
 
     async startPrompt(sessionId, text, userText) {
       const run = await sessionMutations.run(sessionId, async () => {
-        const pendingReload = reloadPendingPromptContext(sessionId);
-        if (pendingReload) await pendingReload;
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) {
           pendingSessionSummaries.set(sessionId, {
@@ -828,8 +961,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
 
     async prompt(sessionId, text) {
       const run = await sessionMutations.run(sessionId, async () => {
-        const pendingReload = reloadPendingPromptContext(sessionId);
-        if (pendingReload) await pendingReload;
         return beginRun(sessionId, text);
       });
       await run.completion;
@@ -847,8 +978,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       const managed = sessionRegistry.peek(sessionId);
       if (!managed) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
       managed.branchToken = randomUUID();
+      options.questionState?.reconcile(sessionId, session.messages, "branch_changed");
+      sessionTextService?.invalidate(sessionId);
       return {
-        snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId)),
+        snapshot: snapshotSession(session, snapshotMessages(sessionId, session), undefined, lastEventId(sessionId), options.questionState?.findPending(sessionId)),
         editorText: result.editorText,
       };
     },
@@ -874,10 +1007,29 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         if (!model) {
           throw new PiRuntimeError("MODEL_NOT_FOUND", "模型不存在或不可用");
         }
+        const previousThinkingLevel = session.thinkingLevel;
         await session.setModel(model);
         const summary = toModelSummary(model);
         if (!summary) throw new PiRuntimeError("MODEL_NOT_FOUND", "模型信息无效");
-        publishSequenced(sessionId, { type: "model_changed", model: summary });
+        publishSequenced(sessionId, { type: "model_changed", model: summary }, { associateCurrentRun: false });
+        if (session.thinkingLevel !== previousThinkingLevel) {
+          publishSequenced(sessionId, {
+            type: "thinking_level_changed",
+            thinkingLevel: session.thinkingLevel,
+          }, { associateCurrentRun: false });
+        }
+      });
+    },
+
+    async setThinkingLevel(sessionId, thinkingLevel) {
+      await sessionMutations.run(sessionId, async () => {
+        const session = requireSession(sessionId);
+        requireIdleSession(sessionId);
+        session.setThinkingLevel(thinkingLevel);
+        publishSequenced(sessionId, {
+          type: "thinking_level_changed",
+          thinkingLevel: session.thinkingLevel,
+        }, { associateCurrentRun: false });
       });
     },
 
@@ -896,6 +1048,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           handle.release();
         }
         session.setSessionName(sanitized);
+        sessionTextService?.invalidate(sessionId);
         manuallyRenamedSessions.add(sessionId);
         const summary = pendingSessionSummaries.get(sessionId);
         if (summary) pendingSessionSummaries.set(sessionId, { ...summary, name: sanitized });
@@ -907,6 +1060,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         requireIdleSession(sessionId);
         await ensureSessionExists(sessionId);
         await sessionMetadataStore.archive(sessionId);
+        sessionTextService?.invalidate(sessionId);
       });
     },
 
@@ -914,6 +1068,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       await sessionMutations.run(sessionId, async () => {
         await ensureSessionExists(sessionId);
         await sessionMetadataStore.unarchive(sessionId);
+        sessionTextService?.invalidate(sessionId);
       });
     },
 
@@ -923,6 +1078,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         requireIdleSession(sessionId);
         await ensureSessionExists(sessionId);
         deletingSessions.add(sessionId);
+        sessionTextService?.invalidate(sessionId);
         let staged: StagedSessionDeletion;
         try {
           staged = backend.stageDeleteSession
@@ -933,6 +1089,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           throw error;
         }
         sessionRegistry.invalidate(sessionId);
+        sessionTextService?.invalidate(sessionId);
         subscriptionTerminators.get(sessionId)?.forEach((terminate) => terminate(
           new DomainError("SESSION_NOT_FOUND", "Session 已删除，实时连接需要关闭"),
         ));
@@ -983,6 +1140,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
           ? await backend.stageDeleteSession?.(sessionId)
           : undefined;
         sessionRegistry.invalidate(sessionId);
+        sessionTextService?.invalidate(sessionId);
         subscriptionTerminators.get(sessionId)?.forEach((terminate) => terminate(new DomainError("SESSION_NOT_FOUND", "Session 创建已回滚")));
         subscriptionTerminators.delete(sessionId);
         listeners.delete(sessionId);
@@ -1034,7 +1192,9 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             messages: page.messages,
             history: page.history,
             model: toModelSummary(session.model),
+            thinkingLevel: session.thinkingLevel,
             run: currentRunSummary(sessionId),
+            pendingQuestion: options.questionState?.findPending(sessionId),
             lastEventId: lastEventId(sessionId),
           };
           // 长会话快照可能超过 SSE 单事件上限；让客户端改走已有的 HTTP Projection
@@ -1077,8 +1237,6 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       return () => idleListeners.delete(listener);
     },
 
-    refreshPromptContext,
-
     drain: drainCheckpoints,
 
     dispose() {
@@ -1090,10 +1248,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       eventLogs.clear();
       pendingSessionSummaries.clear();
       abortRequested.clear();
-      pendingPromptReloads.clear();
       deletingSessions.clear();
       manuallyRenamedSessions.clear();
       backgroundTitleTasks.clear();
+      sessionTextService?.clear();
       sessionIdleWaiters.forEach((waiters) => waiters.forEach((resolve) => resolve()));
       sessionIdleWaiters.clear();
       // 兼容直接调用 dispose 的旧调用方；Supervisor 会先显式 await drain。
@@ -1104,6 +1262,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
 }
 
 interface SdkPiRuntimeOptions {
+  agentId: string;
   cwd: string;
   agentDir: string;
   provider?: StoredProviderConfig;
@@ -1113,10 +1272,15 @@ interface SdkPiRuntimeOptions {
   titleGeneration?: TitleGenerationConfig;
   allowedTools?: string[];
   customTools?: ToolDefinition[];
-  createSessionTools?: (context: { searchRunState: SearchRunState; sessionId: string }) => ToolDefinition[];
+  createRuntimeTools?: (services: { sessionText: SessionTextService }) => ToolDefinition[];
+  createSessionTools?: (context: {
+    searchRunState: SearchRunState;
+    sessionId: string;
+    branchAnchorId(): string | undefined;
+  }) => ToolDefinition[];
   retrievalCapabilities: EffectiveRetrievalCapabilities;
   appendSystemPrompt?: string[];
-  refreshAppendSystemPrompt?: () => Promise<string[]>;
+  resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>;
   sessionDir?: string;
   checkpointStore?: RunCheckpointStore;
   sessionMetadataStore?: SessionMetadataStore;
@@ -1126,6 +1290,7 @@ interface SdkPiRuntimeOptions {
   onRunStarted?: (run: { runId: string; sessionId: string }) => void;
   onRunFinished?: (run: { runId: string; sessionId: string; status: "completed" | "aborted" | "error" }) => Promise<void>;
   stageSessionDeletion?: (sessionId: string, sessionFile: string) => Promise<StagedSessionDeletion>;
+  questionState?: PiRuntimeGatewayOptions["questionState"];
 }
 
 /**
@@ -1153,31 +1318,39 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   }
   const sessionDir = options.sessionDir ?? join(options.agentDir, "sessions");
   let commandCatalog: PiCommandSummary[] | undefined;
-  let appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
-
-  /** 从 Agent 提示词文件读取下一次 reload 应使用的系统提示片段。 */
-  async function refreshAppendSystemPrompt(): Promise<void> {
-    if (options.refreshAppendSystemPrompt) {
-      appendSystemPrompt = await options.refreshAppendSystemPrompt();
-    }
-  }
+  const appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
+  let runtimeTools: ToolDefinition[] = [];
+  const circuitBreakerTools = new Map((options.customTools ?? []).map((tool) => [tool.name, tool]));
 
   async function createWithManager(sessionManager: SessionManager): Promise<PiSessionAdapter> {
     const model = modelRuntime.getModel(selectedProviderId, selectedDefaultModel);
     if (!model) {
       throw new PiRuntimeError("MODEL_NOT_FOUND", "默认模型不存在或不可用");
     }
-    await refreshAppendSystemPrompt();
     const searchRunState = new SearchRunState();
+    const askUserRunState = new AskUserRunState();
     const resourceLoader = createWorkspaceResourceLoader(
       options.cwd,
       options.agentDir,
       appendSystemPrompt,
-      () => appendSystemPrompt,
       options.retrievalCapabilities,
       searchRunState,
+      options.resolveAgentPromptContext,
+      options.allowedTools?.includes("ask_user")
+        ? [createAskUserMessageGuardExtension(askUserRunState)]
+        : [],
     );
     await resourceLoader.reload();
+    const finalCustomTools = [
+      ...(options.customTools ?? []),
+      ...runtimeTools,
+      ...(options.createSessionTools?.({
+        searchRunState,
+        sessionId: sessionManager.getSessionId(),
+        branchAnchorId: () => sessionManager.getLeafId() ?? undefined,
+      }) ?? []),
+    ];
+    finalCustomTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
     const { session, extensionsResult } = await createAgentSession({
       cwd: options.cwd,
       agentDir: options.agentDir,
@@ -1190,23 +1363,23 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       thinkingLevel: options.defaultThinkingLevel ?? "medium",
       // 工具白名单必须与 Agent Profile 一致，不能因为工具已注册就自动放行。
       tools: options.allowedTools ? [...new Set(options.allowedTools)] : undefined,
-      customTools: [
-        ...(options.customTools ?? []),
-        ...(options.createSessionTools?.({ searchRunState, sessionId: sessionManager.getSessionId() }) ?? []),
-      ],
+      customTools: finalCustomTools,
     });
     commandCatalog ??= extensionsResult.runtime.getCommands().map((command) => ({
       name: command.name,
       description: command.description,
       source: command.source,
     }));
-    return adaptAgentSession(session);
+    return adaptAgentSession(session, askUserRunState);
   }
 
   const backend: PiRuntimeBackend = {
     async listModels() {
       const models = await modelRuntime.getAvailable();
-      return models.map((model) => ({ provider: model.provider, id: model.id, name: model.name }));
+      return models.flatMap((model) => {
+        const summary = toModelSummary(model);
+        return summary ? [summary] : [];
+      });
     },
     async listCommands() {
       if (commandCatalog) {
@@ -1282,13 +1455,25 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   return createPiRuntimeGateway(backend, {
     checkpointStore: options.checkpointStore,
     sessionMetadataStore: options.sessionMetadataStore,
-    refreshSessionContext: refreshAppendSystemPrompt,
     onBackgroundError: options.onBackgroundError,
     onSessionTitleGenerated: options.onSessionTitleGenerated,
     onRunStarted: options.onRunStarted,
     onRunFinished: options.onRunFinished,
-    toolCallCircuitBreakerTools: options.customTools,
+    toolCallCircuitBreakerTools: () => [...circuitBreakerTools.values()],
     onToolCallCircuitBreak: options.onToolCallCircuitBreak,
+    sessionText: {
+      agentId: options.agentId,
+      readPersistedBranch: async (session) => {
+        const sessionFile = assertManagedSessionFile(sessionDir, session.path);
+        const manager = SessionManager.open(sessionFile, sessionDir, options.cwd);
+        return sessionManagerVisibleMessages(manager);
+      },
+      registerService: (service) => {
+        runtimeTools = options.createRuntimeTools?.({ sessionText: service }) ?? [];
+        runtimeTools.forEach((tool) => circuitBreakerTools.set(tool.name, tool));
+      },
+    },
+    questionState: options.questionState,
   });
 }
 
@@ -1303,7 +1488,7 @@ export function assertManagedSessionFile(sessionDir: string, filePath: string): 
   return resolvedFile;
 }
 
-function adaptAgentSession(session: AgentSession): PiSessionAdapter {
+function adaptAgentSession(session: AgentSession, askUserRunState?: AskUserRunState): PiSessionAdapter {
   return {
     get sessionId() {
       return session.sessionId;
@@ -1333,14 +1518,21 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     get model() {
       return session.model;
     },
+    get thinkingLevel() {
+      return session.thinkingLevel;
+    },
+    get availableThinkingLevels() {
+      return session.getAvailableThinkingLevels();
+    },
     get isStreaming() {
       return session.isStreaming;
     },
+    askUserRunState,
     subscribe: (listener) => session.subscribe(listener),
     prompt: (text) => session.prompt(text),
-    reload: () => session.reload(),
     abort: () => session.abort(),
     setModel: (model) => session.setModel(model as Parameters<AgentSession["setModel"]>[0]),
+    setThinkingLevel: (level) => session.setThinkingLevel(level),
     setSessionName: (name) => session.setSessionName(name),
     navigateTree: (entryId) => session.navigateTree(entryId, { summarize: false }),
     readMessage: (entryId) => {
@@ -1352,6 +1544,14 @@ function adaptAgentSession(session: AgentSession): PiSessionAdapter {
     },
     dispose: () => session.dispose(),
   };
+}
+
+/** 将 SessionManager 当前叶分支投影成带稳定节点 ID 的消息。 */
+function sessionManagerVisibleMessages(sessionManager: SessionManager): unknown[] {
+  return sessionManager.getBranch().flatMap((entry) => {
+    if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") return [];
+    return [{ ...entry.message, __piEntryId: entry.id }];
+  });
 }
 
 /**
@@ -1440,13 +1640,16 @@ function snapshotSession(
   page: SessionHistorySlice,
   run: ChatRunSummary | undefined,
   lastEventId: number,
+  pendingQuestion?: PendingQuestionProjection,
 ): SessionSnapshot {
   return {
     id: session.sessionId,
     messages: page.messages,
     history: page.history,
     model: toModelSummary(session.model),
+    thinkingLevel: session.thinkingLevel,
     run,
+    pendingQuestion,
     lastEventId,
   };
 }
@@ -1472,11 +1675,26 @@ function toModelSummary(value: unknown): ModelSummary | undefined {
   if (!isRecord(value) || typeof value.provider !== "string" || typeof value.id !== "string") {
     return undefined;
   }
+  const thinkingLevels = availableThinkingLevelsForModel(value);
   return {
     provider: value.provider,
     id: value.id,
     name: typeof value.name === "string" ? value.name : value.id,
+    ...(thinkingLevels ? { thinkingLevels } : {}),
   };
+}
+
+/** 根据模型公开能力生成输入区允许选择的思考深度。 */
+function availableThinkingLevelsForModel(model: Record<string, unknown>): ThinkingLevel[] | undefined {
+  if (typeof model.reasoning !== "boolean") return undefined;
+  if (!model.reasoning) return ["off"];
+  const levelMap = isRecord(model.thinkingLevelMap) ? model.thinkingLevelMap : {};
+  return THINKING_LEVELS.filter((level) => {
+    const mapped = levelMap[level];
+    if (mapped === null) return false;
+    if (level === "xhigh" || level === "max") return mapped !== undefined;
+    return true;
+  });
 }
 
 function normalizeSessionEvent(
@@ -1505,13 +1723,16 @@ function normalizeSessionEvent(
     if (event.assistantMessageEvent.type === "toolcall_delta") {
       const toolCall = readStreamingToolCall(event.message, event.assistantMessageEvent.contentIndex);
       if (!toolCall || !toolParameterProgress) return undefined;
+      const deltaBytes = Buffer.byteLength(event.assistantMessageEvent.delta);
+      // Provider 可能发送空参数片段；零字节事件没有展示价值，也不满足共享 SSE 契约。
+      if (deltaBytes === 0) return undefined;
       const now = Date.now();
       const progress = toolParameterProgress.get(toolCall.id) ?? {
         generatedBytes: 0,
         lastPublishedBytes: 0,
         lastPublishedAt: 0,
       };
-      progress.generatedBytes += Buffer.byteLength(event.assistantMessageEvent.delta);
+      progress.generatedBytes += deltaBytes;
       const shouldPublish = progress.lastPublishedBytes === 0
         || progress.generatedBytes - progress.lastPublishedBytes >= 512
         || now - progress.lastPublishedAt >= 500;
@@ -1684,6 +1905,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function createMemorySessionMetadataStore(): SessionMetadataStore {
   const archived = new Set<string>();
+  const pinned = new Set<string>();
   const agents = new Map<string, string>();
   return {
     getAgentId: async (sessionId) => agents.get(sessionId),
@@ -1696,10 +1918,24 @@ function createMemorySessionMetadataStore(): SessionMetadataStore {
     },
     isArchived: async (sessionId) => archived.has(sessionId),
     listArchivedIds: async () => [...archived],
-    archive: async (sessionId) => { archived.add(sessionId); },
+    listPinnedIds: async (agentId) => [...pinned].filter((sessionId) => agents.get(sessionId) === agentId),
+    pin: async (sessionId) => {
+      if (!agents.has(sessionId)) throw new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+      if (archived.has(sessionId)) throw new DomainError("SESSION_ARCHIVED", "归档 Session 不能置顶");
+      pinned.add(sessionId);
+    },
+    unpin: async (sessionId) => {
+      if (!agents.has(sessionId)) throw new DomainError("SESSION_NOT_FOUND", "Session 不存在");
+      pinned.delete(sessionId);
+    },
+    archive: async (sessionId) => {
+      archived.add(sessionId);
+      pinned.delete(sessionId);
+    },
     unarchive: async (sessionId) => { archived.delete(sessionId); },
     remove: async (sessionId) => {
       archived.delete(sessionId);
+      pinned.delete(sessionId);
       agents.delete(sessionId);
     },
     listIdsByAgent: async (agentId) => [...agents.entries()].filter(([, owner]) => owner === agentId).map(([sessionId]) => sessionId),
@@ -1708,6 +1944,7 @@ function createMemorySessionMetadataStore(): SessionMetadataStore {
         if (owner === agentId) {
           agents.delete(sessionId);
           archived.delete(sessionId);
+          pinned.delete(sessionId);
         }
       }
     },

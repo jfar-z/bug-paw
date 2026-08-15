@@ -53,10 +53,15 @@ export interface ScopedConfigDocument<T> {
 /**
  * Web 配置中心允许管理的 Pi 设置形状。
  */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+
+/** Pi 支持的统一思考深度。 */
+export type ThinkingLevel = typeof THINKING_LEVELS[number];
+
 export interface WebPiSettings {
   defaultProvider?: string;
   defaultModel?: string;
-  defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  defaultThinkingLevel?: ThinkingLevel;
   transport?: "sse" | "websocket" | "websocket-cached" | "auto";
   steeringMode?: "all" | "one-at-a-time";
   followUpMode?: "all" | "one-at-a-time";
@@ -112,7 +117,7 @@ export interface CredentialStatus {
 
 export type ProviderTemplate = "openai-compatible" | "ollama" | "vllm" | "lm-studio" | "custom";
 
-export type ThinkingLevelKey = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevelKey = ThinkingLevel;
 
 /**
  * 配置中心用于普通表单编辑的模型形状。

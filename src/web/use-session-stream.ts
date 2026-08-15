@@ -4,6 +4,14 @@ import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } fro
 import { api, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
 import { isSessionHistoryPage } from "../shared/session-history-contracts";
+import type { ThinkingLevel } from "../shared/configuration-contracts";
+import { PendingQuestionProjectionSchema, type PendingQuestionProjection } from "../shared/session-question-contracts";
+import { Check } from "typebox/value";
+
+export interface QuestionResolvedNotice {
+  questionRecordId: string;
+  state: "submitted" | "discarded";
+}
 
 interface SessionStreamOptions {
   sessionId?: string;
@@ -11,6 +19,9 @@ interface SessionStreamOptions {
   onTimelineEvent: (event: TimelineEvent) => void;
   onRunChange: (run: ChatRunSummary | undefined) => void;
   onModelChange?: (model: ModelSummary) => void;
+  onThinkingLevelChange?: (thinkingLevel: ThinkingLevel) => void;
+  onPendingQuestion?: (pending: PendingQuestionProjection) => void;
+  onQuestionResolved?: (notice: QuestionResolvedNotice) => void;
   onSessionRenamed?: (sessionId: string, name: string) => void;
   onError: (message: string) => void;
   onUnexpectedError?: (error: unknown) => void;
@@ -18,6 +29,7 @@ interface SessionStreamOptions {
 
 export interface SessionStreamControl {
   ensureOpen(): Promise<void>;
+  refreshProjection(): void;
   close(): void;
   reconnecting: boolean;
 }
@@ -34,6 +46,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
   const lastEventIdRef = useRef(0);
   const callbacksRef = useRef<CallbackSet>(options);
   const pendingDeltasRef = useRef<Array<Extract<TimelineEvent, { type: "text_delta" }>>>([]);
+  const refreshProjectionRef = useRef<() => void>(() => undefined);
   const animationFrameRef = useRef<number | undefined>(undefined);
   const [reconnecting, setReconnecting] = useState(false);
   const [reconnectRequest, setReconnectRequest] = useState<{ sessionId: string; cursor: number; nonce: number }>();
@@ -94,81 +107,17 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     let active = true;
     let projectionRecovering = false;
     let recoveryController: AbortController | undefined;
-    const reportInvalidEvent = () => callbacksRef.current.onError("实时事件格式无效，正在等待会话状态恢复。");
-    const parse = (event: MessageEvent): Record<string, unknown> | undefined => {
-      if (!active || sourceRef.current !== source) return undefined;
-      try {
-        const value: unknown = JSON.parse(event.data);
-        if (isRecord(value)) return value;
-      } catch {
-        // 损坏的单条 SSE 不得中断后续浏览器自动重连和 Projection 恢复。
-      }
-      reportInvalidEvent();
-      return undefined;
-    };
-    const accept = (payload: Record<string, unknown>): boolean => {
-      if (!active || sourceRef.current !== source || projectionRecovering) return false;
-      if (payload.sessionId !== options.sessionId
-        || typeof payload.id !== "number"
-        || !Number.isSafeInteger(payload.id)
-        || payload.id < 1) {
-        reportInvalidEvent();
-        return false;
-      }
-      const id = payload.id;
-      if (id <= lastEventIdRef.current) {
-        return false;
-      }
-      lastEventIdRef.current = id;
-      return true;
-    };
-
-    source.addEventListener("open", () => setReconnecting(false));
-    source.addEventListener("snapshot", (rawEvent) => {
-      if (projectionRecovering) return;
-      const payload = parse(rawEvent as MessageEvent);
-      if (!payload) return;
-      if (!isSessionSnapshotEvent(payload)) {
-        reportInvalidEvent();
-        return;
-      }
-      const snapshot = readSnapshot(payload);
-      if (!snapshot || snapshot.id !== options.sessionId) {
-        reportInvalidEvent();
-        return;
-      }
-      flushDeltas();
-      lastEventIdRef.current = snapshot.lastEventId;
-      callbacksRef.current.onSnapshot(snapshot);
-      if (isActiveRun(snapshot.run)) {
-        callbacksRef.current.onRunChange(snapshot.run);
-        callbacksRef.current.onTimelineEvent({ type: "generation_started" });
-      } else {
-        callbacksRef.current.onRunChange(undefined);
-        if (snapshot.run) {
-          const outcome = snapshot.run.status === "completed"
-            ? "completed"
-            : snapshot.run.status === "aborted"
-              ? "aborted"
-              : "error";
-          callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome });
-        }
-      }
-    });
-    source.addEventListener("projection_required", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
-      if (!payload || !isProjectionRequiredEvent(payload) || payload.sessionId !== options.sessionId) {
-        reportInvalidEvent();
-        return;
-      }
-      // 恢复 Projection 期间暂停增量输入，避免迟到快照覆盖已经应用的更高序号事件。
+    const recoverProjection = (notice?: string) => {
+      if (!active || sourceRef.current !== source || projectionRecovering) return;
       projectionRecovering = true;
+      // 游标已接纳的正文必须先交付，避免恢复失败后按新游标重连时丢失动画帧缓冲。
+      flushDeltas();
       source.close();
+      if (notice) callbacksRef.current.onError(notice);
       recoveryController = new AbortController();
       const recoveryTimeout = window.setTimeout(() => recoveryController?.abort(), PROJECTION_RECOVERY_TIMEOUT_MS);
-      void api.openSession(options.sessionId, recoveryController.signal).then((snapshot) => {
+      void api.openSession(options.sessionId!, recoveryController.signal).then((snapshot) => {
         if (!active || sourceRef.current !== source) return;
-        flushDeltas();
         lastEventIdRef.current = snapshot.lastEventId;
         callbacksRef.current.onSnapshot(snapshot);
         setReconnectRequest((current) => ({
@@ -191,12 +140,104 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }).finally(() => {
         window.clearTimeout(recoveryTimeout);
       });
+    };
+    refreshProjectionRef.current = recoverProjection;
+    const reportInvalidEvent = (
+      eventType: string,
+      stage: "parse" | "schema" | "identity",
+      payload?: Record<string, unknown>,
+    ) => {
+      if (!active || sourceRef.current !== source || projectionRecovering) return;
+      const eventId = typeof payload?.id === "number" && Number.isSafeInteger(payload.id)
+        ? payload.id
+        : undefined;
+      // 诊断只记录协议元数据，禁止输出消息正文、工具参数或完整事件载荷。
+      console.warn("会话实时事件校验失败", {
+        eventType,
+        stage,
+        ...(eventId === undefined ? {} : { eventId }),
+      });
+      recoverProjection("实时事件格式无效，正在恢复会话状态。");
+    };
+    const parse = (eventType: string, event: MessageEvent): Record<string, unknown> | undefined => {
+      if (!active || sourceRef.current !== source || projectionRecovering) return undefined;
+      try {
+        const value: unknown = JSON.parse(event.data);
+        if (isRecord(value)) return value;
+      } catch {
+        // 损坏的单条 SSE 交由权威 Projection 恢复，避免继续消费可能存在缺口的增量。
+      }
+      reportInvalidEvent(eventType, "parse");
+      return undefined;
+    };
+    const accept = (payload: Record<string, unknown>): boolean => {
+      if (!active || sourceRef.current !== source || projectionRecovering) return false;
+      if (payload.sessionId !== options.sessionId
+        || typeof payload.id !== "number"
+        || !Number.isSafeInteger(payload.id)
+        || payload.id < 1) {
+        reportInvalidEvent(typeof payload.type === "string" ? payload.type : "unknown", "identity", payload);
+        return false;
+      }
+      const id = payload.id;
+      if (id <= lastEventIdRef.current) {
+        return false;
+      }
+      lastEventIdRef.current = id;
+      return true;
+    };
+
+    source.addEventListener("open", () => setReconnecting(false));
+    source.addEventListener("snapshot", (rawEvent) => {
+      if (projectionRecovering) return;
+      const payload = parse("snapshot", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionSnapshotEvent(payload)) {
+        reportInvalidEvent("snapshot", "schema", payload);
+        return;
+      }
+      const snapshot = readSnapshot(payload);
+      if (!snapshot || snapshot.id !== options.sessionId) {
+        reportInvalidEvent("snapshot", "identity", payload);
+        return;
+      }
+      flushDeltas();
+      lastEventIdRef.current = snapshot.lastEventId;
+      callbacksRef.current.onSnapshot(snapshot);
+      if (isActiveRun(snapshot.run)) {
+        callbacksRef.current.onRunChange(snapshot.run);
+        callbacksRef.current.onTimelineEvent({ type: "generation_started" });
+      } else {
+        callbacksRef.current.onRunChange(undefined);
+        if (snapshot.run) {
+          const outcome = snapshot.run.status === "completed"
+            ? "completed"
+            : snapshot.run.status === "aborted"
+              ? "aborted"
+              : "error";
+          callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome });
+        }
+      }
+    });
+    source.addEventListener("projection_required", (rawEvent) => {
+      const payload = parse("projection_required", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isProjectionRequiredEvent(payload)) {
+        reportInvalidEvent("projection_required", "schema", payload);
+        return;
+      }
+      if (payload.sessionId !== options.sessionId) {
+        reportInvalidEvent("projection_required", "identity", payload);
+        return;
+      }
+      // 恢复 Projection 期间暂停增量输入，避免迟到快照覆盖已经应用的更高序号事件。
+      recoverProjection();
     });
     source.addEventListener("run_started", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("run_started", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "run_started") {
-        reportInvalidEvent();
+        reportInvalidEvent("run_started", "schema", payload);
         return;
       }
       if (!accept(payload)) {
@@ -210,24 +251,65 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       callbacksRef.current.onTimelineEvent({ type: "generation_started" });
     });
     source.addEventListener("model_changed", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
-      if (!payload || !isSessionEvent(payload) || payload.type !== "model_changed") {
-        reportInvalidEvent();
+      const payload = parse("model_changed", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "model_changed") {
+        reportInvalidEvent("model_changed", "schema", payload);
         return;
       }
       if (!accept(payload)) return;
       callbacksRef.current.onModelChange?.(payload.model);
     });
+    source.addEventListener("thinking_level_changed", (rawEvent) => {
+      const payload = parse("thinking_level_changed", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "thinking_level_changed") {
+        reportInvalidEvent("thinking_level_changed", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      callbacksRef.current.onThinkingLevelChange?.(payload.thinkingLevel);
+    });
     source.addEventListener("session_renamed", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
-      if (!payload || !isSessionEvent(payload) || payload.type !== "session_renamed" || !accept(payload)) return;
+      const payload = parse("session_renamed", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "session_renamed") {
+        reportInvalidEvent("session_renamed", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
       callbacksRef.current.onSessionRenamed?.(payload.sessionId, payload.name);
     });
+    source.addEventListener("question_pending", (rawEvent) => {
+      const payload = parse("question_pending", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "question_pending") {
+        reportInvalidEvent("question_pending", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      flushDeltas();
+      callbacksRef.current.onPendingQuestion?.(payload.pendingQuestion);
+    });
+    source.addEventListener("question_resolved", (rawEvent) => {
+      const payload = parse("question_resolved", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "question_resolved") {
+        reportInvalidEvent("question_resolved", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      flushDeltas();
+      callbacksRef.current.onQuestionResolved?.({
+        questionRecordId: payload.questionRecordId,
+        state: payload.state,
+      });
+    });
     source.addEventListener("text_delta", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("text_delta", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "text_delta") {
-        reportInvalidEvent();
+        reportInvalidEvent("text_delta", "schema", payload);
         return;
       }
       if (accept(payload) && typeof payload.delta === "string") {
@@ -235,10 +317,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("thinking_delta", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("thinking_delta", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "thinking_delta") {
-        reportInvalidEvent();
+        reportInvalidEvent("thinking_delta", "schema", payload);
         return;
       }
       if (accept(payload) && typeof payload.delta === "string") {
@@ -246,10 +328,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("thinking_finished", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("thinking_finished", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "thinking_finished") {
-        reportInvalidEvent();
+        reportInvalidEvent("thinking_finished", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -258,10 +340,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("tool_preparing", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("tool_preparing", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "tool_preparing") {
-        reportInvalidEvent();
+        reportInvalidEvent("tool_preparing", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -274,10 +356,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("tool_parameters_streaming", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("tool_parameters_streaming", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "tool_parameters_streaming") {
-        reportInvalidEvent();
+        reportInvalidEvent("tool_parameters_streaming", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -292,10 +374,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("tool_prepared", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("tool_prepared", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "tool_prepared") {
-        reportInvalidEvent();
+        reportInvalidEvent("tool_prepared", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -309,10 +391,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("tool_started", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("tool_started", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "tool_started") {
-        reportInvalidEvent();
+        reportInvalidEvent("tool_started", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -326,10 +408,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("tool_updated", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("tool_updated", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "tool_updated") {
-        reportInvalidEvent();
+        reportInvalidEvent("tool_updated", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -343,10 +425,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
     });
     source.addEventListener("tool_finished", (rawEvent) => {
-      const payload = parse(rawEvent as MessageEvent);
+      const payload = parse("tool_finished", rawEvent as MessageEvent);
       if (!payload) return;
       if (!isSessionEvent(payload) || payload.type !== "tool_finished") {
-        reportInvalidEvent();
+        reportInvalidEvent("tool_finished", "schema", payload);
         return;
       }
       if (accept(payload)) {
@@ -362,10 +444,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     });
     (["completed", "aborted", "error"] as const).forEach((type) => {
       source.addEventListener(type, (rawEvent) => {
-        const payload = parse(rawEvent as MessageEvent);
+        const payload = parse(type, rawEvent as MessageEvent);
         if (!payload) return;
         if (!isSessionEvent(payload) || payload.type !== type) {
-          reportInvalidEvent();
+          reportInvalidEvent(type, "schema", payload);
           return;
         }
         if (!accept(payload)) {
@@ -386,6 +468,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
 
     return () => {
       active = false;
+      if (refreshProjectionRef.current === recoverProjection) {
+        refreshProjectionRef.current = () => undefined;
+      }
       recoveryController?.abort();
       closeTransport();
     };
@@ -408,7 +493,11 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     });
   }, []);
 
-  return { ensureOpen, close, reconnecting };
+  const refreshProjection = useCallback(() => {
+    refreshProjectionRef.current();
+  }, []);
+
+  return { ensureOpen, refreshProjection, close, reconnecting };
 }
 
 function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undefined {
@@ -425,6 +514,9 @@ function readSnapshot(payload: Record<string, unknown>): SessionSnapshot | undef
     messages: payload.messages,
     history: { ...payload.history },
     model: readModel(payload.model),
+    pendingQuestion: Check(PendingQuestionProjectionSchema, payload.pendingQuestion)
+      ? payload.pendingQuestion
+      : undefined,
     run: readRun(payload.run),
     lastEventId: payload.lastEventId,
   };

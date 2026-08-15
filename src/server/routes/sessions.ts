@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { SessionBulkAction, SessionBulkTarget } from "../../shared/session-bulk-contracts";
+import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/configuration-contracts";
+import { sortSessionsPinnedFirst } from "../../shared/session-sort";
 import type { PiRuntimeGateway } from "../pi-runtime";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
 import type { SessionMetadataStore } from "../session-metadata";
@@ -24,6 +26,45 @@ interface SessionRouteDependencies {
  * 注册会话列表、创建、恢复和模型切换接口。
  */
 export function registerSessionRoutes(app: FastifyInstance, dependencies: SessionRouteDependencies): void {
+  app.get<{ Querystring: { agentId?: string; query?: string; cursor?: string } }>(
+    "/api/sessions/search",
+    async (request, reply) => {
+      if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+      const { agentId, query, cursor } = request.query;
+      if (!agentId || agentId.length > 200) {
+        return sendApiError(reply, 400, "AGENT_REQUIRED", "搜索 Session 必须指定 agentId");
+      }
+      if (typeof query !== "string" || query.length < 1 || query.length > 500
+        || (cursor !== undefined && (cursor.length < 1 || cursor.length > 1_000))) {
+        return sendApiError(reply, 400, "SESSION_SEARCH_QUERY_INVALID", "搜索参数格式不正确");
+      }
+      const startedAt = Date.now();
+      let acquired: Awaited<ReturnType<typeof acquireRuntimeForAgent>>;
+      try {
+        acquired = await acquireRuntimeForAgent(dependencies, agentId);
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      }
+      try {
+        if (!acquired.runtime.searchSessionText) {
+          return sendApiError(reply, 409, "SESSION_SEARCH_UNAVAILABLE", "当前运行时不支持会话文本搜索");
+        }
+        const page = await acquired.runtime.searchSessionText({
+          query,
+          limit: 30,
+          ...(cursor ? { cursor } : {}),
+        });
+        // 搜索日志只保留作用域和计数，不能记录聊天正文或查询词。
+        request.log.info({ agentId, resultCount: page.hits.length, elapsedMs: Date.now() - startedAt }, "会话文本搜索完成");
+        return reply.send(page);
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      } finally {
+        acquired.release();
+      }
+    },
+  );
+
   app.get<{ Querystring: { archived?: string; agentId?: string } }>("/api/sessions", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;
@@ -36,12 +77,14 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     const acquired = await acquireRuntimeForAgent(dependencies, agentId);
     try {
       const sessions = await acquired.runtime.listSessions({ archived: request.query.archived === "true" });
+      const pinnedIds = new Set(await dependencies.sessionMetadata?.listPinnedIds(agentId) ?? []);
       const enrichedSessions = await Promise.all(sessions.map(async (session) => ({
         ...session,
         agentId,
+        pinned: pinnedIds.has(session.id),
         scheduledTaskCount: (await dependencies.scheduledTasks?.boundTasks(session.id) ?? []).length,
       })));
-      return reply.send({ sessions: enrichedSessions });
+      return reply.send({ sessions: sortSessionsPinnedFirst(enrichedSessions) });
     } finally {
       acquired.release();
     }
@@ -122,26 +165,54 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
   });
 
-  app.get<{ Params: { id: string }; Querystring: { before?: string; branch?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { before?: string; after?: string; branch?: string } }>(
     "/api/sessions/:id/history",
     async (request, reply) => {
       if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
-      if (!request.query.before || !request.query.branch
-        || request.query.before.length > 200 || request.query.branch.length > 200) {
+      const { before, after, branch } = request.query;
+      if ((!before && !after) || (before && after) || !branch
+        || (before?.length ?? 0) > 200 || (after?.length ?? 0) > 200 || branch.length > 200) {
         return sendApiError(reply, 400, "VALIDATION_FAILED", "历史分页参数不完整");
       }
       try {
         const resolved = await acquireRuntimeForSession(dependencies, request.params.id);
         try {
           await resolved.runtime.openSession(request.params.id);
-          if (!resolved.runtime.loadHistoryPage) {
+          const loader = before ? resolved.runtime.loadHistoryPage : resolved.runtime.loadHistoryPageAfter;
+          if (!loader) {
             return sendApiError(reply, 409, "SESSION_HISTORY_STALE", "当前运行时不支持历史分页");
           }
-          return reply.send(await resolved.runtime.loadHistoryPage(
+          return reply.send(await loader.call(
+            resolved.runtime,
             request.params.id,
-            request.query.before,
-            request.query.branch,
+            (before ?? after)!,
+            branch,
           ));
+        } finally {
+          resolved.release();
+        }
+      } catch (error) {
+        return sendRuntimeError(reply, error);
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { entryId?: string; branch?: string } }>(
+    "/api/sessions/:id/history-window",
+    async (request, reply) => {
+      if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+      const { entryId, branch } = request.query;
+      if (!entryId || !branch || entryId.length > 200 || branch.length > 200) {
+        return sendApiError(reply, 400, "VALIDATION_FAILED", "目标历史窗口参数不完整");
+      }
+      try {
+        const resolved = await acquireRuntimeForSession(dependencies, request.params.id);
+        try {
+          await resolved.runtime.openSession(request.params.id);
+          if (!resolved.runtime.loadHistoryTarget) {
+            return sendApiError(reply, 409, "SESSION_HISTORY_STALE", "当前运行时不支持目标历史窗口");
+          }
+          return reply.send(await resolved.runtime.loadHistoryTarget(request.params.id, entryId, branch));
         } finally {
           resolved.release();
         }
@@ -173,6 +244,28 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     }
   });
 
+  app.put<{ Params: { id: string } }>("/api/sessions/:id/thinking-level", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) {
+      return;
+    }
+    const body = isRecord(request.body) ? request.body : {};
+    if (!isThinkingLevel(body.thinkingLevel)) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "思考深度参数格式不正确");
+    }
+    try {
+      const acquired = await acquireRuntimeForSession(dependencies, request.params.id);
+      try {
+        await acquired.runtime.openSession(request.params.id);
+        await acquired.runtime.setThinkingLevel(request.params.id, body.thinkingLevel);
+        return reply.code(204).send();
+      } finally {
+        acquired.release();
+      }
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
   app.patch<{ Params: { id: string } }>("/api/sessions/:id", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) {
       return;
@@ -187,6 +280,32 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
         await acquired.runtime.renameSession(request.params.id, body.name);
         return reply.code(204).send();
       } finally { acquired.release(); }
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
+  app.put<{ Params: { id: string } }>("/api/sessions/:id/pin", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) {
+      return;
+    }
+    try {
+      if (!dependencies.sessionMetadata) throw new Error("Session 元数据服务尚未配置");
+      await dependencies.sessionMetadata.pin(request.params.id);
+      return reply.code(204).send();
+    } catch (error) {
+      return sendRuntimeError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/sessions/:id/pin", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) {
+      return;
+    }
+    try {
+      if (!dependencies.sessionMetadata) throw new Error("Session 元数据服务尚未配置");
+      await dependencies.sessionMetadata.unpin(request.params.id);
+      return reply.code(204).send();
     } catch (error) {
       return sendRuntimeError(reply, error);
     }
@@ -246,6 +365,10 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
       return sendRuntimeError(reply, error);
     }
   });
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
 }
 
 async function acquireRuntimeForAgent(

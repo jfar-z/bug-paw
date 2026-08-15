@@ -18,6 +18,7 @@ interface ScheduledTaskServiceOptions {
   assignSession?(sessionId: string, agentId: string): Promise<void>;
   archiveSession?(sessionId: string): Promise<void>;
   sessionIsPersisted?(agentId: string, sessionId: string): Promise<boolean>;
+  assertSessionRunnable?(agentId: string, sessionId: string): void;
   onBackgroundError?(error: { code: "SCHEDULED_TASK_BACKGROUND_FAILED"; taskId: string; message: string }): void;
 }
 
@@ -101,6 +102,9 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
     if (!task) throw new Error("定时任务不存在");
     if (isDeletedSessionTarget(task.target)) {
       throw new DomainError("SCHEDULED_TASK_TARGET_MISSING", "原目标会话已删除，请重新选择任务目标");
+    }
+    if (task.target.type === "existing_session") {
+      options.assertSessionRunnable?.(task.agentId, task.target.sessionId);
     }
     if (trigger === "scheduled") {
       const claimed = await options.store.claimDueTask(taskId, new Date());

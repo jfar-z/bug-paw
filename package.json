@@ -54,6 +54,7 @@
     "proper-lockfile": "4.1.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "react-easy-crop": "6.2.3",
     "react-markdown": "10.1.0",
     "rehype-katex": "7.0.1",
     "remark-gfm": "4.0.1",

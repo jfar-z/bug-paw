@@ -17,6 +17,7 @@ import {
 import { usePressFeedback } from "./use-press-feedback";
 import { useOnlineStatus } from "./use-online-status";
 import { useMobileBackNavigation } from "./use-mobile-back-navigation";
+import { clearAllQuestionDrafts } from "./question-draft-store";
 
 type PreviewPage = "setup" | "login" | "chat";
 type AppPage = "loading" | "setup" | "login" | "workbench" | "error";
@@ -121,6 +122,7 @@ export function App() {
   const logout = async () => {
     try {
       await api.logout();
+      clearAllQuestionDrafts();
       navigateTo({ page: "chat" }, true);
       setPage("login");
     } catch (error) {
@@ -169,6 +171,7 @@ export function App() {
 
   return (
     <ApiTaskProvider onAuthenticationRequired={() => {
+      clearAllQuestionDrafts();
       navigateTo({ page: "chat" }, true);
       setPage("login");
     }}>

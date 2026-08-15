@@ -1,12 +1,16 @@
 import { ArrowLeft, Check, Copy, Folder, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AgentInstructions, AgentProfile, AgentProfileDocument, TitleGenerationConfig } from "../../shared/agent-contracts";
+import type { AvatarCropArea } from "../../shared/avatar-contracts";
 import { BUILTIN_TOOL_CATALOG, CAPABILITY_TOOL_CATALOG, DEFAULT_AGENT_TOOL_NAMES, SYSTEM_TOOL_CATALOG } from "../../shared/tool-catalog";
 import { api, type ModelSummary, type ResourceCatalog } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { DangerDialog } from "../components/configuration/danger-dialog";
+import { AvatarCropDialog } from "../components/avatar/avatar-crop-dialog";
+import { validateAvatarFile } from "../components/avatar/avatar-file";
 import { InheritedField } from "../components/configuration/inherited-field";
 import type { AppRoute } from "../router";
+import { formatTtsCustomParameters, parseTtsCustomParametersText } from "../tts-custom-parameters-form";
 import { useOnlineStatus } from "../use-online-status";
 
 interface AgentDetailPageProps {
@@ -69,6 +73,8 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
+  const [avatarFile, setAvatarFile] = useState<File>();
+  const [avatarError, setAvatarError] = useState("");
   const [notFound, setNotFound] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [removeSessions, setRemoveSessions] = useState(false);
@@ -76,6 +82,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
   const [deletePreview, setDeletePreview] = useState<{ sessions: { count: number }; workspace: { files: number; bytes: number } }>();
   const [bootsharpOpen, setBootsharpOpen] = useState(false);
   const [bootsharp, setBootsharp] = useState("");
+  const [ttsCustomParametersText, setTtsCustomParametersText] = useState("{}");
 
   useEffect(() => {
     let active = true;
@@ -93,6 +100,10 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     void runOptionalApiTask(() => api.listResources(agentId), { operation: "加载 Agent 资源目录", fallbackReason: "资源目录不可用", fallback: () => ({ resources: [], tools: [], diagnostics: [] }) }).then((result) => { if (active && (result.status === "success" || result.status === "fallback")) setResources(result.data); });
     return () => { active = false; };
   }, [agentId, runApiTask, runOptionalApiTask]);
+
+  useEffect(() => {
+    setTtsCustomParametersText(formatTtsCustomParameters(document?.profile.ttsCustomParameters));
+  }, [agentId, document?.revision]);
 
   const agent = document?.profile;
   const toolCatalog = useMemo(() => {
@@ -130,6 +141,15 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
 
   async function save() {
     if (!document || document.revision === "fallback") return;
+    let ttsCustomParameters = document.profile.ttsCustomParameters;
+    if (activeTab === "runtime" && document.profile.ttsProfileId) {
+      try {
+        ttsCustomParameters = parseTtsCustomParametersText(ttsCustomParametersText);
+      } catch (validationError) {
+        setError(validationError instanceof Error ? validationError.message : "TTS 自定义请求参数无效");
+        return;
+      }
+    }
     setSaving(true);
     setError("");
     setNotice("");
@@ -153,6 +173,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
         allowedTools: document.profile.allowedTools,
         ttsProfileId: document.profile.ttsProfileId ?? null,
         ttsVoice: document.profile.ttsVoice?.trim() || null,
+        ttsCustomParameters: document.profile.ttsProfileId ? ttsCustomParameters ?? {} : null,
         ttsAutoPlay: document.profile.ttsAutoPlay === true,
         ttsStreamPlayback: document.profile.ttsStreamPlayback === true,
       }), { operation: "保存 Agent", expected: agentDetailExpected(setError) });
@@ -178,13 +199,27 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     } finally { setSaving(false); }
   }
 
-  async function uploadAvatar(file: File | undefined) {
-    if (!file || !document || document.revision === "fallback") return;
+  function selectAvatar(file: File | undefined) {
+    if (!file) return;
+    const validation = validateAvatarFile(file);
+    setAvatarError(validation ?? "");
+    if (!validation) setAvatarFile(file);
+  }
+
+  async function uploadAvatar(crop: AvatarCropArea) {
+    if (!avatarFile || !document || document.revision === "fallback") return;
     setSaving(true);
-    setError("");
+    setAvatarError("");
     try {
-      const result = await runApiTask(() => api.uploadAgentAvatar(agentId, document.revision, file), { operation: "上传 Agent 头像", expected: agentDetailExpected(setError) });
-      if (result.status === "success") { setDocument(result.data); setNotice("头像已更新"); }
+      const result = await runApiTask(
+        () => api.uploadAgentAvatar(agentId, document.revision, avatarFile, crop),
+        { operation: "上传 Agent 头像", expected: avatarUploadExpected(setAvatarError) },
+      );
+      if (result.status === "success") {
+        setDocument(result.data);
+        setNotice("头像已更新");
+        setAvatarFile(undefined);
+      }
     } finally {
       setSaving(false);
     }
@@ -250,7 +285,8 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
             <div className="configuration-section__heading"><div><span>01</span><h2 id="agent-identity-title">基本身份</h2></div></div>
             <label><span>显示名称<small>在会话和 Agent 列表中使用</small></span><input value={agent.name} onChange={(event) => updateProfile({ name: event.target.value })} /></label>
             <label><span>头像文字<small>保存后使用文字头像，也可上传方形图片</small></span><input aria-label="头像文字" value={agent.avatar.kind === "initial" ? agent.avatar.value : ""} maxLength={2} onChange={(event) => updateProfile({ avatar: { kind: "initial", value: event.target.value } })} /></label>
-            <label><span>头像图片<small>PNG、JPEG 或 WebP，最大 2 MB；图片保存在当前 Agent 下</small></span><input aria-label="上传头像图片" type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => void uploadAvatar(event.target.files?.[0])} /></label>
+            <label><span>头像图片<small>PNG、JPEG 或 WebP，原图最大 20 MB；上传前可裁剪，系统将自动压缩。</small></span><input aria-label="上传头像图片" type="file" accept="image/png,image/jpeg,image/webp" disabled={saving} onChange={(event) => { selectAvatar(event.target.files?.[0]); event.target.value = ""; }} /></label>
+            {avatarError && !avatarFile ? <div className="configuration-inline-error" role="alert">{avatarError}</div> : null}
             <label><span>简介<small>简短说明这个 Agent 的用途</small></span><textarea rows={3} value={agent.description} onChange={(event) => updateProfile({ description: event.target.value })} /></label>
             <div className="configuration-button-row">
               <button type="button" onClick={toggleArchive}>{agent.status === "active" ? "归档 Agent" : "恢复 Agent"}</button>
@@ -319,7 +355,23 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
             </select></label> : null}
             <label><input aria-label="标题生成启用思考" type="checkbox" checked={titleGeneration.thinkingEnabled} onChange={(event) => updateProfile({ titleGeneration: { ...titleGeneration, thinkingEnabled: event.target.checked } })} />启用思考</label>
           </section>
-          <section className="configuration-form-card configuration-single-column"><h2>语音回答</h2><p className="configuration-help">选择已配置的语音模型后，可让 Agent 回答自动播放。</p><label><span>语音模型</span><select aria-label="Agent 语音模型" value={agent.ttsProfileId ?? ""} onChange={(event) => updateProfile(event.target.value ? { ttsProfileId: event.target.value } : { ttsProfileId: undefined, ttsVoice: undefined, ttsAutoPlay: false, ttsStreamPlayback: false })}><option value="">不使用语音</option>{ttsProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.voice}</option>)}</select></label><label><span>Agent 音色<small>留空则继承所选语音模型；填写后仅在此 Agent 运行时覆盖</small></span><input aria-label="Agent 音色" disabled={!agent.ttsProfileId} maxLength={160} placeholder={selectedTtsProfile ? `继承模型音色：${selectedTtsProfile.voice}` : "请先选择语音模型"} value={agent.ttsVoice ?? ""} onChange={(event) => updateProfile({ ttsVoice: event.target.value || undefined })} /></label><label><input aria-label="自动播放语音" type="checkbox" disabled={!agent.ttsProfileId} checked={agent.ttsAutoPlay === true} onChange={(event) => updateProfile({ ttsAutoPlay: event.target.checked, ttsStreamPlayback: event.target.checked ? agent.ttsStreamPlayback : false })} />自动播放语音</label><label><input aria-label="流式播放语音" type="checkbox" disabled={!agent.ttsProfileId || !agent.ttsAutoPlay} checked={agent.ttsStreamPlayback === true} onChange={(event) => updateProfile({ ttsStreamPlayback: event.target.checked })} />流式播放语音</label></section>
+          <section className="configuration-form-card configuration-single-column">
+            <h2>语音回答</h2>
+            <p className="configuration-help">选择已配置的语音模型后，可让 Agent 回答自动播放。</p>
+            <label><span>语音模型</span><select aria-label="Agent 语音模型" value={agent.ttsProfileId ?? ""} onChange={(event) => {
+              if (event.target.value) {
+                updateProfile({ ttsProfileId: event.target.value });
+                return;
+              }
+              setTtsCustomParametersText("{}");
+              updateProfile({ ttsProfileId: undefined, ttsVoice: undefined, ttsCustomParameters: undefined, ttsAutoPlay: false, ttsStreamPlayback: false });
+            }}><option value="">不使用语音</option>{ttsProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.voice}</option>)}</select></label>
+            <label><span>Agent 音色<small>留空则继承所选语音模型；填写后仅在此 Agent 运行时覆盖</small></span><input aria-label="Agent 音色" disabled={!agent.ttsProfileId} maxLength={160} placeholder={selectedTtsProfile ? `继承模型音色：${selectedTtsProfile.voice}` : "请先选择语音模型"} value={agent.ttsVoice ?? ""} onChange={(event) => updateProfile({ ttsVoice: event.target.value || undefined })} /></label>
+            <label><span>自定义请求参数（JSON）<small>Agent 参数覆盖模型参数，专用音色优先级最高</small></span><textarea aria-label="Agent TTS 自定义请求参数" disabled={!agent.ttsProfileId} rows={7} spellCheck={false} value={ttsCustomParametersText} onChange={(event) => { setTtsCustomParametersText(event.target.value); setNotice(""); }} /></label>
+            <p className="configuration-help">不能覆盖 <code>input</code>；不要填写 API Key、账号或身份信息。嵌套对象按顶层字段整体覆盖。</p>
+            <label><input aria-label="自动播放语音" type="checkbox" disabled={!agent.ttsProfileId} checked={agent.ttsAutoPlay === true} onChange={(event) => updateProfile({ ttsAutoPlay: event.target.checked, ttsStreamPlayback: event.target.checked ? agent.ttsStreamPlayback : false })} />自动播放语音</label>
+            <label><input aria-label="流式播放语音" type="checkbox" disabled={!agent.ttsProfileId || !agent.ttsAutoPlay} checked={agent.ttsStreamPlayback === true} onChange={(event) => updateProfile({ ttsStreamPlayback: event.target.checked })} />流式播放语音</label>
+          </section>
         </section>
       ) : null}
 
@@ -349,6 +401,14 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
         </DangerDialog>
       ) : null}
       {bootsharpOpen ? <div className="configuration-dialog-backdrop" role="presentation"><section className="configuration-dialog" role="dialog" aria-modal="true" aria-labelledby="bootsharp-title"><header><div><span>INITIALIZATION</span><h2 id="bootsharp-title">修改 BOOTSHARP</h2></div><button type="button" className="icon-button" aria-label="关闭 BOOTSHARP 编辑" onClick={() => setBootsharpOpen(false)}><X size={18} /></button></header><p>此提示仅在文件非空时引导首次协作；清空后将不再注入新会话。</p><label className="configuration-field"><span>BOOTSHARP 内容</span><textarea aria-label="BOOTSHARP 内容" rows={16} value={bootsharp} onChange={(event) => setBootsharp(event.target.value)} /></label><footer><button type="button" className="secondary-button" onClick={() => setBootsharpOpen(false)}>取消</button><button type="button" className="configuration-primary-action" disabled={saving || !online} onClick={() => void saveBootsharp()}>{saving ? "保存中…" : "保存 BOOTSHARP"}</button></footer></section></div> : null}
+      {avatarFile ? <AvatarCropDialog
+        file={avatarFile}
+        busy={saving}
+        error={avatarError || undefined}
+        onCancel={() => { setAvatarFile(undefined); setAvatarError(""); }}
+        onReplace={selectAvatar}
+        onConfirm={(crop) => void uploadAvatar(crop)}
+      /> : null}
     </div>
   );
 }
@@ -379,5 +439,18 @@ function agentDetailExpected(setError: (message: string) => void): ApiTaskPolicy
     AVATAR_TOO_LARGE: show,
     INVALID_AVATAR: show,
     INVALID_AVATAR_TYPE: show,
+  };
+}
+
+/** 头像错误留在裁剪器内，避免丢失用户已经调整的裁剪状态。 */
+function avatarUploadExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setError(error.message);
+  return {
+    INVALID_AVATAR_CROP: show,
+    AVATAR_TOO_LARGE: show,
+    INVALID_AVATAR_TYPE: show,
+    AVATAR_TOO_MANY_PIXELS: show,
+    AVATAR_PROCESSING_FAILED: show,
+    VERSION_CONFLICT: show,
   };
 }

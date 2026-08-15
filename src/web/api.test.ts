@@ -1,6 +1,39 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClientError, api } from "./api";
 
+describe("头像上传 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("用户和 Agent 上传都携带原图与百分比裁剪区域", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      revision: "r2",
+      profile: { displayName: "管理员", avatar: { kind: "image", revision: "r2", mediaType: "image/webp" } },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    const crop = { x: 12.5, y: 0, width: 75, height: 100 };
+
+    await api.uploadProfileAvatar("profile/r1", file, crop);
+    await api.uploadAgentAvatar("agent/a", "agent/r1", file, crop);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/profile/avatar?revision=profile%2Fr1",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/agents/agent%2Fa/avatar?revision=agent%2Fr1",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    );
+    for (const call of fetchMock.mock.calls) {
+      const body = call[1]?.body as FormData;
+      expect(body.get("avatar")).toMatchObject({ name: file.name, size: file.size, type: file.type });
+      expect(body.get("crop")).toBe(JSON.stringify(crop));
+    }
+  });
+});
+
 describe("知识库 API", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -94,6 +127,131 @@ describe("会话批量 API", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/sessions/session%2Fa?confirmBoundTasks=true",
       expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("会话文本检索 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("编码搜索参数并保留取消信号", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ hits: [], hasMore: false }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await api.searchSessions("agent/a", { query: "中文 & text", cursor: "cursor/1" }, controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/search?agentId=agent%2Fa&query=%E4%B8%AD%E6%96%87%20%26%20text&cursor=cursor%2F1",
+      expect.objectContaining({ credentials: "same-origin", signal: controller.signal }),
+    );
+  });
+
+  it("编码目标窗口和向后分页参数", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      sessionId: "session/a",
+      messages: [],
+      history: { branchToken: "branch/a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await api.loadSessionHistoryTarget("session/a", "assistant/10", "branch/a", controller.signal);
+    await api.loadSessionHistoryAfter("session/a", "assistant/20", "branch/a", controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/sessions/session%2Fa/history-window?entryId=assistant%2F10&branch=branch%2Fa",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/sessions/session%2Fa/history?after=assistant%2F20&branch=branch%2Fa",
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+});
+
+describe("会话置顶 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("使用编码后的会话 ID 发起置顶与取消置顶请求", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.pinSession("session/a");
+    await api.unpinSession("session/a");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/sessions/session%2Fa/pin",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/sessions/session%2Fa/pin",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+describe("会话思考深度 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("使用编码后的会话 ID 写入规范思考深度", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.setThinkingLevel("session/a", "low");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session%2Fa/thinking-level",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ thinkingLevel: "low" }) }),
+    );
+  });
+});
+
+describe("会话提问 API", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("提交带版本号的结构化答案并返回下一次运行", async () => {
+    const run = {
+      runId: "run-next",
+      sessionId: "session/a",
+      status: "queued",
+      startedAt: "2026-08-13T08:00:00.000Z",
+    };
+    const resolution = {
+      resolutionId: "resolution-next",
+      questionRecordId: "question/1",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ run, resolution }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.submitQuestionAnswers("session/a", "question/1", {
+      version: 2,
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+    });
+
+    expect(result).toEqual({ run, resolution });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/session%2Fa/questions/question%2F1/answers",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          version: 2,
+          answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+        }),
+      }),
     );
   });
 });

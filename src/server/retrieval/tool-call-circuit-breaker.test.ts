@@ -99,6 +99,22 @@ describe("工具空参数断路器", () => {
     }]);
     expect(JSON.stringify(diagnostics)).not.toContain("private-value");
   });
+
+  it("会话列表、搜索与阅读工具的必填字段会进入空参数断路", () => {
+    const breaker = createToolCallCircuitBreaker([
+      requiredActionTool("session_list"),
+      requiredActionTool("session_search"),
+      requiredActionTool("session_read"),
+    ]);
+
+    expect(breaker.observe(call("session_list", {}))).toEqual({ terminate: false });
+    expect(breaker.observe(call("session_list", {}))).toEqual({ terminate: false });
+    expect(breaker.observe(call("session_list", {}))).toEqual({ terminate: true });
+    expect(breaker.observe(call("session_search", undefined))).toEqual({ terminate: false });
+    expect(breaker.observe(call("session_search", undefined))).toEqual({ terminate: false });
+    expect(breaker.observe(call("session_search", undefined))).toEqual({ terminate: true });
+    expect(breaker.observe(call("session_read", {}))).toEqual({ terminate: false });
+  });
 });
 
 /** 创建声明 action 必填的最小工具定义。 */

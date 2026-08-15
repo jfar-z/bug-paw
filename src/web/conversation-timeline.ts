@@ -1,5 +1,16 @@
+import { Check } from "typebox/value";
+
 import type { WorkspaceFileRef } from "../shared/contracts";
 import { parseAgentReferences, type AgentReference } from "../shared/agent-reference-contracts";
+import {
+  parseQuestionResponseProtocol,
+  QuestionResolutionSchema,
+  type QuestionResolution,
+} from "../shared/question-response-protocol";
+import {
+  PendingQuestionProjectionSchema,
+  type PendingQuestionProjection,
+} from "../shared/session-question-contracts";
 
 export interface UserEntry {
   id: string;
@@ -17,6 +28,7 @@ export interface MarkdownBlock {
   type: "markdown";
   text: string;
   streaming: boolean;
+  piEntryId?: string;
   revealStart?: number;
   revealPhase?: number;
 }
@@ -59,10 +71,18 @@ export interface AgentTurn {
   sourceUserEntryId?: string;
 }
 
-export type ConversationEntry = UserEntry | AgentTurn;
+export interface QuestionResponseEntry {
+  id: string;
+  type: "question_response";
+  pendingQuestion: PendingQuestionProjection;
+  resolution: QuestionResolution;
+}
+
+export type ConversationEntry = UserEntry | QuestionResponseEntry | AgentTurn;
 
 export type TimelineEvent =
   | { type: "user_message"; text: string; files?: WorkspaceFileRef[]; references?: AgentReference[]; id?: string }
+  | { type: "question_resolved"; resolution: QuestionResolution }
   | { type: "generation_started" }
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
@@ -79,6 +99,9 @@ export type TimelineEvent =
  * 将实时事件归并到单一有序时间线，文件与工具更新保持原始位置。
  */
 export function reduceTimeline(entries: ConversationEntry[], event: TimelineEvent): ConversationEntry[] {
+  if (event.type === "question_resolved") {
+    return applyQuestionResolution(entries, event.resolution);
+  }
   if (event.type === "user_message") {
     return [...entries, {
       id: event.id ?? createId("user", entries),
@@ -89,6 +112,13 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
     }];
   }
   if (event.type === "generation_started") {
+    if (shouldStartAgentTurnAfterQuestion(entries)) {
+      return [...entries, {
+        id: createId("agent", entries),
+        type: "agent",
+        blocks: [],
+      }];
+    }
     return ensureAgentTurn(entries).next;
   }
   if (event.type === "text_delta") {
@@ -169,6 +199,10 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
     });
   }
 
+  if (event.type === "tool_preparing" && event.toolName === "ask_user") {
+    entries = removeUnexecutedSiblingTools(entries, event.callId);
+  }
+
   const existing = findTool(entries, event.callId);
   if (existing) {
     const turn = entries[existing.turnIndex] as AgentTurn;
@@ -197,6 +231,9 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
     }
     if (message.role === "user") {
       const parsed = parseUserContext(extractContentText(message.content));
+      if (parsed.resolution) {
+        entries = applyQuestionResolution(entries, parsed.resolution);
+      }
       if (parsed.text || parsed.files.length > 0 || parsed.references.length > 0) {
         sourceUserEntryId = typeof message.__piEntryId === "string" ? message.__piEntryId : undefined;
         entries = [...entries, {
@@ -210,17 +247,30 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
       }
       return;
     }
-    if (message.role === "assistant" && Array.isArray(message.content)) {
+    if (message.role === "assistant" && (Array.isArray(message.content) || typeof message.content === "string")) {
       const ensured = ensureAgentTurn(entries);
       entries = ensured.next;
       const turn = entries[ensured.turnIndex] as AgentTurn;
       const blocks = [...turn.blocks];
-      message.content.forEach((part, partIndex) => {
+      const assistantEntryId = typeof message.__piEntryId === "string" ? message.__piEntryId : undefined;
+      let entryAnchorAssigned = false;
+      const assistantParts = typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : message.content;
+      assistantParts.forEach((part, partIndex) => {
         if (!isRecord(part)) {
           return;
         }
         if (part.type === "text" && typeof part.text === "string" && part.text) {
-          blocks.push(...splitAgentText(part.text, `history-${messageIndex}-${partIndex}`, false));
+          const parsedBlocks = splitAgentText(part.text, `history-${messageIndex}-${partIndex}`, false);
+          if (assistantEntryId && !entryAnchorAssigned) {
+            const markdownIndex = parsedBlocks.findIndex((block) => block.type === "markdown" && block.text.trim());
+            if (markdownIndex >= 0) {
+              parsedBlocks[markdownIndex] = { ...parsedBlocks[markdownIndex] as MarkdownBlock, piEntryId: assistantEntryId };
+              entryAnchorAssigned = true;
+            }
+          }
+          blocks.push(...parsedBlocks);
         }
         if (part.type === "thinking") {
           const text = extractThinkingText(part);
@@ -258,6 +308,10 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
           status: message.isError === true ? "error" : "completed",
         };
         entries = replaceTurn(entries, location.turnIndex, { ...turn, blocks });
+        const resolvedQuestion = readResolvedQuestion(blocks[location.blockIndex]);
+        if (resolvedQuestion) {
+          entries = applyQuestionResolution(entries, resolvedQuestion.resolution);
+        }
         return;
       }
       const ensured = ensureAgentTurn(entries);
@@ -336,15 +390,85 @@ function extractThinkingText(part: Record<string, unknown>): string | undefined 
   return typeof part.text === "string" ? part.text : undefined;
 }
 
-function parseUserContext(text: string): { text: string; files: WorkspaceFileRef[]; references: AgentReference[] } {
-  const parsedReferences = parseAgentReferences(text);
+function parseUserContext(text: string): { text: string; files: WorkspaceFileRef[]; references: AgentReference[]; resolution?: QuestionResolution } {
+  const response = parseQuestionResponseProtocol(text);
+  const parsedReferences = parseAgentReferences(response.visibleText);
   const parsedFiles = parseUserFiles(parsedReferences.text);
   const referenceFiles = parsedReferences.references.flatMap((reference) => reference.type === "file" ? [{ path: reference.path }] : []);
   return {
     text: parsedFiles.text,
     files: mergeFiles(parsedFiles.files, referenceFiles),
     references: parsedReferences.references,
+    ...(response.resolution ? { resolution: response.resolution } : {}),
   };
+}
+
+/** 将权威回答归并到提问工具块，并投影为独立的用户回答条目。 */
+function applyQuestionResolution(entries: ConversationEntry[], resolution: QuestionResolution): ConversationEntry[] {
+  for (let turnIndex = entries.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const entry = entries[turnIndex];
+    if (entry.type !== "agent") continue;
+    const blockIndex = entry.blocks.findIndex((block) => block.type === "tool"
+      && block.name === "ask_user"
+      && isRecord(block.details)
+      && Check(PendingQuestionProjectionSchema, block.details.pendingQuestion)
+      && block.details.pendingQuestion.id === resolution.questionRecordId);
+    if (blockIndex < 0) continue;
+    const blocks = [...entry.blocks];
+    const tool = blocks[blockIndex] as ToolBlock;
+    const pendingQuestion = (tool.details as { pendingQuestion: PendingQuestionProjection }).pendingQuestion;
+    blocks[blockIndex] = {
+      ...tool,
+      details: { ...(isRecord(tool.details) ? tool.details : {}), resolution },
+    };
+    const next = replaceTurn(entries, turnIndex, { ...entry, blocks });
+    const response: QuestionResponseEntry = {
+      id: `question-response-${resolution.resolutionId}`,
+      type: "question_response",
+      pendingQuestion,
+      resolution,
+    };
+    const existingIndex = next.findIndex((item) => item.type === "question_response"
+      && item.resolution.resolutionId === resolution.resolutionId);
+    if (existingIndex >= 0) {
+      const updated = [...next];
+      updated[existingIndex] = response;
+      return updated;
+    }
+    return [
+      ...next.slice(0, turnIndex + 1),
+      response,
+      ...next.slice(turnIndex + 1),
+    ];
+  }
+  return entries;
+}
+
+/** 从工具详情中读取经过共享 Schema 校验的提问终态。 */
+function readResolvedQuestion(block: AgentBlock): {
+  pendingQuestion: PendingQuestionProjection;
+  resolution: QuestionResolution;
+} | undefined {
+  if (block.type !== "tool" || block.name !== "ask_user" || !isRecord(block.details)) return undefined;
+  if (!Check(PendingQuestionProjectionSchema, block.details.pendingQuestion)
+    || !Check(QuestionResolutionSchema, block.details.resolution)) return undefined;
+  return {
+    pendingQuestion: block.details.pendingQuestion,
+    resolution: block.details.resolution,
+  };
+}
+
+/** ask_user 成为终止点时，清理同回合中 Pi 已声明但从未执行的兄弟工具。 */
+function removeUnexecutedSiblingTools(entries: ConversationEntry[], askCallId: string): ConversationEntry[] {
+  const turnIndex = findLastAgentTurn(entries);
+  if (turnIndex < 0) return entries;
+  const turn = entries[turnIndex] as AgentTurn;
+  const blocks = turn.blocks.filter((block) => block.type !== "tool"
+    || block.callId === askCallId
+    || block.status !== "preparing" && block.status !== "parameterizing");
+  return blocks.length === turn.blocks.length
+    ? entries
+    : replaceTurn(entries, turnIndex, { ...turn, blocks });
 }
 
 function parseUserFiles(text: string): { text: string; files: WorkspaceFileRef[] } {
@@ -443,6 +567,17 @@ function ensureAgentTurn(entries: ConversationEntry[]): { next: ConversationEntr
     return { next: entries, turnIndex: lastIndex };
   }
   return { next: [...entries, { id: createId("agent", entries), type: "agent", blocks: [] }], turnIndex: entries.length };
+}
+
+/** ask_user 终止当前 Run 后，答案续跑必须进入新的 Agent 回合。 */
+function shouldStartAgentTurnAfterQuestion(entries: ConversationEntry[]): boolean {
+  const last = entries.at(-1);
+  if (last?.type !== "agent") return false;
+  return last.blocks.some((block) => block.type === "tool"
+    && block.name === "ask_user"
+    && block.status === "completed"
+    && isRecord(block.details)
+    && Check(PendingQuestionProjectionSchema, block.details.pendingQuestion));
 }
 
 function replaceTurn(entries: ConversationEntry[], index: number, turn: AgentTurn): ConversationEntry[] {

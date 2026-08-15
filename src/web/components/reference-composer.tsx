@@ -1,5 +1,5 @@
 import { ChevronLeft, Database, File, Folder, Plus, Terminal, WandSparkles } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import type { AgentReference, FileReference } from "../../shared/agent-reference-contracts";
 import type { ComposerCatalog, WorkspaceEntry } from "../../shared/contracts";
 import { useApiTask } from "../api-task-provider";
@@ -19,6 +19,7 @@ interface ReferenceComposerProps {
   editingContext?: ReactNode;
   attachmentControl?: ReactNode;
   attachmentContent?: ReactNode;
+  railControls?: ReactNode;
   bottomControls?: ReactNode;
 }
 
@@ -28,10 +29,18 @@ type Candidate =
   | { type: "file"; name: string; description: string; reference: FileReference }
   | { type: "command"; name: string; description: string };
 
+/** 判断当前回车是否应提交消息，移动端和组合输入统一保留原生换行。 */
+function shouldSubmitComposerOnEnter(event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean {
+  if (event.key !== "Enter") return false;
+  if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
+  if (event.shiftKey || event.ctrlKey || event.metaKey) return false;
+  return !(window.matchMedia?.("(pointer: coarse)").matches ?? false);
+}
+
 /**
  * 支持 @ 资源引用、/ 安全命令补全与加号快捷选择的对话输入组件。
  */
-export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, onFilesInput, editingContext, attachmentControl, attachmentContent, bottomControls }: ReferenceComposerProps) {
+export function ReferenceComposer({ value, references, disabled, loadCatalog, onChange, onReferencesChange, onSubmit, onCatalogError, onFilesInput, editingContext, attachmentControl, attachmentContent, railControls, bottomControls }: ReferenceComposerProps) {
   const { runApiTask } = useApiTask();
   const [text, setText] = useState(value);
   const [catalog, setCatalog] = useState<ComposerCatalog>();
@@ -207,6 +216,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
           ref={textareaRef}
           style={{ touchAction: "pan-y" }}
           rows={1}
+          enterKeyHint="enter"
           placeholder="给 Agent 发消息…（输入 @ 引用资源）"
           aria-label="消息内容"
           disabled={disabled}
@@ -226,7 +236,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
                 return;
               }
             }
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (shouldSubmitComposerOnEnter(event)) {
               event.preventDefault();
               onSubmit?.();
             }
@@ -256,6 +266,7 @@ export function ReferenceComposer({ value, references, disabled, loadCatalog, on
             </div> : null}
           </div>
           {attachmentControl}
+          {railControls}
         </div>
         {bottomControls}
       </div>

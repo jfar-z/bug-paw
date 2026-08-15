@@ -1,7 +1,7 @@
 import { createRef } from "react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentTurn, UserEntry } from "../../../conversation-timeline";
+import type { AgentTurn, QuestionResponseEntry, UserEntry } from "../../../conversation-timeline";
 import { ConversationTimelineView } from "./conversation-timeline-view";
 
 const firstTurn: AgentTurn = {
@@ -130,7 +130,192 @@ describe("ConversationTimelineView 消息复制", () => {
   });
 });
 
+describe("ConversationTimelineView 消息排版", () => {
+  it("把结构化回答放入独立用户气泡且不提供普通消息操作", () => {
+    const pendingQuestion = {
+      id: "question-1",
+      version: 1,
+      toolCallId: "ask-1",
+      createdAt: "2026-08-14T08:00:00.000Z",
+      questions: [{
+        id: "q-1",
+        header: "范围",
+        question: "处理范围？",
+        multiSelect: false,
+        options: [
+          { id: "o-1", label: "全部", description: "处理全部" },
+          { id: "o-2", label: "部分", description: "处理部分" },
+        ],
+      }, {
+        id: "q-2",
+        header: "备注",
+        question: "还有补充吗？",
+        multiSelect: false,
+        options: [
+          { id: "o-3", label: "没有", description: "没有补充" },
+          { id: "o-4", label: "有", description: "补充说明" },
+        ],
+      }],
+    };
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [
+        { questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] },
+        { questionId: "q-2", kind: "text" as const, text: "保留现状" },
+      ],
+      unansweredQuestionIds: [],
+    };
+    const questionTurn: AgentTurn = {
+      id: "agent-question",
+      type: "agent",
+      blocks: [{
+        id: "ask",
+        type: "tool",
+        callId: "ask-1",
+        name: "ask_user",
+        args: {},
+        status: "completed",
+        details: { type: "question_pending", pendingQuestion, resolution },
+      }],
+    };
+    const response: QuestionResponseEntry = {
+      id: "question-response-resolution-1",
+      type: "question_response",
+      pendingQuestion,
+      resolution,
+    };
+
+    let container!: HTMLElement;
+    expect(() => {
+      ({ container } = render(<ConversationTimelineView
+        {...baseProps()}
+        timeline={[questionTurn, response]}
+      />));
+    }).not.toThrow();
+
+    const row = container.querySelector<HTMLElement>('[data-question-resolution-id="resolution-1"]');
+    expect(row).toHaveClass("message-row", "is-user", "question-response-message");
+    expect(within(row!).getByText("已提交回答")).toBeVisible();
+    expect(within(row!).getByText("部分")).toBeVisible();
+    expect(within(row!).getByText("处理部分")).toBeVisible();
+    expect(within(row!).queryByLabelText("用户消息操作")).not.toBeInTheDocument();
+    const agentRow = container.querySelector<HTMLElement>(".message-row.is-assistant");
+    expect(within(agentRow!).queryByText("部分")).not.toBeInTheDocument();
+
+    fireEvent.click(within(agentRow!).getByRole("button", { name: "查看问题" }));
+    fireEvent.click(within(agentRow!).getByRole("tab", { name: "2" }));
+    expect(within(agentRow!).getByText("还有补充吗？")).toBeVisible();
+    expect(within(row!).getByText("处理范围？")).toBeVisible();
+
+    fireEvent.click(within(row!).getByRole("tab", { name: "2" }));
+    expect(within(row!).getByText("还有补充吗？")).toBeVisible();
+    expect(within(row!).getByText("保留现状")).toBeVisible();
+    expect(within(agentRow!).queryByText("保留现状")).not.toBeInTheDocument();
+  });
+
+  it("有活动时本轮活动控制与消息操作共用同一行底栏", () => {
+    const turn: AgentTurn = {
+      id: "agent-activity",
+      type: "agent",
+      sourceUserEntryId: "user-activity",
+      blocks: [
+        { id: "text", type: "markdown", text: "回答正文", streaming: false },
+        { id: "tool", type: "tool", callId: "call", name: "read", args: {}, status: "completed" },
+      ],
+    };
+    render(<ConversationTimelineView {...baseProps()} timeline={[turn]} />);
+
+    const activityButton = screen.getByRole("button", { name: "展开本轮全部活动" });
+    const messageActions = screen.getByLabelText("Agent 消息操作");
+    const sharedFooter = activityButton.closest(".agent-turn-footer");
+
+    expect(sharedFooter).not.toBeNull();
+    expect(messageActions.parentElement).toBe(sharedFooter);
+    expect(sharedFooter).toHaveClass("message-actions--separated");
+    expect(messageActions.compareDocumentPosition(activityButton) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy();
+  });
+
+  it("无活动时保留 Agent 操作区原有分割线", () => {
+    render(<ConversationTimelineView {...baseProps()} timeline={[firstTurn]} />);
+
+    expect(screen.getByLabelText("Agent 消息操作"))
+      .toHaveClass("message-actions--separated");
+  });
+
+  it("用户消息保留原始多行文本并提供专用排版钩子", () => {
+    const user: UserEntry = {
+      id: "user-multiline",
+      type: "user",
+      text: "第一行\n  第二行\n第三行",
+      files: [],
+      references: [],
+    };
+    const { container } = render(<ConversationTimelineView
+      {...baseProps()}
+      timeline={[user]}
+    />);
+
+    const paragraph = container.querySelector(".user-message-text");
+    expect(paragraph?.textContent).toBe("第一行\n  第二行\n第三行");
+  });
+});
+
 describe("ConversationTimelineView 历史加载状态", () => {
+  it("为用户行和 Assistant 正文提供稳定 Session entry 锚点", () => {
+    const user: UserEntry = {
+      id: "user-local",
+      type: "user",
+      text: "用户命中",
+      files: [],
+      references: [],
+      piEntryId: "user-25",
+    };
+    const agent: AgentTurn = {
+      id: "agent-local",
+      type: "agent",
+      blocks: [{ id: "agent-text", type: "markdown", text: "Agent 命中", streaming: false, piEntryId: "assistant-25" }],
+    };
+    const { container } = render(
+      <ConversationTimelineView {...baseProps()} timeline={[user, agent]} focusedEntryId="assistant-25" />,
+    );
+
+    expect(container.querySelector('.message-row[data-session-entry-id="user-25"]')).not.toBeNull();
+    expect(container.querySelector('.markdown-content[data-session-entry-id="assistant-25"]'))
+      .toHaveClass("is-session-search-focus");
+  });
+
+  it("聚焦窗口分别展示前后分页状态与返回最新入口", () => {
+    const onRetryNewerHistory = vi.fn();
+    const onReturnLatest = vi.fn();
+    const { rerender } = render(
+      <ConversationTimelineView
+        {...baseProps()}
+        timeline={[firstTurn]}
+        focusedHistory
+        newerHistoryState="loading"
+        onReturnLatest={onReturnLatest}
+      />,
+    );
+
+    expect(screen.getByRole("status", { name: "正在加载较新消息" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "回到最新消息" }));
+    expect(onReturnLatest).toHaveBeenCalledOnce();
+
+    rerender(<ConversationTimelineView
+      {...baseProps()}
+      timeline={[firstTurn]}
+      focusedHistory
+      newerHistoryState="error"
+      onRetryNewerHistory={onRetryNewerHistory}
+      onReturnLatest={onReturnLatest}
+    />);
+    fireEvent.click(screen.getByRole("button", { name: "加载较新消息失败，重试" }));
+    expect(onRetryNewerHistory).toHaveBeenCalledOnce();
+  });
+
   it("消息滚动容器保留纵向滚动并允许页面识别横划", () => {
     const { container } = render(<ConversationTimelineView {...baseProps()} timeline={[firstTurn]} />);
 

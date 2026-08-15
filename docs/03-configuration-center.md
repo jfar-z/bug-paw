@@ -23,7 +23,7 @@
 - `default` Agent 固定使用 `/data/workspace`，兼容已有 Session。
 - 新 Agent 使用 `/data/workspace/agents/<UUID>`，ID 和 cwd 由服务端生成且不可编辑。
 - Profile 包含名称、描述、初始字符或本地图片头像、角色与职责、行事作风、规则、用户设定、默认模型、思考等级和工具权限。
-- 图片头像只接受 PNG、JPEG、WebP 魔数校验后的文件，最大 2 MiB。
+- 图片头像只接受 PNG、JPEG、WebP 魔数校验后的原图，原图最大 20 MiB。浏览器固定进行 1:1 裁剪，服务端统一输出最大 512×512、体积不超过 2 MiB 的静态 WebP；PNG 和 WebP 的透明通道会保留。
 - Agent 归档后不能创建新 Session；永久删除前会展示 Session 数和工作目录大小，工作目录删除进入可恢复垃圾目录流程。
 - 多 Agent Runtime 共享模型目录，但工作目录、Session 目录和稳定系统指令相互隔离。
 - 所有 Agent Runtime 都内置 cwd 相对路径文件交付协议；Agent 用 `<pi_agent_files version="1">` 结构块发送工作目录文件，Web 会展示文件卡片。

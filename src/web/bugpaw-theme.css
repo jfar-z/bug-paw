@@ -5,6 +5,10 @@
   --tabby: #7a5a3a;
   --deep-brown: #2f241b;
   --bugpaw-danger: #df6b6b;
+  --scrollbar-track: transparent;
+  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
+  --shadow-pixel: none;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   color: var(--text-primary);
   background: var(--canvas);
@@ -13,91 +17,94 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --canvas: #171c22;
-  --panel: #202630;
-  --surface: #252d38;
-  --surface-soft: #283444;
-  --surface-hover: #303a47;
-  --text-primary: #f7f6f2;
-  --text-secondary: #b9c0c7;
-  --text-tertiary: #98a4b2;
-  --border: #35404d;
-  --border-strong: #465363;
-  --accent: #7cc26b;
-  --accent-strong: #96d685;
-  --accent-soft: rgba(124, 194, 107, 0.11);
-  --danger: #df7777;
-  --focus: #7cc26b;
-  --primary-bg: #f7f6f2;
-  --primary-text: #283444;
-  --rail: #1b2129;
-  --backdrop: #11161c;
-  --scrollbar-track: transparent;
-  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
-  --shadow-soft: 0 18px 50px rgba(4, 8, 13, 0.24);
-  --shadow-float: 0 22px 70px rgba(4, 8, 13, 0.34);
-  --shadow-pixel: none;
+  --eye: #a4c66d;
+  --canvas: #151517;
+  --panel: #1c1c1f;
+  --surface: #24252a;
+  --surface-soft: #2c2d32;
+  --surface-hover: #34353a;
+  --text-primary: #f4f1ec;
+  --text-secondary: #b7bac2;
+  --text-tertiary: #888d98;
+  --border: #383940;
+  --border-strong: #4a4d56;
+  --accent: #5f6d8a;
+  --accent-strong: #94a4c4;
+  --fg: var(--accent-strong);
+  --accent-soft: rgba(95, 109, 138, 0.18);
+  --ok: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 18%, transparent);
+  --danger: #d77c78;
+  --focus: #a4c66d;
+  --primary-bg: #5f6d8a;
+  --primary-text: #f7f5f1;
+  --rail: #18191b;
+  --backdrop: #0f0f11;
+  --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.28);
+  --shadow-float: 0 22px 70px rgba(0, 0, 0, 0.42);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --canvas: #f7f6f2;
-  --panel: #ffffff;
+  --eye: #587b3e;
+  --canvas: #f3f2ee;
+  --panel: #faf9f6;
   --surface: #ffffff;
-  --surface-soft: #efeee9;
-  --surface-hover: #e8e7e1;
-  --text-primary: #283444;
-  --text-secondary: #5b6b7f;
-  --text-tertiary: #596676;
-  --border: #d8d6cf;
-  --border-strong: #c5c2b9;
-  --accent: #4f7f45;
-  --accent-strong: #3f6937;
-  --accent-soft: rgba(94, 154, 80, 0.1);
-  --danger: #b55353;
-  --focus: #5e9a50;
-  --primary-bg: #283444;
-  --primary-text: #f7f6f2;
-  --rail: #f0efea;
-  --backdrop: #e7e5df;
-  --scrollbar-track: transparent;
-  --scrollbar-thumb: color-mix(in srgb, var(--text-tertiary) 58%, transparent);
-  --scrollbar-thumb-hover: color-mix(in srgb, var(--text-secondary) 72%, transparent);
-  --shadow-soft: 0 18px 50px rgba(40, 52, 68, 0.12);
-  --shadow-float: 0 22px 70px rgba(40, 52, 68, 0.18);
-  --shadow-pixel: none;
+  --surface-soft: #e9e8e3;
+  --surface-hover: #e1e2df;
+  --text-primary: #252b33;
+  --text-secondary: #626b76;
+  --text-tertiary: #64707b;
+  --border: #d6d5cf;
+  --border-strong: #c1c2bf;
+  --accent: #5f7088;
+  --accent-strong: #475970;
+  --fg: var(--accent-strong);
+  --accent-soft: rgba(95, 112, 136, 0.12);
+  --ok: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 16%, transparent);
+  --danger: #b45d5d;
+  --focus: #587b3e;
+  --primary-bg: #43536a;
+  --primary-text: #ffffff;
+  --rail: #ecebe6;
+  --backdrop: #e4e3de;
+  --shadow-soft: 0 14px 36px rgba(50, 57, 66, 0.1);
+  --shadow-float: 0 22px 58px rgba(50, 57, 66, 0.16);
 }
 
 :root[data-theme="bug"] {
   color-scheme: light;
-  --eye: #7fae58;
-  --paw: #efa6aa;
-  --canvas: #ded2bf;
-  --panel: #f1e7d8;
-  --surface: #f1e7d8;
-  --surface-soft: #cdba9f;
-  --surface-hover: #bfa98b;
-  --text-primary: #2f241b;
-  --text-secondary: #594634;
-  --text-tertiary: #735f4c;
-  --border: #a98f70;
-  --border-strong: #7a5a3a;
-  --accent: #5d7f3f;
-  --accent-strong: #496532;
-  --accent-soft: rgba(127, 174, 88, 0.18);
-  --danger: #b74d49;
-  --focus: #6c944b;
-  --primary-bg: #2f241b;
-  --primary-text: #fff9ee;
-  --rail: #2f241b;
-  --backdrop: #b49a7a;
+  --eye: #587b3e;
+  --paw: #bd686d;
+  --canvas: #e9dfd1;
+  --panel: #f5eee4;
+  --surface: #fffaf3;
+  --surface-soft: #ded0bc;
+  --surface-hover: #d4c2aa;
+  --text-primary: #30271f;
+  --text-secondary: #655545;
+  --text-tertiary: #705e4d;
+  --border: #c9b89f;
+  --border-strong: #9f876d;
+  --accent: #6e5948;
+  --accent-strong: #49392d;
+  --fg: var(--accent-strong);
+  --accent-soft: rgba(110, 89, 72, 0.14);
+  --ok: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 16%, transparent);
+  --danger: #bd686d;
+  --focus: #587b3e;
+  --primary-bg: #34281f;
+  --primary-text: #fff8ee;
+  --rail: #34281f;
+  --backdrop: #d9cbb9;
   --scrollbar-track: var(--surface-soft);
-  --scrollbar-thumb: var(--tabby);
-  --scrollbar-thumb-hover: var(--deep-brown);
-  --shadow-soft: 4px 4px 0 #7a5a3a;
-  --shadow-float: 6px 6px 0 #7a5a3a;
-  --shadow-pixel: 4px 4px 0 #7a5a3a;
+  --scrollbar-thumb: #8a715b;
+  --scrollbar-thumb-hover: var(--accent-strong);
+  --shadow-soft: 0 12px 30px rgba(73, 57, 45, 0.13);
+  --shadow-float: 0 20px 52px rgba(73, 57, 45, 0.2);
+  --shadow-pixel: 2px 2px 0 #49392d;
 }
 
 /* 所有可滚动区域共享主题化细滚动条，避免页面出现浏览器默认外观。 */
@@ -237,7 +244,9 @@ textarea:focus-visible {
 .primary-button,
 .configuration-primary-action,
 .send-button,
-.new-chat-button {
+.new-chat-button,
+[data-theme=dark] .mobile-entry-gate__enter,
+[data-theme=dark] .question-composer__submit {
   color: var(--primary-text);
   background: var(--primary-bg);
   border-color: var(--primary-bg);
@@ -399,6 +408,8 @@ textarea:focus-visible {
 }
 
 .composer,
+.question-composer,
+.question-timeline-card,
 .configuration-section,
 .settings-section,
 .knowledge-base-overview,
@@ -423,6 +434,12 @@ textarea:focus-visible {
 
 .message-row.is-assistant .message-content {
   background: transparent;
+}
+
+/* 暗色主题用猫眼绿表达运行与成功，主要交互继续使用灰蓝强调色。 */
+[data-theme=dark] .private-state i {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px var(--halo);
 }
 
 .configuration-overview-page .configuration-page__heading {
@@ -471,10 +488,10 @@ textarea:focus-visible {
   height: 52px;
 }
 
-/* BUG 主题使用更暗奶油色、硬边框和克制的像素按压反馈。 */
+/* BUG 主题以深棕侧栏承载品牌骨架，日常内容保持安静的奶油层级。 */
 :root[data-theme="bug"] .product-mark__image {
-  border: 2px solid var(--deep-brown);
-  border-radius: 4px;
+  border: 2px solid var(--accent-strong);
+  border-radius: 7px;
 }
 
 :root[data-theme="bug"] .workbench-rail,
@@ -482,13 +499,13 @@ textarea:focus-visible {
 :root[data-theme="bug"] .configuration-sidebar,
 :root[data-theme="bug"] .workspace-agent-navigation,
 :root[data-theme="bug"] .knowledge-base-navigation {
-  color: #fff9ee;
-  border-color: var(--deep-brown);
-  background: var(--deep-brown);
+  color: #fff8ee;
+  border-color: var(--accent-strong);
+  background: var(--rail);
 }
 
 :root[data-theme="bug"] .workbench-rail .product-mark__image {
-  border-color: #fff9ee;
+  border-color: #fff8ee;
 }
 
 :root[data-theme="bug"] .workbench-main-nav button,
@@ -497,7 +514,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .configuration-sidebar button,
 :root[data-theme="bug"] .workspace-agent-navigation button,
 :root[data-theme="bug"] .knowledge-base-navigation button {
-  color: #ded2bf;
+  color: #d8cbbb;
 }
 
 :root[data-theme="bug"] .workbench-main-nav button:hover,
@@ -507,8 +524,8 @@ textarea:focus-visible {
 :root[data-theme="bug"] .configuration-sidebar button:hover,
 :root[data-theme="bug"] .workspace-agent-navigation button:hover,
 :root[data-theme="bug"] .knowledge-base-navigation button:hover {
-  color: #fff9ee;
-  background: #594634;
+  color: #fff8ee;
+  background: #514035;
 }
 
 /* 会话操作菜单使用浅色面板，必须覆盖深色侧栏的通用按钮前景。 */
@@ -531,17 +548,17 @@ textarea:focus-visible {
 
 /* 账户信息位于深棕侧栏，使用专用浅色文字保持层级清晰。 */
 :root[data-theme="bug"] .chat-sidebar .account-button strong {
-  color: #fff9ee;
+  color: #fff8ee;
 }
 
 :root[data-theme="bug"] .chat-sidebar .account-button small {
-  color: #ded2bf;
+  color: #d8cbbb;
 }
 
 /* Session 的悬停底色由整行承担，避免操作按钮区域出现颜色断层。 */
 :root[data-theme="bug"] .session-row:hover {
-  color: #fff9ee;
-  background: #594634;
+  color: #fff8ee;
+  background: #514035;
 }
 
 :root[data-theme="bug"] .session-row:hover .session-row__open {
@@ -554,9 +571,9 @@ textarea:focus-visible {
 :root[data-theme="bug"] .configuration-nav > button.is-active,
 :root[data-theme="bug"] .workspace-agent-navigation nav button.is-active,
 :root[data-theme="bug"] .knowledge-base-navigation nav button.is-active {
-  color: #fff9ee;
-  background: #594634;
-  box-shadow: inset 4px 0 0 var(--paw);
+  color: #fff8ee;
+  background: #514035;
+  box-shadow: inset 4px 0 0 var(--eye);
 }
 
 /* 选中会话的标题与操作入口沿用整行前景，避免省略号在深棕底上丢失。 */
@@ -569,10 +586,11 @@ textarea:focus-visible {
 }
 
 :root[data-theme="bug"] .session-row.is-active .session-actions__trigger:hover {
-  color: #fff9ee;
-  background: #7a5a3a;
+  color: #fff8ee;
+  background: #6e5948;
 }
 
+/* BUG 日常容器使用细边框与柔和阴影，避免整页组件都呈现玩具块感。 */
 :root[data-theme="bug"] .theme-segment,
 :root[data-theme="bug"] .bugpaw-auth-visual,
 :root[data-theme="bug"] .form-frame,
@@ -589,9 +607,9 @@ textarea:focus-visible {
 :root[data-theme="bug"] .workspace-resources-page__heading,
 :root[data-theme="bug"] .knowledge-base-workspace__heading,
 :root[data-theme="bug"] .configuration-dialog {
-  border: 2px solid var(--border-strong);
-  border-radius: 6px;
-  box-shadow: var(--shadow-pixel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
 }
 
 :root[data-theme="bug"] .icon-button,
@@ -601,30 +619,34 @@ textarea:focus-visible {
 :root[data-theme="bug"] select,
 :root[data-theme="bug"] .session-row,
 :root[data-theme="bug"] .session-nav > button,
-:root[data-theme="bug"] .configuration-nav > button {
-  border-radius: 4px;
+:root[data-theme="bug"] .configuration-nav > button,
+:root[data-theme="bug"] .danger-button {
+  border-radius: 7px;
 }
 
+:root[data-theme="bug"] .question-composer,
+:root[data-theme="bug"] .question-timeline-card {
+  border-radius: 10px;
+}
+
+/* 像素按压只留给关键动作，形成有节制的品牌签名。 */
 :root[data-theme="bug"] .primary-button,
 :root[data-theme="bug"] .configuration-primary-action,
 :root[data-theme="bug"] .send-button,
+:root[data-theme="bug"] .question-composer__submit,
 :root[data-theme="bug"] .new-chat-button {
-  border: 2px solid var(--deep-brown);
-  border-radius: 4px;
-  box-shadow: 3px 3px 0 var(--tabby);
-}
-
-:root[data-theme="bug"] .danger-button {
-  border: 2px solid var(--deep-brown);
-  border-radius: 4px;
+  border: 2px solid var(--accent-strong);
+  border-radius: 7px;
+  box-shadow: var(--shadow-pixel);
 }
 
 :root[data-theme="bug"] .primary-button:active:not(:disabled),
 :root[data-theme="bug"] .configuration-primary-action:active:not(:disabled),
 :root[data-theme="bug"] .send-button:active:not(:disabled),
+:root[data-theme="bug"] .question-composer__submit:active:not(:disabled),
 :root[data-theme="bug"] .new-chat-button:active:not(:disabled) {
-  box-shadow: 1px 1px 0 var(--tabby);
-  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--accent-strong);
+  transform: translate(1px, 1px);
 }
 
 :root[data-theme="bug"] .configuration-overview-mascot,
@@ -632,36 +654,37 @@ textarea:focus-visible {
   filter: saturate(0.92) contrast(1.04);
 }
 
-/* BUG 主题保留 v0 几何，只替换为 BUG 花色与硬边表达。 */
+/* 登录页保留强品牌画面，表单本身沿用日常组件的柔和边界。 */
 :root[data-theme="bug"] .login-page {
-  border: 2px solid var(--deep-brown);
-  border-radius: 6px;
-  box-shadow: 4px 4px 0 var(--tabby);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-soft);
 }
 
 :root[data-theme="bug"] .login-brand-panel {
-  background: #2f241b;
+  background: var(--rail);
 }
 
 :root[data-theme="bug"] .hero-art {
-  border: 2px solid #fff9ee;
-  border-radius: 6px;
-  box-shadow: 5px 5px 0 #7a5a3a;
+  border: 2px solid #fff8ee;
+  border-radius: 7px;
+  box-shadow: var(--shadow-pixel);
 }
 
-:root[data-theme="bug"] .password-field,
-:root[data-theme="bug"] .login-submit {
-  border: 2px solid var(--deep-brown);
-  border-radius: 4px;
+:root[data-theme="bug"] .password-field {
+  border: 1px solid var(--border);
+  border-radius: 7px;
 }
 
 :root[data-theme="bug"] .login-submit {
-  box-shadow: 3px 3px 0 var(--tabby);
+  border: 2px solid var(--accent-strong);
+  border-radius: 7px;
+  box-shadow: var(--shadow-pixel);
 }
 
 :root[data-theme="bug"] .login-submit:active:not(:disabled) {
-  box-shadow: 1px 1px 0 var(--tabby);
-  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--accent-strong);
+  transform: translate(1px, 1px);
 }
 
 @media (max-width: 760px) {

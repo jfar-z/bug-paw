@@ -13,6 +13,8 @@ import { MermaidDiagram } from "./mermaid-diagram";
 
 interface MarkdownContentProps {
   text: string;
+  sessionEntryId?: string;
+  focused?: boolean;
   streaming?: boolean;
   revealStart?: number;
   revealPhase?: number;
@@ -25,6 +27,8 @@ interface MarkdownContentProps {
  */
 export const MarkdownContent = memo(function MarkdownContent({
   text,
+  sessionEntryId,
+  focused = false,
   streaming = false,
   revealStart,
   revealPhase = 0,
@@ -63,7 +67,10 @@ export const MarkdownContent = memo(function MarkdownContent({
   }), [onLinkActivate, streaming, theme]);
 
   return (
-    <div className={`markdown-content${isRevealing ? " is-text-revealing" : ""}`}>
+    <div
+      className={`markdown-content${isRevealing ? " is-text-revealing" : ""}${focused ? " is-session-search-focus" : ""}`}
+      data-session-entry-id={sessionEntryId}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[

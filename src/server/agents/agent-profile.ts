@@ -1,4 +1,5 @@
 import type { AgentInstructions, AgentProfile, CreateAgentInput, TitleGenerationConfig } from "../../shared/agent-contracts";
+import { normalizeTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import { DEFAULT_AGENT_TOOL_NAMES } from "../../shared/tool-catalog";
 
 /**
@@ -52,6 +53,9 @@ export function normalizeAgentInstructions(value: unknown): AgentInstructions {
 export function createAgentProfile(id: string, cwd: string, input: CreateAgentInput, now: string): AgentProfile {
   const name = input.name.trim();
   const ttsVoice = input.ttsProfileId ? normalizeTtsVoice(input.ttsVoice) : undefined;
+  const ttsCustomParameters = input.ttsProfileId
+    ? normalizeTtsCustomParameters(input.ttsCustomParameters ?? {})
+    : {};
   if (!name) {
     throw new TypeError("Agent 名称不能为空");
   }
@@ -69,6 +73,7 @@ export function createAgentProfile(id: string, cwd: string, input: CreateAgentIn
     ...(input.ttsProfileId ? {
       ttsProfileId: input.ttsProfileId,
       ...(ttsVoice ? { ttsVoice } : {}),
+      ...(Object.keys(ttsCustomParameters).length > 0 ? { ttsCustomParameters } : {}),
       ttsAutoPlay: input.ttsAutoPlay === true,
       ttsStreamPlayback: input.ttsAutoPlay === true && input.ttsStreamPlayback === true,
     } : {}),
@@ -95,7 +100,11 @@ export function assertAgentProfile(value: unknown): asserts value is AgentProfil
     typeof (value as Partial<AgentProfile>).name !== "string" ||
     !isTitleGenerationConfig((value as Partial<AgentProfile>).titleGeneration) ||
     ((value as Partial<AgentProfile>).ttsVoice !== undefined
-      && typeof (value as Partial<AgentProfile>).ttsVoice !== "string")
+      && typeof (value as Partial<AgentProfile>).ttsVoice !== "string") ||
+    ((value as Partial<AgentProfile>).ttsCustomParameters !== undefined
+      && (typeof (value as Partial<AgentProfile>).ttsCustomParameters !== "object"
+        || (value as Partial<AgentProfile>).ttsCustomParameters === null
+        || Array.isArray((value as Partial<AgentProfile>).ttsCustomParameters)))
   ) {
     throw new TypeError("Agent Profile 格式无效");
   }

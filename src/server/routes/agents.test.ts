@@ -3,10 +3,13 @@
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import Fastify from "fastify";
+import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
+import type { AvatarCropArea } from "../../shared/avatar-contracts";
 import { AgentStore } from "../agents/agent-store";
 import { AgentPromptStore } from "../agents/agent-prompt-store";
 import { createDataPaths } from "../paths";
@@ -34,7 +37,6 @@ describe("Agent 配置路由", () => {
       updateProfile: vi.fn(async () => { throw new Error("测试未使用个人资料更新"); }),
     };
     const refreshAgent = vi.fn(async () => undefined);
-    const refreshPromptContext = vi.fn(async () => undefined);
     const removeAgent = vi.fn(async () => undefined);
     const restoreAgent = vi.fn(() => undefined);
     const countSessions = vi.fn(async () => 2);
@@ -42,9 +44,9 @@ describe("Agent 配置路由", () => {
     await app.register(cookie);
     await app.register(multipart);
     const prompts = new AgentPromptStore(paths.agentsDir);
-    const dependencies = { authService, store, prompts, refreshPromptContext, refreshAgent, removeAgent, restoreAgent, countSessions };
+    const dependencies = { authService, store, prompts, refreshAgent, removeAgent, restoreAgent, countSessions };
     registerAgentRoutes(app, dependencies);
-    return { app, paths, store, prompts, stageSessions, commitSessions, refreshAgent, refreshPromptContext, removeAgent, restoreAgent, countSessions };
+    return { app, paths, store, prompts, stageSessions, commitSessions, refreshAgent, removeAgent, restoreAgent, countSessions };
   }
 
   afterEach(async () => {
@@ -111,22 +113,26 @@ describe("Agent 配置路由", () => {
     await app.close();
   });
 
-  it("读取和修改 Agent 的独立提示词文件，并刷新当前会话", async () => {
-    const { app, store, prompts, refreshPromptContext } = await fixture();
+  it("读取和修改 Agent 的独立提示词文件", async () => {
+    const { app, store, prompts } = await fixture();
     const created = await store.create({ name: "提示词 Agent" });
+    const files = ["role", "behavior", "rules", "user", "bootsharp"] as const;
 
-    const initial = await app.inject({ method: "GET", url: `/api/agents/${created.profile.id}/prompts/role` });
-    expect(initial.statusCode).toBe(200);
-    expect(initial.json()).toEqual({ file: "role", content: "" });
+    for (const file of files) {
+      const existing = await prompts.read(created.profile.id, file);
+      const initial = await app.inject({ method: "GET", url: `/api/agents/${created.profile.id}/prompts/${file}` });
+      expect(initial.statusCode).toBe(200);
+      expect(initial.json()).toEqual({ file, content: existing });
 
-    const saved = await app.inject({
-      method: "PUT",
-      url: `/api/agents/${created.profile.id}/prompts/role`,
-      payload: { content: "负责测试" },
-    });
-    expect(saved.statusCode).toBe(200);
-    expect(await prompts.read(created.profile.id, "role")).toBe("负责测试");
-    expect(refreshPromptContext).toHaveBeenCalledWith(created.profile.id);
+      const content = `${file} 的测试内容`;
+      const saved = await app.inject({
+        method: "PUT",
+        url: `/api/agents/${created.profile.id}/prompts/${file}`,
+        payload: { content },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(await prompts.read(created.profile.id, file)).toBe(content);
+    }
     await app.close();
   });
 
@@ -211,23 +217,37 @@ describe("Agent 配置路由", () => {
     await app.close();
   });
 
-  it("保存 Agent 的语音模型、音色覆盖和播放选项", async () => {
+  it("保存并清除 Agent 的语音模型、音色、自定义参数和播放选项", async () => {
     const { app, store } = await fixture();
     const created = await store.create({ name: "语音 Agent" });
     const response = await app.inject({
       method: "PATCH",
       url: `/api/agents/${created.profile.id}`,
-      payload: { revision: created.revision, ttsProfileId: "voice-a", ttsVoice: "Cherry", ttsAutoPlay: true, ttsStreamPlayback: true },
+      payload: {
+        revision: created.revision,
+        ttsProfileId: "voice-a",
+        ttsVoice: "Cherry",
+        ttsCustomParameters: { instructions: "温柔", response_format: "pcm" },
+        ttsAutoPlay: true,
+        ttsStreamPlayback: true,
+      },
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().profile).toMatchObject({ ttsProfileId: "voice-a", ttsVoice: "Cherry", ttsAutoPlay: true, ttsStreamPlayback: true });
+    expect(response.json().profile).toMatchObject({
+      ttsProfileId: "voice-a",
+      ttsVoice: "Cherry",
+      ttsCustomParameters: { instructions: "温柔", response_format: "pcm" },
+      ttsAutoPlay: true,
+      ttsStreamPlayback: true,
+    });
     const cleared = await app.inject({
       method: "PATCH",
       url: `/api/agents/${created.profile.id}`,
       payload: { revision: response.json().revision, ttsProfileId: null },
     });
     expect(cleared.json().profile).not.toHaveProperty("ttsVoice");
+    expect(cleared.json().profile).not.toHaveProperty("ttsCustomParameters");
     await app.close();
   });
 
@@ -237,11 +257,34 @@ describe("Agent 配置路由", () => {
     const response = await app.inject({
       method: "PATCH",
       url: `/api/agents/${created.profile.id}`,
-      payload: { revision: created.revision, ttsVoice: "Cherry" },
+      payload: { revision: created.revision, ttsVoice: "Cherry", ttsCustomParameters: { instructions: "不会生效" } },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().profile).not.toHaveProperty("ttsVoice");
+    expect(response.json().profile).not.toHaveProperty("ttsCustomParameters");
+    await app.close();
+  });
+
+  it("以 VALIDATION_FAILED 拒绝 Agent 自定义参数覆盖 input", async () => {
+    const { app, store } = await fixture();
+    const created = await store.create({ name: "语音 Agent" });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/agents/${created.profile.id}`,
+      payload: {
+        revision: created.revision,
+        ttsProfileId: "voice-a",
+        ttsCustomParameters: { input: "覆盖" },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: "TTS 自定义请求参数不能覆盖 input",
+    });
     await app.close();
   });
 
@@ -309,23 +352,52 @@ describe("Agent 配置路由", () => {
     await app.close();
   });
 
-  it("校验并持久化本地图片头像", async () => {
+  it("裁剪大于 2 MiB 的原图并持久化为受限 WebP", async () => {
     const { app, store } = await fixture();
     const created = await store.create({ name: "图片助手" });
     const boundary = "avatar-test";
-    const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from("image")]);
+    const png = await sharp(randomBytes(1_200 * 1_200 * 4), {
+      raw: { width: 1_200, height: 1_200, channels: 4 },
+    }).png().toBuffer();
+    expect(png.byteLength).toBeGreaterThan(2 * 1024 * 1024);
     const response = await app.inject({
       method: "POST",
       url: `/api/agents/${created.profile.id}/avatar?revision=${created.revision}`,
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
-      payload: avatarMultipart(boundary, png),
+      payload: avatarMultipart(boundary, png, { x: 10, y: 10, width: 80, height: 80 }),
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().profile.avatar).toMatchObject({ kind: "image", mediaType: "image/png" });
+    expect(response.json().profile.avatar).toMatchObject({ kind: "image", mediaType: "image/webp" });
     const image = await app.inject({ method: "GET", url: `/api/agents/${created.profile.id}/avatar` });
     expect(image.statusCode).toBe(200);
-    expect(image.headers["content-type"]).toBe("image/png");
-    expect(image.rawPayload).toEqual(png);
+    expect(image.headers["content-type"]).toBe("image/webp");
+    expect(image.rawPayload.byteLength).toBeLessThanOrEqual(2 * 1024 * 1024);
+    await expect(sharp(image.rawPayload).metadata()).resolves.toMatchObject({ format: "webp", width: 512, height: 512 });
+    await app.close();
+  });
+
+  it("拒绝无效裁剪且不覆盖已有 Agent 头像", async () => {
+    const { app, store } = await fixture();
+    const created = await store.create({ name: "头像保护" });
+    const current = await store.setImageAvatar(created.profile.id, Buffer.from("old"), "image/webp", created.revision);
+    const source = await sharp({ create: { width: 80, height: 80, channels: 3, background: "#6688aa" } })
+      .png()
+      .toBuffer();
+    const boundary = "avatar-invalid-crop-route";
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/agents/${created.profile.id}/avatar?revision=${current.revision}`,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      payload: avatarMultipart(boundary, source, { x: 90, y: 0, width: 20, height: 20 }),
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("INVALID_AVATAR_CROP");
+    await expect(store.readImageAvatar(created.profile.id)).resolves.toEqual({
+      content: Buffer.from("old"),
+      mediaType: "image/webp",
+    });
     await app.close();
   });
 
@@ -380,10 +452,14 @@ describe("Agent 配置路由", () => {
   });
 });
 
-function avatarMultipart(boundary: string, content: Buffer): Buffer {
+function avatarMultipart(boundary: string, content: Buffer, crop: AvatarCropArea): Buffer {
   return Buffer.concat([
     Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="avatar"; filename="avatar.png"\r\nContent-Type: image/png\r\n\r\n`, "utf8"),
     content,
-    Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"),
+    Buffer.from(
+      `\r\n--${boundary}\r\nContent-Disposition: form-data; name="crop"\r\n\r\n`
+      + `${JSON.stringify(crop)}\r\n--${boundary}--\r\n`,
+      "utf8",
+    ),
   ]);
 }

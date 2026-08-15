@@ -1,5 +1,5 @@
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
-import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, WebPiSettings } from "../shared/configuration-contracts";
+import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, ThinkingLevel, WebPiSettings } from "../shared/configuration-contracts";
 import type { ChatRunSummary, ComposerCatalog, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
 import type { AgentReference, AgentReferenceInput } from "../shared/agent-reference-contracts";
 import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateScheduledTaskInput } from "../shared/scheduled-task-contracts";
@@ -14,6 +14,10 @@ import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/
 import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
 import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument } from "../shared/browser-automation-contracts";
+import type { SessionTextSearchPage } from "../shared/session-text-search";
+import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared/session-question-contracts";
+import type { QuestionAnswerSubmissionResult } from "../shared/question-response-protocol";
+import type { AvatarCropArea } from "../shared/avatar-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -51,6 +55,7 @@ export interface ModelSummary {
   provider: string;
   id: string;
   name: string;
+  thinkingLevels?: readonly ThinkingLevel[];
 }
 
 export interface SessionSummary {
@@ -60,6 +65,7 @@ export interface SessionSummary {
   firstMessage: string;
   modified: string;
   messageCount: number;
+  pinned?: boolean;
   scheduledTaskCount?: number;
 }
 
@@ -69,7 +75,9 @@ export interface SessionSnapshot {
   messages: unknown[];
   history: SessionHistoryPage;
   model?: ModelSummary;
+  thinkingLevel?: ThinkingLevel;
   run?: ChatRunSummary;
+  pendingQuestion?: PendingQuestionProjection;
   lastEventId: number;
 }
 
@@ -279,9 +287,10 @@ export const api = {
   getProfile: () => request<UserProfileDocument>("/api/profile"),
   updateProfile: (revision: string, displayName: string) =>
     request<UserProfileDocument>("/api/profile", { method: "PATCH", body: JSON.stringify({ revision, displayName }) }),
-  uploadProfileAvatar: (revision: string, file: File) => {
+  uploadProfileAvatar: (revision: string, file: File, crop: AvatarCropArea) => {
     const form = new FormData();
     form.append("avatar", file, file.name);
+    form.append("crop", JSON.stringify(crop));
     return request<UserProfileDocument>(`/api/profile/avatar?revision=${encodeURIComponent(revision)}`, { method: "POST", body: form });
   },
   listAgents: () => request<{ agents: AgentProfileDocument[] }>("/api/agents"),
@@ -321,9 +330,10 @@ export const api = {
     request<{ trashPath?: string }>(`/api/agents/${encodeURIComponent(agentId)}`, {
       method: "DELETE", body: JSON.stringify({ removeSessions, removeWorkspace }),
     }),
-  uploadAgentAvatar: (agentId: string, revision: string, file: File) => {
+  uploadAgentAvatar: (agentId: string, revision: string, file: File, crop: AvatarCropArea) => {
     const form = new FormData();
     form.append("avatar", file, file.name);
+    form.append("crop", JSON.stringify(crop));
     return request<AgentProfileDocument>(`/api/agents/${encodeURIComponent(agentId)}/avatar?revision=${encodeURIComponent(revision)}`, {
       method: "POST",
       body: form,
@@ -402,6 +412,11 @@ export const api = {
   listSessions: (agentId: string, archived = false) => request<{ sessions: SessionSummary[] }>(
     `/api/sessions?agentId=${encodeURIComponent(agentId)}${archived ? "&archived=true" : ""}`,
   ),
+  searchSessions: (agentId: string, input: { query: string; cursor?: string }, signal?: AbortSignal) =>
+    request<SessionTextSearchPage>(
+      `/api/sessions/search?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(input.query)}${input.cursor ? `&cursor=${encodeURIComponent(input.cursor)}` : ""}`,
+      { signal },
+    ),
   previewSessionBulk: (action: SessionBulkAction, target: SessionBulkTarget) => request<SessionBulkPreview>("/api/sessions/bulk/preview", {
     method: "POST",
     body: JSON.stringify({ action, target }),
@@ -420,10 +435,25 @@ export const api = {
       `/api/sessions/${encodeURIComponent(sessionId)}/history?before=${encodeURIComponent(before)}&branch=${encodeURIComponent(branchToken)}`,
       { signal },
     ),
+  loadSessionHistoryTarget: (sessionId: string, entryId: string, branchToken: string, signal?: AbortSignal) =>
+    request<SessionHistoryResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/history-window?entryId=${encodeURIComponent(entryId)}&branch=${encodeURIComponent(branchToken)}`,
+      { signal },
+    ),
+  loadSessionHistoryAfter: (sessionId: string, after: string, branchToken: string, signal?: AbortSignal) =>
+    request<SessionHistoryResult>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/history?after=${encodeURIComponent(after)}&branch=${encodeURIComponent(branchToken)}`,
+      { signal },
+    ),
   sendMessage: (sessionId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
     request<ChatRunSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
       body: JSON.stringify({ text, filePaths, references }),
+    }),
+  submitQuestionAnswers: (sessionId: string, questionRecordId: string, input: SubmitQuestionAnswers) =>
+    request<QuestionAnswerSubmissionResult>(`/api/sessions/${encodeURIComponent(sessionId)}/questions/${encodeURIComponent(questionRecordId)}/answers`, {
+      method: "POST",
+      body: JSON.stringify(input),
     }),
   sendBranchMessage: (sessionId: string, entryId: string, text: string, filePaths: string[] = [], references: AgentReferenceInput[] = []) =>
     request<{ snapshot: SessionSnapshot; run: ChatRunSummary }>(`/api/sessions/${encodeURIComponent(sessionId)}/branches/${encodeURIComponent(entryId)}/messages`, {
@@ -477,11 +507,20 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ provider, modelId }),
     }),
+  setThinkingLevel: (sessionId: string, thinkingLevel: ThinkingLevel) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/thinking-level`, {
+      method: "PUT",
+      body: JSON.stringify({ thinkingLevel }),
+    }),
   renameSession: (sessionId: string, name: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
+  pinSession: (sessionId: string) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, { method: "PUT" }),
+  unpinSession: (sessionId: string) =>
+    request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, { method: "DELETE" }),
   archiveSession: (sessionId: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" }),
   unarchiveSession: (sessionId: string) =>

@@ -2,9 +2,13 @@ import { lstat, opendir } from "node:fs/promises";
 import { join } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { CreateAgentInput, TitleGenerationConfig, UpdateAgentInput } from "../../shared/agent-contracts";
+import type { TtsCustomParameters } from "../../shared/tts-custom-parameters";
+import { normalizeTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import type { AgentStore } from "../agents/agent-store";
 import { AgentWorkspaceError } from "../agents/agent-workspace";
 import { type AgentPromptFile, AgentPromptStore } from "../agents/agent-prompt-store";
+import { processAvatarImage } from "../avatar/avatar-image-processor";
+import { receiveAvatarUpload } from "../avatar/avatar-upload";
 import { VersionConflictError } from "../configuration/versioned-json-store";
 import { DomainError } from "../core/errors";
 import { SYSTEM_LIMITS } from "../core/limits";
@@ -25,7 +29,6 @@ interface AgentRouteDependencies {
   beginAgentRemoval?: (agentId: string) => Promise<AgentRemovalPermit>;
   countSessions?: (agentId: string) => Promise<number>;
   prompts?: AgentPromptStore;
-  refreshPromptContext?: (agentId: string) => Promise<void>;
   resolveAvailableModel?: (provider: string, modelId: string) => Promise<{
     reasoning: boolean;
     thinkingLevelMap?: Partial<Record<ThinkingLevel, string | null>>;
@@ -109,7 +112,6 @@ export function registerAgentRoutes(app: FastifyInstance, dependencies: AgentRou
       if (!dependencies.prompts) throw new Error("提示词存储尚未就绪");
       return await runAgentMutation(dependencies, request.params.id, async () => {
         await dependencies.prompts!.replace(request.params.id, file, content);
-        await dependencies.refreshPromptContext?.(request.params.id);
         return reply.send({ file, content });
       });
     } catch (error) { return sendAgentError(reply, error); }
@@ -128,24 +130,27 @@ export function registerAgentRoutes(app: FastifyInstance, dependencies: AgentRou
 
   app.post<{ Params: { id: string }; Querystring: { revision?: string } }>("/api/agents/:id/avatar", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
-    if (!request.isMultipart()) return sendApiError(reply, 400, "INVALID_MULTIPART", "请上传图片文件");
     if (typeof request.query.revision !== "string") return sendApiError(reply, 400, "REVISION_REQUIRED", "上传头像必须携带 revision");
     try {
-      const part = await request.file({ limits: { files: 1, fileSize: 2 * 1024 * 1024 } });
-      if (!part) return sendApiError(reply, 400, "AVATAR_REQUIRED", "请选择头像图片");
-      const content = await part.toBuffer();
-      const mediaType = detectImageType(content);
-      if (!mediaType) return sendApiError(reply, 415, "INVALID_AVATAR_TYPE", "仅支持 PNG、JPEG 或 WebP 图片");
-      const updated = await runAgentMutation(
-        dependencies,
-        request.params.id,
-        () => dependencies.store.setImageAvatar(request.params.id, content, mediaType, request.query.revision!),
-      );
+      const upload = await receiveAvatarUpload(request);
+      let updated;
+      try {
+        const processed = await processAvatarImage(upload.sourcePath, upload.crop);
+        updated = await runAgentMutation(
+          dependencies,
+          request.params.id,
+          () => dependencies.store.setImageAvatar(
+            request.params.id,
+            processed.content,
+            processed.mediaType,
+            request.query.revision!,
+          ),
+        );
+      } finally {
+        await upload.cleanup();
+      }
       return reply.send(updated);
     } catch (error) {
-      if (error instanceof app.multipartErrors.RequestFileTooLargeError) {
-        return sendApiError(reply, 413, "AVATAR_TOO_LARGE", "头像不能超过 2 MB");
-      }
       return sendAgentError(reply, error);
     }
   });
@@ -286,13 +291,6 @@ function clampThinkingLevel(
     ?? "off";
 }
 
-function detectImageType(content: Buffer): "image/png" | "image/jpeg" | "image/webp" | undefined {
-  if (content.length >= 8 && content.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return "image/png";
-  if (content.length >= 3 && content[0] === 0xff && content[1] === 0xd8 && content[2] === 0xff) return "image/jpeg";
-  if (content.length >= 12 && content.subarray(0, 4).toString("ascii") === "RIFF" && content.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
-  return undefined;
-}
-
 async function changeArchiveStatus(
   agentId: string,
   archived: boolean,
@@ -353,6 +351,9 @@ function readCreateInput(body: Record<string, unknown>): CreateAgentInput {
     titleGeneration: body.titleGeneration === undefined ? undefined : readTitleGeneration(body.titleGeneration),
     ttsProfileId: typeof body.ttsProfileId === "string" ? body.ttsProfileId : undefined,
     ttsVoice: typeof body.ttsVoice === "string" ? body.ttsVoice : undefined,
+    ttsCustomParameters: body.ttsCustomParameters === undefined
+      ? undefined
+      : readTtsCustomParameters(body.ttsCustomParameters),
     ttsAutoPlay: body.ttsAutoPlay === true,
     ttsStreamPlayback: body.ttsStreamPlayback === true,
     allowedTools: readStringArray(body.allowedTools),
@@ -375,6 +376,8 @@ function readUpdateInput(body: Record<string, unknown>): UpdateAgentInput {
   else if (typeof body.ttsProfileId === "string") input.ttsProfileId = body.ttsProfileId;
   if (body.ttsVoice === null) input.ttsVoice = null;
   else if (typeof body.ttsVoice === "string") input.ttsVoice = body.ttsVoice;
+  if (body.ttsCustomParameters === null) input.ttsCustomParameters = null;
+  else if (body.ttsCustomParameters !== undefined) input.ttsCustomParameters = readTtsCustomParameters(body.ttsCustomParameters);
   if (typeof body.ttsAutoPlay === "boolean") input.ttsAutoPlay = body.ttsAutoPlay;
   if (typeof body.ttsStreamPlayback === "boolean") input.ttsStreamPlayback = body.ttsStreamPlayback;
   if (body.allowedTools !== undefined) input.allowedTools = readStringArray(body.allowedTools);
@@ -459,6 +462,16 @@ function sendAgentError(reply: FastifyReply, error: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 把共享参数校验错误映射为稳定的 Agent API 业务错误。 */
+function readTtsCustomParameters(value: unknown): TtsCustomParameters {
+  try {
+    return normalizeTtsCustomParameters(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "TTS 自定义请求参数无效";
+    throw new DomainError("VALIDATION_FAILED", message);
+  }
 }
 
 /** 将路由参数限制为 Agent 可编辑的五个固定提示词文件。 */

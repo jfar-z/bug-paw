@@ -58,6 +58,10 @@ describe("KnowledgeBasePage", () => {
     renderKnowledgeBasePage();
 
     expect(await screen.findByRole("navigation", { name: "知识库列表" })).toBeInTheDocument();
+    const header = document.querySelector(".knowledge-base-navigation header")!;
+    expect(header).toHaveClass("secondary-sidebar-header");
+    expect([...header.querySelectorAll(".secondary-sidebar-header__eyebrow, .secondary-sidebar-header__title")]
+      .map((element) => element.textContent)).toEqual(["KNOWLEDGE BASES", "知识库"]);
     expect(screen.getByRole("button", { name: "选择知识库 产品资料" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "上传资料" })).toBeInTheDocument();
     expect(screen.getByText("说明.txt")).toBeInTheDocument();

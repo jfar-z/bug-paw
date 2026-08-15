@@ -26,6 +26,7 @@ class FakeRuntime implements PiRuntimeGateway {
   abort = vi.fn(async () => undefined);
   abortAll = vi.fn(async () => this.busy ? 1 : 0);
   setModel = vi.fn(async () => undefined);
+  setThinkingLevel = vi.fn(async () => undefined);
   renameSession = vi.fn(async () => undefined);
   archiveSession = vi.fn(async () => undefined);
   unarchiveSession = vi.fn(async () => undefined);
@@ -36,7 +37,7 @@ class FakeRuntime implements PiRuntimeGateway {
 }
 
 function emptyHistory() {
-  return { branchToken: "branch-test", hasMoreBefore: false, turnCount: 0 };
+  return { branchToken: "branch-test", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 };
 }
 
 describe("RuntimeSupervisor", () => {

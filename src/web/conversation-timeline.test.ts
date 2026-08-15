@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { compileQuestionResponseProtocol } from "../shared/question-response-protocol";
 import {
   formatToolValue,
   parsePiHistory,
@@ -77,6 +78,38 @@ describe("对话时间线", () => {
     expect((entries[0] as AgentTurn).blocks.map((block) => block.type)).toEqual(["thinking", "markdown"]);
   });
 
+  it("把 Assistant 的 Pi entry ID 只投影到首个可见正文块", () => {
+    const timeline = parsePiHistory([{
+      role: "assistant",
+      __piEntryId: "assistant-25",
+      content: [
+        { type: "thinking", thinking: "内部思考" },
+        { type: "text", text: "第一段正文" },
+        { type: "text", text: "第二段正文" },
+      ],
+    }]);
+
+    const turn = timeline[0] as AgentTurn;
+    const markdown = turn.blocks.filter((block) => block.type === "markdown");
+    expect(markdown[0]).toMatchObject({ text: "第一段正文", piEntryId: "assistant-25" });
+    expect(markdown[1]).toMatchObject({ text: "第二段正文" });
+    expect(markdown[1]).not.toHaveProperty("piEntryId");
+  });
+
+  it("兼容字符串格式的历史 Assistant 正文锚点", () => {
+    const timeline = parsePiHistory([{
+      role: "assistant",
+      __piEntryId: "assistant-legacy",
+      content: "旧格式正文",
+    }]);
+
+    expect((timeline[0] as AgentTurn).blocks[0]).toMatchObject({
+      type: "markdown",
+      text: "旧格式正文",
+      piEntryId: "assistant-legacy",
+    });
+  });
+
   it("连续文本增量拼接且重复工具开始事件不会产生重复卡片", () => {
     const entries = reduceEvents([
       { type: "text_delta", delta: "第一段" },
@@ -123,6 +156,21 @@ describe("对话时间线", () => {
     expect(entries[0]).toMatchObject({
       blocks: [{ callId: "call-2", status: "cancelled" }],
     });
+  });
+
+  it("ask_user 开始时移除同回合尚未执行的普通工具占位", () => {
+    const entries = reduceEvents([
+      { type: "tool_started", callId: "running", toolName: "read", args: {} },
+      { type: "tool_preparing", callId: "unused", toolName: "write" },
+      { type: "tool_parameters_streaming", callId: "partial", toolName: "bash", generatedBytes: 12 },
+      { type: "tool_preparing", callId: "ask", toolName: "ask_user" },
+    ]);
+
+    const turn = entries[0] as AgentTurn;
+    expect(turn.blocks).toMatchObject([
+      { callId: "running", status: "running" },
+      { callId: "ask", name: "ask_user", status: "preparing" },
+    ]);
   });
 
   it("连续文本增量保持流式 Markdown 块标识稳定", () => {
@@ -224,6 +272,157 @@ describe("对话时间线", () => {
   it("标记定时任务发出的会话消息", () => {
     const entries = parsePiHistory([{ role: "user", content: "这是定时任务发出的消息\n\n整理日报" }]);
     expect(entries[0]).toMatchObject({ type: "user", source: "scheduled" });
+  });
+
+  it("将权威回答投影为 Agent 状态和独立用户回答条目", () => {
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+    const entries = parsePiHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+      toolName: "ask_user",
+      content: [{ type: "text", text: "等待用户回答" }],
+      details: { type: "question_pending", pendingQuestion: historyPendingQuestion, resolution },
+      },
+      { role: "user", content: "" },
+    ]);
+
+    expect(entries).toHaveLength(2);
+    expect((entries[0] as AgentTurn).blocks[0]).toMatchObject({
+      name: "ask_user",
+      details: { resolution },
+    });
+    expect(entries[1]).toMatchObject({
+      id: `question-response-${resolution.resolutionId}`,
+      type: "question_response",
+      pendingQuestion: historyPendingQuestion,
+      resolution,
+    });
+  });
+
+  it("把实时回答插入提问之后且重复事件不重复创建", () => {
+    const entries = parsePiHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask_user",
+        content: [{ type: "text", text: "等待用户回答" }],
+        details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
+      },
+    ]);
+    const resolution = {
+      resolutionId: "resolution-live",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+
+    const nextTurn: AgentTurn = { id: "agent-next", type: "agent", blocks: [] };
+    const resolved = reduceTimeline([...entries, nextTurn], { type: "question_resolved", resolution });
+    const duplicate = reduceTimeline(resolved, { type: "question_resolved", resolution });
+
+    expect((duplicate[0] as AgentTurn).blocks[0]).toMatchObject({
+      name: "ask_user",
+      details: { resolution },
+    });
+    expect(duplicate.map((entry) => entry.type)).toEqual(["agent", "question_response", "agent"]);
+    expect(duplicate.filter((entry) => entry.type === "question_response")).toHaveLength(1);
+  });
+
+  it("ask_user 续跑正文先到时仍保留用户回答回合边界", () => {
+    let entries = parsePiHistory([
+      { role: "user", content: "第一轮问题" },
+      { role: "assistant", content: [{ type: "text", text: "第一轮回答" }] },
+      { role: "user", content: "第二轮问题" },
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask_user",
+        content: "等待用户回答",
+        details: { type: "question_pending", pendingQuestion: historyPendingQuestion },
+      },
+    ]);
+    const resolution = {
+      resolutionId: "resolution-late",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    };
+
+    entries = reduceTimeline(entries, { type: "generation_started" });
+    entries = reduceTimeline(entries, { type: "generation_started" });
+    entries = reduceTimeline(entries, { type: "text_delta", delta: "续跑回答" });
+    entries = reduceTimeline(entries, { type: "question_resolved", resolution });
+
+    expect(entries.map((entry) => entry.type)).toEqual([
+      "user",
+      "agent",
+      "user",
+      "agent",
+      "question_response",
+      "agent",
+    ]);
+    expect((entries[3] as AgentTurn).blocks).toMatchObject([
+      { type: "tool", name: "ask_user" },
+    ]);
+    expect((entries[5] as AgentTurn).blocks).toMatchObject([
+      { type: "markdown", text: "续跑回答" },
+    ]);
+  });
+
+  it("放弃协议只显示协议后的普通正文，损坏协议保留原文", () => {
+    const discarded = compileQuestionResponseProtocol({
+      resolutionId: "resolution-2",
+      questionRecordId: "question-1",
+      status: "discarded",
+      discardReason: "new_message",
+      answers: [],
+      unansweredQuestionIds: ["q-1"],
+    }, historyPendingQuestion.questions);
+    const entries = parsePiHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      { role: "toolResult", toolCallId: "ask-1", toolName: "ask_user", content: "等待", details: { type: "question_pending", pendingQuestion: historyPendingQuestion } },
+      { role: "user", content: `${discarded}\n\n改为直接处理` },
+      { role: "user", content: '<bug_paw_question_response version="1">\n{broken}\n</bug_paw_question_response>' },
+    ]);
+
+    expect(entries.map((entry) => entry.type)).toEqual([
+      "agent",
+      "question_response",
+      "user",
+      "user",
+    ]);
+    expect(entries[1]).toMatchObject({
+      type: "question_response",
+      resolution: { status: "discarded" },
+    });
+    expect(entries.filter((entry) => entry.type === "user")).toMatchObject([
+      { text: "改为直接处理" },
+      { text: '<bug_paw_question_response version="1">\n{broken}\n</bug_paw_question_response>' },
+    ]);
+  });
+
+  it("找不到对应提问时隐藏内部协议且不创建无标签回答", () => {
+    const protocol = compileQuestionResponseProtocol({
+      resolutionId: "resolution-orphan",
+      questionRecordId: "question-missing",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: [],
+    }, historyPendingQuestion.questions);
+
+    expect(parsePiHistory([{ role: "user", content: protocol }])).toEqual([]);
   });
 
   it("保留找不到调用记录的孤立工具结果", () => {
@@ -359,3 +558,20 @@ describe("对话时间线", () => {
     ]);
   });
 });
+
+const historyPendingQuestion = {
+  id: "question-1",
+  version: 1,
+  toolCallId: "ask-1",
+  createdAt: "2026-08-13T08:00:00.000Z",
+  questions: [{
+    id: "q-1",
+    header: "范围",
+    question: "处理范围？",
+    multiSelect: false,
+    options: [
+      { id: "o-1", label: "全部", description: "处理全部" },
+      { id: "o-2", label: "部分", description: "处理部分" },
+    ],
+  }],
+};

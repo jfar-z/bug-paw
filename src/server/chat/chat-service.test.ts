@@ -202,6 +202,46 @@ describe("ChatApplicationService", () => {
     await expect(service.navigateHistory("s1", "assistant-branch-leaf")).resolves.toBe(snapshot);
     expect(runtime.navigateTree).toHaveBeenCalledWith("s1", "assistant-branch-leaf");
   });
+
+  it("普通发送和答案提交都经过问题状态服务", async () => {
+    const runtime = fakeRuntime();
+    const resolution = {
+      resolutionId: "resolution-1",
+      questionRecordId: "record-1",
+      status: "submitted" as const,
+      answers: [],
+      unansweredQuestionIds: ["question-1"],
+    };
+    const questions = {
+      startUserMessage: vi.fn(async (input, startPrompt) => startPrompt(input.sessionId, input.prompt, input.userText)),
+      submitAnswers: vi.fn(async (_input, startPrompt) => ({
+        run: await startPrompt("s1", "内部答案协议", ""),
+        resolution,
+      })),
+    };
+    const service = new ChatApplicationService({
+      runtimeSupervisor: { acquire: async () => ({ runtime, generation: 1, retired: neverRetired(), release: vi.fn() }) } as never,
+      sessionAgent: async () => "a1",
+      questions: questions as never,
+    });
+
+    await service.startTurn("s1", { text: "普通消息" });
+    const result = await service.submitQuestionAnswers("s1", "record-1", { version: 1, answers: [] });
+
+    expect(questions.startUserMessage).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "a1",
+      sessionId: "s1",
+      prompt: "普通消息",
+      userText: "普通消息",
+    }), expect.any(Function));
+    expect(questions.submitAnswers).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "a1",
+      sessionId: "s1",
+      questionRecordId: "record-1",
+      input: { version: 1, answers: [] },
+    }), expect.any(Function));
+    expect(result).toMatchObject({ run: { runId: "r1" }, resolution });
+  });
 });
 
 function fakeRuntime(): PiRuntimeGateway {
@@ -211,7 +251,8 @@ function fakeRuntime(): PiRuntimeGateway {
     openSession: async (id) => ({ id, messages: [], history: emptyHistory(), lastEventId: 0 }),
     startPrompt: vi.fn(async (sessionId: string) => ({ runId: "r1", sessionId, status: "running" as const, startedAt: "2026-08-07T00:00:00.000Z" })),
     prompt: async () => undefined, abort: vi.fn(async () => undefined), abortAll: async () => 0,
-    setModel: async () => undefined, renameSession: async () => undefined, archiveSession: async () => undefined,
+    setModel: async () => undefined, setThinkingLevel: async () => undefined,
+    renameSession: async () => undefined, archiveSession: async () => undefined,
     unarchiveSession: async () => undefined, deleteSession: async () => undefined,
     discardUnassignedSession: async () => undefined,
     subscribe(sessionId, _after, listener) {
@@ -223,7 +264,7 @@ function fakeRuntime(): PiRuntimeGateway {
 }
 
 function emptyHistory() {
-  return { branchToken: "branch-test", hasMoreBefore: false, turnCount: 0 };
+  return { branchToken: "branch-test", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 };
 }
 
 function neverRetired(): Promise<void> {

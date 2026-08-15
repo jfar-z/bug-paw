@@ -33,6 +33,15 @@ function MermaidWithUnrelatedDraft() {
 }
 
 describe("MarkdownContent", () => {
+  it("把 Session entry ID 放在现有 Markdown 根节点上", () => {
+    const { container } = render(<MarkdownContent text="命中正文" sessionEntryId="assistant-25" focused />);
+
+    const markdownRoot = container.firstElementChild;
+    expect(markdownRoot).toHaveClass("markdown-content", "is-session-search-focus");
+    expect(markdownRoot).toHaveAttribute("data-session-entry-id", "assistant-25");
+    expect(markdownRoot?.children).toHaveLength(1);
+  });
+
   it("允许宿主拦截相对工作目录链接", () => {
     const onLinkActivate = vi.fn(() => true);
     render(<MarkdownContent text="[查看文件](docs/readme.md)" onLinkActivate={onLinkActivate} />);

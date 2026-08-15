@@ -17,6 +17,7 @@ import { MessageSpeechButton } from "./message-speech-button";
 import { MessageCopyButton } from "./message-copy-button";
 import { copyTextForEntry } from "../message-copy";
 import { AgentTurnContent } from "./agent-turn-content";
+import { QuestionResponseMessage } from "./question-response-message";
 import type { SessionHistoryLoadState } from "../../../use-session-history";
 
 const SESSION_LOADING_NOTICE_EXIT_DELAY = 160;
@@ -38,7 +39,13 @@ interface ConversationTimelineViewProps {
   contentRef: RefObject<HTMLDivElement | null>;
   historyState?: SessionHistoryLoadState;
   historySentinelRef?: RefCallback<HTMLDivElement>;
+  newerHistoryState?: SessionHistoryLoadState;
+  newerHistorySentinelRef?: RefCallback<HTMLDivElement>;
+  focusedHistory?: boolean;
+  focusedEntryId?: string;
   onRetryHistory?(): void;
+  onRetryNewerHistory?(): void;
+  onReturnLatest?(): void;
   onResolved(summary: WorkspaceFileSummary): void;
   onPreview(summary: WorkspaceFileSummary): void;
   onWorkspaceLink?(href: string): boolean;
@@ -74,7 +81,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
 
   return <>
     <MessageNavigator items={props.navigationItems} scrollContainerRef={props.scrollRef} />
-    <div className="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable", touchAction: "pan-y" }}>
+    <div className="message-scroll" data-testid="message-scroll" ref={props.scrollRef} style={{ scrollbarGutter: "stable", touchAction: "pan-y" }}>
       <div className="message-column message-column--compact-end" ref={props.contentRef}>
         {props.timeline.length > 0 ? <div ref={props.historySentinelRef} className="session-history-sentinel" aria-live="polite">
           {props.historyState === "loading" ? <span role="status">正在加载更早消息…</span> : null}
@@ -87,7 +94,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
           {props.noAvailableAgent ? <><p>请先在 Agent 管理中创建 Agent，再开始对话。</p><button type="button" className="configuration-primary-action session-intro__create-agent" onClick={props.onCreateAgent}>创建 Agent</button></> : <p>{props.activeAgent?.profile.description?.trim() || `准备好后，向 ${props.activeAgent?.profile.name ?? "你的 Agent"} 发出第一条消息，开始推进你的工作。`}</p>}
         </div>}
         {props.timeline.map((entry) => entry.type === "user" ? (
-          <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}${props.editingEntryId && entry.piEntryId === props.editingEntryId ? " is-editing-source" : ""}`} id={userMessageDomId(entry.id)} key={entry.id}>
+          <article className={`message-row is-user${entry.source === "scheduled" ? " is-scheduled" : ""}${props.editingEntryId && entry.piEntryId === props.editingEntryId ? " is-editing-source" : ""}${props.focusedEntryId && entry.piEntryId === props.focusedEntryId ? " is-session-search-focus" : ""}`} data-session-entry-id={entry.piEntryId} id={userMessageDomId(entry.id)} key={entry.id}>
             <div className="message-meta">
               <strong>{entry.source === "scheduled" ? "定时任务" : props.profileIdentity.displayName}</strong>
               {entry.source === "scheduled" ? <span className="message-avatar is-scheduled-avatar" aria-label="定时任务消息"><Clock3 size={15} aria-hidden="true" /></span> : <UserAvatar identity={props.profileIdentity} className="message-avatar is-user-avatar" />}
@@ -95,7 +102,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
             <div className="user-message-body">
               {props.editingEntryId && entry.piEntryId === props.editingEntryId ? <span className="user-message-editing-label">编辑中</span> : null}
               <div className="message-content">
-                {entry.text && <p>{entry.text}</p>}
+                {entry.text && <p className="user-message-text">{entry.text}</p>}
                 <AgentReferenceChips references={entry.references} />
                 {entry.files.length > 0 && props.activeAgentId && <MessageAttachments files={entry.files} agentId={props.activeAgentId} onResolved={props.onResolved} onPreview={props.onPreview} />}
               </div>
@@ -106,6 +113,12 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               </div> : null}
             </div>
           </article>
+        ) : entry.type === "question_response" ? (
+          <QuestionResponseMessage
+            key={entry.id}
+            entry={entry}
+            profileIdentity={props.profileIdentity}
+          />
         ) : (
           <article className="message-row is-assistant" key={entry.id}>
             <div className="message-meta">
@@ -122,21 +135,28 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
                 onResolved={props.onResolved}
                 onPreview={props.onPreview}
                 onLinkActivate={props.onWorkspaceLink}
+                focusedEntryId={props.focusedEntryId}
+                actions={(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
+                  <div className={`message-actions message-actions--speech${agentTurnHasActivity(entry) ? "" : " message-actions--separated"}`} aria-label="Agent 消息操作">
+                    {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
+                    {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
+                    {props.speechEnabled && agentTurnSpeechText(entry) ? <MessageSpeechButton
+                      active={props.activeSpeechMessageId === entry.id}
+                      disabled={speechButtonDisabled(entry, props.streaming, props.activeAgentEntryId)}
+                      onToggle={() => props.onToggleSpeech(entry)}
+                    /> : null}
+                  </div>
+                ) : undefined}
               />
-              {(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (
-                <div className="message-actions message-actions--speech message-actions--separated" aria-label="Agent 消息操作">
-                  {entry.sourceUserEntryId ? <button type="button" aria-label="重新生成回答" title="重新生成回答" disabled={props.streaming || props.opening} onClick={() => props.onRegenerate?.(entry.sourceUserEntryId!)}><RefreshCcw size={16} aria-hidden="true" /></button> : null}
-                  {copyTextForEntry(entry) ? <MessageCopyButton text={copyTextForEntry(entry)} /> : null}
-                  {props.speechEnabled && agentTurnSpeechText(entry) ? <MessageSpeechButton
-                    active={props.activeSpeechMessageId === entry.id}
-                    disabled={speechButtonDisabled(entry, props.streaming, props.activeAgentEntryId)}
-                    onToggle={() => props.onToggleSpeech(entry)}
-                  /> : null}
-                </div>
-              ) : null}
             </div>
           </article>
         ))}
+        {props.focusedHistory ? <div ref={props.newerHistorySentinelRef} className="session-history-sentinel session-history-sentinel--newer" aria-live="polite">
+          {props.newerHistoryState === "loading" ? <span role="status" aria-label="正在加载较新消息">正在加载较新消息…</span> : null}
+          {props.newerHistoryState === "error" ? <button type="button" onClick={props.onRetryNewerHistory}>加载较新消息失败，重试</button> : null}
+          {props.newerHistoryState === "complete" ? <span>已到达最新消息</span> : null}
+          <button type="button" className="session-history-return-latest" onClick={props.onReturnLatest}>回到最新消息</button>
+        </div> : null}
       </div>
       {loadingNoticeVisible ? <div className={`session-loading-notice${loadingNoticeLeaving ? " is-leaving" : ""}`} role="status" aria-label="正在加载会话"><span aria-hidden="true" />正在加载会话…</div> : null}
     </div>
@@ -145,6 +165,11 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
 
 function userMessageDomId(entryId: string): string {
   return `live-user-message-${entryId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+/** 判断 Agent 本轮是否包含需要整体展开控制的思考或工具活动。 */
+function agentTurnHasActivity(turn: AgentTurn): boolean {
+  return turn.blocks.some((block) => block.type === "thinking" || block.type === "tool");
 }
 
 /** 流式正文尚未形成稳定语音片段时暂不允许手动朗读。 */

@@ -38,9 +38,9 @@ describe("resolveTheme", () => {
   });
 
   it.each([
-    ["dark", "#171c22"],
-    ["light", "#f7f6f2"],
-    ["bug", "#ded2bf"],
+    ["dark", "#151517"],
+    ["light", "#f3f2ee"],
+    ["bug", "#e9dfd1"],
   ] as const)("为 %s 主题同步浏览器颜色", (preference, expectedColor) => {
     document.head.innerHTML = '<meta name="theme-color" content="#000000">';
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false })));

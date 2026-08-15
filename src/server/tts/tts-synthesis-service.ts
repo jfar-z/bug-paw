@@ -1,10 +1,18 @@
 import { Readable } from "node:stream";
 
 import type { TtsResponseFormat } from "../../shared/tts-contracts";
+import type { TtsCustomParameters } from "../../shared/tts-custom-parameters";
+import { isTtsResponseFormat } from "../../shared/tts-custom-parameters";
 import { TtsConfigService } from "./tts-config-service";
 
 const MAX_TTS_INPUT_LENGTH = 20_000;
 const MAX_TTS_RESPONSE_BYTES = 20 * 1024 * 1024;
+
+/** Agent 在模型级 TTS 请求参数之上提供的个性化覆盖。 */
+export interface TtsAgentOverrides {
+  voice?: string;
+  customParameters?: TtsCustomParameters;
+}
 
 /** 通过服务端保存的配置请求 OpenAI 兼容语音合成服务。 */
 export class TtsSynthesisService {
@@ -18,12 +26,30 @@ export class TtsSynthesisService {
   ) {}
 
   /** 合成一段文本，并返回可立即转发给浏览器的音频流。 */
-  async synthesize(profileId: string, input: string, signal: AbortSignal, voiceOverride?: string): Promise<{ content: Readable; mediaType: string }> {
+  async synthesize(profileId: string, input: string, signal: AbortSignal, overrides?: TtsAgentOverrides): Promise<{ content: Readable; mediaType: string }> {
     const text = input.trim();
     if (!text || text.length > MAX_TTS_INPUT_LENGTH) throw new TypeError("语音文本长度无效");
     const profile = await this.configs.getPrivate(profileId);
     if (!profile) throw new Error("未找到所选语音配置");
     try {
+      const baseRequestBody = {
+        model: profile.model,
+        voice: profile.voice,
+        input: text,
+        response_format: profile.responseFormat,
+      };
+      const requestBody = {
+        ...baseRequestBody,
+        ...profile.customParameters,
+        ...overrides?.customParameters,
+        ...(overrides?.voice?.trim() ? { voice: overrides.voice.trim() } : {}),
+        // 实际朗读文本始终来自当前请求，配置层不能替换。
+        input: text,
+      };
+      if (!isTtsResponseFormat(requestBody.response_format)) {
+        throw new TypeError("TTS 最终 response_format 无效");
+      }
+      const effectiveFormat = requestBody.response_format;
       const response = await this.request(`${profile.baseUrl}/audio/speech`, {
         method: "POST",
         signal,
@@ -31,12 +57,7 @@ export class TtsSynthesisService {
           "Content-Type": "application/json",
           Authorization: `Bearer ${profile.apiKey}`,
         },
-        body: JSON.stringify({
-          model: profile.model,
-          voice: voiceOverride?.trim() || profile.voice,
-          input: text,
-          response_format: profile.responseFormat,
-        }),
+        body: JSON.stringify(requestBody),
       });
       if (!response.ok) throw new Error("上游服务返回失败状态");
       if (!response.body) throw new Error("上游音频响应为空");
@@ -49,7 +70,7 @@ export class TtsSynthesisService {
       }
       return {
         content: await createLimitedAudioStream(response.body),
-        mediaType: readAudioMediaType(response.headers.get("content-type"), profile.responseFormat),
+        mediaType: readAudioMediaType(response.headers.get("content-type"), effectiveFormat),
       };
     } catch (error) {
       if (signal.aborted) throw error;

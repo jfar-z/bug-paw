@@ -1,16 +1,38 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../styles.css";
 import { ApiTaskProvider } from "../api-task-provider";
 import { ErrorToastProvider } from "../error-toast-provider";
+import { compileQuestionResponseProtocol } from "../../shared/question-response-protocol";
 import { LiveChatPage } from "./live-chat-page";
+
+vi.mock("../components/avatar/avatar-crop-dialog", () => ({
+  AvatarCropDialog: (props: {
+    onCancel(): void;
+    onConfirm(crop: { x: number; y: number; width: number; height: number }): void;
+  }) => (
+    <section role="dialog" aria-label="调整头像">
+      <button type="button" onClick={props.onCancel}>取消裁剪</button>
+      <button type="button" onClick={() => props.onConfirm({ x: 10, y: 10, width: 80, height: 80 })}>裁剪并上传</button>
+    </section>
+  ),
+}));
 
 type EventListener = (event: MessageEvent) => void;
 const operationLog: string[] = [];
 let regenerateResponse: Promise<Response> | undefined;
 let historyResponse: Response | undefined;
+let historyWindowResponse: Response | undefined;
+let sessionOneSnapshot: Record<string, unknown> | undefined;
+let questionAnswerResponse: Promise<Response> | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
+}
 
 class HistoryObserverDouble {
   constructor(callback: IntersectionObserverCallback) {
@@ -57,19 +79,36 @@ class FakeEventSource {
     const suppliedId = typeof original.id === "number" ? original.id : undefined;
     const id = suppliedId ?? this.nextEventId;
     this.nextEventId = Math.max(this.nextEventId, id + 1);
-    const isRunScopedEvent = type !== "snapshot" && type !== "session_renamed";
+    const isRunScopedEvent = !["snapshot", "session_renamed", "question_pending", "question_resolved"].includes(type);
     const normalized = {
       id,
       type,
       sessionId,
       ...(isRunScopedEvent ? { runId: "run-1" } : {}),
-      ...(type === "snapshot" ? { history: { branchToken: "branch-a", hasMoreBefore: false, turnCount: 1 } } : {}),
+      ...(type === "snapshot" ? { history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 } } : {}),
       ...original,
       ...(type === "snapshot" && original.lastEventId === undefined ? { lastEventId: id } : {}),
     };
     const event = { data: JSON.stringify(normalized) } as MessageEvent;
     this.listeners.get(type)?.forEach((listener) => listener(event));
   }
+}
+
+/** 记录跨标签页会话列表广播，验证失败请求不会误通知其他页面。 */
+class RecordingBroadcastChannel {
+  static instances: RecordingBroadcastChannel[] = [];
+  readonly messages: unknown[] = [];
+  onmessage: ((event: MessageEvent) => void) | null = null;
+
+  constructor(readonly name: string) {
+    RecordingBroadcastChannel.instances.push(this);
+  }
+
+  postMessage(message: unknown): void {
+    this.messages.push(message);
+  }
+
+  close(): void {}
 }
 
 /** 页面级音频桩保留播放状态，便于验证按钮和导航触发的停止行为。 */
@@ -107,6 +146,32 @@ const props = {
   agentIdentity: { displayName: "默认 Agent", avatarText: "π" },
 };
 
+const pendingQuestion = {
+  id: "question-1",
+  version: 1,
+  toolCallId: "ask-1",
+  createdAt: "2026-08-13T08:00:00.000Z",
+  questions: [{
+    id: "q-1",
+    header: "范围",
+    question: "需要处理哪些内容？",
+    multiSelect: false,
+    options: [
+      { id: "o-1", label: "全部", description: "处理全部内容" },
+      { id: "o-2", label: "部分", description: "只处理一部分" },
+    ],
+  }, {
+    id: "q-2",
+    header: "格式",
+    question: "需要哪种格式？",
+    multiSelect: true,
+    options: [
+      { id: "o-3", label: "Markdown", description: "生成 Markdown" },
+      { id: "o-4", label: "HTML", description: "生成 HTML" },
+    ],
+  }],
+};
+
 /** 使用生产环境一致的异步任务和错误提示上下文渲染聊天页面。 */
 function renderLiveChatPage(element: ReactElement) {
   return render(
@@ -137,13 +202,19 @@ function mediaQueryResult(matches: boolean): MediaQueryList {
 
 beforeEach(() => {
   FakeEventSource.instances = [];
+  RecordingBroadcastChannel.instances = [];
   PageFakeAudio.instances = [];
   operationLog.length = 0;
   regenerateResponse = undefined;
   historyResponse = undefined;
+  historyWindowResponse = undefined;
+  sessionOneSnapshot = undefined;
+  questionAnswerResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
+  window.localStorage.clear();
   vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("BroadcastChannel", RecordingBroadcastChannel);
   vi.stubGlobal("IntersectionObserver", HistoryObserverDouble);
   vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(false)));
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -164,8 +235,26 @@ beforeEach(() => {
     if (url === "/api/v1/sessions?agentId=default&archived=true") {
       return new Response(JSON.stringify({ sessions: [{ id: "archived-1", name: "旧会话", firstMessage: "旧问题", modified: "", messageCount: 2 }] }));
     }
+    if (url.startsWith("/api/v1/sessions/search?agentId=default&query=")) {
+      return new Response(JSON.stringify({
+        hits: [{
+          sessionId: "session-2",
+          sessionFirstMessage: "第二会话",
+          archived: false,
+          entryId: "assistant-25",
+          role: "assistant",
+          timestamp: "2026-08-13T01:00:00.000Z",
+          snippet: "包含 needle 的回答",
+          matchRanges: [{ start: 3, end: 9 }],
+        }],
+        hasMore: false,
+      }));
+    }
     if (url === "/api/v1/models") {
-      return new Response(JSON.stringify({ models: [{ provider: "openai", id: "gpt-5", name: "GPT-5" }] }));
+      return new Response(JSON.stringify({ models: [{
+        provider: "openai", id: "gpt-5", name: "GPT-5",
+        thinkingLevels: ["off", "minimal", "low", "medium", "high"],
+      }] }));
     }
     if (url.includes("/workspace/entries")) {
       return new Response(JSON.stringify({ entries: [] }));
@@ -195,15 +284,37 @@ beforeEach(() => {
       return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
-      return new Response(JSON.stringify({ id: "session-1", messages: [], lastEventId: 0 }));
+      return new Response(JSON.stringify(sessionOneSnapshot ?? { id: "session-1", messages: [], thinkingLevel: "medium", lastEventId: 0 }));
+    }
+    if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
+      return new Response(null, { status: 204 });
     }
     if (url === "/api/v1/sessions/session-2") {
       return new Response(JSON.stringify({
         id: "session-2",
         agentId: "default",
         messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
-        history: { branchToken: "branch-session-2", hasMoreBefore: false, turnCount: 1 },
+        history: { branchToken: "branch-session-2", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
+        thinkingLevel: "high",
         lastEventId: 1,
+      }));
+    }
+    if (url === "/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2") {
+      return historyWindowResponse ?? new Response(JSON.stringify({
+        sessionId: "session-2",
+        targetEntryId: "assistant-25",
+        messages: [
+          { role: "user", content: "窗口问题", __piEntryId: "user-25" },
+          { role: "assistant", content: [{ type: "text", text: "包含 needle 的回答" }], __piEntryId: "assistant-25" },
+        ],
+        history: {
+          startEntryId: "user-25",
+          endEntryId: "assistant-25",
+          branchToken: "branch-session-2",
+          hasMoreBefore: true,
+          hasMoreAfter: true,
+          turnCount: 1,
+        },
       }));
     }
     if (url === "/api/v1/sessions/archived-1") {
@@ -216,7 +327,7 @@ beforeEach(() => {
       return new Response(JSON.stringify({
         id: "session-1",
         messages: [{ role: "user", content: "上一版本", __piEntryId: "user-old" }],
-        history: { branchToken: "branch-b", hasMoreBefore: false, turnCount: 1 },
+        history: { branchToken: "branch-b", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
         lastEventId: 2,
       }));
     }
@@ -225,7 +336,7 @@ beforeEach(() => {
         snapshot: {
           id: "session-1",
           messages: [],
-          history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+          history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
           lastEventId: 3,
         },
         run: {
@@ -254,6 +365,23 @@ beforeEach(() => {
           sessionId: "session-1",
           status: "running",
           startedAt: "2026-08-05T08:00:00.000Z",
+        },
+      }));
+    }
+    if (url === "/api/v1/sessions/session-1/questions/question-1/answers" && init?.method === "POST") {
+      return questionAnswerResponse ?? new Response(JSON.stringify({
+        run: {
+          runId: "run-question-answer",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-13T08:10:00.000Z",
+        },
+        resolution: {
+          resolutionId: "resolution-live",
+          questionRecordId: "question-1",
+          status: "submitted",
+          answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+          unansweredQuestionIds: ["q-2"],
         },
       }));
     }
@@ -291,6 +419,103 @@ beforeEach(() => {
 });
 
 describe("LiveChatPage 时间线", () => {
+  it("从搜索结果打开目标窗口并只滚动消息容器到精确 entry", async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function getRect(this: HTMLElement) {
+      const top = this.classList.contains("message-scroll")
+        ? 100
+        : this.dataset.sessionEntryId === "assistant-25" ? 420 : 0;
+      return { top, bottom: top + 40, left: 0, right: 640, width: 640, height: 40, x: 0, y: top, toJSON: () => ({}) } as DOMRect;
+    });
+    try {
+      renderLiveChatPage(<LiveChatPage {...props} />);
+      await screen.findByRole("button", { name: "测试" });
+      fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+      const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+      fireEvent.change(searchbox, { target: { value: "needle" } });
+      fireEvent.keyDown(searchbox, { key: "Enter" });
+
+      const result = await screen.findByRole("option", { name: /第二会话/ });
+      const container = screen.getByTestId("message-scroll");
+      Object.defineProperty(container, "scrollTop", { configurable: true, value: 0, writable: true });
+      fireEvent.click(result);
+
+      await waitFor(() => expect(container.querySelector('[data-session-entry-id="assistant-25"]')).not.toBeNull());
+      expect(container.scrollTop).toBe(296);
+      expect(document.scrollingElement?.scrollTop ?? 0).toBe(0);
+      expect(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2"))
+        .toBeLessThan(operationLog.indexOf("fetch:GET:/api/v1/sessions/session-2/history-window?entryId=assistant-25&branch=branch-session-2"));
+      expect(screen.getByRole("button", { name: "思考深度：高" })).toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: "搜索聊天记录" })).not.toBeInTheDocument();
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("聚焦历史时隔离 SSE 正文增量，并可返回最新窗口", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+    fireEvent.change(searchbox, { target: { value: "needle" } });
+    fireEvent.keyDown(searchbox, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /第二会话/ }));
+    await screen.findByText("包含 needle 的回答");
+    await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).toContain("/sessions/session-2/events"));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("run_started", {
+      type: "run_started",
+      run: { runId: "run-focus", sessionId: "session-2", status: "running", startedAt: "2026-08-13T01:01:00.000Z" },
+    }));
+    act(() => FakeEventSource.instances.at(-1)!.emit("text_delta", { type: "text_delta", delta: "不应拼接的最新正文" }));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+
+    expect(screen.getByLabelText("Agent 正在处理")).toBeInTheDocument();
+    expect(screen.queryByText(/不应拼接的最新正文/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "回到最新消息" }));
+    await waitFor(() => expect(screen.queryByText("包含 needle 的回答")).not.toBeInTheDocument());
+    expect(operationLog.filter((item) => item === "fetch:GET:/api/v1/sessions/session-2")).toHaveLength(2);
+  });
+
+  it("从聚焦历史发送消息前先恢复最新窗口", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+    fireEvent.change(searchbox, { target: { value: "needle" } });
+    fireEvent.keyDown(searchbox, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /第二会话/ }));
+    await screen.findByText("包含 needle 的回答");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "从历史继续提问" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-2/messages"));
+    expect(operationLog.filter((item) => item === "fetch:GET:/api/v1/sessions/session-2")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "回到最新消息" })).not.toBeInTheDocument();
+    expect(screen.getAllByText("从历史继续提问")).toHaveLength(2);
+  });
+
+  it("搜索命中已删除时保留弹层和当前消息且不误定位", async () => {
+    historyWindowResponse = new Response(JSON.stringify({
+      code: "SESSION_ENTRY_NOT_FOUND",
+      message: "目标会话记录不存在",
+    }), { status: 404, headers: { "Content-Type": "application/json" } });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    fireEvent.click(screen.getByRole("button", { name: "搜索聊天记录" }));
+    const searchbox = await screen.findByRole("searchbox", { name: "搜索聊天记录" });
+    fireEvent.change(searchbox, { target: { value: "needle" } });
+    fireEvent.keyDown(searchbox, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: /第二会话/ }));
+
+    expect((await screen.findByText("记录已变化，请重新搜索")).closest('[role="alert"]')).not.toBeNull();
+    expect(screen.getByRole("dialog", { name: "搜索聊天记录" })).toBeInTheDocument();
+    expect(screen.getByTestId("message-scroll").querySelector('[data-session-entry-id="assistant-25"]')).toBeNull();
+    expect(screen.getByRole("heading", { name: "默认 Agent" })).toBeInTheDocument();
+    expect(FakeEventSource.instances.at(-1)?.url).toContain("/sessions/session-1/events");
+  });
+
   it("实时连接自动重连成功后撤销中断提示", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
@@ -316,6 +541,108 @@ describe("LiveChatPage 时间线", () => {
 
     act(() => source.emitOpen());
     expect(screen.getByText("Agent 执行失败")).toHaveClass("live-chat-error");
+  });
+
+  it("重新打开失败会话时从权威快照恢复安全模型提示", async () => {
+    installTtsFetch({
+      messages: [
+        { role: "user", content: "触发模型失败" },
+        {
+          role: "assistant",
+          stopReason: "error",
+          content: [],
+          errorMessage: "模型请求失败",
+        },
+      ],
+    });
+
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    expect(await screen.findByText("模型请求失败")).toHaveClass("live-chat-error");
+    expect(document.querySelectorAll(".live-chat-error")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "朗读消息" })).not.toBeInTheDocument();
+  });
+
+  it("快照与 SSE 复用一个模型错误提示并由新一轮清除", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    const source = FakeEventSource.instances[0];
+
+    act(() => source.emit("snapshot", {
+      id: 2,
+      messages: [
+        { role: "user", content: "失败问题" },
+        { role: "assistant", stopReason: "error", content: [], errorMessage: "模型请求失败" },
+      ],
+      lastEventId: 2,
+    }));
+    expect(screen.getByText("模型请求失败")).toHaveClass("live-chat-error");
+
+    act(() => source.emit("error", { code: "AGENT_EXECUTION_FAILED", message: "模型请求失败" }));
+    expect(document.querySelectorAll(".live-chat-error")).toHaveLength(1);
+
+    act(() => source.emit("snapshot", {
+      id: 4,
+      messages: [
+        { role: "user", content: "失败问题" },
+        { role: "assistant", stopReason: "error", content: [], errorMessage: "模型请求失败" },
+        { role: "user", content: "重新提问" },
+      ],
+      lastEventId: 4,
+    }));
+    await waitFor(() => expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument());
+
+    act(() => source.emit("error", { code: "AGENT_EXECUTION_FAILED", message: "模型请求失败" }));
+    expect(screen.getByText("模型请求失败")).toHaveClass("live-chat-error");
+    act(() => source.emit("snapshot", {
+      id: 6,
+      messages: [
+        { role: "user", content: "重新提问" },
+        { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "正常回答" }] },
+      ],
+      lastEventId: 6,
+    }));
+    await screen.findByText("正常回答");
+    expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument();
+  });
+
+  it("长度截断显示固定提示并保留已有回答", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances[0].emit("snapshot", {
+      id: 2,
+      messages: [
+        { role: "user", content: "生成长回答" },
+        {
+          role: "assistant",
+          stopReason: "length",
+          content: [{ type: "text", text: "已生成的部分回答" }],
+          errorMessage: "回答因达到长度限制而被截断",
+        },
+      ],
+      lastEventId: 2,
+    }));
+
+    expect(await screen.findByText("已生成的部分回答")).toBeInTheDocument();
+    expect(screen.getByText("回答因达到长度限制而被截断")).toHaveClass("live-chat-error");
+  });
+
+  it("切换到正常会话时不保留上一会话的模型错误", async () => {
+    installTtsFetch({
+      messages: [
+        { role: "user", content: "失败问题" },
+        { role: "assistant", stopReason: "error", content: [], errorMessage: "模型请求失败" },
+      ],
+      secondSessionMessages: [{ role: "user", content: "正常会话问题" }],
+    });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    expect(await screen.findByText("模型请求失败")).toHaveClass("live-chat-error");
+
+    fireEvent.click(screen.getByRole("button", { name: "第二会话" }));
+
+    await waitFor(() => expect(messageRowTexts().some((text) => text.includes("正常会话问题"))).toBe(true));
+    expect(screen.queryByText("模型请求失败")).not.toBeInTheDocument();
   });
 
   it("将用户操作区置于气泡外侧，并把版本切换发送到分支导航接口", async () => {
@@ -424,7 +751,7 @@ describe("LiveChatPage 时间线", () => {
 
     act(() => source.emit("snapshot", {
       messages: [],
-      history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+      history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
       run: {
         runId: "run-regenerated",
         sessionId: "session-1",
@@ -439,7 +766,7 @@ describe("LiveChatPage 时间线", () => {
       snapshot: {
         id: "session-1",
         messages: [],
-        history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 0 },
+        history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
         lastEventId: 3,
       },
       run: {
@@ -468,7 +795,7 @@ describe("LiveChatPage 时间线", () => {
         { role: "user", content: "需要保留的问题", __piEntryId: "user-regenerated" },
         { role: "assistant", content: [{ type: "text", text: "最终新回答" }] },
       ],
-      history: { branchToken: "branch-regenerated", hasMoreBefore: false, turnCount: 1 },
+      history: { branchToken: "branch-regenerated", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
       run: {
         runId: "run-regenerated",
         sessionId: "session-1",
@@ -496,6 +823,7 @@ describe("LiveChatPage 时间线", () => {
         startEntryId: "older-user",
         branchToken: "branch-regenerated",
         hasMoreBefore: false,
+        hasMoreAfter: false,
         turnCount: 1,
       },
     }));
@@ -516,6 +844,7 @@ describe("LiveChatPage 时间线", () => {
         startEntryId: "recent-user",
         branchToken: "branch-regenerated",
         hasMoreBefore: true,
+        hasMoreAfter: false,
         turnCount: 2,
       },
       run: {
@@ -593,7 +922,7 @@ describe("LiveChatPage 时间线", () => {
         snapshot: {
           id: "session-1",
           messages: [{ role: "user", content: "旧会话问题", __piEntryId: "old-regenerated" }],
-          history: { branchToken: "branch-old", hasMoreBefore: false, turnCount: 1 },
+          history: { branchToken: "branch-old", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
           lastEventId: 3,
         },
         run: {
@@ -696,7 +1025,112 @@ describe("LiveChatPage 时间线", () => {
     const workspaceSwitcher = await screen.findByRole("button", { name: "打开工作台导航" });
 
     expect(workspaceSwitcher.closest(".chat-header")).toHaveClass("live-chat-header");
-    expect(screen.getByRole("button", { name: "切换 Agent 或模型" })).toHaveClass("agent-model-menu__trigger");
+    expect(screen.getByRole("button", { name: "切换 Agent" })).toHaveClass("agent-model-menu__trigger");
+  });
+
+  it("按固定顺序在输入区展示思考与模型选择并持久化当前会话深度", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    const reference = await screen.findByRole("button", { name: "添加引用" });
+    const attachment = screen.getByLabelText("添加附件");
+    const thinking = screen.getByRole("button", { name: "思考深度：中" });
+    const model = screen.getByRole("button", { name: "切换模型，当前 GPT-5" });
+    const send = screen.getByRole("button", { name: "发送消息" });
+    expect(reference.compareDocumentPosition(attachment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attachment.compareDocumentPosition(thinking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(thinking.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(model.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(thinking);
+    fireEvent.click(screen.getByRole("option", { name: "高 high" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => (
+      String(url) === "/api/v1/sessions/session-1/thinking-level"
+      && init?.method === "PUT"
+      && init.body === JSON.stringify({ thinkingLevel: "high" })
+    ))).toBe(true));
+  });
+
+  it("新对话继承 Agent 默认深度并在首次发送前持久化草稿选择", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{
+        profile: {
+          id: "default",
+          name: "默认 Agent",
+          avatar: { kind: "initial", value: "π" },
+          status: "active",
+          cwd: "/data/workspace",
+          defaultThinkingLevel: "high",
+          instructions: {},
+          allowedTools: [],
+        },
+        revision: "r1",
+      }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [{
+        provider: "openai",
+        id: "gpt-5",
+        name: "GPT-5",
+        thinkingLevels: ["off", "minimal", "low", "medium", "high"],
+      }] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      if (url === "/api/v1/sessions" && init?.method === "POST") return new Response(JSON.stringify({
+        id: "session-new",
+        agentId: "default",
+        messages: [],
+        model: { provider: "openai", id: "gpt-5", name: "GPT-5", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
+        thinkingLevel: "high",
+        lastEventId: 0,
+      }));
+      if (url === "/api/v1/sessions/session-new/thinking-level" && init?.method === "PUT") return new Response(null, { status: 204 });
+      if (url === "/api/v1/sessions/session-new/messages") return new Response(JSON.stringify({ runId: "run-new", sessionId: "session-new", status: "running", startedAt: "2026-08-13T00:00:00.000Z" }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    const thinking = await screen.findByRole("button", { name: "思考深度：高" });
+    fireEvent.click(thinking);
+    fireEvent.click(screen.getByRole("option", { name: "低 low" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "使用低深度" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, request]) => (
+      String(url) === "/api/v1/sessions/session-new/thinking-level"
+      && request?.method === "PUT"
+      && request.body === JSON.stringify({ thinkingLevel: "low" })
+    ))).toBe(true));
+  });
+
+  it("草稿切换模型时按 Pi 规则选择最接近的可用深度", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{
+        profile: {
+          id: "default",
+          name: "默认 Agent",
+          avatar: { kind: "initial", value: "π" },
+          status: "active",
+          cwd: "/data/workspace",
+          defaultThinkingLevel: "max",
+          instructions: {},
+          allowedTools: [],
+        },
+        revision: "r1",
+      }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [
+        { provider: "openai", id: "full", name: "完整模型", thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        { provider: "openai", id: "limited", name: "受限模型", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
+      ] }));
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    expect(await screen.findByRole("button", { name: "思考深度：最大" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "切换模型，当前 完整模型" }));
+    fireEvent.click(screen.getByRole("option", { name: /受限模型/ }));
+
+    expect(screen.getByRole("button", { name: "思考深度：高" })).toBeInTheDocument();
   });
 
   it("在 Agent 选择框右侧提供快捷新建会话按钮", async () => {
@@ -716,7 +1150,7 @@ describe("LiveChatPage 时间线", () => {
   it("将快捷资源入口放在 Agent 选择框与新建会话之间", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
 
-    const agentTrigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const agentTrigger = await screen.findByRole("button", { name: "切换 Agent" });
     const resourcesTrigger = screen.getByRole("button", { name: "打开快捷资源管理" });
     const createTrigger = screen.getByRole("button", { name: "新建会话" });
 
@@ -933,6 +1367,43 @@ describe("LiveChatPage 时间线", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledWith("/api/v1/profile", expect.objectContaining({ method: "PATCH" }));
   });
 
+  it("选择个人头像后先裁剪，再上传原图和裁剪区域", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents") return new Response(JSON.stringify({ agents: [{ profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" }] }));
+      if (url === "/api/v1/models") return new Response(JSON.stringify({ models: [] }));
+      if (url === "/api/v1/profile/avatar?revision=profile-r1" && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          revision: "profile-r2",
+          profile: { displayName: "管理员", avatar: { kind: "image", revision: "profile-r2", mediaType: "image/webp" } },
+        }), { headers: { "Content-Type": "application/json" } });
+      }
+      if (url === "/api/v1/profile") {
+        return new Response(JSON.stringify({ revision: "profile-r1", profile: { displayName: "管理员" } }));
+      }
+      if (url === "/api/v1/sessions?agentId=default") return new Response(JSON.stringify({ sessions: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderLiveChatPage(<LiveChatPage {...props} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑个人资料" }));
+    const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("上传个人头像"), { target: { files: [file] } });
+    expect(await screen.findByRole("dialog", { name: "调整头像" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/profile/avatar"))).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "裁剪并上传" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/profile/avatar?revision=profile-r1",
+      expect.objectContaining({ method: "POST", body: expect.any(FormData) }),
+    ));
+    const upload = fetchMock.mock.calls.find(([url]) => String(url).includes("/profile/avatar"));
+    const body = upload?.[1]?.body as FormData;
+    expect(body.get("crop")).toBe(JSON.stringify({ x: 10, y: 10, width: 80, height: 80 }));
+    expect(screen.queryByRole("dialog", { name: "调整头像" })).not.toBeInTheDocument();
+  });
+
   it("重新进入会话页时恢复本页缓存的 Agent", async () => {
     const agents = [
       { profile: { id: "default", name: "默认 Agent", avatar: { kind: "initial", value: "π" }, status: "active", cwd: "/data/workspace", instructions: {}, allowedTools: [] }, revision: "r1" },
@@ -947,7 +1418,7 @@ describe("LiveChatPage 时间线", () => {
     }));
 
     const firstPage = renderLiveChatPage(<LiveChatPage {...props} />);
-    const trigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = await screen.findByRole("button", { name: "切换 Agent" });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("option", { name: /研究 Agent/ }));
     await waitFor(() => expect(trigger).toHaveTextContent("研究 Agent"));
@@ -955,14 +1426,14 @@ describe("LiveChatPage 时间线", () => {
     firstPage.unmount();
     renderLiveChatPage(<LiveChatPage {...props} />);
 
-    expect(await screen.findByRole("button", { name: "切换 Agent 或模型" })).toHaveTextContent("研究 Agent");
+    expect(await screen.findByRole("button", { name: "切换 Agent" })).toHaveTextContent("研究 Agent");
   });
 
   it("缓存的 Agent 不存在时回退到第一个可用 Agent", async () => {
     window.sessionStorage.setItem("pi-agent-web.selected-agent-id", "deleted-agent");
     renderLiveChatPage(<LiveChatPage {...props} />);
 
-    expect(await screen.findByRole("button", { name: "切换 Agent 或模型" })).toHaveTextContent("默认 Agent");
+    expect(await screen.findByRole("button", { name: "切换 Agent" })).toHaveTextContent("默认 Agent");
     expect(window.sessionStorage.getItem("pi-agent-web.selected-agent-id")).toBeNull();
   });
 
@@ -986,7 +1457,7 @@ describe("LiveChatPage 时间线", () => {
       return new Response(JSON.stringify({}), { status: 200 });
     }));
     renderLiveChatPage(<LiveChatPage {...props} />);
-    const trigger = await screen.findByRole("button", { name: "切换 Agent 或模型" });
+    const trigger = await screen.findByRole("button", { name: "切换 Agent" });
 
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole("option", { name: /研究 Agent/ }));
@@ -1226,6 +1697,55 @@ describe("LiveChatPage 时间线", () => {
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/archived-1/archive" && init?.method === "DELETE")).toBe(true));
   });
 
+  it("从三点菜单置顶和取消置顶后即时更新会话分区", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    RecordingBroadcastChannel.instances.forEach((channel) => channel.messages.splice(0));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/session-1/pin" && init?.method === "PUT")).toBe(true));
+    expect(RecordingBroadcastChannel.instances.flatMap((channel) => channel.messages)).toContain("sessions-invalidated");
+    expect(screen.getByRole("group", { name: "置顶会话" })).toHaveTextContent("测试");
+    expect(screen.getByRole("group", { name: "最近会话" })).toHaveTextContent("第二会话");
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    RecordingBroadcastChannel.instances.forEach((channel) => channel.messages.splice(0));
+    fireEvent.click(screen.getByRole("menuitem", { name: "取消置顶" }));
+
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url) === "/api/v1/sessions/session-1/pin" && init?.method === "DELETE")).toBe(true));
+    expect(RecordingBroadcastChannel.instances.flatMap((channel) => channel.messages)).toContain("sessions-invalidated");
+    expect(screen.queryByRole("group", { name: "置顶会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "最近会话" })).toHaveTextContent("测试");
+  });
+
+  it("置顶请求失败时保留原分区并展示稳定业务错误", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultImplementation = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/sessions/session-1/pin" && init?.method === "PUT") {
+        return new Response(JSON.stringify({ error: { code: "SESSION_ARCHIVED", message: "归档 Session 不能置顶" } }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (!defaultImplementation) throw new Error("测试 fetch 桩未配置");
+      return defaultImplementation(input, init);
+    });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    RecordingBroadcastChannel.instances.forEach((channel) => channel.messages.splice(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "置顶" }));
+
+    expect(await screen.findByText("归档 Session 不能置顶")).toHaveClass("live-chat-error");
+    expect(RecordingBroadcastChannel.instances.flatMap((channel) => channel.messages)).toHaveLength(0);
+    expect(screen.queryByRole("group", { name: "置顶会话" })).not.toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "置顶" })).toBeInTheDocument();
+  });
+
   it("全部恢复按服务端归档范围确认并刷新两个列表", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await screen.findByRole("button", { name: "查看已归档会话" });
@@ -1337,6 +1857,33 @@ describe("LiveChatPage 时间线", () => {
     expect(operationLog.filter((entry) => entry === "fetch:POST:/api/v1/sessions")).toHaveLength(1);
     expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events"))
       .toBeLessThan(operationLog.indexOf("fetch:POST:/api/v1/sessions/session-new/messages"));
+  });
+
+  it("存在置顶会话时草稿首次发送仍将新会话放入最近分区", async () => {
+    const fetchMock = vi.mocked(fetch);
+    const defaultImplementation = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === "/api/v1/sessions?agentId=default") {
+        return new Response(JSON.stringify({ sessions: [
+          { id: "session-1", firstMessage: "已置顶会话", modified: "2026-08-13T10:00:00.000Z", messageCount: 1, pinned: true },
+          { id: "session-2", firstMessage: "原最近会话", modified: "2026-08-13T09:00:00.000Z", messageCount: 2 },
+        ] }));
+      }
+      if (!defaultImplementation) throw new Error("测试 fetch 桩未配置");
+      return defaultImplementation(input, init);
+    });
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: /^已置顶会话/ });
+
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "草稿首条消息" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    const pinnedGroup = await screen.findByRole("group", { name: "置顶会话" });
+    const recentGroup = screen.getByRole("group", { name: "最近会话" });
+    expect(within(pinnedGroup).getByRole("button", { name: /^已置顶会话/ })).toBeInTheDocument();
+    expect(within(recentGroup).getByRole("button", { name: "草稿首条消息" })).toBeInTheDocument();
+    expect(within(pinnedGroup).queryByText("草稿首条消息")).not.toBeInTheDocument();
   });
 
   it("用户发送后在首个增量前显示 Agent 等待气泡和运行状态", async () => {
@@ -1918,7 +2465,7 @@ describe("LiveChatPage TTS 自动播放资格", () => {
     expect(await screen.findByText("切换前回答。")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "朗读消息" }));
     await waitFor(() => expect(PageFakeAudio.instances[0]?.played).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "切换 Agent 或模型" }));
+    fireEvent.click(screen.getByRole("button", { name: "切换 Agent" }));
     fireEvent.click(screen.getByRole("option", { name: /写作 Agent/ }));
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "写作 Agent" })).toBeInTheDocument());
@@ -2031,4 +2578,412 @@ function installPageAudio(): void {
 /** 返回当前测试已发出的语音合成请求。 */
 function ttsRequests(): Array<[input: string | URL | Request, init?: RequestInit]> {
   return vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/agents/default/tts");
+}
+
+describe("LiveChatPage 提问处理", () => {
+  it("收到提问后切换处理框，并支持收起后继续回答", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+
+    expect(screen.getByText("问题 1/2")).toBeVisible();
+    expect(screen.queryByPlaceholderText("给 Agent 发消息…（输入 @ 引用资源）")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: /全部/ }));
+    fireEvent.click(screen.getByRole("button", { name: "收起提问处理框" }));
+
+    expect(screen.getByPlaceholderText("给 Agent 发消息…（输入 @ 引用资源）")).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续回答 · 1/2" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "继续回答 · 1/2" }));
+    expect(screen.getByRole("radio", { name: /全部/ })).toBeChecked();
+  });
+
+  it("提交部分答案后只调用 answers API 并进入下一次运行", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => {
+      const source = FakeEventSource.instances.at(-1)!;
+      source.emit("tool_started", { type: "tool_started", callId: "ask-1", toolName: "ask_user", args: {} });
+      source.emit("tool_finished", {
+        type: "tool_finished",
+        callId: "ask-1",
+        toolName: "ask_user",
+        result: {
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+        isError: false,
+      });
+      source.emit("question_pending", { type: "question_pending", pendingQuestion });
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+
+    await screen.findByRole("button", { name: "停止生成" });
+    const answerCalls = vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/questions/question-1/answers"));
+    expect(answerCalls).toHaveLength(1);
+    expect(JSON.parse(String(answerCalls[0]?.[1]?.body))).toEqual({
+      version: 1,
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+    });
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith("/messages"))).toHaveLength(0);
+    const answerRow = screen.getByText("已提交回答").closest<HTMLElement>(".question-response-message");
+    expect(answerRow).not.toBeNull();
+    expect(within(answerRow!).getByText("部分")).toBeVisible();
+    expect(within(answerRow!).getByText("未回答 1 题")).toBeVisible();
+    const agentRow = screen.getByText("已回答").closest<HTMLElement>(".is-assistant");
+    expect(agentRow).not.toBeNull();
+    expect(within(agentRow!).queryByText("部分")).not.toBeInTheDocument();
+  });
+
+  it("Run 启动快照先清除待答状态时仍立即展示成功回答", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => {
+      const source = FakeEventSource.instances.at(-1)!;
+      source.emit("tool_started", { type: "tool_started", callId: "ask-1", toolName: "ask_user", args: {} });
+      source.emit("tool_finished", {
+        type: "tool_finished",
+        callId: "ask-1",
+        toolName: "ask_user",
+        result: {
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+        isError: false,
+      });
+      source.emit("question_pending", { type: "question_pending", pendingQuestion });
+    });
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      ([input]) => String(input).endsWith("/questions/question-1/answers"),
+    )).toBe(true));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("snapshot", {
+      type: "snapshot",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+        {
+          role: "toolResult",
+          toolCallId: "ask-1",
+          toolName: "ask_user",
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+      ],
+      run: {
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-14T08:10:00.000Z",
+      },
+    }));
+    expect(screen.queryByText("已提交回答")).not.toBeInTheDocument();
+
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByText("已提交回答")).toBeVisible();
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeVisible();
+  });
+
+  it("同一会话第二轮回答续跑正文先到时仍先展示用户卡片", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    sessionOneSnapshot = {
+      id: "session-1",
+      agentId: "default",
+      messages: [
+        { role: "user", content: "第一轮问题" },
+        { role: "assistant", content: [{ type: "text", text: "第一轮回答" }] },
+        { role: "user", content: "第二轮问题" },
+        { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+        {
+          role: "toolResult",
+          toolCallId: "ask-1",
+          toolName: "ask_user",
+          content: "等待用户回答",
+          details: { type: "question_pending", pendingQuestion },
+        },
+      ],
+      pendingQuestion,
+      thinkingLevel: "medium",
+      lastEventId: 4,
+    };
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    await screen.findAllByText("第二轮问题");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      ([input]) => String(input).endsWith("/questions/question-1/answers"),
+    )).toBe(true));
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("run_started", {
+      type: "run_started",
+      run: {
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-14T08:10:00.000Z",
+      },
+    }));
+    act(() => FakeEventSource.instances.at(-1)!.emit("text_delta", {
+      type: "text_delta",
+      delta: "续跑回答",
+    }));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    const questionRow = screen.getByText("已回答").closest<HTMLElement>(".message-row");
+    const answerRow = screen.getByText("已提交回答").closest<HTMLElement>(".message-row");
+    const continuationRow = screen.getByText("续跑回答").closest<HTMLElement>(".message-row");
+    const rows = [...document.querySelectorAll<HTMLElement>(".message-row")];
+    expect(questionRow).not.toBeNull();
+    expect(answerRow).not.toBeNull();
+    expect(continuationRow).not.toBeNull();
+    expect(within(questionRow!).queryByText("续跑回答")).not.toBeInTheDocument();
+    expect(rows.indexOf(questionRow!)).toBeLessThan(rows.indexOf(answerRow!));
+    expect(rows.indexOf(answerRow!)).toBeLessThan(rows.indexOf(continuationRow!));
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeVisible();
+  });
+
+  it("第二轮回答成功后运行中快照缺少协议时仍持续展示用户卡片", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    const secondRoundMessages = [
+      { role: "user", content: "第一轮问题" },
+      { role: "assistant", content: [{ type: "text", text: "第一轮回答" }] },
+      { role: "user", content: "第二轮问题" },
+      { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "ask-1",
+        toolName: "ask_user",
+        content: "等待用户回答",
+        details: { type: "question_pending", pendingQuestion },
+      },
+    ];
+    sessionOneSnapshot = {
+      id: "session-1",
+      agentId: "default",
+      messages: secondRoundMessages,
+      pendingQuestion,
+      history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 2 },
+      thinkingLevel: "medium",
+      lastEventId: 4,
+    };
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    fireEvent.click(await screen.findByRole("button", { name: "测试" }));
+    await screen.findAllByText("第二轮问题");
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(
+      ([input]) => String(input).endsWith("/questions/question-1/answers"),
+    )).toBe(true));
+
+    const source = FakeEventSource.instances.at(-1)!;
+    act(() => source.emit("run_started", {
+      type: "run_started",
+      run: {
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-15T08:10:00.000Z",
+      },
+    }));
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+    expect(await screen.findByText("已提交回答")).toBeVisible();
+
+    act(() => source.emit("snapshot", {
+      type: "snapshot",
+      messages: secondRoundMessages,
+      pendingQuestion: undefined,
+      run: {
+        runId: "run-question-answer",
+        sessionId: "session-1",
+        status: "running",
+        startedAt: "2026-08-15T08:10:00.000Z",
+      },
+    }));
+    act(() => source.emit("text_delta", {
+      type: "text_delta",
+      delta: "快照后的续跑回答",
+    }));
+    await act(async () => { await new Promise((resolve) => requestAnimationFrame(resolve)); });
+
+    const questionRow = screen.getByText("已回答").closest<HTMLElement>(".message-row");
+    const answerRow = screen.getByText("已提交回答").closest<HTMLElement>(".message-row");
+    const continuationRow = screen.getByText("快照后的续跑回答").closest<HTMLElement>(".message-row");
+    const rows = [...document.querySelectorAll<HTMLElement>(".message-row")];
+    expect(questionRow).not.toBeNull();
+    expect(answerRow).not.toBeNull();
+    expect(continuationRow).not.toBeNull();
+    expect(rows.indexOf(questionRow!)).toBeLessThan(rows.indexOf(answerRow!));
+    expect(rows.indexOf(answerRow!)).toBeLessThan(rows.indexOf(continuationRow!));
+    expect(screen.getByRole("button", { name: "停止生成" })).toBeVisible();
+  });
+
+  it("收到无答案的最终事件后刷新权威会话投影", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    const resolution = {
+      resolutionId: "resolution-remote",
+      questionRecordId: "question-1",
+      status: "submitted" as const,
+      answers: [{ questionId: "q-1", kind: "options" as const, optionIds: ["o-2"] }],
+      unansweredQuestionIds: ["q-2"],
+    };
+    sessionOneSnapshot = {
+      id: "session-1",
+      messages: [
+        { role: "assistant", content: [{ type: "toolCall", id: "ask-1", name: "ask_user", arguments: {} }] },
+        {
+          role: "toolResult",
+          toolCallId: "ask-1",
+          toolName: "ask_user",
+          content: [{ type: "text", text: "等待用户回答" }],
+          details: { type: "question_pending", pendingQuestion },
+        },
+        { role: "user", content: compileQuestionResponseProtocol(resolution, pendingQuestion.questions) },
+      ],
+      thinkingLevel: "medium",
+      lastEventId: 4,
+    };
+
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_resolved", {
+      type: "question_resolved",
+      questionRecordId: "question-1",
+      state: "submitted",
+    }));
+
+    expect(await screen.findByText("已提交回答")).toBeVisible();
+    expect(document.querySelectorAll(".question-response-message")).toHaveLength(1);
+    expect(screen.getByText("已回答")).toBeVisible();
+    expect(screen.getByText("部分").closest(".question-response-message")).not.toBeNull();
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1")).toHaveLength(2);
+  });
+
+  it("答案响应迟到时不会覆盖用户已经切换到的会话", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/questions/question-1/answers"))).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "第二会话已绑定 2 个定时任务" }));
+    expect(await screen.findAllByText("第二会话问题")).not.toHaveLength(0);
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    expect(screen.getAllByText("第二会话问题")).not.toHaveLength(0);
+    expect(screen.queryByText("已提交回答")).not.toBeInTheDocument();
+  });
+
+  it("Run 终态先于答案响应到达时不会恢复为运行中", async () => {
+    const answer = deferred<Response>();
+    questionAnswerResponse = answer.promise;
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /部分/ }));
+    fireEvent.click(screen.getByRole("button", { name: "提交已回答的 1/2 题" }));
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/questions/question-1/answers"))).toBe(true));
+    act(() => {
+      const source = FakeEventSource.instances.at(-1)!;
+      source.emit("run_started", {
+        type: "run_started",
+        run: {
+          runId: "run-question-answer",
+          sessionId: "session-1",
+          status: "running",
+          startedAt: "2026-08-13T08:10:00.000Z",
+        },
+      });
+      source.emit("completed", { type: "completed" });
+    });
+    await act(async () => {
+      answer.resolve(questionAnswerResult());
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "停止生成" })).not.toBeInTheDocument();
+  });
+
+  it("收起后发送普通消息视为放弃，并只调用一次 messages API", async () => {
+    renderLiveChatPage(<LiveChatPage {...props} />);
+    await screen.findByRole("button", { name: "测试" });
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    act(() => FakeEventSource.instances.at(-1)!.emit("question_pending", {
+      type: "question_pending",
+      pendingQuestion,
+    }));
+    fireEvent.click(screen.getByRole("radio", { name: /全部/ }));
+    fireEvent.click(screen.getByRole("button", { name: "收起提问处理框" }));
+    fireEvent.change(screen.getByPlaceholderText("给 Agent 发消息…（输入 @ 引用资源）"), { target: { value: "不用问了，直接处理" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+
+    await screen.findByRole("button", { name: "停止生成" });
+    expect(vi.mocked(fetch).mock.calls.filter(([input]) => String(input) === "/api/v1/sessions/session-1/messages")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /继续回答/ })).not.toBeInTheDocument();
+  });
+});
+
+function questionAnswerResult(): Response {
+  return new Response(JSON.stringify({
+    run: {
+      runId: "run-question-answer",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-08-13T08:10:00.000Z",
+    },
+    resolution: {
+      resolutionId: "resolution-live",
+      questionRecordId: "question-1",
+      status: "submitted",
+      answers: [{ questionId: "q-1", kind: "options", optionIds: ["o-2"] }],
+      unansweredQuestionIds: ["q-2"],
+    },
+  }));
 }

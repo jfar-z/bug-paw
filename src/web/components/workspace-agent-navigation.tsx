@@ -1,6 +1,7 @@
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import { X } from "lucide-react";
 import { AgentAvatar } from "./agent-avatar";
+import { SecondarySidebarHeader } from "./secondary-sidebar-header";
 
 export const WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-workspace-agent-navigation";
 
@@ -30,10 +31,12 @@ export function WorkspaceAgentNavigation({
 }: WorkspaceAgentNavigationProps) {
   const content = (
     <>
-      <header className="workspace-agent-navigation__header">
-        <div><span>{eyebrow}</span><strong>{title}</strong></div>
-        <button type="button" className="icon-button workspace-agent-navigation__close" aria-label="关闭 Agent 列表" onClick={onClose}><X size={18} aria-hidden="true" /></button>
-      </header>
+      <SecondarySidebarHeader
+        className="workspace-agent-navigation__header"
+        eyebrow={eyebrow}
+        title={title}
+        actions={<button type="button" className="icon-button workspace-agent-navigation__close" aria-label="关闭 Agent 列表" onClick={onClose}><X size={18} aria-hidden="true" /></button>}
+      />
       <nav aria-label={navigationLabel}>
         {agents.map((agent) => (
           <button

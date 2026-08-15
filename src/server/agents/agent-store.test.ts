@@ -50,6 +50,27 @@ describe("AgentStore", () => {
     });
   });
 
+  it("读取历史 Profile 时忽略非法 TTS 自定义参数", async () => {
+    const { paths, store } = await fixture();
+    const created = await store.create({ name: "历史语音 Agent", ttsProfileId: "voice-a" });
+    const database = openDatabase(paths.databaseFile);
+    const stored = database.readOne<{ profile_json: string }>(
+      "SELECT profile_json FROM agents WHERE id = ?",
+      [created.profile.id],
+    );
+    const profile = JSON.parse(stored!.profile_json) as Record<string, unknown>;
+    database.write(
+      "UPDATE agents SET profile_json = ? WHERE id = ?",
+      [JSON.stringify({ ...profile, ttsCustomParameters: { input: "历史错误值" } }), created.profile.id],
+    );
+    database.close();
+
+    const loaded = await new AgentStore(paths).get(created.profile.id);
+
+    expect(loaded?.profile.name).toBe("历史语音 Agent");
+    expect(loaded?.profile).not.toHaveProperty("ttsCustomParameters");
+  });
+
   it("补齐历史 Agent 的系统工具权限且不移除既有选择", async () => {
     const { store } = await fixture();
     const created = await store.create({ name: "历史 Agent", allowedTools: ["read"] });
@@ -61,6 +82,26 @@ describe("AgentStore", () => {
       "knowledge_search",
       "scheduled_tasks",
     ]);
+  });
+
+  it("幂等移除废弃工具权限并保持其他权限顺序", async () => {
+    const { store } = await fixture();
+    const withRetired = await store.create({
+      name: "旧 Agent",
+      allowedTools: ["read", "edit_own_prompts", "write", "extension_lookup"],
+    });
+    const unchanged = await store.create({ name: "新 Agent", allowedTools: ["read", "write"] });
+
+    await store.removeToolPermissions(["edit_own_prompts"]);
+
+    expect((await store.get(withRetired.profile.id))?.profile.allowedTools)
+      .toEqual(["read", "write", "extension_lookup"]);
+    expect((await store.get(unchanged.profile.id))?.revision).toBe(unchanged.revision);
+
+    const cleanedRevision = (await store.get(withRetired.profile.id))?.revision;
+    expect(Number(cleanedRevision)).toBe(Number(withRetired.revision) + 1);
+    await store.removeToolPermissions(["edit_own_prompts"]);
+    expect((await store.get(withRetired.profile.id))?.revision).toBe(cleanedRevision);
   });
 
   it("保存指定 Agent 顺序，并把未收录 Agent 稳定追加", async () => {
@@ -291,6 +332,37 @@ describe("AgentStore", () => {
     const saved = await files.saveUpload(created.profile.id, "note.txt", "text/plain", Readable.from("agent file"));
 
     expect(saved.absolutePath).toBe(join(created.profile.cwd, "attachments", "note.txt"));
+  });
+
+  it("成功替换头像后删除旧文件，版本冲突时保留当前头像", async () => {
+    const { paths, store } = await fixture();
+    const created = await store.create({ name: "头像 Agent" });
+    const first = await store.setImageAvatar(created.profile.id, Buffer.from("first"), "image/webp", created.revision);
+    expect(first.profile.avatar.kind).toBe("image");
+    const firstRevision = first.profile.avatar.kind === "image" ? first.profile.avatar.revision : "";
+    const firstPath = join(paths.agentsDir, created.profile.id, `avatar-${firstRevision}`);
+
+    await expect(store.setImageAvatar(
+      created.profile.id,
+      Buffer.from("conflict"),
+      "image/webp",
+      created.revision,
+    )).rejects.toThrow();
+    await expect(readFile(firstPath)).resolves.toEqual(Buffer.from("first"));
+
+    const second = await store.setImageAvatar(
+      created.profile.id,
+      Buffer.from("second"),
+      "image/webp",
+      first.revision,
+    );
+
+    await expect(stat(firstPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(store.readImageAvatar(created.profile.id)).resolves.toEqual({
+      content: Buffer.from("second"),
+      mediaType: "image/webp",
+    });
+    expect(second.profile.avatar).toMatchObject({ kind: "image", mediaType: "image/webp" });
   });
 
   it("删除 Profile、Session 和 cwd 选项相互独立且 cwd 进入回收区", async () => {

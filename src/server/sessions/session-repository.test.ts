@@ -40,6 +40,38 @@ describe("SessionRepository", () => {
     });
   });
 
+  it("幂等置顶和取消置顶且不改变业务更新时间", async () => {
+    const { agents, sessions } = createRepositories();
+    await agents.insert(profile("a1"));
+    await sessions.assign("s1", "a1", "2026-08-07T00:00:00.000Z");
+
+    await sessions.pin("s1", "2026-08-07T01:00:00.000Z");
+    await sessions.pin("s1", "2026-08-07T02:00:00.000Z");
+
+    expect(await sessions.find("s1")).toMatchObject({
+      pinnedAt: "2026-08-07T01:00:00.000Z",
+      updatedAt: "2026-08-07T00:00:00.000Z",
+    });
+    expect(await sessions.listPinnedIds("a1")).toEqual(["s1"]);
+
+    await sessions.unpin("s1");
+    await sessions.unpin("s1");
+    expect(await sessions.find("s1")).not.toHaveProperty("pinnedAt");
+  });
+
+  it("归档时清除置顶并拒绝重新置顶", async () => {
+    const { agents, sessions } = createRepositories();
+    await agents.insert(profile("a1"));
+    await sessions.assign("s1", "a1", "2026-08-07T00:00:00.000Z");
+    await sessions.pin("s1", "2026-08-07T01:00:00.000Z");
+
+    await sessions.archive("s1", "2026-08-07T02:00:00.000Z");
+
+    expect(await sessions.find("s1")).not.toHaveProperty("pinnedAt");
+    await expect(sessions.pin("s1", "2026-08-07T03:00:00.000Z"))
+      .rejects.toMatchObject({ code: "SESSION_ARCHIVED" });
+  });
+
   function createRepositories() {
     const database = createTestDatabase();
     databases.push(database);

@@ -1,4 +1,4 @@
-import { Archive, ListChecks, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { Archive, ListChecks, MoreHorizontal, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SessionSummary } from "../api";
@@ -15,6 +15,7 @@ interface SessionActionsMenuProps {
   session: SessionSummary;
   disabled?: boolean;
   openRequestId?: number;
+  onPinChange: (pinned: boolean) => Promise<boolean>;
   onRename: (name: string) => void | Promise<void>;
   onArchive: () => void | Promise<void>;
   onDelete: (confirmBoundTasks: boolean) => void | Promise<void>;
@@ -24,8 +25,9 @@ interface SessionActionsMenuProps {
 /**
  * 提供单个会话的轻量操作菜单和危险操作确认。
  */
-export function SessionActionsMenu({ session, disabled, openRequestId, onRename, onArchive, onDelete, onSelectMultiple }: SessionActionsMenuProps) {
+export function SessionActionsMenu({ session, disabled, openRequestId, onPinChange, onRename, onArchive, onDelete, onSelectMultiple }: SessionActionsMenuProps) {
   const [open, setOpen] = useState(false);
+  const [pinning, setPinning] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [name, setName] = useState(session.name || session.firstMessage || "新对话");
@@ -107,6 +109,17 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
     setOpen(false);
   };
 
+  /** 等待置顶状态持久化成功后再关闭菜单，失败时保留原状态供用户重试。 */
+  const changePinned = async () => {
+    if (pinning) return;
+    setPinning(true);
+    try {
+      if (await onPinChange(!session.pinned)) setOpen(false);
+    } finally {
+      setPinning(false);
+    }
+  };
+
   return (
     <div className="session-actions" ref={rootRef}>
       <button
@@ -166,6 +179,10 @@ export function SessionActionsMenu({ session, disabled, openRequestId, onRename,
           ) : (
             <>
               <button type="button" role="menuitem" onClick={() => setRenaming(true)}><Pencil size={15} />重命名</button>
+              <button type="button" role="menuitem" disabled={pinning} onClick={() => void changePinned()}>
+                {session.pinned ? <PinOff size={15} /> : <Pin size={15} />}
+                {session.pinned ? "取消置顶" : "置顶"}
+              </button>
               {onSelectMultiple ? <button type="button" role="menuitem" onClick={() => { onSelectMultiple(); setOpen(false); }}><ListChecks size={15} />多选</button> : null}
               <button type="button" role="menuitem" disabled={disabled} onClick={() => { void onArchive(); setOpen(false); }}><Archive size={15} />归档</button>
               <button type="button" role="menuitem" className="is-danger" disabled={disabled} onClick={() => setConfirmingDelete(true)}><Trash2 size={15} />删除</button>

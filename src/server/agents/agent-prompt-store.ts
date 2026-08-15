@@ -15,6 +15,18 @@ export const AGENT_PROMPT_FILES: Record<AgentPromptFile, string> = {
   bootsharp: "BOOTSHARP.md",
 };
 
+/** 当前 Agent 每轮系统提示词所需的五文件权威快照。 */
+export interface AgentPromptContextSnapshot {
+  /** 五个提示词文件所在目录。 */
+  directory: string;
+  /** 五个提示词文件的精确绝对路径。 */
+  paths: Record<AgentPromptFile, string>;
+  /** 四个长期提示词文件的当前内容。 */
+  instructions: AgentInstructions;
+  /** 仅在首次协作阶段生效的初始化引导。 */
+  bootsharp: string;
+}
+
 /** 新建 Agent 使用的首次协作引导。 */
 export const DEFAULT_BOOTSHARP = `### 初始化协作设定
 
@@ -28,9 +40,9 @@ export const DEFAULT_BOOTSHARP = `### 初始化协作设定
 4. 你应如何称呼用户。
 5. 你应长期了解的用户信息，例如背景、偏好、工作上下文、语言和交付习惯。
 
-每当用户确认一项内容后，使用提供的“编辑自身提示词”工具，将内容写入你自己的 \`ROLE.md\`、\`BEHAVIOR.md\`、\`RULES.md\` 或 \`USER.md\`。编辑自己的五个提示词文件时，如需使用 Markdown 标题，只能使用三级标题（\`###\`）或更低级标题；不得使用一级或二级标题（\`#\`、\`##\`）。只保存已确认的信息；不得猜测、编造或覆盖未被用户要求修改的内容。
+每当用户确认一项内容后，使用系统提示词列出的精确路径更新你自己的 \`ROLE.md\`、\`BEHAVIOR.md\`、\`RULES.md\` 或 \`USER.md\`。更新前先使用 \`read\` 获取最新内容；空文件或需要完整替换时使用 \`write\`，精确局部修改时使用 \`edit\`。编辑自己的五个提示词文件时，如需使用 Markdown 标题，只能使用三级标题（\`###\`）或更低级标题；不得使用一级或二级标题（\`#\`、\`##\`）。只保存已确认的信息；不得猜测、编造或覆盖未被用户要求修改的内容。
 
-“规则”可按需要补充，但不是结束初始化的前提。当你自行判断“角色与职责”“行为风格”“用户”三项已足以支持稳定协作时，使用同一工具将你自己的 \`BOOTSHARP.md\` 清空。清空后，后续会话不再执行此初始化引导。
+“规则”可按需要补充，但不是结束初始化的前提。当你自行判断“角色与职责”“行为风格”“用户”三项已足以支持稳定协作时，使用 \`write\` 将你自己的 \`BOOTSHARP.md\` 写为空字符串。清空后，后续会话不再执行此初始化引导。
 
 你只能编辑自己的五段提示词，不能修改其他 Agent 的文件。
 `;
@@ -55,6 +67,20 @@ export class AgentPromptStore {
       this.read(agentId, "role"), this.read(agentId, "behavior"), this.read(agentId, "rules"), this.read(agentId, "user"),
     ]);
     return { role, behavior, rules, user };
+  }
+
+  /** 读取当前 Agent 的五个提示词文件及其精确运行时路径。 */
+  async readContext(agentId: string): Promise<AgentPromptContextSnapshot> {
+    const directory = join(this.agentsDir, agentId);
+    const paths = Object.fromEntries(
+      (Object.keys(AGENT_PROMPT_FILES) as AgentPromptFile[])
+        .map((file) => [file, this.pathFor(agentId, file)]),
+    ) as Record<AgentPromptFile, string>;
+    const [instructions, bootsharp] = await Promise.all([
+      this.readLongTermInstructions(agentId),
+      this.read(agentId, "bootsharp"),
+    ]);
+    return { directory, paths, instructions, bootsharp };
   }
 
   /** 为新建或克隆 Agent 初始化四个空长期文件与默认引导。 */

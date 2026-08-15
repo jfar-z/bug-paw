@@ -8,6 +8,7 @@ import type {
   CreateAgentInput,
   UpdateAgentInput,
 } from "../../shared/agent-contracts";
+import { normalizeTtsCustomParameters, readTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import type { DataPaths } from "../paths";
 import { DomainError } from "../core/errors";
 import { KeyedMutex } from "../core/keyed-mutex";
@@ -141,6 +142,27 @@ export class AgentStore {
   }
 
   /**
+   * 幂等移除已经退役的工具权限，不改变其他权限及顺序。
+   *
+   * @param toolNames 需要精确移除的废弃工具名称
+   */
+  async removeToolPermissions(toolNames: readonly string[]): Promise<void> {
+    const removed = new Set(toolNames);
+    if (removed.size === 0) return;
+    for (const current of await this.list()) {
+      const allowedTools = current.profile.allowedTools.filter((name) => !removed.has(name));
+      if (allowedTools.length === current.profile.allowedTools.length) continue;
+      const next: AgentProfile = {
+        ...current.profile,
+        allowedTools,
+        updatedAt: new Date().toISOString(),
+      };
+      const { instructions: _instructions, ...persisted } = next;
+      await this.repository.update(current.profile.id, current.revision, persisted);
+    }
+  }
+
+  /**
    * 保存 Agent 的展示顺序，并返回规范化后的完整列表。
    *
    * @param agentIds 用户指定的 Agent ID 顺序
@@ -245,7 +267,7 @@ export class AgentStore {
     const migration = requestedCwd === current.profile.cwd
       ? undefined
       : await preparePiMigration(current.profile.cwd, requestedCwd);
-    const { cwd: _cwd, defaultModel, defaultThinkingLevel, titleGeneration, ttsProfileId, ttsVoice, ttsAutoPlay, ttsStreamPlayback, ...safePatch } = patch;
+    const { cwd: _cwd, defaultModel, defaultThinkingLevel, titleGeneration, ttsProfileId, ttsVoice, ttsCustomParameters, ttsAutoPlay, ttsStreamPlayback, ...safePatch } = patch;
     const next: AgentProfile = {
       ...current.profile,
       ...safePatch,
@@ -267,6 +289,7 @@ export class AgentStore {
     if (ttsProfileId === null) {
       delete next.ttsProfileId;
       delete next.ttsVoice;
+      delete next.ttsCustomParameters;
       delete next.ttsAutoPlay;
       delete next.ttsStreamPlayback;
     } else if (ttsProfileId !== undefined) {
@@ -281,8 +304,17 @@ export class AgentStore {
         if (normalizedVoice) next.ttsVoice = normalizedVoice;
         else delete next.ttsVoice;
       }
+      if (ttsCustomParameters === null) delete next.ttsCustomParameters;
+      else if (ttsCustomParameters !== undefined) {
+        const normalizedParameters = normalizeTtsCustomParameters(ttsCustomParameters);
+        if (Object.keys(normalizedParameters).length > 0) next.ttsCustomParameters = normalizedParameters;
+        else delete next.ttsCustomParameters;
+      }
     }
-    if (!next.ttsProfileId) delete next.ttsVoice;
+    if (!next.ttsProfileId) {
+      delete next.ttsVoice;
+      delete next.ttsCustomParameters;
+    }
     const { instructions: _instructions, ...storedNext } = next;
     const written = await this.repository.update(agentId, revision, storedNext)
       .catch(async (error: unknown) => {
@@ -308,11 +340,16 @@ export class AgentStore {
     mediaType: "image/png" | "image/jpeg" | "image/webp",
     revision: string,
   ): Promise<AgentProfileDocument> {
+    const current = await this.get(agentId);
     const token = randomUUID();
     const path = this.avatarPath(agentId, token);
     await writeFile(path, content, { mode: 0o600, flag: "wx" });
     try {
       const updated = await this.update(agentId, { avatar: { kind: "image", revision: token, mediaType } }, revision);
+      if (current?.profile.avatar.kind === "image" && current.profile.avatar.revision !== token) {
+        // Profile 已原子指向新文件，旧文件清理失败不应把成功更新误报为失败。
+        await rm(this.avatarPath(agentId, current.profile.avatar.revision), { force: true }).catch(() => undefined);
+      }
       return updated;
     } catch (error) {
       await rm(path, { force: true });
@@ -505,9 +542,12 @@ export class AgentStore {
   }
 
   private async withInstructions(document: PersistedAgentDocument): Promise<AgentProfileDocument> {
+    const { ttsCustomParameters: storedTtsCustomParameters, ...storedProfile } = document.profile;
+    const ttsCustomParameters = readTtsCustomParameters(storedTtsCustomParameters);
     return {
       profile: {
-        ...document.profile,
+        ...storedProfile,
+        ...(Object.keys(ttsCustomParameters).length > 0 ? { ttsCustomParameters } : {}),
         instructions: await this.prompts.readLongTermInstructions(document.profile.id),
       },
       revision: document.revision,

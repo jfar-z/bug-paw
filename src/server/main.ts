@@ -29,12 +29,11 @@ import { createSessionBulkService } from "./sessions/session-bulk-service";
 import { ConfigTransaction, recoverPendingTransactions } from "./configuration/config-transaction";
 import { createAgentService } from "./agents/agent-service";
 import { AgentPromptStore } from "./agents/agent-prompt-store";
-import { createEditOwnPromptsTool } from "./agents/agent-prompt-tool";
 import { createRuntimeCoordinator, type RuntimeCoordinator } from "./runtime-coordinator";
 import { RuntimeSupervisor } from "./runtime/runtime-supervisor";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentProfile } from "../shared/agent-contracts";
-import { SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
+import { RETIRED_AGENT_TOOL_NAMES, STARTUP_ENFORCED_SYSTEM_TOOL_NAMES } from "../shared/tool-catalog";
 import { resolveEffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import { ModelConfigService } from "./configuration/model-config-service";
 import { CredentialService } from "./configuration/credential-service";
@@ -51,6 +50,7 @@ import { registerScheduledTaskRoutes } from "./routes/scheduled-tasks";
 import { ensureScheduledTaskSkill } from "./scheduled-tasks/global-skill";
 import { createScheduledTasksTool } from "./scheduled-tasks/scheduled-task-tool";
 import { ensureSkillCreatorGlobalSkill } from "./skills/skill-creator-global-skill";
+import { ensureDeepResearchGlobalSkill } from "./skills/deep-research-global-skill";
 import { WebResearchConfigService } from "./web-research/web-research-config-service";
 import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { ManagedSearchProviderRegistry } from "./web-research/managed-search-provider-registry";
@@ -87,6 +87,7 @@ import { exposeRequestId, registerApiErrorHandler } from "./http/error-handler";
 import { sendApiError } from "./routes/http";
 import { BackgroundErrorRegistry } from "./observability/background-errors";
 import { SYSTEM_LIMITS } from "./core/limits";
+import { createSessionTextTools } from "./session-text-tools";
 import { AgentLifecycleGate } from "./core/agent-lifecycle-gate";
 import { DurableDeletionCoordinator } from "./core/durable-deletion";
 import { KeyedMutex } from "./core/keyed-mutex";
@@ -99,6 +100,10 @@ import { BrowserPreviewService } from "./browser-automation/browser-preview-serv
 import { BrowserAuditRepository } from "./browser-automation/browser-audit-repository";
 import { BrowserAutomationService } from "./browser-automation/browser-automation-service";
 import { createBrowserTools } from "./browser-automation/browser-tools";
+import { SessionQuestionRepository } from "./questions/session-question-repository";
+import { createAskUserTool } from "./questions/ask-user-tool";
+import { SessionQuestionRuntimeState } from "./questions/session-question-reconciliation";
+import { SessionQuestionService } from "./questions/session-question-service";
 import { resolveBrowserCapabilities } from "./browser-automation/browser-capabilities";
 import { registerBrowserAutomationRoutes } from "./routes/browser-automation";
 import { registerBrowserPreviewRoutes } from "./routes/browser-preview";
@@ -151,6 +156,16 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const authService = createAuthService(paths, { identityRepository: identities });
   registerOriginProtection(app);
   const sessionRepository = createSessionRepository(applicationDatabase);
+  const sessionQuestions = new SessionQuestionRepository(applicationDatabase);
+  const questionRuntimeStates = new Map<string, SessionQuestionRuntimeState>();
+  const questionStateFor = (agentId: string) => {
+    const existing = questionRuntimeStates.get(agentId);
+    if (existing) return existing;
+    const created = new SessionQuestionRuntimeState(agentId, sessionQuestions);
+    questionRuntimeStates.set(agentId, created);
+    return created;
+  };
+  const questionService = new SessionQuestionService(sessionQuestions, questionStateFor);
   const sessionBulkRepository = createSessionBulkRepository(applicationDatabase);
   await reconcileUnpersistedSessions(paths, applicationDatabase);
   const agentLifecycle = new AgentLifecycleGate();
@@ -309,12 +324,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
         if (!profile) {
           throw new Error("Agent 不存在");
         }
-        const readInstructionPrompts = async () => {
-          const latest = await agentStore.get(agentId);
-          if (!latest) throw new Error("Agent 不存在");
-          const bootsharp = await agentPrompts.read(agentId, "bootsharp");
-          return buildAgentInstructionPrompts(latest.profile, bootsharp);
-        };
         const webResearchConfig = (await webResearchConfigs.read()).config;
         const retrievalCapabilities = resolveEffectiveRetrievalCapabilities({
           allowedTools: profile.profile.allowedTools,
@@ -327,6 +336,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           deploymentAvailable: deploymentCapabilities.browserAutomationAvailable,
         });
         return createSdkPiRuntimeGateway({
+          agentId,
           cwd,
           agentDir: paths.piDir,
           modelRuntime,
@@ -341,13 +351,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(profile.profile.allowedTools.includes("knowledge_manage")
               ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
               : []),
-            createEditOwnPromptsTool(agentId, agentPrompts, async () => {
-              await runtimeSupervisor?.refreshAgentPromptContext(agentId);
-            }),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
             ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
-          createSessionTools: ({ searchRunState, sessionId }) => [
+          createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
+          createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...(profile.profile.allowedTools.includes("ask_user")
+              ? [createAskUserTool({ agentId, sessionId, branchAnchorId, repository: sessionQuestions })]
+              : []),
             ...(retrievalCapabilities.webSearch
               ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
               : []),
@@ -355,17 +366,14 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
               ? createBrowserTools({ sessionId }, browserAutomation).filter((tool) => browserCapabilities.toolNames.includes(tool.name as never))
               : []),
           ],
-          appendSystemPrompt: [
-            ...await readInstructionPrompts(),
-            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
-          ],
-          refreshAppendSystemPrompt: async () => [
-            ...await readInstructionPrompts(),
-            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
-          ],
+          appendSystemPrompt: browserCapabilities.toolNames.length > 0
+            ? [AgentSystemPromptConfiguration.browserAutomationPolicy]
+            : [],
+          resolveAgentPromptContext: () => agentPrompts.readContext(agentId),
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
           sessionMetadataStore,
+          questionState: questionStateFor(agentId),
           onToolCallCircuitBreak: (event) => {
             app.log.warn(event, "重复空参数工具调用已限制");
           },
@@ -429,6 +437,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     assignSession: (sessionId, agentId) => sessionMetadataStore.assignAgent(sessionId, agentId),
     archiveSession: (sessionId) => sessionMetadataStore.archive(sessionId),
     sessionIsPersisted: (agentId, sessionId) => hasPersistedSessionFile(paths, agentId, sessionId),
+    assertSessionRunnable: (agentId, sessionId) => questionService.assertAutomationCanStart(agentId, sessionId),
     onBackgroundError: (error) => {
       backgroundErrors.record(error.code, { taskId: error.taskId });
       app.log.error(error, "定时任务后台执行失败");
@@ -439,10 +448,16 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     sessionAgent: (sessionId) => resolveSessionAgentId(sessionId, sessionMetadataStore),
     workspaceFiles,
     referenceResolver,
+    questions: questionService,
   });
-  await agentStore.ensureSystemToolPermissions(SYSTEM_TOOL_NAMES);
+  await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);
+  await agentStore.ensureSystemToolPermissions(STARTUP_ENFORCED_SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
   await ensureSkillCreatorGlobalSkill(paths.piDir);
+  const deepResearchSkill = await ensureDeepResearchGlobalSkill(paths.piDir);
+  if (deepResearchSkill.status !== "current") {
+    app.log.info(deepResearchSkill, "通用深度研究 Skill 初始化完成");
+  }
   const legacySkillCleanup = await cleanupBundledRetrievalSkills(paths.piDir);
   for (const result of legacySkillCleanup) {
     if (result.status !== "absent") app.log.info(result, "检索内置 Skill 清理完成");
@@ -508,7 +523,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     authService,
     store: agentStore,
     prompts: agentPrompts,
-    refreshPromptContext: (agentId) => runtimeSupervisor.refreshAgentPromptContext(agentId),
     removeAgent: (agentId) => runtimeCoordinator.removeAgent(agentId),
     finalizeAgentRemoval: (agentId) => runtimeCoordinator.finalizeAgentRemoval(agentId),
     restoreAgent: (agentId) => runtimeCoordinator.restoreAgent(agentId),
@@ -590,7 +604,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     isProfileInUse: async (profileId) => (await agentStore.list()).some((agent) => agent.profile.ttsProfileId === profileId),
     getAgentTtsProfile: async (agentId) => {
       const profile = (await agentStore.get(agentId))?.profile;
-      return profile?.ttsProfileId ? { profileId: profile.ttsProfileId, voice: profile.ttsVoice } : undefined;
+      return profile?.ttsProfileId ? {
+        profileId: profile.ttsProfileId,
+        voice: profile.ttsVoice,
+        customParameters: profile.ttsCustomParameters,
+      } : undefined;
     },
   });
   registerKnowledgeRetrievalRoutes(app, {
@@ -679,24 +697,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     throw error;
   }
 }
-
-/**
- * 把 Agent Profile 的稳定角色字段转换为持续注入的系统提示。
- */
-function buildAgentInstructionPrompts(profile: AgentProfile, bootsharp = ""): string[] {
-  const sections: Array<[string, string]> = [
-    ["角色定位", profile.instructions.role],
-    ["行为方式", profile.instructions.behavior],
-    ["规则", profile.instructions.rules],
-    ["用户", profile.instructions.user],
-  ];
-  const content = sections
-    .filter(([, value]) => value.trim())
-    .map(([title, value]) => `## ${title}\n\n${value.trim()}`)
-    .join("\n\n");
-  return [content, bootsharp.trim() ? `## 初始化协作设定\n\n${bootsharp.trim()}` : ""].filter(Boolean);
-}
-
 
 interface GracefulShutdownOptions {
   close(): Promise<void>;

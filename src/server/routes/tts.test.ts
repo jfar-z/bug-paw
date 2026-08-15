@@ -37,14 +37,62 @@ describe("语音合成配置路由", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/v1/capabilities/tts",
-      payload: { name: "中文语音", baseUrl: "https://tts.example/v1", model: "tts-1", voice: "alloy", responseFormat: "mp3", apiKey: randomUUID() },
+      payload: {
+        name: "中文语音",
+        baseUrl: "https://tts.example/v1",
+        model: "tts-1",
+        voice: "alloy",
+        responseFormat: "mp3",
+        apiKey: randomUUID(),
+        customParameters: { response_format: "pcm", instructions: "用愉快语气朗读" },
+      },
     });
     const listed = await app.inject({ method: "GET", url: "/api/v1/capabilities/tts" });
 
     expect(created.statusCode).toBe(201);
     expect(listed.headers["cache-control"]).toBe("no-store");
-    expect(listed.json().profiles).toEqual([expect.objectContaining({ name: "中文语音", hasApiKey: true })]);
+    expect(listed.json().profiles).toEqual([expect.objectContaining({
+      name: "中文语音",
+      hasApiKey: true,
+      customParameters: { response_format: "pcm", instructions: "用愉快语气朗读" },
+    })]);
     expect(listed.json().profiles[0]).not.toHaveProperty("apiKey");
+    await app.close();
+  });
+
+  it("拒绝模型级自定义参数覆盖 input", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tts-routes-"));
+    roots.push(root);
+    const app = Fastify();
+    registerApiV1Namespace(app);
+    registerTtsRoutes(app, {
+      authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService,
+      configs: new TtsConfigService(join(root, "tts.json")),
+      synthesize: { synthesize: vi.fn() },
+      isProfileInUse: vi.fn(async () => false),
+      getAgentTtsProfile: vi.fn(async () => undefined),
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/capabilities/tts",
+      payload: {
+        name: "无效语音",
+        baseUrl: "https://tts.example/v1",
+        model: "tts-1",
+        voice: "alloy",
+        responseFormat: "mp3",
+        apiKey: randomUUID(),
+        customParameters: { input: "覆盖" },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: "TTS 自定义请求参数不能覆盖 input",
+    });
     await app.close();
   });
 
@@ -76,7 +124,7 @@ describe("语音合成配置路由", () => {
     await app.close();
   });
 
-  it("合成时把 Agent 音色覆盖传给服务，并流式返回音频", async () => {
+  it("合成时把 Agent 自定义参数和音色覆盖传给服务，并流式返回音频", async () => {
     const root = await mkdtemp(join(tmpdir(), "tts-routes-"));
     roots.push(root);
     const app = Fastify();
@@ -90,7 +138,11 @@ describe("语音合成配置路由", () => {
       configs: new TtsConfigService(join(root, "tts.json")),
       synthesize: { synthesize },
       isProfileInUse: vi.fn(async () => false),
-      getAgentTtsProfile: vi.fn(async () => ({ profileId: "profile-1", voice: "Cherry" })),
+      getAgentTtsProfile: vi.fn(async () => ({
+        profileId: "profile-1",
+        voice: "Cherry",
+        customParameters: { instructions: "Agent 情绪", response_format: "pcm" },
+      })),
     });
     await app.ready();
 
@@ -99,7 +151,10 @@ describe("语音合成配置路由", () => {
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("audio/pcm");
     expect([...response.rawPayload]).toEqual([1, 2, 3]);
-    expect(synthesize).toHaveBeenCalledWith("profile-1", "你好", expect.any(AbortSignal), "Cherry");
+    expect(synthesize).toHaveBeenCalledWith("profile-1", "你好", expect.any(AbortSignal), {
+      voice: "Cherry",
+      customParameters: { instructions: "Agent 情绪", response_format: "pcm" },
+    });
     await app.close();
   });
 

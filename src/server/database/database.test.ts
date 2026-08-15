@@ -40,6 +40,8 @@ describe("BugPaw SQLite", () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
+      { version: 5 },
     ]);
     database.close();
 
@@ -49,6 +51,8 @@ describe("BugPaw SQLite", () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
+      { version: 5 },
     ]);
     reopened.close();
   });
@@ -84,12 +88,73 @@ describe("BugPaw SQLite", () => {
       "knowledge_manage",
       "web_search",
       "web_read",
+      "ask_user",
     ]);
     expect(database.read<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
+      { version: 5 },
     ]);
+    database.close();
+  });
+
+  it("为已有 Session 增加空的置顶状态", () => {
+    const database = openDatabase(":memory:");
+    runMigrations(database, { throughVersion: 3 });
+    database.write(
+      "INSERT INTO agents(id, cwd, profile_json, sort_order, revision, created_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)",
+      ["agent-1", "/data/workspace/agent-1", "{}", "2026-08-07T00:00:00.000Z", "2026-08-07T00:00:00.000Z"],
+    );
+    database.write(
+      "INSERT INTO sessions(id, agent_id, projection_version, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+      ["session-1", "agent-1", "2026-08-07T00:00:00.000Z", "2026-08-07T00:00:00.000Z"],
+    );
+
+    runMigrations(database);
+
+    expect(database.readOne<{ pinned_at: string | null }>(
+      "SELECT pinned_at FROM sessions WHERE id = ?",
+      ["session-1"],
+    )).toEqual({ pinned_at: null });
+    database.close();
+  });
+
+  it("迁移会话提问表并只为存量 Agent 一次性补充 ask_user", () => {
+    const database = openDatabase(":memory:");
+    runMigrations(database, { throughVersion: 4 });
+    const profile = { id: "agent-1", allowedTools: ["read"] };
+    database.write(
+      "INSERT INTO agents(id, cwd, profile_json, sort_order, revision, created_at, updated_at) VALUES (?, ?, ?, 0, 7, ?, ?)",
+      ["agent-1", "/data/workspace/agent-1", JSON.stringify(profile), "2026-08-13T00:00:00.000Z", "2026-08-13T00:00:00.000Z"],
+    );
+    database.write(
+      "INSERT INTO sessions(id, agent_id, projection_version, created_at, updated_at) VALUES (?, ?, 0, ?, ?)",
+      ["session-1", "agent-1", "2026-08-13T00:00:00.000Z", "2026-08-13T00:00:00.000Z"],
+    );
+
+    runMigrations(database);
+
+    const migrated = database.readOne<{ profile_json: string; revision: number }>(
+      "SELECT profile_json, revision FROM agents WHERE id = ?",
+      ["agent-1"],
+    );
+    expect(JSON.parse(migrated!.profile_json).allowedTools).toEqual(["read", "ask_user"]);
+    expect(migrated!.revision).toBe(7);
+
+    const insert = (id: string, state: string) => database.write(`
+      INSERT INTO session_questions(
+        id, agent_id, session_id, tool_call_id, state, version,
+        questions_json, created_at, updated_at
+      ) VALUES (?, 'agent-1', 'session-1', ?, ?, 1, '[]', ?, ?)
+    `, [id, `call-${id}`, state, "2026-08-13T00:00:00.000Z", "2026-08-13T00:00:00.000Z"]);
+    insert("pending-1", "pending");
+    expect(() => insert("pending-2", "resolving")).toThrow();
+    database.write("UPDATE session_questions SET state = 'submitted' WHERE id = 'pending-1'");
+    insert("pending-2", "resolving");
+    database.write("DELETE FROM sessions WHERE id = 'session-1'");
+    expect(database.read<{ id: string }>("SELECT id FROM session_questions")).toEqual([]);
     database.close();
   });
 

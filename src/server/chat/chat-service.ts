@@ -7,6 +7,9 @@ import type { WorkspaceFileInfo, WorkspaceFileService } from "../attachments";
 import { compileAgentReferences, type AgentReferenceResolver } from "../agent-references";
 import type { AgentReference, AgentReferenceInput } from "../../shared/agent-reference-contracts";
 import { parseSessionReplayContent } from "../../shared/session-message-context";
+import type { SubmitQuestionAnswers } from "../../shared/session-question-contracts";
+import type { QuestionAnswerSubmissionResult } from "../../shared/question-response-protocol";
+import type { SessionQuestionService } from "../questions/session-question-service";
 
 export interface SessionSubscription {
   events: AsyncIterable<ChatEvent>;
@@ -20,6 +23,7 @@ export interface ChatServiceDependencies {
   sessionAgent(sessionId: string): Promise<string>;
   workspaceFiles?: WorkspaceFileService;
   referenceResolver?: AgentReferenceResolver;
+  questions?: Pick<SessionQuestionService, "startUserMessage" | "submitAnswers" | "reconcileBranch">;
 }
 
 /** 以单次 RuntimeLease 完成 Chat 用例，Route 不再重复解析 Runtime。 */
@@ -31,7 +35,36 @@ export class ChatApplicationService {
     try {
       await lease.runtime.openSession(sessionId);
       const prompt = await this.preparePrompt(lease.runtime, agentId, input);
-      return await lease.runtime.startPrompt(sessionId, prompt.content, prompt.summary);
+      if (!this.dependencies.questions) {
+        return await lease.runtime.startPrompt(sessionId, prompt.content, prompt.summary);
+      }
+      return await this.dependencies.questions.startUserMessage({
+        agentId,
+        sessionId,
+        prompt: prompt.content,
+        userText: prompt.summary,
+      }, (id, content, userText) => lease.runtime.startPrompt(id, content, userText));
+    } finally {
+      lease.release();
+    }
+  }
+
+  /** 提交当前问题答案并在同一 Runtime 租约中启动下一 Run。 */
+  async submitQuestionAnswers(
+    sessionId: string,
+    questionRecordId: string,
+    input: SubmitQuestionAnswers,
+  ): Promise<QuestionAnswerSubmissionResult> {
+    if (!this.dependencies.questions) throw new DomainError("REQUEST_FAILED", "问题服务尚未就绪");
+    const { agentId, lease } = await this.acquire(sessionId);
+    try {
+      await lease.runtime.openSession(sessionId);
+      return await this.dependencies.questions.submitAnswers({
+        agentId,
+        sessionId,
+        questionRecordId,
+        input,
+      }, (id, prompt, userText) => lease.runtime.startPrompt(id, prompt, userText));
     } finally {
       lease.release();
     }

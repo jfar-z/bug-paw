@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import type { TtsProfileInput, TtsProfileSummary, TtsResponseFormat, TtsSettingsDocument } from "../../shared/tts-contracts";
+import type { TtsProfileInput, TtsProfileSummary, TtsSettingsDocument } from "../../shared/tts-contracts";
+import { isTtsResponseFormat, normalizeTtsCustomParameters, readTtsCustomParameters } from "../../shared/tts-custom-parameters";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
 
 interface StoredTtsProfile extends Omit<TtsProfileSummary, "hasApiKey"> {
@@ -10,6 +11,10 @@ interface StoredTtsProfile extends Omit<TtsProfileSummary, "hasApiKey"> {
 interface StoredTtsSettings {
   profiles: StoredTtsProfile[];
 }
+
+type LegacyStoredTtsProfile = Omit<StoredTtsProfile, "customParameters"> & {
+  customParameters?: unknown;
+};
 
 /** 管理多个 OpenAI 兼容语音配置，并确保读取结果不含密钥。 */
 export class TtsConfigService {
@@ -76,6 +81,7 @@ function toSummary(profile: StoredTtsProfile): TtsProfileSummary {
     model: profile.model,
     voice: profile.voice,
     responseFormat: profile.responseFormat,
+    customParameters: profile.customParameters,
     hasApiKey: Boolean(profile.apiKey),
   };
 }
@@ -83,7 +89,11 @@ function toSummary(profile: StoredTtsProfile): TtsProfileSummary {
 /** 兼容缺失或旧格式的配置文件。 */
 function normalizeSettings(value: unknown): StoredTtsSettings {
   if (!isRecord(value) || !Array.isArray(value.profiles)) return { profiles: [] };
-  return { profiles: value.profiles.filter(isStoredProfile) };
+  return {
+    profiles: value.profiles
+      .map(normalizeStoredProfile)
+      .filter((profile): profile is StoredTtsProfile => profile !== undefined),
+  };
 }
 
 /** 校验用户提交的单项配置。 */
@@ -93,8 +103,9 @@ function normalizeProfile(input: TtsProfileInput, id: string): StoredTtsProfile 
   const voice = normalizeText(input.voice, "音色", 160);
   const apiKey = input.apiKey.trim();
   if (!apiKey) throw new TypeError("请填写 API Key");
-  if (!isResponseFormat(input.responseFormat)) throw new TypeError("语音格式无效");
-  return { id, name, baseUrl: normalizeBaseUrl(input.baseUrl), model, voice, responseFormat: input.responseFormat, apiKey };
+  if (!isTtsResponseFormat(input.responseFormat)) throw new TypeError("语音格式无效");
+  const customParameters = normalizeTtsCustomParameters(input.customParameters ?? {});
+  return { id, name, baseUrl: normalizeBaseUrl(input.baseUrl), model, voice, responseFormat: input.responseFormat, customParameters, apiKey };
 }
 
 /** 统一校验第三方 OpenAI 兼容服务地址。 */
@@ -118,11 +129,7 @@ function normalizeText(value: string, label: string, maximum: number): string {
   return text;
 }
 
-function isResponseFormat(value: unknown): value is TtsResponseFormat {
-  return value === "mp3" || value === "opus" || value === "wav" || value === "pcm";
-}
-
-function isStoredProfile(value: unknown): value is StoredTtsProfile {
+function isStoredProfile(value: unknown): value is LegacyStoredTtsProfile {
   return isRecord(value)
     && typeof value.id === "string"
     && typeof value.name === "string"
@@ -130,7 +137,14 @@ function isStoredProfile(value: unknown): value is StoredTtsProfile {
     && typeof value.model === "string"
     && typeof value.voice === "string"
     && typeof value.apiKey === "string"
-    && isResponseFormat(value.responseFormat);
+    && isTtsResponseFormat(value.responseFormat);
+}
+
+/** 将旧版持久化记录补齐为当前完整结构。 */
+function normalizeStoredProfile(value: unknown): StoredTtsProfile | undefined {
+  if (!isStoredProfile(value)) return undefined;
+  const { customParameters, ...profile } = value;
+  return { ...profile, customParameters: readTtsCustomParameters(customParameters) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
