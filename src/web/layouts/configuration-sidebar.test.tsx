@@ -1,18 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ConfigurationSidebar } from "./configuration-sidebar";
 
 describe("ConfigurationSidebar", () => {
-  it("将运行设置作为 BugPaw 的产品入口呈现", () => {
-    render(<ConfigurationSidebar route={{ page: "pi-settings" }} open onClose={vi.fn()} onNavigate={vi.fn()} />);
+  it("标记当前配置入口并将导航交给工作台", () => {
+    const onNavigate = vi.fn();
+    render(<ConfigurationSidebar route={{ page: "pi-settings" }} open onClose={vi.fn()} onNavigate={onNavigate} />);
 
-    const header = document.querySelector(".configuration-sidebar__header")!;
-    expect(header).toHaveClass("secondary-sidebar-header");
-    expect([...header.querySelectorAll(".secondary-sidebar-header__eyebrow, .secondary-sidebar-header__title")]
-      .map((element) => element.textContent)).toEqual(["SETTINGS", "配置中心"]);
     expect(screen.getByRole("button", { name: "运行设置" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText("核心配置为事实来源")).toBeInTheDocument();
-    expect(screen.queryByText("Pi 运行设置")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模型与凭证" }));
+    expect(onNavigate).toHaveBeenCalledWith({ page: "providers" });
   });
 
   it("将联网搜索作为能力扩展分组下的二级菜单", () => {

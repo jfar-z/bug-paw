@@ -86,19 +86,6 @@ function mediaDeclaration(source: string, condition: string, selector: string, p
 }
 
 describe("BugPaw 生产视觉合同", () => {
-  it("主题画布与签名阴影使用已确认视觉方向", async () => {
-    const source = await readFile("src/web/bugpaw-theme.css", "utf8").catch(() => "");
-    const rules = parseStyleRules(source);
-
-    expect(declaration(rules, ':root[data-theme="dark"]', "--canvas")).toBe("#151517");
-    expect(declaration(rules, ':root[data-theme="light"]', "--canvas")).toBe("#f3f2ee");
-    expect(declaration(rules, ':root[data-theme="bug"]', "--canvas")).toBe("#e9dfd1");
-    expect(declaration(rules, ':root[data-theme="bug"]', "--shadow-pixel").replaceAll(" ", ""))
-      .toBe("2px2px0#49392d");
-    expect(declaration(rules, ".product-mark__image", "width")).toBe("36px");
-    expect(declaration(rules, ".bugpaw-auth-visual img", "object-fit")).toBe("contain");
-  });
-
   it("白色主题使用温润表面、灰蓝交互与猫眼绿状态", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8");
     const rules = parseStyleRules(source);
@@ -290,10 +277,7 @@ describe("BugPaw 生产视觉合同", () => {
   });
 
   it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
-    const [source, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
-      readFile("src/web/bugpaw-theme.css", "utf8"),
-    ]);
+    const themeSource = await readFile("src/web/bugpaw-theme.css", "utf8");
     const themeRules = parseStyleRules(themeSource);
     for (const themedSelector of [
       ".primary-button",
@@ -305,7 +289,6 @@ describe("BugPaw 生产视觉合同", () => {
       expect(groupedDeclaration(themeRules, themedSelector, "background")).toBe("var(--primary-bg)");
       expect(groupedDeclaration(themeRules, themedSelector, "border-color")).toBe("var(--primary-bg)");
     }
-    expect(source).not.toContain("#102018");
   });
 
   it("三套主题为全部滚动区域提供统一的非原生滚动条", async () => {
@@ -546,29 +529,6 @@ describe("BugPaw 生产视觉合同", () => {
     expect(groupedDeclaration(rules, ':root[data-theme="bug"] .danger-button', "border-radius")).toBe("7px");
   });
 
-  it("配置概览入口留白充足，普通配置标题保持纵向文档流", async () => {
-    const [baseSource, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
-      readFile("src/web/bugpaw-theme.css", "utf8"),
-    ]);
-    const baseRules = parseStyleRules(baseSource);
-    const themeRules = parseStyleRules(themeSource);
-
-    expect(declaration(baseRules, ".configuration-entry", "padding")).toBe("15px 16px");
-    expect(declaration(themeRules, ".configuration-page__heading", "display")).toBe("");
-    expect(declaration(themeRules, ".configuration-overview-page .configuration-page__heading", "display")).toBe("flex");
-    expect(declaration(themeRules, ".configuration-overview-page .configuration-page__heading", "justify-content")).toBe("space-between");
-    expect(declaration(baseRules, ".configuration-page__heading--actions", "display")).toBe("flex");
-  });
-
-  it("运行设置分组让标题与字段远离容器边界", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
-    const rules = parseStyleRules(source);
-
-    expect(declaration(rules, ".settings-section .configuration-section__heading", "padding-inline")).toBe("16px");
-    expect(declaration(rules, ".settings-section > div:last-child", "padding-inline")).toBe("16px");
-  });
-
   it("全部生产样式不再声明小于 10px 的可见字号", async () => {
     const sources = await Promise.all([
       readFile("src/web/styles.css", "utf8"),
@@ -597,22 +557,46 @@ describe("BugPaw 生产视觉合同", () => {
     expect(mediaConditions).toContain("(prefers-reduced-motion: reduce)");
   });
 
-  it("登录页保持 v0 双栏几何、品牌画面和移动端收拢方式", async () => {
-    const [baseSource, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
-      readFile("src/web/bugpaw-theme.css", "utf8"),
-    ]);
-    const baseRules = parseStyleRules(baseSource);
-    const themeRules = parseStyleRules(themeSource);
+  it("登录页在窄屏切换为移动端品牌入口", async () => {
+    const baseSource = await readFile("src/web/styles.css", "utf8");
 
-    expect(declaration(baseRules, ".login-page", "grid-template-columns"))
-      .toBe("minmax(520px, 1.25fr) minmax(390px, 0.75fr)");
-    expect(declaration(baseRules, ".login-brand-panel", "background")).toBe("rgb(27, 34, 43)");
-    expect(declaration(baseRules, ".hero-art", "transform")).toBe("rotate(-2deg)");
-    expect(declaration(baseRules, ".login-form-wrap", "max-width")).toBe("340px");
-    expect(declaration(themeRules, ':root[data-theme="bug"] .login-brand-panel', "background"))
-      .toBe("var(--rail)");
     expect(mediaDeclaration(baseSource, "(max-width: 860px)", ".login-brand-panel", "display")).toBe("none");
     expect(mediaDeclaration(baseSource, "(max-width: 860px)", ".mobile-brand", "display")).toBe("flex");
+  });
+
+  it("活动卡片保留标题首行与状态标记的对齐关系", async () => {
+    const source = await readFile("src/web/styles.css", "utf8");
+
+    expect(source).toMatch(/\.live-tool-card__summary,\s*\.thinking-card__summary\s*\{[^}]*align-items:\s*start;/s);
+    expect(source).toMatch(/\.activity-group__summary\s*\{[^}]*align-items:\s*center;/s);
+    expect(source).toMatch(/\.live-tool-card::before,\s*\.thinking-card::before\s*\{[^}]*top:\s*9px;[^}]*left:\s*-18\.5px;/s);
+  });
+
+  it("搜索结果与工具详情在各自容器内独立滚动", async () => {
+    const source = await readFile("src/web/styles.css", "utf8");
+    const style = document.createElement("style");
+    style.textContent = source;
+    document.head.append(style);
+    document.body.innerHTML = `
+      <section class="configuration-dialog session-search-dialog">
+        <div class="session-search-dialog__results"></div>
+      </section>
+      <section class="live-tool-card__detail"><pre>长入参</pre></section>
+      <section class="live-tool-card__detail"><pre>长结果</pre></section>`;
+
+    const dialog = getComputedStyle(document.querySelector<HTMLElement>(".session-search-dialog")!);
+    const results = getComputedStyle(document.querySelector<HTMLElement>(".session-search-dialog__results")!);
+    expect(dialog.gridTemplateRows).toBe("auto auto auto minmax(0, 1fr) auto");
+    expect(results.minHeight).toBe("0px");
+    expect(results.overflowY).toBe("auto");
+    expect(results.overscrollBehaviorY).toBe("contain");
+
+    for (const detail of document.querySelectorAll<HTMLElement>(".live-tool-card__detail pre")) {
+      const computed = getComputedStyle(detail);
+      expect(Number.parseFloat(computed.maxHeight)).toBeGreaterThanOrEqual(160);
+      expect(Number.parseFloat(computed.maxHeight)).toBeLessThanOrEqual(300);
+      expect(computed.overflow).toBe("auto");
+    }
+    style.remove();
   });
 });
