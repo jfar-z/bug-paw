@@ -38,7 +38,7 @@ describe("resolveTheme", () => {
   });
 
   it.each([
-    ["dark", "#171c22"],
+    ["dark", "#151517"],
     ["light", "#f7f6f2"],
     ["bug", "#ded2bf"],
   ] as const)("为 %s 主题同步浏览器颜色", (preference, expectedColor) => {
