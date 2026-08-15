@@ -33,6 +33,7 @@
   --fg: var(--accent-strong);
   --accent-soft: rgba(95, 109, 138, 0.18);
   --ok: var(--eye);
+  --halo: color-mix(in srgb, var(--eye) 18%, transparent);
   --danger: #d77c78;
   --focus: #a4c66d;
   --primary-bg: #5f6d8a;
@@ -236,7 +237,9 @@ textarea:focus-visible {
 .primary-button,
 .configuration-primary-action,
 .send-button,
-.new-chat-button {
+.new-chat-button,
+[data-theme=dark] .mobile-entry-gate__enter,
+[data-theme=dark] .question-composer__submit {
   color: var(--primary-text);
   background: var(--primary-bg);
   border-color: var(--primary-bg);
@@ -427,9 +430,9 @@ textarea:focus-visible {
 }
 
 /* 暗色主题用猫眼绿表达运行与成功，主要交互继续使用灰蓝强调色。 */
-:root[data-theme="dark"] .private-state i {
+[data-theme=dark] .private-state i {
   background: var(--ok);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--halo);
 }
 
 .configuration-overview-page .configuration-page__heading {

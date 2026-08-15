@@ -123,6 +123,7 @@ describe("BugPaw 生产视觉合同", () => {
       ["--accent-strong", "#94a4c4"],
       ["--fg", "var(--accent-strong)"],
       ["--ok", "var(--eye)"],
+      ["--halo", "color-mix(in srgb,var(--eye) 18%,transparent)"],
       ["--accent-soft", "rgba(95,109,138,0.18)"],
       ["--danger", "#d77c78"],
       ["--focus", "#a4c66d"],
@@ -147,10 +148,11 @@ describe("BugPaw 生产视觉合同", () => {
     expect(contrastRatio("#a4c66d", "#151517")).toBeGreaterThanOrEqual(4.5);
     expect(declaration(baseRules, ":root", "--fg")).toBe("var(--accent)");
     expect(declaration(baseRules, ":root", "--ok")).toBe("var(--accent)");
-    expect(declaration(baseRules, ":root", "--halo")).toBe("");
+    expect(declaration(baseRules, ":root", "--halo")).toBe("var(--accent-soft)");
     expect(declaration(themeRules, ":root", "--fg")).toBe("");
     expect(declaration(themeRules, ":root", "--ok")).toBe("");
-    expect(declaration(themeRules, darkSelector, "--halo")).toBe("");
+    expect(declaration(themeRules, darkSelector, "--halo"))
+      .toBe("color-mix(in srgb,var(--eye) 18%,transparent)");
     expect(declaration(baseRules, ".markdown-content a", "color")).toBe("var(--fg)");
   });
 
@@ -193,7 +195,7 @@ describe("BugPaw 生产视觉合同", () => {
       expect(groupedDeclaration(baseRules, selector, "color"), selector).toBe("var(--ok)");
     }
     for (const selector of [".service-state i", ".streaming-label i", ".status-dot", ".agent-card__title i", ".agent-detail-header__status i"]) {
-      expect(groupedDeclaration(baseRules, selector, "box-shadow"), selector).toContain("var(--accent-soft)");
+      expect(groupedDeclaration(baseRules, selector, "box-shadow"), selector).toContain("var(--halo)");
     }
     expect(declaration(baseRules, ".scheduled-task-state.is-enabled", "border-color"))
       .toBe("color-mix(in srgb, var(--ok) 30%, var(--border))");
@@ -202,19 +204,28 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(baseRules, ".private-state i", "background")).toBe("rgb(124, 194, 107)");
     expect(declaration(baseRules, ".private-state i", "box-shadow"))
       .toBe("0 0 0 4px rgba(124, 194, 107, 0.12)");
-    expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "background"))
+    expect(declaration(rules, "[data-theme=dark] .private-state i", "background"))
       .toBe("var(--ok)");
-    expect(declaration(rules, ':root[data-theme="dark"] .private-state i', "box-shadow"))
-      .toBe("0 0 0 4px var(--accent-soft)");
+    expect(declaration(rules, "[data-theme=dark] .private-state i", "box-shadow"))
+      .toBe("0 0 0 4px var(--halo)");
   });
 
   it("暗色主要操作统一消费灰蓝按钮语义令牌", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
-    const rules = parseStyleRules(source);
-    const selector = ':root[data-theme="dark"] :is(.primary-button, .send-button, .mobile-entry-gate__enter, .question-composer__submit)';
-
-    expect(declaration(rules, selector, "color")).toBe("var(--primary-text)");
-    expect(declaration(rules, selector, "background")).toBe("var(--primary-bg)");
+    const [source, themeSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/bugpaw-theme.css", "utf8"),
+    ]);
+    const themeRules = parseStyleRules(themeSource);
+    for (const themedSelector of [
+      ".primary-button",
+      ".send-button",
+      "[data-theme=dark] .mobile-entry-gate__enter",
+      "[data-theme=dark] .question-composer__submit",
+    ]) {
+      expect(groupedDeclaration(themeRules, themedSelector, "color")).toBe("var(--primary-text)");
+      expect(groupedDeclaration(themeRules, themedSelector, "background")).toBe("var(--primary-bg)");
+      expect(groupedDeclaration(themeRules, themedSelector, "border-color")).toBe("var(--primary-bg)");
+    }
     expect(source).not.toContain("#102018");
   });
 

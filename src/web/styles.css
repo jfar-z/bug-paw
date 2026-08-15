@@ -12,6 +12,7 @@
   --fg: var(--accent);
   --accent-soft: #e2eee7;
   --ok: var(--accent);
+  --halo: var(--accent-soft);
   --canvas: #f3f4ef;
   --panel: #f8f9f5;
   --surface: #ffffff;
@@ -1740,7 +1741,7 @@ p {
   height: 7px;
   border-radius: 50%;
   background: var(--ok);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--halo);
 }
 
 .login-statement {
@@ -3590,7 +3591,7 @@ img.message-avatar {
   height: 6px;
   border-radius: 50%;
   background: var(--ok);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--halo);
   animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -4837,7 +4838,7 @@ img.message-avatar {
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--ok);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--halo);
 }
 
 .configuration-content {
@@ -6652,7 +6653,6 @@ img.message-avatar {
 @keyframes mobile-entry-gate-in { from { opacity: 0; } to { opacity: 1; } }
 
 :root[data-theme="dark"] .mobile-entry-gate__card { box-shadow: 0 20px 64px rgba(0, 0, 0, .38), 0 1px 0 rgba(255, 255, 255, .04) inset; }
-:root[data-theme="dark"] :is(.primary-button, .send-button, .mobile-entry-gate__enter, .question-composer__submit) { color: var(--primary-text); background: var(--primary-bg); }
 
 /* 定时任务沿用资源管理的页面骨架，内部组件使用独立命名空间避免覆盖资源管理的响应式规则。 */
 .scheduled-tasks-page__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
