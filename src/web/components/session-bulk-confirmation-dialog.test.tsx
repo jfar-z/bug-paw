@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionBulkPreview } from "../api";
 import { SessionBulkConfirmationDialog } from "./session-bulk-confirmation-dialog";
 
-const applicationStyles = readFileSync("src/web/styles.css", "utf8");
+const applicationStyles = ["src/web/configuration.css", "src/web/chat.css"]
+  .map((path) => readFileSync(path, "utf8"))
+  .join("\n");
 
 describe("SessionBulkConfirmationDialog", () => {
   it("删除含定时任务的会话时强化提示任务将停用但保留", () => {

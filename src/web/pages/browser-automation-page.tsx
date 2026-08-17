@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument, BrowserGrantedPermission, TrustedBrowserOrigin } from "../../shared/browser-automation-contracts";
 import { api, ApiClientError } from "../api";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
 
 const OFFLINE_KEY = "bugpaw:browser-automation:offline:v1";
 

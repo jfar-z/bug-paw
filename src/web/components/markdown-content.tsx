@@ -5,6 +5,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
+import "../markdown-content.css";
 import { normalizeMathDelimiters } from "../markdown-math";
 import type { ThemePreference } from "../theme";
 import { useStreamingTextReveal } from "../use-streaming-text-reveal";

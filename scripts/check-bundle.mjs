@@ -80,8 +80,16 @@ export async function checkBundle(root = process.cwd()) {
     violations.push(`CSS 总量: ${totalCssBytes} > ${budget.css.totalGzipBytes} bytes gzip`);
   }
 
+  const routeBudgets = budget.css.routes ?? {};
+  const dynamicPageEntries = Object.entries(manifest)
+    .filter(([name, entry]) => name.startsWith("src/web/pages/") && entry.isDynamicEntry)
+    .map(([name]) => name);
+  for (const name of dynamicPageEntries) {
+    if (!routeBudgets[name]) violations.push(`CSS 页面预算缺失: ${name}`);
+  }
+
   const routes = [];
-  for (const [name, routeBudget] of Object.entries(budget.css.routes ?? {})) {
+  for (const [name, routeBudget] of Object.entries(routeBudgets)) {
     if (!manifest[name]) {
       violations.push(`CSS 页面入口缺失: ${routeBudget.label} (${name})`);
       continue;

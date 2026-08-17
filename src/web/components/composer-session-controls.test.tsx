@@ -3,7 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ComposerSessionControls } from "./composer-session-controls";
 
-const applicationStyles = readFileSync("src/web/styles.css", "utf8");
+const applicationStyles = readFileSync("src/web/chat.css", "utf8");
 
 const models = [
   { provider: "openai", id: "gpt-5", name: "GPT-5", thinkingLevels: ["off", "low", "medium", "high"] as const },

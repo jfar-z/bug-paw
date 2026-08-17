@@ -8,6 +8,8 @@ import { ConflictDialog, type ConfigurationDifference } from "../components/conf
 import { InheritedField } from "../components/configuration/inherited-field";
 import { SettingsSection } from "../components/configuration/settings-section";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
+import "../pi-settings.css";
 
 type FieldKind = "text" | "number" | "boolean" | "select" | "csv";
 interface SettingField {

@@ -6,6 +6,7 @@ import { api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
 
 const CACHE_KEY = "pi-agent:knowledge-retrieval-cache";
 const emptyDraft = (): EmbeddingConfigInput => ({ baseUrl: "", model: "", batchSize: 32, apiKey: "", enabled: true });

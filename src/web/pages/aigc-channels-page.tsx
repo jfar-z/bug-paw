@@ -12,6 +12,7 @@ import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
 import "../aigc.css";
 
 const CACHE_KEY = "pi-agent:aigc-channels-cache";

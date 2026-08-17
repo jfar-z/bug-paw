@@ -5,6 +5,7 @@ import { api, type ConfigurationHistoryEntry, type ConfigurationImportPreview } 
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
 
 /**
  * 提供安全导出、先预览后确认的导入，以及可审阅的设置历史恢复。

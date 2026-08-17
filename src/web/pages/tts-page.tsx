@@ -6,6 +6,7 @@ import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
 import { formatTtsCustomParameters, parseTtsCustomParametersText } from "../tts-custom-parameters-form";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
 
 const emptyDraft = (): TtsProfileInput => ({ name: "", baseUrl: "", model: "", voice: "", responseFormat: "mp3", customParameters: {}, apiKey: "" });
 const CACHE_KEY = "pi-agent:tts-cache";

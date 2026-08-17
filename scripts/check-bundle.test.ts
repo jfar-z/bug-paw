@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 /** 构造包含入口样式、页面样式和未登记样式的最小生产构建。 */
-async function createBundle(budgets: { entry: number; total: number; route: number }) {
+async function createBundle(budgets: { entry: number; total: number; route: number }, budgetOther = true) {
   const root = await mkdtemp(join(tmpdir(), "bundle-budget-"));
   roots.push(root);
   await mkdir(join(root, "config"), { recursive: true });
@@ -43,6 +43,7 @@ async function createBundle(budgets: { entry: number; total: number; route: numb
       totalGzipBytes: budgets.total,
       routes: {
         "src/web/pages/aigc.tsx": { label: "AIGC", gzipBytes: budgets.route },
+        ...(budgetOther ? { "src/web/pages/other.tsx": { label: "其他页面", gzipBytes: 1024 } } : {}),
       },
     },
   }), "utf8");
@@ -61,10 +62,10 @@ describe("Bundle 分层 CSS 预算", () => {
       + gzipSync(files["aigc.css"]).byteLength
       + gzipSync(files["other.css"]).byteLength,
     );
-    expect(result.css.routes).toEqual([expect.objectContaining({
+    expect(result.css.routes).toEqual(expect.arrayContaining([expect.objectContaining({
       label: "AIGC",
       bytes: gzipSync(files["aigc.css"]).byteLength,
-    })]);
+    })]));
   });
 
   it("独立报告首屏、页面和总量超限", async () => {
@@ -76,5 +77,12 @@ describe("Bundle 分层 CSS 预算", () => {
       expect.stringMatching(/^CSS 总量:/u),
       expect.stringMatching(/^CSS 页面 AIGC:/u),
     ]);
+  });
+
+  it("拒绝未登记预算的懒加载页面", async () => {
+    const { root } = await createBundle({ entry: 1024, total: 1024, route: 1024 }, false);
+    const result = await checkBundle(root);
+
+    expect(result.violations).toContain("CSS 页面预算缺失: src/web/pages/other.tsx");
   });
 });
