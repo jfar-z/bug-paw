@@ -16,7 +16,10 @@ function renderAigcRunPage() {
 }
 
 describe("AigcWorkbenchPage 创作台", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.history.replaceState({}, "", "/");
+  });
 
   it("选择已启用接口后展示提示词表单并提交生成任务", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -68,6 +71,9 @@ describe("AigcWorkbenchPage 创作台", () => {
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST" && String(init.body).includes("一只在太空中的猫"))).toBe(true));
-    expect(await screen.findByText("查看任务详情")).toHaveAttribute("href", "/aigc/tasks/task-1");
+    const detailLink = await screen.findByText("查看任务详情");
+    expect(detailLink).toHaveAttribute("href", "/aigc/tasks/task-1");
+    fireEvent.click(detailLink);
+    expect(window.location.pathname).toBe("/aigc/tasks/task-1");
   });
 });

@@ -19,7 +19,7 @@ import type {
 import { api, apiV1Url } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { useOnlineStatus } from "../use-online-status";
-import type { AppRoute } from "../router";
+import { navigateTo, type AppRoute } from "../router";
 
 interface AigcWorkbenchPageProps {
   route: AppRoute;
@@ -272,7 +272,7 @@ function AigcRunPage() {
         <section className="aigc-overview-card">
           <span>已创建任务</span>
           <strong>{createdTask.status}</strong>
-          <small><a href={`/aigc/tasks/${encodeURIComponent(createdTask.id)}`}>查看任务详情</a></small>
+          <small><a href={`/aigc/tasks/${encodeURIComponent(createdTask.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: createdTask.id }); }}>查看任务详情</a></small>
         </section>
       ) : null}
     </div>
@@ -700,7 +700,7 @@ function AigcTasksPage() {
             <div className="aigc-task-actions">
               {(task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
               {(task.status === "failed" || task.status === "cancelled") ? <button type="button" onClick={() => void retry(task.id)}><RefreshCw size={14} />重试</button> : null}
-              <a href={`/aigc/tasks/${encodeURIComponent(task.id)}`}>查看</a>
+              <a href={`/aigc/tasks/${encodeURIComponent(task.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: task.id }); }}>查看</a>
             </div>
           </section>
         ))}
@@ -817,7 +817,7 @@ function AigcWorkflowsPage() {
           <section key={workflow.id} className="aigc-task-row">
             <div><strong>{workflow.name}</strong><span>{workflow.fileName}</span><small>{workflow.nodeCount} 节点 · {workflow.edgeCount} 连线</small></div>
             <p>{workflow.inputCount} 个入参 · {workflow.outputCount} 个输出映射</p>
-            <div className="aigc-task-actions"><a href={`/aigc/workflows/${encodeURIComponent(workflow.id)}`}>配置映射</a><button type="button" onClick={() => void remove(workflow.id)}><Trash2 size={14} />删除</button></div>
+            <div className="aigc-task-actions"><a href={`/aigc/workflows/${encodeURIComponent(workflow.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-workflow-detail", workflowId: workflow.id }); }}>配置映射</a><button type="button" onClick={() => void remove(workflow.id)}><Trash2 size={14} />删除</button></div>
           </section>
         ))}
         {!document?.workflows.length ? <p className="configuration-help">尚未导入工作流。</p> : null}
