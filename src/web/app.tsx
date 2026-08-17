@@ -135,6 +135,7 @@ export function App() {
   const renderRoute = (activeRoute: AppRoute) => {
     switch (activeRoute.page) {
       case "aigc-overview":
+      case "aigc-run":
       case "aigc-interfaces":
       case "aigc-tasks":
       case "aigc-workflows":

@@ -43,6 +43,7 @@ describe("PWA 应用壳", () => {
     expect(source).toContain('"/brand/bugpaw/bugpaw-paw-icon-512.png"');
     expect(source).toContain('"/settings/capabilities/browser"');
     expect(source).toContain('"/aigc"');
+    expect(source).toContain('"/aigc/run"');
     expect(source).toContain('"/settings/capabilities/aigc-channels"');
     expect(source).toContain("__BUGPAW_PRECACHE__");
     expect(source).not.toContain("/icons/icon.svg");
@@ -65,6 +66,6 @@ describe("PWA 应用壳", () => {
   it("使用新应用壳版本清除已安装 PWA 的旧入口缓存", async () => {
     const source = await readFile("public/sw.js", "utf8");
 
-    expect(source).toContain('const CACHE_NAME = "bugpaw-shell-v14"');
+    expect(source).toContain('const CACHE_NAME = "bugpaw-shell-v15"');
   });
 });

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 export type AppRoute =
   | { page: "chat" }
   | { page: "aigc-overview" }
+  | { page: "aigc-run" }
   | { page: "aigc-interfaces" }
   | { page: "aigc-tasks" }
   | { page: "aigc-workflows" }
@@ -37,6 +38,7 @@ export const KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-knowledge
 export function parseRoute(pathname: string, search = ""): AppRoute {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   if (normalized === "/aigc") return { page: "aigc-overview" };
+  if (normalized === "/aigc/run") return { page: "aigc-run" };
   if (normalized === "/aigc/interfaces") return { page: "aigc-interfaces" };
   if (normalized === "/aigc/tasks") return { page: "aigc-tasks" };
   if (normalized === "/aigc/workflows") return { page: "aigc-workflows" };
@@ -110,6 +112,8 @@ export function routePath(route: AppRoute): string {
   switch (route.page) {
     case "aigc-overview":
       return "/aigc";
+    case "aigc-run":
+      return "/aigc/run";
     case "aigc-interfaces":
       return "/aigc/interfaces";
     case "aigc-tasks":

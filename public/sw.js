@@ -1,4 +1,4 @@
-const CACHE_NAME = "bugpaw-shell-v14";
+const CACHE_NAME = "bugpaw-shell-v15";
 const BUILD_ASSETS = __BUGPAW_PRECACHE__;
 const CORE_ASSETS = [
   "/",
@@ -7,6 +7,7 @@ const CORE_ASSETS = [
   "/settings/capabilities/knowledge-retrieval",
   "/settings/capabilities/browser",
   "/aigc",
+  "/aigc/run",
   "/settings/capabilities/aigc-channels",
   "/manifest.webmanifest",
   "/brand/bugpaw/bugpaw-paw-favicon.png",

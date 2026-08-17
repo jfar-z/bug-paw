@@ -123,6 +123,13 @@ describe("WorkbenchShell", () => {
     expect(screen.getByRole("navigation", { name: "AIGC 工作台导航" })).toBeInTheDocument();
   });
 
+  it("AIGC 创作台展示二级导航并标记当前入口", () => {
+    renderShell({ page: "aigc-run" });
+
+    expect(screen.getByRole("button", { name: "创作" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("navigation", { name: "AIGC 工作台导航" })).toBeInTheDocument();
+  });
+
   it("配置中心展示 AIGC 渠道入口", () => {
     renderShell({ page: "aigc-channels" });
 

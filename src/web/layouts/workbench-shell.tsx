@@ -188,6 +188,7 @@ export function WorkbenchShell({
 function isAigcRoute(route: AppRoute): boolean {
   return [
     "aigc-overview",
+    "aigc-run",
     "aigc-interfaces",
     "aigc-tasks",
     "aigc-workflows",

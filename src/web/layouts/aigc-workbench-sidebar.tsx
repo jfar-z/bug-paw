@@ -1,4 +1,4 @@
-import { Activity, Boxes, GitFork, LayoutDashboard, X } from "lucide-react";
+import { Activity, Boxes, GitFork, LayoutDashboard, WandSparkles, X } from "lucide-react";
 import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
 import type { AppRoute } from "../router";
 
@@ -20,6 +20,7 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
     onClose();
   };
 
+  const runActive = route.page === "aigc-run";
   const interfaceActive = route.page === "aigc-interfaces" || route.page === "aigc-interface-detail";
   const taskActive = route.page === "aigc-tasks" || route.page === "aigc-task-detail";
   const workflowActive = route.page === "aigc-workflows" || route.page === "aigc-workflow-detail";
@@ -45,6 +46,15 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
         >
           <LayoutDashboard size={17} aria-hidden="true" />
           <span>概览</span>
+        </button>
+        <button
+          type="button"
+          className={runActive ? "is-active" : undefined}
+          aria-current={runActive ? "page" : undefined}
+          onClick={() => go({ page: "aigc-run" })}
+        >
+          <WandSparkles size={17} aria-hidden="true" />
+          <span>创作</span>
         </button>
         <button
           type="button"

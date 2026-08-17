@@ -6,11 +6,14 @@ import type {
   AigcInterfaceInput,
   AigcInterfaceRecord,
   AigcInterfaceProtocol,
+  AigcRunInputValue,
   AigcSettingsDocument,
   AigcTaskDocument,
   AigcTaskRecord,
+  AigcUploadedAsset,
   AigcWorkflowDetail,
   AigcWorkflowDocument,
+  AigcWorkflowInputMapping,
 } from "../../shared/aigc-contracts";
 import { api, apiV1Url } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
@@ -25,6 +28,7 @@ interface AigcWorkbenchPageProps {
 export function AigcWorkbenchPage({ route }: AigcWorkbenchPageProps) {
   if (route.page === "aigc-interfaces") return <AigcInterfacesPage />;
   if (route.page === "aigc-interface-detail") return <AigcInterfaceDetail interfaceId={route.interfaceId} />;
+  if (route.page === "aigc-run") return <AigcRunPage />;
   if (route.page === "aigc-tasks") return <AigcTasksPage />;
   if (route.page === "aigc-task-detail") return <AigcTaskDetail taskId={route.taskId} />;
   if (route.page === "aigc-workflows") return <AigcWorkflowsPage />;
@@ -83,6 +87,274 @@ function AigcOverview() {
       </section>
     </div>
   );
+}
+
+/** 创作台入参字段定义。 */
+interface AigcRunFieldDefinition {
+  name: string;
+  label: string;
+  type: AigcWorkflowInputMapping["type"];
+  required: boolean;
+  options?: string[];
+  placeholder?: string;
+}
+
+/** 创作台：选择已启用接口，按能力或 ComfyUI 映射动态生成入参并提交试运行。 */
+function AigcRunPage() {
+  const { runApiTask } = useApiTask();
+  const online = useOnlineStatus();
+  const [interfaces, setInterfaces] = useState<AigcInterfaceRecord[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [workflow, setWorkflow] = useState<AigcWorkflowDetail>();
+  const [values, setValues] = useState<Record<string, AigcRunInputValue>>({});
+  const [uploads, setUploads] = useState<Record<string, AigcUploadedAsset>>({});
+  const [uploading, setUploading] = useState<string>();
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState("");
+  const [createdTask, setCreatedTask] = useState<AigcTaskRecord>();
+
+  const enabledInterfaces = interfaces.filter((item) => item.enabled);
+  const selected = enabledInterfaces.find((item) => item.id === selectedId);
+  const fields = selected ? runFields(selected, workflow) : [];
+
+  useEffect(() => {
+    void runApiTask(async () => {
+      const document = await api.getAigcInterfaces();
+      setInterfaces(document.interfaces);
+      return document;
+    }, { operation: "加载可用的 AIGC 接口" }).then((result) => {
+      if (result.status !== "success") return;
+      const firstEnabled = result.data.interfaces.find((item) => item.enabled);
+      if (firstEnabled) setSelectedId(firstEnabled.id);
+    });
+  }, [runApiTask]);
+
+  useEffect(() => {
+    setCreatedTask(undefined);
+    setMessage("");
+    if (!selected) {
+      setWorkflow(undefined);
+      setValues({});
+      setUploads({});
+      return;
+    }
+    if (selected.protocol !== "comfyui") {
+      setWorkflow(undefined);
+      setValues({ prompt: "" });
+      setUploads({});
+      return;
+    }
+    const workflowId = (selected.config as { workflowId?: string }).workflowId;
+    if (!workflowId) {
+      setWorkflow(undefined);
+      setValues({});
+      setUploads({});
+      return;
+    }
+    void runApiTask(async () => {
+      const next = await api.getAigcWorkflow(workflowId);
+      setWorkflow(next.workflow);
+      setValues(initialComfyUiValues(next.workflow.inputMappings));
+      setUploads({});
+      return next;
+    }, { operation: "加载 ComfyUI 入参", expected: aigcExpected(setMessage) });
+  }, [runApiTask, selected?.id]);
+
+  async function uploadFile(field: AigcRunFieldDefinition, file?: File) {
+    if (!file) return;
+    setMessage("");
+    setUploading(field.name);
+    const result = await runApiTask(() => api.uploadAigcInput(file), { operation: `上传 ${field.label}`, expected: aigcExpected(setMessage) });
+    setUploading(undefined);
+    if (result.status !== "success") return;
+    setUploads((current) => ({ ...current, [field.name]: result.data.asset }));
+    setValues((current) => ({
+      ...current,
+      [field.name]: {
+        assetId: result.data.asset.id,
+        name: result.data.asset.name,
+        mediaType: result.data.asset.mediaType,
+      },
+    }));
+  }
+
+  async function submit() {
+    if (!selected || !online || submitting) return;
+    setMessage("");
+    setCreatedTask(undefined);
+    const inputs: Record<string, AigcRunInputValue> = {};
+    for (const field of fields) {
+      const value = coerceRunValue(field, values[field.name]);
+      if (field.required && (value === undefined || value === "")) {
+        setMessage(`请填写 ${field.label}`);
+        return;
+      }
+      if (value !== undefined && value !== "") inputs[field.name] = value;
+    }
+    const result = await runApiTask(() => api.runAigcInterface({ interfaceId: selected.id, inputs }), {
+      operation: "创建 AIGC 生成任务",
+      expected: aigcExpected(setMessage),
+    });
+    if (result.status !== "success") return;
+    setCreatedTask(result.data);
+    setMessage("生成任务已创建，可前往任务页查看进度。");
+  }
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>创作</h1><p>选择已启用接口，填写生成参数并提交任务。</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <section className="configuration-form-card">
+        <div className="configuration-section__heading"><div><span>01</span><h2>生成任务</h2></div></div>
+        <label>
+          <span>AIGC 接口</span>
+          <select aria-label="AIGC 接口" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
+            <option value="">请选择已启用接口</option>
+            {enabledInterfaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
+        {selected ? <p className="configuration-help">{capabilityLabel(selected.protocol, selected.capability)} · {selected.protocol.toUpperCase()}</p> : <p className="configuration-help">暂无可用接口，请先在“接口”页创建并启用。</p>}
+        {selected ? (
+          <>
+            {fields.map((field) => (
+              <AigcRunField
+                key={field.name}
+                field={field}
+                value={values[field.name]}
+                uploaded={uploads[field.name]}
+                uploading={uploading === field.name}
+                onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
+                onFile={(file) => void uploadFile(field, file)}
+              />
+            ))}
+            {!fields.length ? <p className="configuration-help">该接口无需额外入参，可直接开始生成。</p> : null}
+            <div className="configuration-save-bar">
+              <button type="button" className="configuration-primary-action" disabled={!online || submitting || uploading !== undefined} onClick={() => void submit()}>
+                <Play size={16} />{submitting ? "正在创建…" : "开始生成"}
+              </button>
+            </div>
+          </>
+        ) : null}
+      </section>
+      {createdTask ? (
+        <section className="aigc-overview-card">
+          <span>已创建任务</span>
+          <strong>{createdTask.status}</strong>
+          <small><a href={`/aigc/tasks/${encodeURIComponent(createdTask.id)}`}>查看任务详情</a></small>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+/** 渲染单个 AIGC 入参字段。 */
+function AigcRunField(props: {
+  field: AigcRunFieldDefinition;
+  value: AigcRunInputValue | undefined;
+  uploaded?: AigcUploadedAsset;
+  uploading: boolean;
+  onChange: (value: AigcRunInputValue) => void;
+  onFile: (file?: File) => void;
+}) {
+  const { field, value, uploaded, uploading, onChange, onFile } = props;
+  if (field.type === "bool") {
+    return (
+      <label className="configuration-check-line">
+        <input type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} />
+        <span>{field.label}{field.required ? " *" : ""}</span>
+      </label>
+    );
+  }
+  if (field.type === "enum") {
+    return (
+      <label>
+        <span>{field.label}{field.required ? " *" : ""}</span>
+        <select aria-label={field.label} value={typeof value === "string" ? value : ""} onChange={(event) => onChange(event.target.value)}>
+          <option value="">请选择</option>
+          {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
+        </select>
+      </label>
+    );
+  }
+  if (field.type === "image" || field.type === "video") {
+    const accept = field.type === "video" ? "video/*" : "image/*";
+    return (
+      <label>
+        <span>{field.label}{field.required ? " *" : ""}</span>
+        <input type="file" accept={accept} aria-label={field.label} onChange={(event) => onFile(event.target.files?.[0])} />
+        <small className="configuration-help">{uploading ? "上传中…" : uploaded?.name ?? "上传后作为生成入参"}</small>
+      </label>
+    );
+  }
+  const isNumber = field.type === "int" || field.type === "double";
+  const inputValue = typeof value === "number" || typeof value === "string" ? value : "";
+  return (
+    <label>
+      <span>{field.label}{field.required ? " *" : ""}</span>
+      <input
+        type={isNumber ? "number" : "text"}
+        step={field.type === "double" ? "any" : undefined}
+        placeholder={field.placeholder}
+        aria-label={field.label}
+        value={inputValue}
+        onChange={(event) => onChange(isNumber ? event.target.valueAsNumber || "" : event.target.value)}
+      />
+    </label>
+  );
+}
+
+/** 根据接口协议和工作流映射生成创作台字段。 */
+function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): AigcRunFieldDefinition[] {
+  if (item.protocol === "comfyui") {
+    return (workflow?.inputMappings ?? []).map((mapping) => ({
+      name: mapping.name,
+      label: mapping.description || mapping.name,
+      type: mapping.type,
+      required: mapping.required,
+      options: mapping.enumOptions,
+      placeholder: mapping.description || `输入 ${mapping.name}`,
+    }));
+  }
+  const fields: AigcRunFieldDefinition[] = [{ name: "prompt", label: "提示词", type: "string", required: true, placeholder: "描述要生成的画面或视频" }];
+  if (item.capability === "image-edit" || item.capability === "image-to-video") {
+    fields.push({ name: "image", label: "图片", type: "image", required: true });
+  }
+  return fields;
+}
+
+/** 为 ComfyUI 工作流映射生成初始值。 */
+function initialComfyUiValues(mappings: AigcWorkflowInputMapping[]): Record<string, AigcRunInputValue> {
+  const values: Record<string, AigcRunInputValue> = {};
+  for (const mapping of mappings) {
+    if (mapping.type === "bool") values[mapping.name] = typeof mapping.defaultValue === "boolean" ? mapping.defaultValue : false;
+    else if (mapping.type === "int" || mapping.type === "double") values[mapping.name] = typeof mapping.defaultValue === "number" ? mapping.defaultValue : "";
+    else if (mapping.type === "enum") values[mapping.name] = typeof mapping.defaultValue === "string" ? mapping.defaultValue : mapping.enumOptions?.[0] ?? "";
+    else if (mapping.type === "string") values[mapping.name] = typeof mapping.defaultValue === "string" ? mapping.defaultValue : "";
+  }
+  return values;
+}
+
+/** 将表单值转换为提交给服务端的 AIGC 入参。 */
+function coerceRunValue(field: AigcRunFieldDefinition, value: AigcRunInputValue | undefined): AigcRunInputValue | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (field.type === "bool") return value === true;
+  if (field.type === "int" || field.type === "double") {
+    if (value === "") return undefined;
+    const number = Number(value);
+    if (!Number.isFinite(number)) return undefined;
+    return field.type === "int" ? Math.trunc(number) : number;
+  }
+  if (field.type === "string") {
+    const text = String(value).trim();
+    return text;
+  }
+  if (field.type === "enum") return typeof value === "string" ? value : undefined;
+  return typeof value === "object" && "assetId" in value ? value : undefined;
+}
+
+/** 返回接口能力的展示文案。 */
+function capabilityLabel(protocol: AigcInterfaceProtocol, capability: AigcInterfaceCapability): string {
+  return capabilityOptions(protocol).find((option) => option.value === capability)?.label ?? capability;
 }
 
 /** 接口列表与编辑。 */
