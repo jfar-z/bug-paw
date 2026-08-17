@@ -49,7 +49,10 @@ describe("AigcWorkbenchPage 创作台", () => {
 
     expect(globalStyles).not.toContain(".aigc-workbench-page {");
     expect(aigcStyles).toContain(".aigc-workbench-page {");
+    expect(aigcStyles).toContain(".aigc-run-preview-stage {");
+    expect(aigcStyles).toContain(".aigc-asset-card__preview {");
     expect(workbenchSource).toContain('import "../aigc.css";');
+    expect(workbenchSource).not.toContain('className="media-attachment');
     expect(channelsSource).toContain('import "../aigc.css";');
   });
 
@@ -98,6 +101,8 @@ describe("AigcWorkbenchPage 创作台", () => {
 
     expect(await screen.findByLabelText("AIGC 接口")).toHaveValue("interface-1");
     expect(await screen.findByLabelText("提示词")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "创作与运行" }).closest(".aigc-run-page")).not.toHaveClass("has-readiness");
+    expect(screen.queryByText("生成结果")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
     expect(await screen.findByText("请填写 提示词")).toBeInTheDocument();
@@ -159,6 +164,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(await screen.findByLabelText("AIGC 接口")).toHaveValue("comfy-1");
     expect(screen.getByRole("tab", { name: /ComfyUI/ })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByLabelText("提示词")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "创作与运行" }).closest(".aigc-run-page")).toHaveClass("has-readiness");
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
     expect(await screen.findByText("ComfyUI 连接正常")).toBeInTheDocument();
   });
