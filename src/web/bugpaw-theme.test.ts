@@ -539,6 +539,7 @@ describe("BugPaw 生产视觉合同", () => {
   it("全部生产样式不再声明小于 10px 的可见字号", async () => {
     const sources = await Promise.all([
       readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/aigc.css", "utf8"),
       readFile("src/web/bugpaw-theme.css", "utf8").catch(() => ""),
     ]);
     const violations = sources.flatMap(parseStyleRules).flatMap((rule) => {

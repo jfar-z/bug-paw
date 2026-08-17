@@ -26,6 +26,7 @@ import { ConfirmationDialog } from "../components/configuration/confirmation-dia
 import { useOnlineStatus } from "../use-online-status";
 import { navigateTo, NAVIGATION_BEFORE_EVENT, type AppRoute } from "../router";
 import { AigcWorkflowComposer } from "./aigc-workflow-composer";
+import "../aigc.css";
 
 interface AigcWorkbenchPageProps {
   route: AppRoute;

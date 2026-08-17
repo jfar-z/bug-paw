@@ -1,5 +1,18 @@
 {
   "entryJsGzipBytes": 235520,
-  "cssGzipBytes": 51200,
-  "lazyChunkGzipBytes": 153600
+  "lazyChunkGzipBytes": 153600,
+  "css": {
+    "entryGzipBytes": 47104,
+    "totalGzipBytes": 57344,
+    "routes": {
+      "src/web/pages/aigc-workbench-page.tsx": {
+        "label": "AIGC 工作台",
+        "gzipBytes": 2560
+      },
+      "src/web/pages/aigc-channels-page.tsx": {
+        "label": "AIGC 渠道",
+        "gzipBytes": 2560
+      }
+    }
+  }
 }

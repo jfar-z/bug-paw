@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +20,20 @@ describe("AigcWorkbenchPage 创作台", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     window.history.replaceState({}, "", "/");
+  });
+
+  it("由两个懒加载入口共享独立页面样式", async () => {
+    const [globalStyles, aigcStyles, workbenchSource, channelsSource] = await Promise.all([
+      readFile("src/web/styles.css", "utf8"),
+      readFile("src/web/aigc.css", "utf8"),
+      readFile("src/web/pages/aigc-workbench-page.tsx", "utf8"),
+      readFile("src/web/pages/aigc-channels-page.tsx", "utf8"),
+    ]);
+
+    expect(globalStyles).not.toContain(".aigc-workbench-page {");
+    expect(aigcStyles).toContain(".aigc-workbench-page {");
+    expect(workbenchSource).toContain('import "../aigc.css";');
+    expect(channelsSource).toContain('import "../aigc.css";');
   });
 
   it("选择已启用接口后展示提示词表单并提交生成任务", async () => {
