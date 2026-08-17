@@ -15,11 +15,13 @@ import type {
   AigcWorkflowDetail,
   AigcWorkflowDocument,
   AigcWorkflowInputMapping,
+  AigcWorkflowOutputMapping,
 } from "../../shared/aigc-contracts";
 import { api, apiV1Url } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { useOnlineStatus } from "../use-online-status";
 import { navigateTo, type AppRoute } from "../router";
+import { AigcWorkflowComposer } from "./aigc-workflow-composer";
 
 interface AigcWorkbenchPageProps {
   route: AppRoute;
@@ -470,6 +472,20 @@ function capabilityLabel(protocol: AigcInterfaceProtocol, capability: AigcInterf
   return capabilityOptions(protocol).find((option) => option.value === capability)?.label ?? capability;
 }
 
+/** 接口页协议卡的展示名称。 */
+function interfaceProtocolName(protocol: AigcInterfaceProtocol): string {
+  if (protocol === "openai") return "OpenAI";
+  if (protocol === "grok") return "Grok";
+  return "ComfyUI";
+}
+
+/** 接口页协议卡的简短能力说明。 */
+function interfaceProtocolDescription(protocol: AigcInterfaceProtocol): string {
+  if (protocol === "openai") return "图片生成与编辑";
+  if (protocol === "grok") return "图片与视频全流程";
+  return "工作流节点编排";
+}
+
 /** 接口列表与编辑。 */
 function AigcInterfacesPage() {
   const { runApiTask } = useApiTask();
@@ -519,6 +535,16 @@ function AigcInterfacesPage() {
     setDraft({ ...emptyInterface, channelId: channels.find((channel) => channel.enabled)?.id ?? "" });
   }
 
+  function changeProtocol(protocol: AigcInterfaceProtocol) {
+    setDraft((current) => ({
+      ...current,
+      protocol,
+      capability: defaultCapability(protocol),
+      channelId: channels.find((channel) => channel.type === protocol && channel.enabled)?.id ?? "",
+      config: protocol === "comfyui" ? { workflowId: "" } : { model: "" },
+    }));
+  }
+
   async function save() {
     if (!online) return;
     setMessage("");
@@ -551,56 +577,92 @@ function AigcInterfacesPage() {
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>接口</h1><p>把渠道、能力与 ComfyUI 工作流组合成可手动试运行的 AIGC 接口。</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
-      <section className="configuration-form-card">
-        <div className="configuration-section__heading"><div><span>01</span><h2>接口定义</h2></div><button type="button" onClick={createDraft} disabled={!online}><Boxes size={15} />新增</button></div>
-        <div className="configuration-button-row">
-          {(document?.interfaces ?? []).map((item) => (
-            <button type="button" key={item.id} className={selected?.id === item.id ? "is-selected" : undefined} onClick={() => select(item)}>{item.name}</button>
-          ))}
-        </div>
-        <label><span>接口名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-        <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-        <div className="configuration-field-row">
-          <label><span>协议</span><select aria-label="AIGC 接口协议" value={draft.protocol} onChange={(event) => setDraft({ ...draft, protocol: event.target.value as AigcInterfaceProtocol, capability: defaultCapability(event.target.value as AigcInterfaceProtocol) })}>
-            <option value="openai">OpenAI</option><option value="grok">Grok</option><option value="comfyui">ComfyUI</option>
-          </select></label>
-          <label><span>能力</span><select aria-label="AIGC 接口能力" value={draft.capability} onChange={(event) => setDraft({ ...draft, capability: event.target.value as AigcInterfaceCapability })}>
-            {capabilityOptions(draft.protocol).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select></label>
-        </div>
-        <label><span>渠道</span><select aria-label="AIGC 渠道" value={draft.channelId} onChange={(event) => setDraft({ ...draft, channelId: event.target.value })}>
-          <option value="">请选择渠道</option>
-          {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}（{channel.type}）</option>)}
-        </select></label>
-        <label><span>{draft.protocol === "comfyui" ? "工作流" : "模型"}</span>
-          {draft.protocol === "comfyui" ? (
-            <select aria-label="ComfyUI 工作流" value={(draft.config as { workflowId?: string }).workflowId ?? ""} onChange={(event) => setDraft({ ...draft, config: { workflowId: event.target.value } })}>
-              <option value="">请选择工作流</option>
-              {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}
-            </select>
-          ) : (
-            <input aria-label="AIGC 模型" value={(draft.config as { model?: string }).model ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, model: event.target.value } })} />
-          )}
-        </label>
-        {draft.protocol === "grok" ? (
-          <div className="configuration-field-row">
-            <label><span>默认尺寸</span><input aria-label="Grok 默认尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
-            <label><span>默认时长（秒）</span><input type="number" min={1} max={300} aria-label="Grok 默认时长" value={(draft.config as { duration?: number }).duration ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, duration: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined } })} /></label>
+      <section className="configuration-section aigc-section">
+        <div className="configuration-section__heading"><div><span>01</span><h2>接口列表</h2></div><button type="button" className="configuration-primary-action" onClick={createDraft} disabled={!online}><Boxes size={15} />新增接口</button></div>
+        {(document?.interfaces ?? []).length ? (
+          <div className="aigc-entity-list">
+            {(document?.interfaces ?? []).map((item) => (
+              <article key={item.id} className={selected?.id === item.id ? "aigc-task-row aigc-entity-row is-selected" : "aigc-task-row aigc-entity-row"}>
+                <button type="button" className="aigc-entity-row__main" onClick={() => select(item)}>
+                  <span className="aigc-entity-row__name">{item.name}</span>
+                  <span className="aigc-entity-row__meta">{item.protocol} · {capabilityLabel(item.protocol, item.capability)}</span>
+                  <span className={item.enabled ? "aigc-status-badge is-enabled" : "aigc-status-badge"}>{item.enabled ? "已启用" : "已停用"}</span>
+                </button>
+              </article>
+            ))}
           </div>
-        ) : null}
-        {draft.protocol === "openai" ? (
-          <div className="configuration-field-row">
-            <label><span>尺寸</span><input aria-label="OpenAI 尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
-            <label><span>质量</span><input aria-label="OpenAI 质量" placeholder="standard" value={(draft.config as { quality?: string }).quality ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, quality: event.target.value } })} /></label>
-          </div>
-        ) : null}
-        <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用接口</span></label>
-        <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>预留未来发布为 Agent 工具</span></label>
+        ) : <p className="configuration-help">尚未创建 AIGC 接口。</p>}
       </section>
-      <div className="configuration-save-bar">
-        <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online} onClick={() => void remove()}><Trash2 size={15} />删除</button>
-        <button type="button" className="configuration-primary-action" disabled={!online} onClick={() => void save()}><Save size={16} />保存接口</button>
-      </div>
+
+      <section className="configuration-form-card aigc-config-section">
+        <div className="configuration-section__heading"><div><span>02</span><h2>{selected ? "编辑接口" : "新增接口"}</h2></div><small>{selected ? selected.name : "定义协议、能力和执行目标"}</small></div>
+        <div className="aigc-form-stack">
+          <label><span>接口名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+          <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+        </div>
+
+        <div className="aigc-fieldset">
+          <div className="aigc-fieldset__heading"><strong>协议</strong><small>选择接口使用的第三方协议，能力会随协议变化</small></div>
+          <div className="aigc-protocol-grid aigc-protocol-grid--compact">
+            {(["openai", "grok", "comfyui"] as const).map((protocol) => (
+              <button
+                type="button"
+                key={protocol}
+                className={draft.protocol === protocol ? "aigc-overview-card aigc-protocol-card is-selected" : "aigc-overview-card aigc-protocol-card"}
+                onClick={() => changeProtocol(protocol)}
+              >
+                <span className="aigc-protocol-card__name">{interfaceProtocolName(protocol)}</span>
+                <span className="aigc-protocol-card__type">{protocol}</span>
+                <small>{interfaceProtocolDescription(protocol)}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="aigc-fieldset">
+          <div className="aigc-fieldset__heading"><strong>执行目标</strong><small>能力、渠道及模型或工作流共同决定最终调用方式</small></div>
+          <div className="configuration-field-row">
+            <label><span>能力</span><select aria-label="AIGC 接口能力" value={draft.capability} onChange={(event) => setDraft({ ...draft, capability: event.target.value as AigcInterfaceCapability })}>
+              {capabilityOptions(draft.protocol).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select></label>
+            <label><span>渠道</span><select aria-label="AIGC 渠道" value={draft.channelId} onChange={(event) => setDraft({ ...draft, channelId: event.target.value })}>
+              <option value="">请选择渠道</option>
+              {channels.filter((channel) => channel.type === draft.protocol).map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+            </select></label>
+          </div>
+          {!channels.some((channel) => channel.type === draft.protocol) ? <p className="configuration-help">当前协议还没有可用渠道，请先到配置中心创建 {interfaceProtocolName(draft.protocol)} 渠道。</p> : null}
+          <label><span>{draft.protocol === "comfyui" ? "工作流" : "模型"}</span>
+            {draft.protocol === "comfyui" ? (
+              <select aria-label="ComfyUI 工作流" value={(draft.config as { workflowId?: string }).workflowId ?? ""} onChange={(event) => setDraft({ ...draft, config: { workflowId: event.target.value } })}>
+                <option value="">请选择工作流</option>
+                {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}
+              </select>
+            ) : (
+              <input aria-label="AIGC 模型" value={(draft.config as { model?: string }).model ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, model: event.target.value } })} />
+            )}
+          </label>
+        </div>
+
+        {draft.protocol === "grok" || draft.protocol === "openai" ? (
+          <div className="aigc-fieldset">
+            <div className="aigc-fieldset__heading"><strong>协议参数</strong><small>按需补充生成默认值；留空时由调用方传入</small></div>
+            <div className="configuration-field-row">
+              <label><span>默认尺寸</span><input aria-label={`${interfaceProtocolName(draft.protocol)} 默认尺寸`} placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
+              {draft.protocol === "grok" ? <label><span>默认时长（秒）</span><input type="number" min={1} max={300} aria-label="Grok 默认时长" value={(draft.config as { duration?: number }).duration ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, duration: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined } })} /></label> : <label><span>质量</span><input aria-label="OpenAI 质量" placeholder="standard" value={(draft.config as { quality?: string }).quality ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, quality: event.target.value } })} /></label>}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="aigc-fieldset aigc-fieldset--checks">
+          <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用接口</span></label>
+          <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>预留未来发布为 Agent 工具</span></label>
+        </div>
+
+        <div className="configuration-save-bar">
+          <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online} onClick={() => void remove()}><Trash2 size={15} />删除</button>
+          <button type="button" className="configuration-primary-action" disabled={!online} onClick={() => void save()}><Save size={16} />保存接口</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -826,14 +888,14 @@ function AigcWorkflowsPage() {
   );
 }
 
-/** 工作流详情页，提供节点与映射查看和 JSON 编辑。 */
+/** 工作流详情页，提供节点与字段点选的可视化映射编排。 */
 function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   const { runApiTask } = useApiTask();
   const [detail, setDetail] = useState<AigcWorkflowDetail>();
   const [revision, setRevision] = useState("");
   const [name, setName] = useState("");
-  const [inputJson, setInputJson] = useState("[]");
-  const [outputJson, setOutputJson] = useState("[]");
+  const [inputMappings, setInputMappings] = useState<AigcWorkflowInputMapping[]>([]);
+  const [outputMappings, setOutputMappings] = useState<AigcWorkflowOutputMapping[]>([]);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -842,23 +904,13 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       setDetail(next.workflow);
       setRevision(next.revision);
       setName(next.workflow.name);
-      setInputJson(JSON.stringify(next.workflow.inputMappings, null, 2));
-      setOutputJson(JSON.stringify(next.workflow.outputMappings, null, 2));
+      setInputMappings(next.workflow.inputMappings);
+      setOutputMappings(next.workflow.outputMappings);
       return next;
     }, { operation: "加载 ComfyUI 工作流详情" });
   }, [runApiTask, workflowId]);
 
   async function save() {
-    let inputMappings;
-    let outputMappings;
-    try {
-      inputMappings = JSON.parse(inputJson);
-      outputMappings = JSON.parse(outputJson);
-      if (!Array.isArray(inputMappings) || !Array.isArray(outputMappings)) throw new Error();
-    } catch {
-      setMessage("映射 JSON 格式无效");
-      return;
-    }
     const result = await runApiTask(() => api.updateAigcWorkflow(workflowId, revision, { name, inputMappings, outputMappings }), {
       operation: "保存 ComfyUI 工作流映射",
       expected: aigcExpected(setMessage),
@@ -868,6 +920,8 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       const next = await api.getAigcWorkflow(workflowId);
       setRevision(next.revision);
       setDetail(next.workflow);
+      setInputMappings(next.workflow.inputMappings);
+      setOutputMappings(next.workflow.outputMappings);
     }
   }
 
@@ -875,15 +929,20 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>工作流详情</h1><p>{detail?.fileName ?? workflowId}</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
-      <section className="configuration-form-card">
-        <label><span>名称</span><input aria-label="工作流名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
-        <div className="aigc-node-list">
-          {(detail?.nodes ?? []).map((node) => <p key={node.id}><strong>{node.type}</strong> · {node.fields.length} 个可映射字段</p>)}
-        </div>
-        <label><span>入参映射 JSON</span><textarea aria-label="ComfyUI 入参映射" rows={8} spellCheck={false} value={inputJson} onChange={(event) => setInputJson(event.target.value)} /></label>
-        <label><span>输出映射 JSON</span><textarea aria-label="ComfyUI 输出映射" rows={5} spellCheck={false} value={outputJson} onChange={(event) => setOutputJson(event.target.value)} /></label>
-        <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={() => void save()}><Save size={15} />保存映射</button></div>
-      </section>
+      {detail ? (
+        <AigcWorkflowComposer
+          workflow={detail}
+          name={name}
+          onNameChange={setName}
+          inputMappings={inputMappings}
+          outputMappings={outputMappings}
+          onInputMappingsChange={setInputMappings}
+          onOutputMappingsChange={setOutputMappings}
+        />
+      ) : <p className="configuration-help">正在加载工作流节点…</p>}
+      <div className="configuration-save-bar">
+        <button type="button" className="configuration-primary-action" disabled={!detail} onClick={() => void save()}><Save size={15} />保存映射</button>
+      </div>
     </div>
   );
 }
