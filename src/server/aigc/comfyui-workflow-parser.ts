@@ -148,9 +148,10 @@ export class ComfyUiWorkflowParser {
 /** 根据节点类型返回常见输出字段名。 */
 function outputFieldNamesForNodeType(type: string): string[] {
   if (/saveimage|previewimage/iu.test(type)) return ["images"];
+  if (/saveaudio|previewaudio|save_sound|preview_sound/iu.test(type)) return ["audio"];
   if (/saveanimated|animated/iu.test(type)) return ["images", "videos"];
   if (/vhs_videocombine|savevideo/iu.test(type)) return ["videos", "gifs"];
-  return ["images", "videos", "gifs", "text", "json"];
+  return ["images", "videos", "gifs", "audio", "text", "json"];
 }
 
 /** 从 UI 连线槽位解析源节点输出字段名。 */

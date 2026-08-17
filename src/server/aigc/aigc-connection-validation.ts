@@ -28,7 +28,9 @@ export class AigcConnectionValidation {
       const response = await this.request(url, {
         method: "GET",
         headers,
-        signal: AbortSignal.timeout(Math.max(1_000, channel.timeoutMs)),
+        signal: channel.timeoutMs === undefined
+          ? undefined
+          : AbortSignal.timeout(Math.max(1_000, channel.timeoutMs)),
       });
       if (response.ok) return { ok: true, message: "渠道连接正常" };
       const status = response.status;

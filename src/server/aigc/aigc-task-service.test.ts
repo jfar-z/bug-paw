@@ -7,7 +7,7 @@ import { CredentialService } from "../configuration/credential-service";
 import { AigcAssetService } from "./aigc-asset-service";
 import { AigcConnectionService } from "./aigc-connection-service";
 import { AigcInterfaceService } from "./aigc-interface-service";
-import type { AigcExecutionResult } from "./aigc-protocol-adapter";
+import type { AigcExecutionInput, AigcExecutionResult } from "./aigc-protocol-adapter";
 import { AigcTaskRepository } from "./aigc-task-repository";
 import { AigcTaskService } from "./aigc-task-service";
 import { AigcWorkflowService } from "./aigc-workflow-service";
@@ -19,7 +19,7 @@ describe("AIGC 任务服务", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  async function fixture(adapterResult: AigcExecutionResult | Error) {
+  async function fixture(adapterResult: AigcExecutionResult | Error | ((input: AigcExecutionInput) => Promise<AigcExecutionResult>)) {
     const root = await mkdtemp(join(tmpdir(), "aigc-tasks-"));
     roots.push(root);
     const connections = new AigcConnectionService(join(root, "channels.json"));
@@ -43,7 +43,8 @@ describe("AIGC 任务服务", () => {
       config: { model: "dall-e-3" },
     });
     const adapter = {
-      execute: vi.fn(async () => {
+      execute: vi.fn(async (input: AigcExecutionInput) => {
+        if (typeof adapterResult === "function") return adapterResult(input);
         if (adapterResult instanceof Error) throw adapterResult;
         return adapterResult;
       }),
@@ -94,5 +95,33 @@ describe("AIGC 任务服务", () => {
 
     const retried = await service.retry(task.id);
     expect(retried?.status).toBe("queued");
+  });
+
+  it("实时进度仅附加到运行中任务并在终态清除", async () => {
+    let finish: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const { service, item } = await fixture(async (input) => {
+      input.onProgress?.({
+        phase: "running",
+        currentNodeId: "12",
+        currentNodeName: "KSampler",
+        progressValue: 3,
+        progressMax: 20,
+        updatedAt: new Date().toISOString(),
+      });
+      await pending;
+      return { assets: [{ name: "image.png", mediaType: "image/png", content: Buffer.from("png") }] };
+    });
+
+    const task = await service.createRun({ interfaceId: item.id, inputs: { prompt: "一只猫" } });
+    await vi.waitFor(async () => {
+      expect((await service.get(task.id))?.execution).toMatchObject({ currentNodeId: "12", progressValue: 3 });
+    });
+    finish?.();
+    await vi.waitFor(async () => {
+      const done = await service.get(task.id);
+      expect(done?.status).toBe("succeeded");
+      expect(done?.execution).toBeUndefined();
+    });
   });
 });

@@ -84,7 +84,7 @@ export class GrokAigcAdapter implements AigcProtocolAdapter {
   ): Promise<Record<string, unknown>> {
     const response = await this.request(`${channel.baseUrl}/${path}`, {
       method,
-      signal: requestSignal(input.signal, channel.timeoutMs),
+      signal: requestSignal(input.signal, channel.timeoutMs ?? 30_000),
       headers: jsonHeaders(input.apiKey),
       body: payload === undefined ? undefined : JSON.stringify(payload),
     });

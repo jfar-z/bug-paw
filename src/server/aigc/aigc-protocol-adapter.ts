@@ -1,6 +1,7 @@
 import type {
   AigcChannelConfig,
   AigcInterfaceRecord,
+  AigcTaskExecutionState,
 } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "./aigc-asset-service";
 import type { AigcWorkflowService } from "./aigc-workflow-service";
@@ -13,6 +14,8 @@ export interface AigcExecutionInput {
   assets: AigcAssetService;
   workflows?: AigcWorkflowService;
   signal: AbortSignal;
+  /** 上报执行中的瞬态进度，调用方不得在此执行高频持久化。 */
+  onProgress?: (state: AigcTaskExecutionState) => void;
 }
 
 export interface AigcExecutionAsset {

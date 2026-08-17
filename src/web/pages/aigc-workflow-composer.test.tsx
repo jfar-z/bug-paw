@@ -89,4 +89,24 @@ describe("AigcWorkflowComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "删除输出" }));
     expect(onOutputMappingsChange).toHaveBeenCalledWith([]);
   });
+
+  it("输入和输出映射均提供音频类型", () => {
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增入参" }));
+    expect(screen.getByLabelText("入参类型")).toContainHTML('<option value="audio">音频（audio）</option>');
+    fireEvent.click(screen.getByRole("button", { name: "关闭入参编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
+    expect(screen.getByLabelText("输出媒体类型")).toContainHTML('<option value="audio">音频（audio）</option>');
+  });
 });

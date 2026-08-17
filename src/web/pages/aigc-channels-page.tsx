@@ -76,7 +76,7 @@ export function AigcChannelsPage() {
       type: template?.type ?? "openai",
       baseUrl: template?.defaultBaseUrl ?? "",
       enabled: true,
-      timeoutMs: 30_000,
+      timeoutMs: template?.type === "comfyui" ? undefined : 30_000,
     });
     setApiKey("");
     setApiKeyVisible(false);
@@ -238,7 +238,18 @@ export function AigcChannelsPage() {
           <p className="configuration-help">协议由新建时确定，编辑阶段不可切换；如需更换请新建渠道。</p>
           <label><span>渠道名称</span><input aria-label="AIGC 渠道名称" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
           <label><span>Base URL</span><input aria-label="AIGC Base URL" placeholder={selectedTemplate?.defaultBaseUrl} value={draft.baseUrl} onChange={(event) => updateDraft("baseUrl", event.target.value)} /></label>
-          <label><span>请求超时（毫秒）</span><input type="number" min={1000} max={300000} step={1000} aria-label="AIGC 请求超时" value={draft.timeoutMs} onChange={(event) => updateDraft("timeoutMs", Number(event.target.value))} /></label>
+          <label>
+            <span>请求超时（毫秒）{draft.type === "comfyui" ? <small>留空表示不限制</small> : null}</span>
+            <input
+              type="number"
+              min={1000}
+              max={300000}
+              step={1000}
+              aria-label="AIGC 请求超时"
+              value={draft.timeoutMs ?? ""}
+              onChange={(event) => updateDraft("timeoutMs", event.target.value === "" ? undefined : Number(event.target.value))}
+            />
+          </label>
           <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => updateDraft("enabled", event.target.checked)} /><span>允许接口引用该渠道</span></label>
           {selectedTemplate?.credentialOptional ? (
             <p className="configuration-help">ComfyUI 通常在内网匿名运行；如上游启用了认证，可在这里填写 API Key。</p>

@@ -42,7 +42,6 @@ describe("AIGC 渠道管理", () => {
       type: "comfyui" as const,
       baseUrl: "http://127.0.0.1:8188",
       enabled: true,
-      timeoutMs: 30_000,
     };
     await management.add({
       configRevision: document.revision,
@@ -52,6 +51,7 @@ describe("AIGC 渠道管理", () => {
 
     document = await management.document();
     expect(document.channels).toEqual([expect.objectContaining({ id: "comfy-local", hasApiKey: false })]);
+    expect(document.channels[0].timeoutMs).toBeUndefined();
 
     await expect(management.add({
       configRevision: document.revision,

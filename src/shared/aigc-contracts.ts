@@ -25,8 +25,8 @@ export interface AigcChannelConfig {
   baseUrl: string;
   /** 是否允许接口引用该渠道。 */
   enabled: boolean;
-  /** 上游请求超时毫秒数。 */
-  timeoutMs: number;
+  /** 上游单次请求超时毫秒数；ComfyUI 未设置时不限制。 */
+  timeoutMs?: number;
 }
 
 /** 返回浏览器的渠道摘要，不包含凭证明文。 */
@@ -41,7 +41,7 @@ export interface AigcChannelInput {
   type: AigcChannelType;
   baseUrl: string;
   enabled: boolean;
-  timeoutMs: number;
+  timeoutMs?: number;
 }
 
 /** 对渠道凭证执行的明确操作。 */
@@ -76,7 +76,7 @@ export interface AigcSettingsDocument {
 }
 
 /** 工作流入参可选的参数类型。 */
-export type AigcWorkflowInputType = "bool" | "int" | "double" | "string" | "enum" | "image" | "video";
+export type AigcWorkflowInputType = "bool" | "int" | "double" | "string" | "enum" | "image" | "video" | "audio";
 
 /** ComfyUI 工作流中的单个输入字段映射。 */
 export interface AigcWorkflowInputMapping {
@@ -101,7 +101,7 @@ export interface AigcWorkflowOutputMapping {
   nodeId: string;
   /** 从该节点读取输出时使用的字段路径。 */
   field: string;
-  mediaType: "image" | "video" | "json" | "text";
+  mediaType: "image" | "video" | "audio" | "json" | "text";
   description?: string;
 }
 
@@ -268,6 +268,23 @@ export interface AigcTaskError {
   message: string;
 }
 
+/** ComfyUI 任务执行阶段。 */
+export type AigcTaskExecutionPhase = "uploading" | "submitting" | "queued" | "running" | "downloading";
+
+/** 执行中任务的瞬态进度，不写入长期任务历史。 */
+export interface AigcTaskExecutionState {
+  phase: AigcTaskExecutionPhase;
+  currentNodeId?: string;
+  currentNodeName?: string;
+  currentNodeType?: string;
+  progressValue?: number;
+  progressMax?: number;
+  completedNodes?: number;
+  totalNodes?: number;
+  queueAhead?: number;
+  updatedAt: string;
+}
+
 /** 任务详情。 */
 export interface AigcTaskRecord {
   id: string;
@@ -277,6 +294,7 @@ export interface AigcTaskRecord {
   status: AigcTaskStatus;
   inputs: Record<string, unknown>;
   assets: AigcTaskAsset[];
+  execution?: AigcTaskExecutionState;
   error?: AigcTaskError;
   createdAt: string;
   updatedAt: string;
@@ -292,6 +310,7 @@ export interface AigcTaskSummary {
   channelId: string;
   status: AigcTaskStatus;
   assetCount: number;
+  execution?: AigcTaskExecutionState;
   error?: AigcTaskError;
   createdAt: string;
   updatedAt: string;

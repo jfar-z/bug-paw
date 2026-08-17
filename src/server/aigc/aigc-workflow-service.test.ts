@@ -80,4 +80,21 @@ describe("AIGC 工作流服务", () => {
     expect(updated.workflow.originalHash).toBe(created.workflow.originalHash);
     expect(updated.workflow.inputMappings[0].type).toBe("image");
   });
+
+  it("保存音频输入和输出映射", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "音频处理",
+      fileName: "audio.json",
+      workflowJson: {
+        "1": { class_type: "LoadAudio", inputs: { audio: "input.wav" } },
+        "2": { class_type: "SaveAudio", inputs: { audio: ["1", 0] } },
+      },
+      inputMappings: [{ id: "audio", name: "audio", nodeId: "1", field: "inputs.audio", type: "audio", required: true }],
+      outputMappings: [{ id: "result", name: "result", nodeId: "2", field: "outputs.audio", mediaType: "audio" }],
+    });
+
+    expect(created.workflow.inputMappings[0]).toMatchObject({ type: "audio" });
+    expect(created.workflow.outputMappings[0]).toMatchObject({ mediaType: "audio" });
+  });
 });

@@ -4,40 +4,67 @@ import { basename } from "node:path";
 
 import type {
   AigcComfyUiInterfaceConfig,
+  AigcTaskExecutionPhase,
+  AigcTaskExecutionState,
+  AigcWorkflowDetail,
   AigcWorkflowInputMapping,
   AigcWorkflowOutputMapping,
 } from "../../shared/aigc-contracts";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
 
-const MAX_POLL_ATTEMPTS = 120;
 const POLL_INTERVAL_MS = 1_000;
+const QUEUE_POLL_EVERY = 3;
+
+interface ComfyWebSocket {
+  addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
+  close(): void;
+}
+
+type ComfyWebSocketFactory = (url: string) => ComfyWebSocket | undefined;
 
 /** 通过 ComfyUI HTTP API 上传入参、提交工作流并收集产物。 */
 export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
   /**
    * @param request 可注入的请求函数，便于隔离外部服务测试
    */
-  constructor(private readonly request: typeof fetch = fetch) {}
+  constructor(
+    private readonly request: typeof fetch = fetch,
+    private readonly createSocket: ComfyWebSocketFactory = defaultSocketFactory,
+    private readonly pollIntervalMs: number = POLL_INTERVAL_MS,
+  ) {}
 
   /** 执行 ComfyUI 工作流接口。 */
   async execute(input: AigcExecutionInput): Promise<AigcExecutionResult> {
     const config = input.item.config as AigcComfyUiInterfaceConfig;
     const workflow = await input.workflows?.getPrivate(config.workflowId);
     if (!workflow) throw new Error("所选 ComfyUI 工作流不存在");
+    const progress = createProgressReporter(input, workflow);
+    if (workflow.inputMappings.some((mapping) => ["image", "video", "audio"].includes(mapping.type))) {
+      progress.phase("uploading");
+    }
     const prompt = await this.buildPrompt(workflow.raw, workflow.inputMappings, input);
     const clientId = randomUUID();
-    const submitResponse = await this.request(`${input.channel.baseUrl}/prompt`, {
-      method: "POST",
-      signal: input.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, client_id: clientId }),
-    });
-    const submitted = await readJson(submitResponse);
-    const promptId = readPromptId(submitted);
-    const outputs = await this.pollHistory(input, promptId);
-    const assets = await this.collectOutputs(input, workflow.outputMappings, outputs);
-    if (assets.length === 0) throw new Error("ComfyUI 工作流执行完成但没有可用产物");
-    return { assets };
+    const tracker = this.openStatusSocket(input.channel.baseUrl, clientId, progress);
+    try {
+      progress.phase("submitting");
+      const submitResponse = await this.request(`${input.channel.baseUrl}/prompt`, {
+        method: "POST",
+        signal: requestSignal(input.signal, input.channel.timeoutMs),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, client_id: clientId }),
+      });
+      const submitted = await readJson(submitResponse);
+      const promptId = readPromptId(submitted);
+      tracker?.setPromptId(promptId);
+      progress.queue(0);
+      const outputs = await this.pollHistory(input, promptId, progress);
+      progress.phase("downloading");
+      const assets = await this.collectOutputs(input, workflow.outputMappings, outputs);
+      if (assets.length === 0) throw new Error("ComfyUI 工作流执行完成但没有可用产物");
+      return { assets };
+    } finally {
+      tracker?.close();
+    }
   }
 
   /** 根据映射生成可执行的 API 格式工作流。 */
@@ -49,7 +76,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         if (mapping.required) throw new TypeError(`工作流入参 ${mapping.name} 不能为空`);
         continue;
       }
-      if (mapping.type === "image" || mapping.type === "video") {
+      if (mapping.type === "image" || mapping.type === "video" || mapping.type === "audio") {
         const uploaded = await this.uploadAsset(input, mapping, value);
         setPath(apiWorkflow, mapping.nodeId, mapping.field, uploaded);
         continue;
@@ -59,19 +86,20 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     return apiWorkflow;
   }
 
-  /** 上传图片或视频文件并返回 ComfyUI 可引用的文件名。 */
+  /** 上传图片、视频或音频文件并返回 ComfyUI 可引用的文件名。 */
   private async uploadAsset(input: AigcExecutionInput, mapping: AigcWorkflowInputMapping, value: unknown): Promise<string> {
     const asset = readAssetReference(value);
     const filePath = await input.assets.resolveInputPath(asset.assetId);
     if (!filePath) throw new TypeError(`工作流入参 ${mapping.name} 的文件不存在`);
     const buffer = await readFile(filePath);
     const form = new FormData();
-    const file = new Blob([buffer], { type: asset.mediaType || (mapping.type === "video" ? "video/mp4" : "image/png") });
+    const fallbackMediaType = mapping.type === "video" ? "video/mp4" : mapping.type === "audio" ? "audio/mpeg" : "image/png";
+    const file = new Blob([buffer], { type: asset.mediaType || fallbackMediaType });
     form.set("image", file, asset.name || basename(filePath));
-    const endpoint = mapping.type === "video" ? "/upload/image" : "/upload/image";
-    const response = await this.request(`${input.channel.baseUrl}${endpoint}`, {
+    // ComfyUI 使用同一上传入口把通用媒体文件写入 input 目录。
+    const response = await this.request(`${input.channel.baseUrl}/upload/image`, {
       method: "POST",
-      signal: input.signal,
+      signal: requestSignal(input.signal, input.channel.timeoutMs),
       body: form,
     });
     const payload = await readJson(response);
@@ -80,11 +108,19 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
   }
 
   /** 轮询 ComfyUI history 直到出现指定 prompt_id。 */
-  private async pollHistory(input: AigcExecutionInput, promptId: string): Promise<Record<string, unknown>> {
-    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
+  private async pollHistory(
+    input: AigcExecutionInput,
+    promptId: string,
+    progress: ExecutionProgressReporter,
+  ): Promise<Record<string, unknown>> {
+    let attempt = 0;
+    while (true) {
       if (input.signal.aborted) throw new Error("任务已取消");
+      if (attempt % QUEUE_POLL_EVERY === 0) {
+        await this.refreshQueueState(input, promptId, progress);
+      }
       const response = await this.request(`${input.channel.baseUrl}/history/${encodeURIComponent(promptId)}`, {
-        signal: input.signal,
+        signal: requestSignal(input.signal, input.channel.timeoutMs),
         headers: { Accept: "application/json" },
       });
       const payload = await readJson(response);
@@ -93,9 +129,65 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         if (isRecord(entry.status) && entry.status.status_str === "error") throw new Error("ComfyUI 工作流执行失败");
         if (isRecord(entry.outputs)) return entry;
       }
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+      attempt += 1;
+      await sleep(this.pollIntervalMs, input.signal);
     }
-    throw new Error("ComfyUI 工作流执行超时");
+  }
+
+  /** 使用队列接口补充 WebSocket 断线时的排队状态。 */
+  private async refreshQueueState(
+    input: AigcExecutionInput,
+    promptId: string,
+    progress: ExecutionProgressReporter,
+  ): Promise<void> {
+    try {
+      const response = await this.request(`${input.channel.baseUrl}/queue`, {
+        signal: requestSignal(input.signal, input.channel.timeoutMs),
+        headers: { Accept: "application/json" },
+      });
+      const payload = await readJson(response);
+      const pending = Array.isArray(payload.queue_pending) ? payload.queue_pending : [];
+      const queueIndex = pending.findIndex((entry) => Array.isArray(entry) && String(entry[1]) === promptId);
+      if (queueIndex >= 0) {
+        progress.queue(queueIndex);
+        return;
+      }
+      const running = Array.isArray(payload.queue_running) ? payload.queue_running : [];
+      if (running.some((entry) => Array.isArray(entry) && String(entry[1]) === promptId)) progress.phase("running");
+    } catch (error) {
+      if (input.signal.aborted) throw error;
+      // 队列信息仅用于增强展示，读取失败时继续依赖 history。
+    }
+  }
+
+  /** 建立节点级事件订阅；连接失败时由 history 轮询兜底。 */
+  private openStatusSocket(baseUrl: string, clientId: string, progress: ExecutionProgressReporter) {
+    let socket: ComfyWebSocket | undefined;
+    try {
+      socket = this.createSocket(comfyWebSocketUrl(baseUrl, clientId));
+    } catch {
+      return undefined;
+    }
+    if (!socket) return undefined;
+    let promptId = "";
+    const buffered: unknown[] = [];
+    const consume = (value: unknown) => {
+      if (!promptId) {
+        if (buffered.length < 100) buffered.push(value);
+        return;
+      }
+      consumeSocketMessage(value, promptId, progress);
+    };
+    socket.addEventListener("message", (event) => consume(event.data));
+    return {
+      setPromptId(value: string) {
+        promptId = value;
+        for (const message of buffered.splice(0)) consumeSocketMessage(message, promptId, progress);
+      },
+      close() {
+        socket?.close();
+      },
+    };
   }
 
   /** 按输出映射下载或提取产物。 */
@@ -126,10 +218,10 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         url.searchParams.set("filename", file.filename);
         if (typeof file.subfolder === "string") url.searchParams.set("subfolder", file.subfolder);
         if (typeof file.type === "string") url.searchParams.set("type", file.type);
-        const downloaded = await download(this.request, url.toString(), input.signal);
+        const downloaded = await download(this.request, url.toString(), requestSignal(input.signal, input.channel.timeoutMs));
         assets.push({
           name: file.filename,
-          mediaType: mapping.mediaType === "video" ? "video/mp4" : "image/png",
+          mediaType: outputMediaType(mapping.mediaType, file.filename),
           content: downloaded,
         });
       }
@@ -222,7 +314,7 @@ function coerceValue(mapping: AigcWorkflowInputMapping, value: unknown): unknown
 }
 
 function readAssetReference(value: unknown): { assetId: string; name?: string; mediaType?: string } {
-  if (!isRecord(value) || typeof value.assetId !== "string" || !value.assetId) throw new TypeError("图片或视频入参格式无效");
+  if (!isRecord(value) || typeof value.assetId !== "string" || !value.assetId) throw new TypeError("媒体入参格式无效");
   return {
     assetId: value.assetId,
     ...(typeof value.name === "string" ? { name: value.name } : {}),
@@ -230,12 +322,173 @@ function readAssetReference(value: unknown): { assetId: string; name?: string; m
   };
 }
 
-function mediaArray(value: unknown, mediaType: "image" | "video"): unknown[] {
+function mediaArray(value: unknown, mediaType: "image" | "video" | "audio"): unknown[] {
   if (Array.isArray(value)) return value;
+  if (isRecord(value) && typeof value.filename === "string") return [value];
   if (mediaType === "video" && isRecord(value) && Array.isArray(value.videos)) return value.videos;
   if (mediaType === "video" && isRecord(value) && Array.isArray(value.gifs)) return value.gifs;
   if (mediaType === "image" && isRecord(value) && Array.isArray(value.images)) return value.images;
+  if (mediaType === "audio" && isRecord(value) && Array.isArray(value.audio)) return value.audio;
+  if (mediaType === "audio" && isRecord(value) && Array.isArray(value.audios)) return value.audios;
   return [];
+}
+
+function outputMediaType(kind: "image" | "video" | "audio", fileName: string): string {
+  if (kind === "video") return "video/mp4";
+  if (kind === "image") return "image/png";
+  const normalized = fileName.toLowerCase();
+  if (normalized.endsWith(".wav")) return "audio/wav";
+  if (normalized.endsWith(".flac")) return "audio/flac";
+  if (normalized.endsWith(".ogg") || normalized.endsWith(".oga")) return "audio/ogg";
+  if (normalized.endsWith(".m4a")) return "audio/mp4";
+  return "audio/mpeg";
+}
+
+interface ExecutionProgressReporter {
+  phase(phase: AigcTaskExecutionPhase): void;
+  queue(ahead: number): void;
+  executing(nodeId: string): void;
+  nodeProgress(nodeId: string, value: number, maximum: number): void;
+  completed(nodeIds: string[]): void;
+}
+
+/** 将 ComfyUI 节点事件归一化为稳定且紧凑的任务进度。 */
+function createProgressReporter(input: AigcExecutionInput, workflow: AigcWorkflowDetail): ExecutionProgressReporter {
+  const nodes = new Map(workflow.nodes.map((node) => [node.id, node]));
+  const completedNodes = new Set<string>();
+  let state: AigcTaskExecutionState = stamp({ phase: "submitting", totalNodes: workflow.nodes.length });
+  const emit = (next: Omit<AigcTaskExecutionState, "updatedAt">) => {
+    state = stamp(next);
+    input.onProgress?.({ ...state });
+  };
+  const nodeState = (nodeId: string) => {
+    const node = nodes.get(nodeId);
+    return {
+      currentNodeId: nodeId,
+      ...(node?.title || node?.type ? { currentNodeName: node.title || node.type } : {}),
+      ...(node?.type ? { currentNodeType: node.type } : {}),
+    };
+  };
+  return {
+    phase(phase) {
+      if (phase === "running" && state.phase === "running") return;
+      emit({ phase, totalNodes: workflow.nodes.length, completedNodes: completedNodes.size });
+    },
+    queue(ahead) {
+      if (state.phase === "running" && state.currentNodeId) return;
+      emit({ phase: "queued", queueAhead: Math.max(0, ahead), totalNodes: workflow.nodes.length, completedNodes: completedNodes.size });
+    },
+    executing(nodeId) {
+      emit({ phase: "running", ...nodeState(nodeId), totalNodes: workflow.nodes.length, completedNodes: completedNodes.size });
+    },
+    nodeProgress(nodeId, value, maximum) {
+      emit({
+        phase: "running",
+        ...nodeState(nodeId),
+        progressValue: Math.max(0, value),
+        progressMax: Math.max(0, maximum),
+        totalNodes: workflow.nodes.length,
+        completedNodes: completedNodes.size,
+      });
+    },
+    completed(nodeIds) {
+      for (const nodeId of nodeIds) completedNodes.add(nodeId);
+      emit({
+        phase: state.phase === "queued" ? "running" : state.phase,
+        ...(state.currentNodeId ? nodeState(state.currentNodeId) : {}),
+        ...(state.progressValue !== undefined ? { progressValue: state.progressValue } : {}),
+        ...(state.progressMax !== undefined ? { progressMax: state.progressMax } : {}),
+        totalNodes: workflow.nodes.length,
+        completedNodes: completedNodes.size,
+      });
+    },
+  };
+}
+
+function stamp(state: Omit<AigcTaskExecutionState, "updatedAt">): AigcTaskExecutionState {
+  return { ...state, updatedAt: new Date().toISOString() };
+}
+
+/** 消费 ComfyUI 文本事件；二进制预览帧由正式产物下载链处理。 */
+function consumeSocketMessage(value: unknown, promptId: string, progress: ExecutionProgressReporter): void {
+  if (typeof value !== "string") return;
+  let message: unknown;
+  try {
+    message = JSON.parse(value);
+  } catch {
+    return;
+  }
+  if (!isRecord(message) || typeof message.type !== "string" || !isRecord(message.data)) return;
+  const data = message.data;
+  if (typeof data.prompt_id === "string" && data.prompt_id !== promptId) return;
+  if (message.type === "execution_start") {
+    progress.phase("running");
+    return;
+  }
+  if (message.type === "execution_cached" && Array.isArray(data.nodes)) {
+    progress.completed(data.nodes.map(String));
+    return;
+  }
+  const nodeId = readNodeId(data);
+  if (message.type === "executing" && nodeId) {
+    progress.executing(nodeId);
+    return;
+  }
+  if (message.type === "executed" && nodeId) {
+    progress.completed([nodeId]);
+    return;
+  }
+  if (message.type === "progress" && nodeId && finiteNumber(data.value) !== undefined && finiteNumber(data.max) !== undefined) {
+    progress.nodeProgress(nodeId, finiteNumber(data.value) as number, finiteNumber(data.max) as number);
+  }
+}
+
+function readNodeId(data: Record<string, unknown>): string | undefined {
+  const value = data.node ?? data.node_id ?? data.display_node;
+  return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function comfyWebSocketUrl(baseUrl: string, clientId: string): string {
+  const url = new URL(baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.pathname = `${url.pathname.replace(/\/$/u, "")}/ws`;
+  url.search = "";
+  url.searchParams.set("clientId", clientId);
+  return url.toString();
+}
+
+function defaultSocketFactory(url: string): ComfyWebSocket | undefined {
+  if (typeof WebSocket === "undefined") return undefined;
+  return new WebSocket(url) as unknown as ComfyWebSocket;
+}
+
+/** 仅在渠道配置了超时时组合请求截止信号。 */
+function requestSignal(signal: AbortSignal, timeoutMs?: number): AbortSignal {
+  return timeoutMs === undefined
+    ? signal
+    : AbortSignal.any([signal, AbortSignal.timeout(Math.max(1_000, timeoutMs))]);
+}
+
+function sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("任务已取消"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, milliseconds));
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("任务已取消"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 async function readJson(response: Response): Promise<Record<string, unknown>> {
