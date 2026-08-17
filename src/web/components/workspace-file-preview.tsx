@@ -9,12 +9,14 @@ interface WorkspaceFilePreviewProps {
   entry: WorkspaceEntry;
   mode: "side" | "overlay";
   onClose: () => void;
+  fileUrl?: (entry: WorkspaceEntry, download: boolean) => string;
+  getText?: (path: string) => Promise<WorkspaceTextPreview>;
 }
 
 /**
  * 在资源管理页中按文件类型展示只读媒体或文本预览。
  */
-export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: WorkspaceFilePreviewProps) {
+export function WorkspaceFilePreview({ agentId, entry, mode, onClose, fileUrl, getText }: WorkspaceFilePreviewProps) {
   const { runApiTask } = useApiTask();
   const [text, setText] = useState<WorkspaceTextPreview>();
   const [error, setError] = useState("");
@@ -22,7 +24,8 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
   const [isFullscreen, setIsFullscreen] = useState(false);
   const previewRef = useRef<HTMLElement>(null);
   const mediaType = entry.mediaType ?? "application/octet-stream";
-  const source = workspaceFileUrl(agentId, entry.path);
+  const resolveFileUrl = fileUrl ?? ((item: WorkspaceEntry, download: boolean) => workspaceFileUrl(agentId, item.path, download));
+  const source = resolveFileUrl(entry, false);
   const isHtml = mediaType === "text/html" || entry.name.toLowerCase().endsWith(".html");
   const isMedia = mediaType.startsWith("image/") || mediaType.startsWith("video/") || mediaType.startsWith("audio/");
   // 预览层及其内容区均可能成为滚动边界，需要继续支持横划返回资源列表。
@@ -36,7 +39,8 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
     let active = true;
     setText(undefined);
     setError("");
-    api.getWorkspaceText(agentId, entry.path).then((content) => {
+    const loadText = getText ?? ((path: string) => api.getWorkspaceText(agentId, path));
+    loadText(entry.path).then((content) => {
       if (active) setText(content);
     }).catch(async (reason) => {
       if (!active) return;
@@ -50,7 +54,7 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
       });
     });
     return () => { active = false; };
-  }, [agentId, entry.path, htmlView, isHtml, isMedia, runApiTask]);
+  }, [agentId, entry.path, getText, htmlView, isHtml, isMedia, runApiTask]);
 
   useEffect(() => {
     setHtmlView("page");
@@ -81,6 +85,6 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose }: Workspac
       {isHtml && htmlView === "page" ? <iframe title={`${entry.name} 页面预览`} src={source} sandbox="allow-scripts" style={{ display: "block", width: "100%", minHeight: "100%", border: 0, background: "#fff" }} /> : null}
       {!isMedia && (!isHtml || htmlView === "source") ? <>{error ? <p className="configuration-inline-error">{error}</p> : text ? <><pre>{text.content}</pre>{text.truncated ? <p>仅展示前 512 KiB。</p> : null}</> : <p>正在读取文本预览…</p>}</> : null}
     </div>
-    <a href={workspaceFileUrl(agentId, entry.path, true)} download={entry.name}><Download size={15} aria-hidden="true" />下载文件</a>
+    <a href={resolveFileUrl(entry, true)} download={entry.name}><Download size={15} aria-hidden="true" />下载文件</a>
   </aside>;
 }

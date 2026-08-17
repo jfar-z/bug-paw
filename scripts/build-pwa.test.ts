@@ -19,12 +19,14 @@ describe("PWA 预缓存构建", () => {
       "src/web/pages/browser-automation-page.tsx": { file: "assets/browser.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/browser.css"] },
       "src/web/pages/aigc-workbench-page.tsx": { file: "assets/aigc.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/aigc.css"] },
       "src/web/pages/aigc-channels-page.tsx": { file: "assets/aigc-channels.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/aigc-channels.css"] },
+      "src/web/pages/aigc-outputs-page.tsx": { file: "assets/aigc-outputs.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/aigc-assets.css"] },
+      "src/web/pages/aigc-public-directory-page.tsx": { file: "assets/aigc-public-directory.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/resources.css"] },
       "src/web/pages/agents-page.tsx": { file: "assets/agents.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/agents.css"] },
       shared: { file: "assets/shared.js" },
     }), "utf8");
     await injectPwaPrecache(root);
     const source = await readFile(join(root, "sw.js"), "utf8");
-    for (const asset of ["/assets/main.js", "/assets/main.css", "/assets/browser.js", "/assets/browser.css", "/assets/aigc.js", "/assets/aigc.css", "/assets/aigc-channels.js", "/assets/aigc-channels.css", "/assets/agents.js", "/assets/agents.css", "/assets/shared.js"]) expect(source).toContain(asset);
+    for (const asset of ["/assets/main.js", "/assets/main.css", "/assets/browser.js", "/assets/browser.css", "/assets/aigc.js", "/assets/aigc.css", "/assets/aigc-channels.js", "/assets/aigc-channels.css", "/assets/aigc-outputs.js", "/assets/aigc-assets.css", "/assets/aigc-public-directory.js", "/assets/resources.css", "/assets/agents.js", "/assets/agents.css", "/assets/shared.js"]) expect(source).toContain(asset);
     expect(source).not.toContain("__BUGPAW_PRECACHE__");
   });
 });

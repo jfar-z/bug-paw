@@ -25,6 +25,8 @@ type AppPage = "loading" | "setup" | "login" | "workbench" | "error";
 const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ default: module.ChatPage })));
 const AigcWorkbenchPage = lazy(() => import("./pages/aigc-workbench-page").then((module) => ({ default: module.AigcWorkbenchPage })));
 const AigcChannelsPage = lazy(() => import("./pages/aigc-channels-page").then((module) => ({ default: module.AigcChannelsPage })));
+const AigcOutputsPage = lazy(() => import("./pages/aigc-outputs-page").then((module) => ({ default: module.AigcOutputsPage })));
+const AigcPublicDirectoryPage = lazy(() => import("./pages/aigc-public-directory-page").then((module) => ({ default: module.AigcPublicDirectoryPage })));
 const AgentDetailPage = lazy(() => import("./pages/agent-detail-page").then((module) => ({ default: module.AgentDetailPage })));
 const AgentsPage = lazy(() => import("./pages/agents-page").then((module) => ({ default: module.AgentsPage })));
 const ConfigurationOverviewPage = lazy(() => import("./pages/configuration-overview-page").then((module) => ({ default: module.ConfigurationOverviewPage })));
@@ -143,6 +145,10 @@ export function App() {
       case "aigc-task-detail":
       case "aigc-workflow-detail":
         return <AigcWorkbenchPage route={activeRoute} />;
+      case "aigc-outputs":
+        return <AigcOutputsPage />;
+      case "aigc-public-directory":
+        return <AigcPublicDirectoryPage />;
       case "workspace-resources":
         return <WorkspaceResourcesPage />;
       case "knowledge-base":

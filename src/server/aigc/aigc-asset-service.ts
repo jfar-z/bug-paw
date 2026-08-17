@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, rm, stat } from "node:fs/promises";
+import { mkdir, open, rename, rm, stat } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import sharp from "sharp";
 
 import type { AigcUploadedAsset } from "../../shared/aigc-contracts";
 
@@ -13,6 +14,8 @@ export const MAX_INPUT_ASSET_BYTES = 200 * 1024 * 1024;
 export class AigcAssetService {
   private readonly inputDir: string;
   private readonly outputRoot: string;
+  private readonly thumbnailRoot: string;
+  private readonly thumbnailTasks = new Map<string, Promise<string | undefined>>();
 
   /**
    * @param rootDir AIGC 资产根目录
@@ -20,6 +23,7 @@ export class AigcAssetService {
   constructor(rootDir: string) {
     this.inputDir = join(rootDir, "inputs");
     this.outputRoot = join(rootDir, "outputs");
+    this.thumbnailRoot = join(rootDir, "thumbnails");
   }
 
   /** 保存浏览器上传的图片、视频或音频入参。 */
@@ -75,11 +79,61 @@ export class AigcAssetService {
     return resolveAssetPath(join(this.outputRoot, safeSegment(taskId)), id);
   }
 
+  /** 按需生成并复用任务图片产物的 WebP 缩略图。 */
+  async resolveThumbnailPath(taskId: string, id: string): Promise<string | undefined> {
+    const safeTaskId = safeSegment(taskId);
+    const safeId = safeSegment(id);
+    const key = `${safeTaskId}/${safeId}`;
+    const existing = this.thumbnailTasks.get(key);
+    if (existing) return existing;
+    const task = this.createThumbnail(safeTaskId, safeId).finally(() => this.thumbnailTasks.delete(key));
+    this.thumbnailTasks.set(key, task);
+    return task;
+  }
+
+  /** 删除任务全部产物及派生缩略图。 */
+  async removeTaskOutputs(taskId: string): Promise<void> {
+    const safeTaskId = safeSegment(taskId);
+    await Promise.all([
+      rm(join(this.outputRoot, safeTaskId), { recursive: true, force: true }),
+      rm(join(this.thumbnailRoot, safeTaskId), { recursive: true, force: true }),
+    ]);
+  }
+
   /** 返回产物读取流。 */
   openOutput(taskId: string, id: string) {
     void taskId;
     void id;
     throw new Error("请通过 resolveOutputPath 读取文件");
+  }
+
+
+  /** 将不可变原图缩放为列表使用的小体积缩略图。 */
+  private async createThumbnail(taskId: string, id: string): Promise<string | undefined> {
+    const source = await this.resolveOutputPath(taskId, id);
+    if (!source) return undefined;
+    const directory = join(this.thumbnailRoot, taskId);
+    const target = join(directory, `${id}.webp`);
+    try {
+      const cached = await stat(target);
+      if (cached.isFile()) return target;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      await sharp(source)
+        .rotate()
+        .resize({ width: 480, height: 320, fit: "inside", withoutEnlargement: true })
+        .webp({ quality: 76 })
+        .toFile(temporary);
+      await rename(temporary, target);
+      return target;
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 }
 
@@ -108,12 +162,6 @@ async function resolveAssetPath(directory: string, id: string): Promise<string |
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-}
-
-/** 清理任务产物目录，供删除任务或重试失败时使用。 */
-export async function removeOutputDirectory(rootDir: string, taskId: string): Promise<void> {
-  const dir = join(rootDir, "outputs", safeSegment(taskId));
-  await rm(dir, { recursive: true, force: true });
 }
 
 export function validAssetId(value: string): boolean {

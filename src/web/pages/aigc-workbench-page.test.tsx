@@ -221,6 +221,22 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(screen.getByText("未来城市")).toBeInTheDocument();
   });
 
+  it("删除任务前明确提示同步删除全部产物", async () => {
+    vi.spyOn(window, "setInterval").mockImplementation(() => 1 as unknown as ReturnType<typeof window.setInterval>);
+    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return new Response(JSON.stringify({ tasks: [{ id: "task-delete", interfaceId: "interface-1", interfaceName: "海报生成", channelId: "channel-1", status: "succeeded", assetCount: 3, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:01.000Z" }] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-tasks" });
+    fireEvent.click(await screen.findByRole("button", { name: "删除任务 task-delete" }));
+    expect(screen.getByRole("dialog", { name: "删除任务？" })).toHaveTextContent("3 个产物将被永久删除");
+    fireEvent.click(screen.getByRole("button", { name: "删除任务和产物" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/aigc/tasks/task-delete", expect.objectContaining({ method: "DELETE" })));
+  });
+
   it("接口编辑切换与删除均提供应用内保护", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

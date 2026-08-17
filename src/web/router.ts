@@ -6,6 +6,8 @@ export type AppRoute =
   | { page: "aigc-run"; interfaceId?: string }
   | { page: "aigc-interfaces" }
   | { page: "aigc-tasks" }
+  | { page: "aigc-outputs" }
+  | { page: "aigc-public-directory" }
   | { page: "aigc-workflows" }
   | { page: "aigc-interface-detail"; interfaceId: string }
   | { page: "aigc-task-detail"; taskId: string }
@@ -45,6 +47,8 @@ export function parseRoute(pathname: string, search = ""): AppRoute {
   }
   if (normalized === "/aigc/interfaces") return { page: "aigc-interfaces" };
   if (normalized === "/aigc/tasks") return { page: "aigc-tasks" };
+  if (normalized === "/aigc/outputs") return { page: "aigc-outputs" };
+  if (normalized === "/aigc/public-directory") return { page: "aigc-public-directory" };
   if (normalized === "/aigc/workflows") return { page: "aigc-workflows" };
   const aigcInterfaceMatch = normalized.match(/^\/aigc\/interfaces\/([^/]+)$/);
   if (aigcInterfaceMatch) {
@@ -122,6 +126,10 @@ export function routePath(route: AppRoute): string {
       return "/aigc/interfaces";
     case "aigc-tasks":
       return "/aigc/tasks";
+    case "aigc-outputs":
+      return "/aigc/outputs";
+    case "aigc-public-directory":
+      return "/aigc/public-directory";
     case "aigc-workflows":
       return "/aigc/workflows";
     case "aigc-interface-detail":

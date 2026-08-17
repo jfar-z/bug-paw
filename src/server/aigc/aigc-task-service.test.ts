@@ -49,16 +49,17 @@ describe("AIGC 任务服务", () => {
         return adapterResult;
       }),
     };
+    const assets = new AigcAssetService(join(root, "assets"));
     const service = new AigcTaskService({
       repository: new AigcTaskRepository(join(root, "tasks.json")),
       interfaces,
       workflows,
       connections,
       credentials: new CredentialService(join(root, "auth.json")),
-      assets: new AigcAssetService(join(root, "assets")),
+      assets,
       adapters: { openai: adapter },
     });
-    return { service, item: created.item, adapter };
+    return { service, item: created.item, adapter, assets };
   }
 
   it("创建任务后异步执行并保存产物", async () => {
@@ -123,5 +124,48 @@ describe("AIGC 任务服务", () => {
       expect(done?.status).toBe("succeeded");
       expect(done?.execution).toBeUndefined();
     });
+  });
+
+  it("按媒体类型铺平产物并按任务标识分页排序", async () => {
+    const { service, item } = await fixture({
+      assets: [
+        { name: "cover.png", mediaType: "image/png", content: Buffer.from("image") },
+        { name: "clip.mp4", mediaType: "video/mp4", content: Buffer.from("video") },
+        { name: "voice.mp3", mediaType: "audio/mpeg", content: Buffer.from("audio") },
+        { name: "meta.json", mediaType: "application/json", content: Buffer.from("{}") },
+      ],
+    });
+    const task = await service.createRun({ interfaceId: item.id, inputs: { prompt: "测试" } });
+    await vi.waitFor(async () => expect((await service.get(task.id))?.status).toBe("succeeded"));
+
+    const images = await service.listOutputs({ kind: "image", sort: "desc", page: 1, pageSize: 24 });
+
+    expect(images).toMatchObject({ page: 1, pageSize: 24, total: 1, totalPages: 1, counts: { image: 1, video: 1, audio: 1, other: 1 } });
+    expect(images.items[0]).toMatchObject({ taskId: task.id, name: "cover.png", kind: "image" });
+  });
+
+  it("删除活动任务时先中止执行并清理任务记录", async () => {
+    const { service, item } = await fixture((input) => new Promise<AigcExecutionResult>((_resolve, reject) => {
+      input.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    const task = await service.createRun({ interfaceId: item.id, inputs: { prompt: "测试" } });
+    await vi.waitFor(async () => expect((await service.get(task.id))?.status).toBe("running"));
+
+    await expect(service.remove(task.id)).resolves.toMatchObject({ id: task.id });
+    await expect(service.get(task.id)).resolves.toBeUndefined();
+  });
+
+  it("删除完成任务时同步删除原产物和缩略图", async () => {
+    const png = await import("sharp").then(({ default: sharp }) => sharp({ create: { width: 8, height: 8, channels: 3, background: "#ffffff" } }).png().toBuffer());
+    const { service, item, assets } = await fixture({ assets: [{ name: "cover.png", mediaType: "image/png", content: png }] });
+    const task = await service.createRun({ interfaceId: item.id, inputs: { prompt: "测试" } });
+    await vi.waitFor(async () => expect((await service.get(task.id))?.status).toBe("succeeded"));
+    const asset = (await service.get(task.id))!.assets[0];
+    expect(await assets.resolveThumbnailPath(task.id, asset.id)).toBeDefined();
+
+    await service.remove(task.id);
+
+    await expect(assets.resolveOutputPath(task.id, asset.id)).resolves.toBeUndefined();
+    await expect(assets.resolveThumbnailPath(task.id, asset.id)).resolves.toBeUndefined();
   });
 });

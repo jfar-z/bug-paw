@@ -3,6 +3,9 @@ import { stat } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import type {
+  AigcOutputKind,
+  AigcPublicDirectoryEntry,
+  AigcPublicFileRecord,
   AigcInterfaceInput,
   AigcPublicFileSummary,
   AigcRunRequest,
@@ -11,7 +14,7 @@ import type {
 } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "../aigc/aigc-asset-service";
 import type { AigcInterfaceService } from "../aigc/aigc-interface-service";
-import type { AigcPublicFileService } from "../aigc/aigc-public-file-service";
+import { AigcPublicDirectoryError, type AigcPublicFileService } from "../aigc/aigc-public-file-service";
 import type { AigcTaskService } from "../aigc/aigc-task-service";
 import type { AigcWorkflowService } from "../aigc/aigc-workflow-service";
 import { VersionConflictError } from "../configuration/versioned-json-store";
@@ -152,6 +155,19 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     return reply.send(await dependencies.tasks.list());
   });
 
+  app.get<{ Querystring: { kind?: string; sort?: string; page?: string; pageSize?: string } }>("/api/aigc/outputs", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const kind = request.query.kind ?? "image";
+    const sort = request.query.sort ?? "desc";
+    const page = Number(request.query.page ?? "1");
+    const pageSize = Number(request.query.pageSize ?? "24");
+    if (!isOutputKind(kind) || (sort !== "asc" && sort !== "desc") || !Number.isInteger(page) || page < 1
+      || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 96) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "AIGC 产物分页参数无效");
+    }
+    return reply.send(await dependencies.tasks.listOutputs({ kind, sort, page, pageSize }));
+  });
+
   app.post("/api/aigc/tasks", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const body = isRecord(request.body) ? request.body : undefined;
@@ -171,6 +187,16 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     const task = await dependencies.tasks.get(request.params.id);
     if (!task) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 任务不存在");
     return reply.send(task);
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/aigc/tasks/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    try {
+      await dependencies.tasks.remove(request.params.id);
+      return reply.code(204).send();
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
   });
 
   app.post<{ Params: { id: string } }>("/api/aigc/tasks/:id/cancel", async (request, reply) => {
@@ -200,6 +226,17 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     const path = await dependencies.assets.resolveOutputPath(task.id, asset.id);
     if (!path) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 产物不存在");
     return sendAssetFile(reply, path, asset.name, asset.mediaType, request.query.download === "1");
+  });
+
+  app.get<{ Params: { id: string; assetId: string } }>("/api/aigc/tasks/:id/assets/:assetId/thumbnail", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const task = await dependencies.tasks.get(request.params.id);
+    if (!task) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 任务不存在");
+    const asset = task.assets.find((candidate) => candidate.id === request.params.assetId);
+    if (!asset || !asset.mediaType.startsWith("image/")) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 图片产物不存在");
+    const path = await dependencies.assets.resolveThumbnailPath(task.id, asset.id);
+    if (!path) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 图片产物不存在");
+    return sendAssetFile(reply, path, `${asset.name}.webp`, "image/webp", false, "private, max-age=86400, immutable");
   });
 }
 
@@ -258,18 +295,108 @@ function registerPublicFileRoutes(app: FastifyInstance, dependencies: AigcRouteD
     return reply.code(204).send();
   });
 
-  app.get<{ Params: { id: string } }>("/aigc-public/files/:id", async (request, reply) => {
+  app.get<{ Querystring: { directory?: string } }>("/api/aigc/public-directory/entries", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    try {
+      const entries = await dependencies.publicFiles.listEntries(request.query.directory ?? "");
+      return reply.send({ entries: entries.map((entry) => toPublicDirectoryEntry(request, entry)) });
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.get<{ Querystring: { query?: string } }>("/api/aigc/public-directory/search", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!request.query.query?.trim()) return sendApiError(reply, 400, "INVALID_PATH", "请输入文件名关键字");
+    try {
+      const entries = await dependencies.publicFiles.searchEntries(request.query.query);
+      return reply.send({ entries: entries.map((entry) => toPublicDirectoryEntry(request, entry)) });
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.get<{ Querystring: { path?: string } }>("/api/aigc/public-directory/text", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!request.query.path) return sendApiError(reply, 400, "INVALID_PATH", "请提供文件路径");
+    try {
+      return reply.send(await dependencies.publicFiles.readText(request.query.path));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.post<{ Body: { directory?: string; name?: string } }>("/api/aigc/public-directory/directories", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!request.body?.name) return sendApiError(reply, 400, "INVALID_PATH", "请提供目录名称");
+    try {
+      return reply.code(201).send(await dependencies.publicFiles.createDirectory(request.body.directory ?? "", request.body.name));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.post<{ Querystring: { directory?: string } }>("/api/aigc/public-directory/uploads", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!request.isMultipart()) return sendApiError(reply, 400, "INVALID_MULTIPART", "请使用 multipart/form-data 上传 AIGC 公共文件");
+    try {
+      const uploads = async function* () {
+        for await (const part of request.files({ limits: { fileSize: 200 * 1024 * 1024 } })) {
+          yield { filename: part.filename, mediaType: part.mimetype, stream: part.file };
+        }
+      };
+      const files = await dependencies.publicFiles.saveMany(uploads(), request.query.directory ?? "");
+      if (!files.length) return sendApiError(reply, 400, "EMPTY_UPLOAD", "至少选择一个 AIGC 公共文件");
+      return reply.code(201).send({ files: files.map((file) => toPublicFileSummary(file, publicFileUrl(request, file.id))) });
+    } catch (error) {
+      if (error instanceof app.multipartErrors.RequestFileTooLargeError) return sendApiError(reply, 413, "VALIDATION_FAILED", "AIGC 公共文件不能超过 200 MiB");
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.patch<{ Body: { operation?: string; path?: string; name?: string; targetDirectory?: string; createTargetDirectory?: boolean } }>("/api/aigc/public-directory/entries", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = request.body;
+    if (!body?.path) return sendApiError(reply, 400, "INVALID_PATH", "请提供文件路径");
+    try {
+      if (body.operation === "rename" && body.name) return reply.send(await dependencies.publicFiles.renameEntry(body.path, body.name));
+      if (body.operation === "move" && body.targetDirectory !== undefined) {
+        return reply.send(await dependencies.publicFiles.moveEntry(body.path, body.targetDirectory, body.createTargetDirectory === true));
+      }
+      return sendApiError(reply, 400, "INVALID_PATH", "文件操作参数无效");
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.delete<{ Body: { paths?: string[] } }>("/api/aigc/public-directory/entries", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!Array.isArray(request.body?.paths) || !request.body.paths.length) return sendApiError(reply, 400, "INVALID_PATH", "至少选择一个文件或目录");
+    try {
+      await dependencies.publicFiles.removeEntries(request.body.paths);
+      return reply.code(204).send();
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { download?: string } }>("/aigc-public/files/:id", async (request, reply) => {
     const [path, file] = await Promise.all([
       dependencies.publicFiles.resolvePath(request.params.id),
       dependencies.publicFiles.get(request.params.id),
     ]);
     if (!path || !file) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 公共文件不存在");
-    return sendAssetFile(reply, path, file.name, file.mediaType, false);
+    return sendAssetFile(reply, path, file.name, file.mediaType, request.query.download === "1");
   });
 }
 
+/** 给登录后的目录管理响应附加稳定公网 URL。 */
+function toPublicDirectoryEntry(request: FastifyRequest, entry: AigcPublicDirectoryEntry): AigcPublicDirectoryEntry {
+  return entry.id ? { ...entry, url: publicFileUrl(request, entry.id) } : entry;
+}
+
 /** 将公共文件记录映射为包含公网 URL 的浏览器摘要。 */
-function toPublicFileSummary(file: { id: string; name: string; mediaType: string; size: number; createdAt: string }, url: string): AigcPublicFileSummary {
+function toPublicFileSummary(file: AigcPublicFileRecord, url: string): AigcPublicFileSummary {
   return { ...file, url };
 }
 
@@ -288,9 +415,9 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
 }
 
 /** 发送资产文件并固定安全响应头。 */
-async function sendAssetFile(reply: Parameters<typeof sendApiError>[0], path: string, name: string, mediaType: string, download: boolean) {
+async function sendAssetFile(reply: Parameters<typeof sendApiError>[0], path: string, name: string, mediaType: string, download: boolean, cacheControl = "no-store") {
   const fileStat = await stat(path);
-  reply.header("Cache-Control", "no-store");
+  reply.header("Cache-Control", cacheControl);
   reply.header("X-Content-Type-Options", "nosniff");
   reply.type(mediaType);
   if (download) reply.header("Content-Disposition", downloadContentDisposition(name));
@@ -308,6 +435,10 @@ function downloadContentDisposition(name: string): string {
 
 function sendAigcError(reply: Parameters<typeof sendApiError>[0], error: unknown) {
   if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
+  if (error instanceof AigcPublicDirectoryError) {
+    const status = error.code === "NOT_FOUND" ? 404 : error.code === "CONFLICT" ? 409 : error.code === "TEXT_PREVIEW_UNAVAILABLE" ? 422 : 400;
+    return sendApiError(reply, status, error.code, error.message);
+  }
   const message = error instanceof Error ? error.message : "AIGC 请求无效";
   if (message.includes("不存在")) return sendApiError(reply, 404, "NOT_FOUND", message);
   if (message.includes("未启用") || message.includes("已取消") || message.includes("引用")) return sendApiError(reply, 409, "VALIDATION_FAILED", message);
@@ -316,4 +447,9 @@ function sendAigcError(reply: Parameters<typeof sendApiError>[0], error: unknown
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 校验产物页只接受四个固定媒体分组。 */
+function isOutputKind(value: string): value is AigcOutputKind {
+  return value === "image" || value === "video" || value === "audio" || value === "other";
 }

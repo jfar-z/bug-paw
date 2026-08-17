@@ -24,6 +24,9 @@ import type {
   AigcInterfaceDocument,
   AigcInterfaceInput,
   AigcInterfaceRecord,
+  AigcOutputKind,
+  AigcOutputPage,
+  AigcPublicDirectoryEntry,
   AigcPublicFileDocument,
   AigcPublicFileSummary,
   AigcRunRequest,
@@ -176,6 +179,17 @@ export function aigcTaskAssetUrl(taskId: string, assetId: string, download = fal
   return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}${suffix}`);
 }
 
+/** 生成 AIGC 图片产物的服务端缩略图地址。 */
+export function aigcTaskThumbnailUrl(taskId: string, assetId: string): string {
+  return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}/thumbnail`);
+}
+
+/** 根据公开文件稳定地址生成预览或下载链接。 */
+export function aigcPublicFileUrl(url: string, download = false): string {
+  if (!download) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}download=1`;
+}
+
 /**
  * 对 fetch 做统一 JSON 和错误协议处理。
  */
@@ -313,6 +327,8 @@ export const api = {
   deleteAigcInterface: (id: string, revision: string) => request<void>(`/api/aigc/interfaces/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getAigcTasks: () => request<AigcTaskDocument>("/api/aigc/tasks"),
   getAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}`),
+  getAigcOutputs: (kind: AigcOutputKind, sort: "asc" | "desc", page: number, pageSize = 24) => request<AigcOutputPage>(`/api/aigc/outputs?kind=${encodeURIComponent(kind)}&sort=${sort}&page=${page}&pageSize=${pageSize}`),
+  deleteAigcTask: (id: string) => request<void>(`/api/aigc/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   runAigcInterface: (input: AigcRunRequest) => request<AigcTaskRecord>("/api/aigc/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   retryAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }),
@@ -328,6 +344,17 @@ export const api = {
     return request<{ file: AigcPublicFileSummary }>("/api/aigc/public-files", { method: "POST", body: form });
   },
   deleteAigcPublicFile: (id: string) => request<void>(`/api/aigc/public-files/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listAigcPublicDirectoryEntries: (directory = "") => request<{ entries: AigcPublicDirectoryEntry[] }>(`/api/aigc/public-directory/entries?directory=${encodeURIComponent(directory)}`),
+  searchAigcPublicDirectoryEntries: (query: string) => request<{ entries: AigcPublicDirectoryEntry[] }>(`/api/aigc/public-directory/search?query=${encodeURIComponent(query)}`),
+  getAigcPublicDirectoryText: (path: string) => request<WorkspaceTextPreview>(`/api/aigc/public-directory/text?path=${encodeURIComponent(path)}`),
+  uploadAigcPublicDirectoryFiles: (directory: string, files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file, file.name));
+    return request<{ files: AigcPublicFileSummary[] }>(`/api/aigc/public-directory/uploads?directory=${encodeURIComponent(directory)}`, { method: "POST", body: form });
+  },
+  createAigcPublicDirectory: (directory: string, name: string) => request<AigcPublicDirectoryEntry>("/api/aigc/public-directory/directories", { method: "POST", body: JSON.stringify({ directory, name }) }),
+  updateAigcPublicDirectoryEntry: (body: { operation: "rename"; path: string; name: string } | { operation: "move"; path: string; targetDirectory: string; createTargetDirectory?: boolean }) => request<AigcPublicDirectoryEntry>("/api/aigc/public-directory/entries", { method: "PATCH", body: JSON.stringify(body) }),
+  deleteAigcPublicDirectoryEntries: (paths: string[]) => request<void>("/api/aigc/public-directory/entries", { method: "DELETE", body: JSON.stringify({ paths }) }),
   getWebResearch: () => request<WebResearchSettingsDocument>("/api/capabilities/web-research"),
   updateWebResearchGlobal: (revision: string, config: WebResearchGlobalConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/global", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   createWebResearchProvider: (input: CreateSearchProviderInput) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers", { method: "POST", body: JSON.stringify(input) }),
