@@ -61,6 +61,19 @@ import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
 import { registerTtsRoutes } from "./routes/tts";
+import { AigcConnectionService } from "./aigc/aigc-connection-service";
+import { AigcConnectionManagementService } from "./aigc/aigc-connection-management-service";
+import { AigcConnectionValidation } from "./aigc/aigc-connection-validation";
+import { AigcWorkflowService } from "./aigc/aigc-workflow-service";
+import { AigcInterfaceService } from "./aigc/aigc-interface-service";
+import { AigcAssetService } from "./aigc/aigc-asset-service";
+import { AigcTaskRepository } from "./aigc/aigc-task-repository";
+import { AigcTaskService } from "./aigc/aigc-task-service";
+import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
+import { GrokAigcAdapter } from "./aigc/grok-adapter";
+import { ComfyUiAigcAdapter } from "./aigc/comfyui-adapter";
+import { registerAigcChannelRoutes } from "./routes/aigc-channels";
+import { registerAigcRoutes } from "./routes/aigc";
 import { EmbeddingConfigService } from "./knowledge-base/embedding-config-service";
 import { OpenAiEmbeddingClient } from "./knowledge-base/openai-embedding-client";
 import { registerKnowledgeRetrievalRoutes } from "./routes/knowledge-retrieval";
@@ -300,6 +313,33 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   }
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
   const ttsSynthesis = new TtsSynthesisService(ttsConfigs);
+  const aigcConnectionPath = join(paths.appDir, "aigc-connections.json");
+  const aigcAuthPath = join(paths.appDir, "aigc-auth.json");
+  const aigcConnections = new AigcConnectionService(aigcConnectionPath);
+  const aigcCredentials = new CredentialService(aigcAuthPath);
+  const aigcManagement = new AigcConnectionManagementService({
+    connections: aigcConnections,
+    credentials: aigcCredentials,
+    configPath: aigcConnectionPath,
+    authPath: aigcAuthPath,
+    transaction: new ConfigTransaction({ rootDir: paths.rootDir, transactionDir: paths.transactionDir }),
+  });
+  const aigcWorkflows = new AigcWorkflowService(join(paths.appDir, "aigc-workflows.json"));
+  const aigcInterfaces = new AigcInterfaceService(join(paths.appDir, "aigc-interfaces.json"), (id) => aigcWorkflows.exists(id));
+  const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
+  const aigcTasks = new AigcTaskService({
+    repository: new AigcTaskRepository(join(paths.appDir, "aigc-tasks.json")),
+    interfaces: aigcInterfaces,
+    workflows: aigcWorkflows,
+    connections: aigcConnections,
+    credentials: aigcCredentials,
+    assets: aigcAssets,
+    adapters: {
+      openai: new OpenAiAigcAdapter(),
+      grok: new GrokAigcAdapter(),
+      comfyui: new ComfyUiAigcAdapter(),
+    },
+  });
   await recoverPendingProviderRenames(paths, models, agentStore);
   const credentials = new CredentialService(resolve(paths.piDir, "auth.json"));
   const providerModelDiscovery = createProviderModelDiscovery({ models, credentials });
@@ -615,6 +655,20 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     authService,
     configs: embeddingConfigs,
     rebuildAll: () => knowledgeBases.rebuildSemanticIndex(),
+  });
+  registerAigcChannelRoutes(app, {
+    authService,
+    management: aigcManagement,
+    validation: new AigcConnectionValidation(),
+    credentials: aigcCredentials,
+    isChannelInUse: (channelId) => aigcInterfaces.isChannelInUse(channelId),
+  });
+  registerAigcRoutes(app, {
+    authService,
+    workflows: aigcWorkflows,
+    interfaces: aigcInterfaces,
+    tasks: aigcTasks,
+    assets: aigcAssets,
   });
   registerBrowserPreviewRoutes(app, browserPreview);
   registerBrowserAutomationRoutes(app, {

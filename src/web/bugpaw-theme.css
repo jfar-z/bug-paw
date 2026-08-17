@@ -328,6 +328,7 @@ textarea:focus-visible {
 .workbench-shell,
 .chat-shell,
 .configuration-shell,
+.aigc-workbench-shell,
 .knowledge-base-page {
   color: var(--text-primary);
   background: var(--canvas);
@@ -377,6 +378,7 @@ textarea:focus-visible {
 
 .chat-sidebar,
 .configuration-sidebar,
+.aigc-workbench-sidebar,
 .workspace-agent-navigation,
 .knowledge-base-navigation {
   border-color: var(--border);
@@ -385,6 +387,7 @@ textarea:focus-visible {
 
 .chat-workspace,
 .configuration-content,
+.aigc-workbench-content,
 .workspace-resources-page__main,
 .knowledge-base-workspace {
   background: var(--canvas);
@@ -393,6 +396,7 @@ textarea:focus-visible {
 .session-row,
 .session-nav > button,
 .configuration-nav > button,
+.aigc-workbench-nav button,
 .workspace-agent-navigation nav button,
 .knowledge-base-navigation nav button {
   border-radius: 7px;
@@ -401,6 +405,7 @@ textarea:focus-visible {
 .session-row.is-active,
 .session-nav > button.is-active,
 .configuration-nav > button.is-active,
+.aigc-workbench-nav button.is-active,
 .workspace-agent-navigation nav button.is-active,
 .knowledge-base-navigation nav button.is-active {
   background: var(--surface-soft);
@@ -497,6 +502,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .workbench-rail,
 :root[data-theme="bug"] .chat-sidebar,
 :root[data-theme="bug"] .configuration-sidebar,
+:root[data-theme="bug"] .aigc-workbench-sidebar,
 :root[data-theme="bug"] .workspace-agent-navigation,
 :root[data-theme="bug"] .knowledge-base-navigation {
   color: #fff8ee;
@@ -512,6 +518,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .workbench-rail__actions .icon-button,
 :root[data-theme="bug"] .chat-sidebar button,
 :root[data-theme="bug"] .configuration-sidebar button,
+:root[data-theme="bug"] .aigc-workbench-sidebar button,
 :root[data-theme="bug"] .workspace-agent-navigation button,
 :root[data-theme="bug"] .knowledge-base-navigation button {
   color: #d8cbbb;
@@ -522,6 +529,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .workbench-rail__actions .icon-button:hover,
 :root[data-theme="bug"] .chat-sidebar button:hover,
 :root[data-theme="bug"] .configuration-sidebar button:hover,
+:root[data-theme="bug"] .aigc-workbench-sidebar button:hover,
 :root[data-theme="bug"] .workspace-agent-navigation button:hover,
 :root[data-theme="bug"] .knowledge-base-navigation button:hover {
   color: #fff8ee;
@@ -569,6 +577,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .workbench-main-nav button.is-active,
 :root[data-theme="bug"] .session-row.is-active,
 :root[data-theme="bug"] .configuration-nav > button.is-active,
+:root[data-theme="bug"] .aigc-workbench-nav button.is-active,
 :root[data-theme="bug"] .workspace-agent-navigation nav button.is-active,
 :root[data-theme="bug"] .knowledge-base-navigation nav button.is-active {
   color: #fff8ee;
@@ -580,6 +589,7 @@ textarea:focus-visible {
 :root[data-theme="bug"] .session-row.is-active .session-row__open,
 :root[data-theme="bug"] .session-row.is-active .session-actions__trigger,
 :root[data-theme="bug"] .configuration-nav > button.is-active small,
+:root[data-theme="bug"] .aigc-workbench-nav button.is-active small,
 :root[data-theme="bug"] .workspace-agent-navigation nav button.is-active small,
 :root[data-theme="bug"] .knowledge-base-navigation nav button.is-active small {
   color: inherit;

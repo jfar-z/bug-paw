@@ -18,6 +18,24 @@ import type { SessionTextSearchPage } from "../shared/session-text-search";
 import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared/session-question-contracts";
 import type { QuestionAnswerSubmissionResult } from "../shared/question-response-protocol";
 import type { AvatarCropArea } from "../shared/avatar-contracts";
+import type {
+  AigcChannelInput,
+  AigcCreateChannelInput,
+  AigcInterfaceDocument,
+  AigcInterfaceInput,
+  AigcInterfaceRecord,
+  AigcRunRequest,
+  AigcSettingsDocument,
+  AigcTaskDocument,
+  AigcTaskRecord,
+  AigcUpdateChannelInput,
+  AigcUploadedAsset,
+  AigcWorkflowCreateInput,
+  AigcWorkflowDetail,
+  AigcWorkflowDetailDocument,
+  AigcWorkflowDocument,
+  AigcWorkflowUpdateInput,
+} from "../shared/aigc-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -270,6 +288,31 @@ export const api = {
   createTtsProfile: (input: TtsProfileInput) => request<{ revision: string }>("/api/capabilities/tts", { method: "POST", body: JSON.stringify(input) }),
   updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  getAigcChannels: () => request<AigcSettingsDocument>("/api/capabilities/aigc/channels"),
+  createAigcChannel: (input: AigcCreateChannelInput) => request<AigcSettingsDocument>("/api/capabilities/aigc/channels", { method: "POST", body: JSON.stringify(input) }),
+  updateAigcChannel: (id: string, input: AigcUpdateChannelInput) => request<AigcSettingsDocument>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteAigcChannel: (id: string, configRevision: string, credentialRevision: string) => request<void>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ configRevision, credentialRevision }) }),
+  testAigcChannel: (id: string) => request<{ ok: boolean; message: string }>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}/test`, { method: "POST" }),
+  getAigcChannelCredential: (id: string) => request<{ apiKey: string }>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}/credential`),
+  getAigcWorkflows: () => request<AigcWorkflowDocument>("/api/aigc/workflows"),
+  createAigcWorkflow: (input: AigcWorkflowCreateInput) => request<AigcWorkflowDetail>("/api/aigc/workflows", { method: "POST", body: JSON.stringify(input) }),
+  getAigcWorkflow: (id: string) => request<AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}`),
+  updateAigcWorkflow: (id: string, revision: string, input: AigcWorkflowUpdateInput) => request<AigcWorkflowDetail>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  deleteAigcWorkflow: (id: string, revision: string) => request<void>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  getAigcInterfaces: () => request<AigcInterfaceDocument>("/api/aigc/interfaces"),
+  createAigcInterface: (input: AigcInterfaceInput) => request<AigcInterfaceRecord>("/api/aigc/interfaces", { method: "POST", body: JSON.stringify(input) }),
+  updateAigcInterface: (id: string, revision: string, input: AigcInterfaceInput) => request<AigcInterfaceRecord>(`/api/aigc/interfaces/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  deleteAigcInterface: (id: string, revision: string) => request<void>(`/api/aigc/interfaces/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  getAigcTasks: () => request<AigcTaskDocument>("/api/aigc/tasks"),
+  getAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}`),
+  runAigcInterface: (input: AigcRunRequest) => request<AigcTaskRecord>("/api/aigc/tasks", { method: "POST", body: JSON.stringify(input) }),
+  cancelAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  retryAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+  uploadAigcInput: (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return request<{ asset: AigcUploadedAsset }>("/api/aigc/inputs", { method: "POST", body: form });
+  },
   getWebResearch: () => request<WebResearchSettingsDocument>("/api/capabilities/web-research"),
   updateWebResearchGlobal: (revision: string, config: WebResearchGlobalConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/global", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   createWebResearchProvider: (input: CreateSearchProviderInput) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers", { method: "POST", body: JSON.stringify(input) }),

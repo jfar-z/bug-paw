@@ -1,10 +1,11 @@
-import { CalendarClock, ChevronDown, FolderOpen, GitFork, LibraryBig, LogOut, Menu, MessageSquare, Settings2, X } from "lucide-react";
+import { CalendarClock, ChevronDown, FolderOpen, GitFork, LibraryBig, LogOut, Menu, MessageSquare, Settings2, WandSparkles, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { ProductMark } from "../components/product-mark";
 import { ThemeSwitcher } from "../components/theme-switcher";
 import { KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT, WORKBENCH_NAVIGATION_TOGGLE_EVENT, type AppRoute } from "../router";
 import { WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT } from "../components/workspace-agent-navigation";
 import type { ThemePreference } from "../theme";
+import { AIGC_NAVIGATION_TOGGLE_EVENT, AigcWorkbenchSidebar } from "./aigc-workbench-sidebar";
 import { ConfigurationSidebar } from "./configuration-sidebar";
 
 interface WorkbenchShellProps {
@@ -29,11 +30,14 @@ export function WorkbenchShell({
 }: WorkbenchShellProps) {
   const [mainNavigationOpen, setMainNavigationOpen] = useState(false);
   const [configurationOpen, setConfigurationOpen] = useState(false);
+  const [aigcNavigationOpen, setAigcNavigationOpen] = useState(false);
   const configurationRoute = isConfigurationRoute(route);
+  const aigcRoute = isAigcRoute(route);
   const agentNavigationRoute = route.page === "workspace-resources" || route.page === "knowledge-base" || route.page === "scheduled-tasks";
   const knowledgeBaseRoute = route.page === "knowledge-base";
   const primaryNavigation = [
     { label: "会话", route: { page: "chat" } as AppRoute, icon: MessageSquare, active: route.page === "chat" },
+    { label: "AIGC 工作台", route: { page: "aigc-overview" } as AppRoute, icon: WandSparkles, active: aigcRoute },
     { label: "资源管理", route: { page: "workspace-resources" } as AppRoute, icon: FolderOpen, active: route.page === "workspace-resources" },
     { label: "知识库", route: { page: "knowledge-base" } as AppRoute, icon: LibraryBig, active: route.page === "knowledge-base" },
     { label: "定时任务", route: { page: "scheduled-tasks" } as AppRoute, icon: CalendarClock, active: route.page === "scheduled-tasks" },
@@ -46,12 +50,19 @@ export function WorkbenchShell({
     return () => window.removeEventListener(WORKBENCH_NAVIGATION_TOGGLE_EVENT, toggleNavigation);
   }, []);
 
+  useEffect(() => {
+    const toggleAigcNavigation = () => setAigcNavigationOpen((current) => !current);
+    window.addEventListener(AIGC_NAVIGATION_TOGGLE_EVENT, toggleAigcNavigation);
+    return () => window.removeEventListener(AIGC_NAVIGATION_TOGGLE_EVENT, toggleAigcNavigation);
+  }, []);
+
   const go = (nextRoute: AppRoute) => {
     onNavigate(nextRoute);
     setMainNavigationOpen(false);
+    setAigcNavigationOpen(false);
   };
 
-  const shellMode = configurationRoute ? "is-configuration" : agentNavigationRoute ? "is-workspace-resources" : "is-chat";
+  const shellMode = configurationRoute ? "is-configuration" : aigcRoute ? "is-aigc" : agentNavigationRoute ? "is-workspace-resources" : "is-chat";
 
   return (
     <main className={`workbench-shell ${shellMode}`} style={{ height: "var(--app-viewport-height, 100dvh)" }}>
@@ -59,10 +70,15 @@ export function WorkbenchShell({
         <button
           type="button"
           className="icon-button workbench-secondary-menu"
-          aria-label={configurationRoute ? (configurationOpen ? "关闭配置导航" : "打开配置导航") : knowledgeBaseRoute ? "打开知识库列表" : agentNavigationRoute ? "打开 Agent 列表" : "当前工作台没有二级导航"}
-          aria-expanded={configurationRoute ? configurationOpen : undefined}
-          disabled={!configurationRoute && !agentNavigationRoute}
+          aria-label={configurationRoute ? (configurationOpen ? "关闭配置导航" : "打开配置导航") : aigcRoute ? (aigcNavigationOpen ? "关闭 AIGC 导航" : "打开 AIGC 导航") : knowledgeBaseRoute ? "打开知识库列表" : agentNavigationRoute ? "打开 Agent 列表" : "当前工作台没有二级导航"}
+          aria-expanded={configurationRoute ? configurationOpen : aigcRoute ? aigcNavigationOpen : undefined}
+          disabled={!configurationRoute && !aigcRoute && !agentNavigationRoute}
           onClick={() => {
+            if (aigcRoute) {
+              setMainNavigationOpen(false);
+              window.dispatchEvent(new Event(AIGC_NAVIGATION_TOGGLE_EVENT));
+              return;
+            }
             if (agentNavigationRoute) {
               setMainNavigationOpen(false);
               window.dispatchEvent(new Event(knowledgeBaseRoute ? KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT : WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT));
@@ -82,6 +98,7 @@ export function WorkbenchShell({
           aria-expanded={mainNavigationOpen}
           onClick={() => {
             setConfigurationOpen(false);
+            setAigcNavigationOpen(false);
             setMainNavigationOpen((current) => !current);
           }}
         >
@@ -90,7 +107,7 @@ export function WorkbenchShell({
         <ProductMark />
       </header>
 
-      {(mainNavigationOpen || configurationOpen) && (
+      {(mainNavigationOpen || configurationOpen || aigcNavigationOpen) && (
         <button
           type="button"
           className="workbench-scrim"
@@ -98,6 +115,7 @@ export function WorkbenchShell({
           onClick={() => {
             setMainNavigationOpen(false);
             setConfigurationOpen(false);
+            setAigcNavigationOpen(false);
           }}
         />
       )}
@@ -144,10 +162,39 @@ export function WorkbenchShell({
               {children}
             </section>
           </div>
+        ) : aigcRoute ? (
+          <div className="aigc-workbench-shell">
+            <AigcWorkbenchSidebar
+              route={route}
+              open={aigcNavigationOpen}
+              onClose={() => setAigcNavigationOpen(false)}
+              onNavigate={onNavigate}
+            />
+            <section className="aigc-workbench-content">
+              {children}
+            </section>
+          </div>
         ) : children}
       </div>
     </main>
   );
+}
+
+/**
+ * 判断路由是否属于 AIGC 工作台。
+ *
+ * @param route 当前工作台路由
+ */
+function isAigcRoute(route: AppRoute): boolean {
+  return [
+    "aigc-overview",
+    "aigc-interfaces",
+    "aigc-tasks",
+    "aigc-workflows",
+    "aigc-interface-detail",
+    "aigc-task-detail",
+    "aigc-workflow-detail",
+  ].includes(route.page);
 }
 
 /**
@@ -167,6 +214,7 @@ function isConfigurationRoute(route: AppRoute): boolean {
     "browser-automation",
     "tts",
     "knowledge-retrieval",
+    "aigc-channels",
     "configuration-operations",
     "diagnostics",
     "agent-detail",

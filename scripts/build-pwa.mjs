@@ -10,9 +10,15 @@ export async function injectPwaPrecache(outputRoot) {
   const workerPath = join(outputRoot, "sw.js");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const selected = Object.entries(manifest)
-    .filter(([key, value]) => key === "index.html" || key.endsWith("/browser-automation-page.tsx") || value.isEntry)
+    .filter(([key, value]) => key === "index.html"
+      || key.endsWith("/browser-automation-page.tsx")
+      || key.endsWith("/aigc-workbench-page.tsx")
+      || key.endsWith("/aigc-channels-page.tsx")
+      || value.isEntry)
     .map(([key]) => key);
   if (!selected.some((key) => key.endsWith("/browser-automation-page.tsx"))) throw new Error("Vite manifest 缺少浏览器配置页分包");
+  if (!selected.some((key) => key.endsWith("/aigc-workbench-page.tsx"))) throw new Error("Vite manifest 缺少 AIGC 工作台分包");
+  if (!selected.some((key) => key.endsWith("/aigc-channels-page.tsx"))) throw new Error("Vite manifest 缺少 AIGC 渠道页分包");
   const assets = new Set();
   const visited = new Set();
   const visit = (key) => {

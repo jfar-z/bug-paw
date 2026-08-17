@@ -1,0 +1,531 @@
+import { Activity, Boxes, GitFork, Play, RefreshCw, Save, Trash2, Upload } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  AigcChannelSummary,
+  AigcInterfaceCapability,
+  AigcInterfaceInput,
+  AigcInterfaceRecord,
+  AigcInterfaceProtocol,
+  AigcSettingsDocument,
+  AigcTaskDocument,
+  AigcTaskRecord,
+  AigcWorkflowDetail,
+  AigcWorkflowDocument,
+} from "../../shared/aigc-contracts";
+import { api, apiV1Url } from "../api";
+import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
+import { useOnlineStatus } from "../use-online-status";
+import type { AppRoute } from "../router";
+
+interface AigcWorkbenchPageProps {
+  route: AppRoute;
+}
+
+/** AIGC 工作台页面，按二级路由呈现概览、接口、任务与工作流。 */
+export function AigcWorkbenchPage({ route }: AigcWorkbenchPageProps) {
+  if (route.page === "aigc-interfaces") return <AigcInterfacesPage />;
+  if (route.page === "aigc-interface-detail") return <AigcInterfaceDetail interfaceId={route.interfaceId} />;
+  if (route.page === "aigc-tasks") return <AigcTasksPage />;
+  if (route.page === "aigc-task-detail") return <AigcTaskDetail taskId={route.taskId} />;
+  if (route.page === "aigc-workflows") return <AigcWorkflowsPage />;
+  if (route.page === "aigc-workflow-detail") return <AigcWorkflowDetail workflowId={route.workflowId} />;
+  return <AigcOverview />;
+}
+
+/** 概览页汇总渠道、接口、工作流与任务状态。 */
+function AigcOverview() {
+  const { runApiTask } = useApiTask();
+  const [channels, setChannels] = useState<AigcSettingsDocument>();
+  const [interfaces, setInterfaces] = useState<{ total: number; enabled: number }>();
+  const [workflows, setWorkflows] = useState<{ total: number }>();
+  const [tasks, setTasks] = useState<{ total: number; running: number; failed: number }>();
+
+  useEffect(() => {
+    void runApiTask(async () => {
+      const [channelDocument, interfaceDocument, workflowDocument, taskDocument] = await Promise.all([
+        api.getAigcChannels(),
+        api.getAigcInterfaces(),
+        api.getAigcWorkflows(),
+        api.getAigcTasks(),
+      ]);
+      setChannels(channelDocument);
+      setInterfaces({ total: interfaceDocument.interfaces.length, enabled: interfaceDocument.interfaces.filter((item) => item.enabled).length });
+      setWorkflows({ total: workflowDocument.workflows.length });
+      setTasks({
+        total: taskDocument.tasks.length,
+        running: taskDocument.tasks.filter((task) => task.status === "queued" || task.status === "running").length,
+        failed: taskDocument.tasks.filter((task) => task.status === "failed").length,
+      });
+      return { channelDocument, interfaceDocument, workflowDocument, taskDocument };
+    }, { operation: "加载 AIGC 概览" });
+  }, [runApiTask]);
+
+  const cards = [
+    { label: "渠道", value: channels?.channels?.length ?? "—", detail: `${channels?.channels?.filter((item) => item.enabled).length ?? 0} 个已启用` },
+    { label: "接口", value: interfaces?.total ?? "—", detail: `${interfaces?.enabled ?? 0} 个可试运行` },
+    { label: "工作流", value: workflows?.total ?? "—", detail: "ComfyUI 编排资产" },
+    { label: "任务", value: tasks?.total ?? "—", detail: `${tasks?.running ?? 0} 运行中 · ${tasks?.failed ?? 0} 失败` },
+  ];
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>概览</h1><p>AIGC 接口与生成任务的总览；渠道连接在配置中心维护。</p></header>
+      <div className="aigc-overview-grid">
+        {cards.map((card) => (
+          <section key={card.label} className="aigc-overview-card">
+            <span>{card.label}</span><strong>{card.value}</strong><small>{card.detail}</small>
+          </section>
+        ))}
+      </div>
+      <section className="configuration-form-card">
+        <div className="configuration-section__heading"><div><span>01</span><h2>当前状态</h2></div></div>
+        <p className="configuration-help">渠道、接口和工作流可在对应二级目录中管理；任务页可查看每次生成的进度与产物。</p>
+      </section>
+    </div>
+  );
+}
+
+/** 接口列表与编辑。 */
+function AigcInterfacesPage() {
+  const { runApiTask } = useApiTask();
+  const online = useOnlineStatus();
+  const [document, setDocument] = useState<{ revision: string; interfaces: AigcInterfaceRecord[] }>();
+  const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
+  const [workflows, setWorkflows] = useState<{ id: string; name: string }[]>([]);
+  const [selected, setSelected] = useState<AigcInterfaceRecord>();
+  const [draft, setDraft] = useState<AigcInterfaceInput>(emptyInterface);
+  const [message, setMessage] = useState("");
+
+  async function refresh() {
+    const [next, channelDocument, workflowDocument] = await Promise.all([
+      api.getAigcInterfaces(),
+      api.getAigcChannels(),
+      api.getAigcWorkflows(),
+    ]);
+    setDocument(next);
+    setChannels(channelDocument.channels);
+    setWorkflows(workflowDocument.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name })));
+    return next;
+  }
+
+  useEffect(() => {
+    void runApiTask(refresh, { operation: "加载 AIGC 接口" }).then((result) => {
+      if (result.status !== "success") return;
+      if (result.data.interfaces[0]) select(result.data.interfaces[0]);
+    });
+  }, [runApiTask]);
+
+  function select(item: AigcInterfaceRecord) {
+    setSelected(item);
+    setDraft({
+      name: item.name,
+      description: item.description,
+      protocol: item.protocol,
+      capability: item.capability,
+      channelId: item.channelId,
+      enabled: item.enabled,
+      toolPublishEnabled: item.toolPublishEnabled,
+      config: item.config as AigcInterfaceInput["config"],
+    });
+  }
+
+  function createDraft() {
+    setSelected(undefined);
+    setDraft({ ...emptyInterface, channelId: channels.find((channel) => channel.enabled)?.id ?? "" });
+  }
+
+  async function save() {
+    if (!online) return;
+    setMessage("");
+    try {
+      const result = selected
+        ? await runApiTask(() => api.updateAigcInterface(selected.id, document?.revision ?? "", draft), { operation: "保存 AIGC 接口", expected: aigcExpected(setMessage) })
+        : await runApiTask(() => api.createAigcInterface(draft), { operation: "保存 AIGC 接口", expected: aigcExpected(setMessage) });
+      if (result.status !== "success") return;
+      const next = await refresh();
+      const current = next.interfaces.find((item) => item.id === selected?.id) ?? next.interfaces.at(-1);
+      if (current) select(current);
+      setMessage("已保存 AIGC 接口");
+    } catch {
+      setMessage("刷新 AIGC 接口失败");
+    }
+  }
+
+  async function remove() {
+    if (!selected || !document || !online) return;
+    setMessage("");
+    const result = await runApiTask(() => api.deleteAigcInterface(selected.id, document.revision), { operation: "删除 AIGC 接口", expected: aigcExpected(setMessage) });
+    if (result.status !== "success") return;
+    const next = await refresh();
+    setSelected(undefined);
+    setDraft(emptyInterface);
+    setMessage("已删除 AIGC 接口");
+  }
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>接口</h1><p>把渠道、能力与 ComfyUI 工作流组合成可手动试运行的 AIGC 接口。</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <section className="configuration-form-card">
+        <div className="configuration-section__heading"><div><span>01</span><h2>接口定义</h2></div><button type="button" onClick={createDraft} disabled={!online}><Boxes size={15} />新增</button></div>
+        <div className="configuration-button-row">
+          {(document?.interfaces ?? []).map((item) => (
+            <button type="button" key={item.id} className={selected?.id === item.id ? "is-selected" : undefined} onClick={() => select(item)}>{item.name}</button>
+          ))}
+        </div>
+        <label><span>接口名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+        <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+        <div className="configuration-field-row">
+          <label><span>协议</span><select aria-label="AIGC 接口协议" value={draft.protocol} onChange={(event) => setDraft({ ...draft, protocol: event.target.value as AigcInterfaceProtocol, capability: defaultCapability(event.target.value as AigcInterfaceProtocol) })}>
+            <option value="openai">OpenAI</option><option value="grok">Grok</option><option value="comfyui">ComfyUI</option>
+          </select></label>
+          <label><span>能力</span><select aria-label="AIGC 接口能力" value={draft.capability} onChange={(event) => setDraft({ ...draft, capability: event.target.value as AigcInterfaceCapability })}>
+            {capabilityOptions(draft.protocol).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select></label>
+        </div>
+        <label><span>渠道</span><select aria-label="AIGC 渠道" value={draft.channelId} onChange={(event) => setDraft({ ...draft, channelId: event.target.value })}>
+          <option value="">请选择渠道</option>
+          {channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}（{channel.type}）</option>)}
+        </select></label>
+        <label><span>{draft.protocol === "comfyui" ? "工作流" : "模型"}</span>
+          {draft.protocol === "comfyui" ? (
+            <select aria-label="ComfyUI 工作流" value={(draft.config as { workflowId?: string }).workflowId ?? ""} onChange={(event) => setDraft({ ...draft, config: { workflowId: event.target.value } })}>
+              <option value="">请选择工作流</option>
+              {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}
+            </select>
+          ) : (
+            <input aria-label="AIGC 模型" value={(draft.config as { model?: string }).model ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, model: event.target.value } })} />
+          )}
+        </label>
+        {draft.protocol === "openai" ? (
+          <div className="configuration-field-row">
+            <label><span>尺寸</span><input aria-label="OpenAI 尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
+            <label><span>质量</span><input aria-label="OpenAI 质量" placeholder="standard" value={(draft.config as { quality?: string }).quality ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, quality: event.target.value } })} /></label>
+          </div>
+        ) : null}
+        <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用接口</span></label>
+        <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>预留未来发布为 Agent 工具</span></label>
+      </section>
+      <div className="configuration-save-bar">
+        <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online} onClick={() => void remove()}><Trash2 size={15} />删除</button>
+        <button type="button" className="configuration-primary-action" disabled={!online} onClick={() => void save()}><Save size={16} />保存接口</button>
+      </div>
+    </div>
+  );
+}
+
+/** 接口详情页复用编辑表单。 */
+function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
+  const { runApiTask } = useApiTask();
+  const [item, setItem] = useState<AigcInterfaceRecord>();
+  const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
+  const [workflows, setWorkflows] = useState<{ id: string; name: string }[]>([]);
+  const [draft, setDraft] = useState<AigcInterfaceInput>(emptyInterface);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    void runApiTask(async () => {
+      const [channelsDocument, workflowsDocument] = await Promise.all([api.getAigcChannels(), api.getAigcWorkflows()]);
+      const found = (await api.getAigcInterfaces()).interfaces.find((candidate) => candidate.id === interfaceId);
+      if (!found) throw new Error("接口不存在");
+      setChannels(channelsDocument.channels);
+      setWorkflows(workflowsDocument.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name })));
+      setItem(found);
+      setDraft({
+        name: found.name,
+        description: found.description,
+        protocol: found.protocol,
+        capability: found.capability,
+        channelId: found.channelId,
+        enabled: found.enabled,
+        toolPublishEnabled: found.toolPublishEnabled,
+        config: found.config as AigcInterfaceInput["config"],
+      });
+      return found;
+    }, { operation: "加载 AIGC 接口详情" });
+  }, [interfaceId, runApiTask]);
+
+  async function save() {
+    if (!item) return;
+    const result = await runApiTask(async () => {
+      const document = await api.getAigcInterfaces();
+      return api.updateAigcInterface(item.id, document.revision, draft);
+    }, { operation: "保存 AIGC 接口", expected: aigcExpected(setMessage) });
+    if (result.status === "success") setMessage("已保存 AIGC 接口");
+  }
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>接口详情</h1><p>编辑接口的协议、能力与目标工作流。</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <section className="configuration-form-card">
+        <label><span>名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+        <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+        <p className="configuration-help">协议、渠道与能力已在接口列表中创建；如需变更协议，请删除后重新创建。</p>
+        {draft.protocol === "comfyui" ? <p className="configuration-help">工作流：{workflows.find((item) => item.id === (draft.config as { workflowId?: string }).workflowId)?.name ?? "未找到"}</p> : null}
+        <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={() => void save()}><Save size={16} />保存接口</button></div>
+      </section>
+    </div>
+  );
+}
+
+/** 任务列表页。 */
+function AigcTasksPage() {
+  const { runApiTask } = useApiTask();
+  const [document, setDocument] = useState<AigcTaskDocument>();
+  const [message, setMessage] = useState("");
+
+  async function refresh() {
+    const next = await api.getAigcTasks();
+    setDocument(next);
+    return next;
+  }
+
+  useEffect(() => {
+    void runApiTask(refresh, { operation: "加载 AIGC 任务" });
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [runApiTask]);
+
+  async function cancel(id: string) {
+    const result = await runApiTask(() => api.cancelAigcTask(id), { operation: "取消 AIGC 任务", expected: aigcExpected(setMessage) });
+    if (result.status === "success") await refresh();
+  }
+
+  async function retry(id: string) {
+    const result = await runApiTask(() => api.retryAigcTask(id), { operation: "重试 AIGC 任务", expected: aigcExpected(setMessage) });
+    if (result.status === "success") await refresh();
+  }
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>任务</h1><p>查看生成任务状态、失败原因与产物下载。</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <div className="aigc-task-list">
+        {(document?.tasks ?? []).map((task) => (
+          <section key={task.id} className="aigc-task-row">
+            <div><strong>{task.interfaceName}</strong><span>{task.status}</span><small>{task.id}</small></div>
+            <p>{task.error ? `${task.error.code}: ${task.error.message}` : `${task.assetCount} 个产物`}</p>
+            <div className="aigc-task-actions">
+              {(task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
+              {(task.status === "failed" || task.status === "cancelled") ? <button type="button" onClick={() => void retry(task.id)}><RefreshCw size={14} />重试</button> : null}
+              <a href={`/aigc/tasks/${encodeURIComponent(task.id)}`}>查看</a>
+            </div>
+          </section>
+        ))}
+        {!document?.tasks.length ? <p className="configuration-help">暂无 AIGC 任务。</p> : null}
+      </div>
+    </div>
+  );
+}
+
+/** 任务详情页。 */
+function AigcTaskDetail({ taskId }: { taskId: string }) {
+  const { runApiTask } = useApiTask();
+  const [task, setTask] = useState<AigcTaskRecord>();
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    void runApiTask(() => api.getAigcTask(taskId).then((next) => { setTask(next); return next; }), { operation: "加载 AIGC 任务详情" });
+    const timer = window.setInterval(() => void api.getAigcTask(taskId).then(setTask).catch(() => undefined), 3_000);
+    return () => window.clearInterval(timer);
+  }, [runApiTask, taskId]);
+
+  async function retry() {
+    const result = await runApiTask(() => api.retryAigcTask(taskId), { operation: "重试 AIGC 任务", expected: aigcExpected(setMessage) });
+    if (result.status === "success" && result.data) setTask(result.data);
+  }
+
+  if (!task) return <div className="aigc-workbench-page"><p className="configuration-help">正在加载任务…</p></div>;
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>任务详情</h1><p>{task.interfaceName} · {task.status}</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <section className="configuration-form-card">
+        <div className="aigc-task-meta"><span>任务 ID</span><code>{task.id}</code></div>
+        <div className="aigc-task-meta"><span>状态</span><strong>{task.status}</strong></div>
+        <div className="aigc-task-meta"><span>创建时间</span><time>{new Date(task.createdAt).toLocaleString()}</time></div>
+        {task.error ? <p className="configuration-help">错误：{task.error.code} {task.error.message}</p> : null}
+        <h2>产物</h2>
+        {task.assets.map((asset) => <p key={asset.id}><a href={apiV1Url(`/api/aigc/tasks/${encodeURIComponent(task.id)}/assets/${encodeURIComponent(asset.id)}`)}>{asset.name}</a>（{asset.mediaType}）</p>)}
+        {!task.assets.length ? <p className="configuration-help">暂无产物。</p> : null}
+        {(task.status === "failed" || task.status === "cancelled") ? <button type="button" className="configuration-secondary-action" onClick={() => void retry()}><RefreshCw size={15} />重试</button> : null}
+      </section>
+    </div>
+  );
+}
+
+/** 工作流导入与列表页。 */
+function AigcWorkflowsPage() {
+  const { runApiTask } = useApiTask();
+  const online = useOnlineStatus();
+  const [document, setDocument] = useState<AigcWorkflowDocument>();
+  const [name, setName] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [rawText, setRawText] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function refresh() {
+    const next = await api.getAigcWorkflows();
+    setDocument(next);
+    return next;
+  }
+
+  useEffect(() => {
+    void runApiTask(refresh, { operation: "加载 ComfyUI 工作流" });
+  }, [runApiTask]);
+
+  async function onFile(file: File | undefined) {
+    if (!file) return;
+    setFileName(file.name);
+    setName(file.name.replace(/\.json$/iu, ""));
+    setRawText(await file.text());
+  }
+
+  async function save() {
+    if (!online) return;
+    setMessage("");
+    let workflowJson: unknown;
+    try {
+      workflowJson = JSON.parse(rawText);
+    } catch {
+      setMessage("ComfyUI 工作流 JSON 格式无效");
+      return;
+    }
+    const result = await runApiTask(() => api.createAigcWorkflow({ name, fileName, workflowJson, inputMappings: [], outputMappings: [] }), {
+      operation: "导入 ComfyUI 工作流",
+      expected: aigcExpected(setMessage),
+    });
+    if (result.status !== "success") return;
+    await refresh();
+    setName("");
+    setFileName("");
+    setRawText("");
+    setMessage("已导入 ComfyUI 工作流");
+  }
+
+  async function remove(id: string) {
+    if (!document) return;
+    const result = await runApiTask(() => api.deleteAigcWorkflow(id, document.revision), { operation: "删除 ComfyUI 工作流", expected: aigcExpected(setMessage) });
+    if (result.status === "success") await refresh();
+  }
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>工作流</h1><p>导入 ComfyUI JSON，解析节点后配置输入与输出映射。</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <section className="configuration-form-card">
+        <div className="configuration-section__heading"><div><span>01</span><h2>导入工作流</h2></div></div>
+        <label><span>JSON 文件</span><input type="file" accept=".json,application/json" aria-label="ComfyUI 工作流文件" onChange={(event) => void onFile(event.target.files?.[0])} /></label>
+        <label><span>工作流名称</span><input aria-label="工作流名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <label><span>原始 JSON</span><textarea aria-label="ComfyUI 工作流 JSON" rows={10} spellCheck={false} value={rawText} onChange={(event) => setRawText(event.target.value)} /></label>
+        <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" disabled={!online} onClick={() => void save()}><Upload size={15} />导入并解析</button></div>
+      </section>
+      <div className="aigc-task-list">
+        {(document?.workflows ?? []).map((workflow) => (
+          <section key={workflow.id} className="aigc-task-row">
+            <div><strong>{workflow.name}</strong><span>{workflow.fileName}</span><small>{workflow.nodeCount} 节点 · {workflow.edgeCount} 连线</small></div>
+            <p>{workflow.inputCount} 个入参 · {workflow.outputCount} 个输出映射</p>
+            <div className="aigc-task-actions"><a href={`/aigc/workflows/${encodeURIComponent(workflow.id)}`}>配置映射</a><button type="button" onClick={() => void remove(workflow.id)}><Trash2 size={14} />删除</button></div>
+          </section>
+        ))}
+        {!document?.workflows.length ? <p className="configuration-help">尚未导入工作流。</p> : null}
+      </div>
+    </div>
+  );
+}
+
+/** 工作流详情页，提供节点与映射查看和 JSON 编辑。 */
+function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
+  const { runApiTask } = useApiTask();
+  const [detail, setDetail] = useState<AigcWorkflowDetail>();
+  const [revision, setRevision] = useState("");
+  const [name, setName] = useState("");
+  const [inputJson, setInputJson] = useState("[]");
+  const [outputJson, setOutputJson] = useState("[]");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    void runApiTask(async () => {
+      const next = await api.getAigcWorkflow(workflowId);
+      setDetail(next.workflow);
+      setRevision(next.revision);
+      setName(next.workflow.name);
+      setInputJson(JSON.stringify(next.workflow.inputMappings, null, 2));
+      setOutputJson(JSON.stringify(next.workflow.outputMappings, null, 2));
+      return next;
+    }, { operation: "加载 ComfyUI 工作流详情" });
+  }, [runApiTask, workflowId]);
+
+  async function save() {
+    let inputMappings;
+    let outputMappings;
+    try {
+      inputMappings = JSON.parse(inputJson);
+      outputMappings = JSON.parse(outputJson);
+      if (!Array.isArray(inputMappings) || !Array.isArray(outputMappings)) throw new Error();
+    } catch {
+      setMessage("映射 JSON 格式无效");
+      return;
+    }
+    const result = await runApiTask(() => api.updateAigcWorkflow(workflowId, revision, { name, inputMappings, outputMappings }), {
+      operation: "保存 ComfyUI 工作流映射",
+      expected: aigcExpected(setMessage),
+    });
+    if (result.status === "success") {
+      setMessage("已保存工作流映射");
+      const next = await api.getAigcWorkflow(workflowId);
+      setRevision(next.revision);
+      setDetail(next.workflow);
+    }
+  }
+
+  return (
+    <div className="aigc-workbench-page">
+      <header className="aigc-page-heading"><h1>工作流详情</h1><p>{detail?.fileName ?? workflowId}</p></header>
+      {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <section className="configuration-form-card">
+        <label><span>名称</span><input aria-label="工作流名称" value={name} onChange={(event) => setName(event.target.value)} /></label>
+        <div className="aigc-node-list">
+          {(detail?.nodes ?? []).map((node) => <p key={node.id}><strong>{node.type}</strong> · {node.fields.length} 个可映射字段</p>)}
+        </div>
+        <label><span>入参映射 JSON</span><textarea aria-label="ComfyUI 入参映射" rows={8} spellCheck={false} value={inputJson} onChange={(event) => setInputJson(event.target.value)} /></label>
+        <label><span>输出映射 JSON</span><textarea aria-label="ComfyUI 输出映射" rows={5} spellCheck={false} value={outputJson} onChange={(event) => setOutputJson(event.target.value)} /></label>
+        <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={() => void save()}><Save size={15} />保存映射</button></div>
+      </section>
+    </div>
+  );
+}
+
+const emptyInterface: AigcInterfaceInput = {
+  name: "",
+  description: "",
+  protocol: "openai",
+  capability: "text-to-image",
+  channelId: "",
+  enabled: true,
+  toolPublishEnabled: false,
+  config: { model: "" },
+};
+
+function defaultCapability(protocol: AigcInterfaceProtocol): AigcInterfaceCapability {
+  if (protocol === "grok") return "text-to-video";
+  if (protocol === "comfyui") return "text-to-image";
+  return "text-to-image";
+}
+
+function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ value: AigcInterfaceCapability; label: string }> {
+  if (protocol === "openai") return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片编辑" }];
+  if (protocol === "grok") return [{ value: "text-to-image", label: "文生图" }, { value: "text-to-video", label: "文生视频" }, { value: "image-to-video", label: "图生视频" }];
+  return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片编辑" }, { value: "text-to-video", label: "文生视频" }, { value: "image-to-video", label: "图生视频" }];
+}
+
+/** 将可恢复业务错误保留在当前页面。 */
+function aigcExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
+  const show = (error: { message: string }) => setMessage(error.message);
+  return {
+    VERSION_CONFLICT: show,
+    VALIDATION_FAILED: show,
+    NOT_FOUND: show,
+  };
+}

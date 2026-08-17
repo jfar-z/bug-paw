@@ -20,6 +20,23 @@ describe("工作台路由", () => {
     expect(routePath({ page: "scheduled-tasks" })).toBe("/scheduled-tasks");
   });
 
+  it("解析 AIGC 工作台与详情深链", () => {
+    expect(parseRoute("/aigc")).toEqual({ page: "aigc-overview" });
+    expect(parseRoute("/aigc/interfaces")).toEqual({ page: "aigc-interfaces" });
+    expect(parseRoute("/aigc/tasks")).toEqual({ page: "aigc-tasks" });
+    expect(parseRoute("/aigc/workflows")).toEqual({ page: "aigc-workflows" });
+    expect(parseRoute("/aigc/interfaces/flux")).toEqual({ page: "aigc-interface-detail", interfaceId: "flux" });
+    expect(parseRoute("/aigc/tasks/task-1")).toEqual({ page: "aigc-task-detail", taskId: "task-1" });
+    expect(parseRoute("/aigc/workflows/wf-1")).toEqual({ page: "aigc-workflow-detail", workflowId: "wf-1" });
+    expect(routePath({ page: "aigc-overview" })).toBe("/aigc");
+    expect(routePath({ page: "aigc-interface-detail", interfaceId: "flux" })).toBe("/aigc/interfaces/flux");
+  });
+
+  it("解析配置中心 AIGC 渠道页", () => {
+    expect(parseRoute("/settings/capabilities/aigc-channels")).toEqual({ page: "aigc-channels" });
+    expect(routePath({ page: "aigc-channels" })).toBe("/settings/capabilities/aigc-channels");
+  });
+
   it("解析配置中心深链", () => {
     expect(parseRoute("/settings/agents/default")).toEqual({
       page: "agent-detail",
