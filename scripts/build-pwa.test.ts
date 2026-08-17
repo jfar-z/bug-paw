@@ -17,11 +17,13 @@ describe("PWA 预缓存构建", () => {
     await writeFile(join(root, ".vite/manifest.json"), JSON.stringify({
       "index.html": { file: "assets/main.js", isEntry: true, imports: ["shared"], css: ["assets/main.css"] },
       "src/web/pages/browser-automation-page.tsx": { file: "assets/browser.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/browser.css"] },
+      "src/web/pages/aigc-workbench-page.tsx": { file: "assets/aigc.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/aigc.css"] },
+      "src/web/pages/aigc-channels-page.tsx": { file: "assets/aigc-channels.js", isDynamicEntry: true, imports: ["shared"], css: ["assets/aigc-channels.css"] },
       shared: { file: "assets/shared.js" },
     }), "utf8");
     await injectPwaPrecache(root);
     const source = await readFile(join(root, "sw.js"), "utf8");
-    for (const asset of ["/assets/main.js", "/assets/main.css", "/assets/browser.js", "/assets/browser.css", "/assets/shared.js"]) expect(source).toContain(asset);
+    for (const asset of ["/assets/main.js", "/assets/main.css", "/assets/browser.js", "/assets/browser.css", "/assets/aigc.js", "/assets/aigc.css", "/assets/aigc-channels.js", "/assets/aigc-channels.css", "/assets/shared.js"]) expect(source).toContain(asset);
     expect(source).not.toContain("__BUGPAW_PRECACHE__");
   });
 });

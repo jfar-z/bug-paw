@@ -3,6 +3,7 @@ import {
   Bot,
   BrainCircuit,
   Boxes,
+  Cable,
   Globe2,
   Volume2,
   History,
@@ -91,6 +92,9 @@ export function ConfigurationSidebar({ route, open, onClose, onNavigate }: Confi
         </button>
         <button type="button" className={route.page === "browser-automation" ? "is-active" : undefined} aria-current={route.page === "browser-automation" ? "page" : undefined} onClick={() => go({ page: "browser-automation" })}>
           <MonitorPlay size={17} aria-hidden="true" /><span>浏览器执行</span>
+        </button>
+        <button type="button" className={route.page === "aigc-channels" ? "is-active" : undefined} aria-current={route.page === "aigc-channels" ? "page" : undefined} onClick={() => go({ page: "aigc-channels" })}>
+          <Cable size={17} aria-hidden="true" /><span>AIGC 渠道</span>
         </button>
         <button type="button" className={route.page === "tts" ? "is-active" : undefined} aria-current={route.page === "tts" ? "page" : undefined} onClick={() => go({ page: "tts" })}>
           <Volume2 size={17} aria-hidden="true" /><span>语音合成</span>

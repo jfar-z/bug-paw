@@ -57,6 +57,33 @@ describe("App 首次初始化", () => {
       .toHaveAttribute("src", "/brand/bugpaw/bugpaw-sleeping.png");
   });
 
+  it("认证后将 AIGC 深链渲染为工作台概览页面", async () => {
+    window.history.replaceState({}, "", "/aigc");
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/v1/status") {
+        return new Response(JSON.stringify({ initialized: true, authenticated: true }));
+      }
+      if (String(input) === "/api/v1/capabilities/aigc/channels") {
+        return new Response(JSON.stringify({ revision: "channels-1", channels: [], channelTemplates: [], credentials: [], credentialRevision: "credentials-1" }));
+      }
+      if (String(input) === "/api/v1/aigc/interfaces") {
+        return new Response(JSON.stringify({ revision: "interfaces-1", interfaces: [] }));
+      }
+      if (String(input) === "/api/v1/aigc/workflows") {
+        return new Response(JSON.stringify({ revision: "workflows-1", workflows: [] }));
+      }
+      if (String(input) === "/api/v1/aigc/tasks") {
+        return new Response(JSON.stringify({ tasks: [] }));
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderApp();
+
+    expect(await screen.findByRole("heading", { name: "概览" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "AIGC 工作台导航" })).toBeInTheDocument();
+  });
+
   it("认证后将资源管理深链渲染为 Agent 工作目录页面", async () => {
     window.history.replaceState({}, "", "/resources");
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

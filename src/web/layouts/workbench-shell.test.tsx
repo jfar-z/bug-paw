@@ -75,12 +75,12 @@ describe("WorkbenchShell", () => {
     expect(document.querySelector(".configuration-content")).toBeInTheDocument();
   });
 
-  it("以固定顺序展示五个工作台一级菜单", () => {
+  it("以固定顺序展示六个工作台一级菜单", () => {
     renderShell({ page: "chat" });
 
     const navigation = screen.getByRole("navigation", { name: "工作台主导航" });
     expect(within(navigation).getAllByRole("button").map((button) => button.getAttribute("aria-label")))
-      .toEqual(["会话", "资源管理", "知识库", "定时任务", "配置中心"]);
+      .toEqual(["会话", "AIGC 工作台", "资源管理", "知识库", "定时任务", "配置中心"]);
   });
 
   it("Agent 列表进入全宽详情，不创建第三层常驻侧栏", async () => {
@@ -106,6 +106,28 @@ describe("WorkbenchShell", () => {
     expect(workspaceTrigger).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(screen.getByRole("button", { name: "配置中心" }));
     expect(within(screen.getByRole("navigation", { name: "配置中心导航" })).getAllByText("Agents").at(-1)).toBeVisible();
+  });
+
+  it("AIGC 工作台展示独立二级导航与可滚动内容容器", () => {
+    renderShell({ page: "aigc-overview" });
+
+    expect(screen.getByRole("navigation", { name: "AIGC 工作台导航" })).toBeInTheDocument();
+    expect(document.querySelector(".aigc-workbench-content")).toBeInTheDocument();
+    expect(document.querySelector(".workbench-shell")).toHaveClass("is-aigc");
+  });
+
+  it("AIGC 详情路由保持二级导航选中态", () => {
+    renderShell({ page: "aigc-workflow-detail", workflowId: "wf-1" });
+
+    expect(screen.getByRole("button", { name: "工作流" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("navigation", { name: "AIGC 工作台导航" })).toBeInTheDocument();
+  });
+
+  it("配置中心展示 AIGC 渠道入口", () => {
+    renderShell({ page: "aigc-channels" });
+
+    expect(screen.getByRole("navigation", { name: "配置中心导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "AIGC 渠道" })).toHaveAttribute("aria-current", "page");
   });
 
   it("资源管理页通过二级菜单按钮打开 Agent 列表", () => {
