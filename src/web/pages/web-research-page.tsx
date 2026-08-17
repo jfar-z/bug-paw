@@ -10,6 +10,7 @@ import { SearchProviderDialog } from "../components/web-research/search-provider
 import { SearchProviderList } from "../components/web-research/search-provider-list";
 import { useOnlineStatus } from "../use-online-status";
 import { webResearchExpected } from "../web-research-error-policy";
+import "../configuration.css";
 
 type ProviderDialogState =
   | { mode: "create" }

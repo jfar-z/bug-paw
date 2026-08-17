@@ -1,0 +1,1027 @@
+/* 配置类页面共享样式，由各独立工作台页面按需加载。 */
+
+.configuration-form-card .configuration-field-row label {
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 0;
+  border-top: 0;
+}
+
+.configuration-form-card label.configuration-check-line {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border-top: 0;
+}
+
+.configuration-field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.configuration-check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.configuration-check-line input[type="checkbox"] {
+  width: auto;
+}
+
+.configuration-button-row button.is-selected {
+  border-color: var(--eye);
+  color: var(--text-primary);
+  background: var(--accent-soft);
+}
+
+@media (max-width: 760px) {
+  .configuration-field-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.configuration-nav {
+  min-height: 0;
+  margin-top: 22px;
+  overflow-y: auto;
+}
+
+.configuration-nav > p {
+  margin: 20px 10px 7px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.configuration-nav > p:first-child {
+  margin-top: 0;
+}
+
+.configuration-nav > button {
+  display: grid;
+  width: 100%;
+  min-height: 42px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  transition: 160ms ease;
+  transition-property: color, background;
+}
+
+.configuration-nav > button:hover:not(:disabled),
+.configuration-nav > button.is-active {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.configuration-nav > button.is-active svg {
+  color: var(--fg);
+}
+
+.configuration-nav > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.56;
+}
+
+.configuration-nav > button small {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.configuration-sidebar__footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding: 14px 10px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.configuration-sidebar__footer > span:last-child {
+  display: grid;
+  gap: 2px;
+}
+
+.configuration-sidebar__footer strong,
+.configuration-sidebar__footer small {
+  font-size: 10px;
+}
+
+.configuration-sidebar__footer small {
+  color: var(--text-tertiary);
+}
+
+.status-dot,
+.agent-card__title i,
+.agent-detail-header__status i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--halo);
+}
+
+.configuration-content {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.configuration-page {
+  width: min(100%, 1060px);
+  margin: 0 auto;
+  padding: clamp(36px, 5vw, 72px) clamp(24px, 5vw, 72px) 80px;
+}
+
+.configuration-page__heading {
+  max-width: 720px;
+  margin-bottom: 48px;
+}
+
+.configuration-page__heading--actions {
+  display: flex;
+  max-width: none;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.configuration-page__heading h1,
+.agent-detail-header h1,
+.configuration-state h1 {
+  margin: 12px 0 0;
+  font-size: clamp(36px, 5vw, 58px);
+  font-weight: 560;
+  letter-spacing: -0.052em;
+  line-height: 1.04;
+}
+
+.configuration-page__heading p,
+.agent-detail-header p,
+.configuration-state p {
+  max-width: 650px;
+  margin: 16px 0 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.coming-soon-page__state {
+  width: fit-content;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--surface-soft);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.configuration-section,
+.configuration-form-card {
+  border-top: 1px solid var(--border-strong);
+}
+
+.configuration-section + .configuration-section {
+  margin-top: 40px;
+}
+
+.configuration-section__heading {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.configuration-section__heading > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.configuration-section__heading > div > span {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.configuration-section__heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.configuration-section__heading > small {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.configuration-entry > span,
+.configuration-empty-note p {
+  display: grid;
+  gap: 6px;
+}
+
+.configuration-entry strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.configuration-entry small,
+.configuration-empty-note small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.configuration-entry-list {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+  list-style: none;
+}
+
+.configuration-entry {
+  display: flex;
+  width: 100%;
+  min-height: 72px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  /* 保持分隔式列表密度，同时让文字远离行边界。 */
+  padding: 15px 16px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: transparent;
+  text-align: left;
+}
+
+.configuration-entry:hover {
+  background: var(--surface-hover);
+}
+
+.configuration-primary-action {
+  display: inline-flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 15px;
+  border: 1px solid var(--accent-strong);
+  border-radius: 9px;
+  color: var(--surface);
+  background: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.configuration-primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.configuration-create-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.configuration-create-panel > div {
+  display: grid;
+  gap: 7px;
+}
+
+.configuration-create-panel__fields {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.configuration-create-panel__onboarding {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.configuration-create-panel__fields > div {
+  display: grid;
+  gap: 7px;
+}
+
+.configuration-create-panel__fields small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.configuration-create-panel label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.configuration-create-panel input {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--surface);
+}
+
+.configuration-icon-action {
+  display: inline-grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.configuration-secondary-action {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.configuration-secondary-action:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+/* 危险操作沿用次级按钮的尺寸，仅用颜色表达不可逆语义。 */
+
+.configuration-secondary-action--danger {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-strong));
+  color: var(--danger);
+}
+
+.configuration-secondary-action--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+.configuration-secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.configuration-inline-error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 36%, transparent);
+  border-radius: 9px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  font-size: 12px;
+}
+
+.configuration-empty-note {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 20px;
+  padding: 18px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  color: var(--text-tertiary);
+}
+
+.configuration-empty-note > span {
+  font-family: var(--font-mono);
+  font-size: 22px;
+}
+
+.configuration-empty-note strong {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.configuration-back {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 7px;
+  padding: 0;
+  border: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: 11px;
+}
+
+.configuration-back:hover {
+  color: var(--text-primary);
+}
+
+.configuration-form-card label {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.4fr) minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px 0;
+  border-top: 1px solid var(--border);
+}
+
+.configuration-form-card label > span {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.configuration-form-card label small,
+.configuration-help {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.configuration-form-card :where(input, textarea) {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: var(--surface-soft);
+  font-size: 13px;
+  resize: vertical;
+}
+
+/* 统一能力开关的视觉尺寸，同时保留原生复选框的无障碍语义。 */
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"] {
+  appearance: none;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface-soft);
+  cursor: pointer;
+  transition: background .14s ease, border-color .14s ease;
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]::after {
+  width: 7px;
+  height: 4px;
+  border: solid var(--surface);
+  border-width: 0 0 2px 2px;
+  content: "";
+  transform: rotate(-45deg) scale(0);
+  transform-origin: center;
+  transition: transform .14s ease;
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]:checked {
+  border-color: var(--fg);
+  background: var(--accent);
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]:checked::after {
+  transform: rotate(-45deg) scale(1);
+}
+
+.configuration-form-card .configuration-capability-toggle input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.configuration-single-column {
+  display: grid;
+  gap: 18px;
+  margin-top: 36px;
+  padding-top: 24px;
+}
+
+.configuration-single-column h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.configuration-form-card select,
+.inherited-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--surface-soft);
+}
+
+.configuration-button-row,
+.configuration-save-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+
+.configuration-button-row {
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.configuration-button-row button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  background: var(--panel);
+}
+
+.configuration-button-row .danger-link {
+  color: var(--danger);
+}
+
+.configuration-save-bar {
+  position: sticky;
+  z-index: 8;
+  bottom: 0;
+  justify-content: flex-end;
+  margin-top: 28px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.configuration-save-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 16px 0 0;
+  color: var(--fg);
+  font-size: 11px;
+}
+
+.inherited-field {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.35fr) minmax(0, 1fr);
+  gap: 9px 18px;
+  margin: 0;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.inherited-field legend {
+  float: left;
+  grid-row: 1 / span 3;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.inherited-field .inherited-field__switch {
+  display: flex;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.inherited-field__switch input {
+  width: 16px;
+}
+
+.inherited-field p,
+.inherited-field small {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.danger-dialog__backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, #000 56%, transparent);
+}
+
+.danger-dialog {
+  display: grid;
+  width: min(100%, 500px);
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px color-mix(in srgb, #000 24%, transparent);
+}
+
+.danger-dialog h2,
+.danger-dialog p {
+  margin: 0;
+}
+
+.danger-dialog p,
+.danger-dialog label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.danger-dialog label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.danger-dialog label:has(input:not([type="checkbox"])) {
+  display: grid;
+}
+
+.danger-dialog input:not([type="checkbox"]) {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--surface-soft);
+}
+
+.danger-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.danger-dialog footer button {
+  min-height: 40px;
+  padding: 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: var(--surface);
+}
+
+.danger-dialog footer .danger-action {
+  border-color: var(--danger);
+  color: var(--surface);
+  background: var(--danger);
+}
+
+.danger-dialog footer button:disabled {
+  opacity: 0.45;
+}
+
+.delete-impact {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.delete-impact div {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+}
+
+.delete-impact div + div {
+  border-left: 1px solid var(--border);
+}
+
+.delete-impact dt {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.delete-impact dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.configuration-state {
+  display: grid;
+  min-height: 70vh;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.configuration-state > svg {
+  color: var(--fg);
+}
+
+.configuration-state button {
+  min-height: 40px;
+  margin-top: 20px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--panel);
+}
+
+.configuration-heading-actions,
+.operations-export,
+.configuration-actions,
+.configuration-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border));
+  border-radius: 8px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.offline-banner {
+  position: fixed;
+  z-index: 90;
+  right: 16px;
+  bottom: 16px;
+  max-width: 420px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 10px;
+  color: var(--text-primary);
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+a[aria-disabled="true"] {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.configuration-form-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.configuration-inline-message {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+
+.diagnostics-version-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-block: 1px solid var(--border);
+}
+
+.diagnostics-version-strip > div {
+  display: grid;
+  gap: 3px;
+  padding: 16px 0;
+}
+
+.diagnostics-version-strip small,
+.diagnostics-list small,
+.configuration-history-list small {
+  color: var(--text-tertiary);
+}
+
+.diagnostics-list,
+.configuration-history-list {
+  display: grid;
+  gap: 0;
+}
+
+.diagnostics-list > div,
+.configuration-history-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnostics-list > div > span,
+.configuration-history-list > div > span {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+}
+
+.diagnostics-list .is-error,
+.diagnostics-list .is-warning {
+  color: var(--danger);
+}
+
+.configuration-field textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 180px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--surface-soft);
+  font-family: "JetBrains Mono", monospace;
+}
+
+.import-preview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  background: var(--border);
+}
+
+.import-preview > div {
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.import-preview ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.configuration-dialog-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--canvas) 72%, transparent);
+}
+
+/* 批量确认可能叠加在已归档窗口上，必须保持为当前顶层交互面。 */
+
+.session-bulk-dialog-backdrop {
+  z-index: 110;
+}
+
+.configuration-dialog {
+  width: min(720px, 100%);
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.configuration-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.configuration-dialog h2,
+.configuration-dialog p {
+  margin: 0;
+}
+
+.provider-rename-dialog {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 16px;
+}
+
+.provider-rename-dialog__field {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.provider-rename-dialog__field input {
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--surface);
+}
+
+.provider-rename-dialog__help {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.configuration-dialog p {
+  margin-top: 5px;
+  color: var(--text-tertiary);
+}
+
+.conflict-differences {
+  margin: 20px 0;
+  border-block: 1px solid var(--border);
+}
+
+.conflict-difference {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.conflict-difference--heading {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .configuration-heading-actions,
+  .operations-export,
+  .configuration-dialog footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .diagnostics-version-strip,
+  .import-preview {
+    grid-template-columns: 1fr;
+  }
+
+  .conflict-difference {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .scheduled-task-segmented { width: 100%; overflow-x: auto; }
+  .scheduled-task-segmented button { flex: 1 0 auto; }
+}
+
+.scheduled-task-segmented { display: inline-flex; width: fit-content; max-width: 100%; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); }
+
+.scheduled-task-segmented button { min-height: 29px; padding: 0 10px; border: 0; border-radius: 6px; color: var(--text-secondary); background: transparent; font-size: 11px; white-space: nowrap; }
+
+.scheduled-task-segmented button:hover { color: var(--text-primary); }
+
+.scheduled-task-segmented button.is-active { color: var(--text-primary); background: var(--panel); box-shadow: 0 1px 2px rgba(22, 32, 27, .11); }

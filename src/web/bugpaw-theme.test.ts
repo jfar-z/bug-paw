@@ -6,6 +6,25 @@ interface ParsedStyleRule {
   declarations: CSSStyleDeclaration;
 }
 
+const applicationStylePaths = [
+  "src/web/styles.css",
+  "src/web/chat.css",
+  "src/web/configuration.css",
+  "src/web/agents.css",
+  "src/web/providers.css",
+  "src/web/pi-settings.css",
+  "src/web/resources.css",
+  "src/web/scheduled-tasks.css",
+  "src/web/knowledge-base.css",
+  "src/web/markdown-content.css",
+  "src/web/aigc.css",
+];
+
+/** 合并全部按页面加载的生产样式，确保视觉合同不依赖具体分包边界。 */
+async function readApplicationStyles(): Promise<string> {
+  return (await Promise.all(applicationStylePaths.map((path) => readFile(path, "utf8")))).join("\n");
+}
+
 /** 将样式表中的普通规则递归展开，便于验证浏览器实际可解析的声明。 */
 function parseStyleRules(source: string): ParsedStyleRule[] {
   const style = document.createElement("style");
@@ -167,7 +186,7 @@ describe("BugPaw 生产视觉合同", () => {
 
   it("暗色主题使用深海灰蓝色阶与猫眼绿状态信号", async () => {
     const [baseSource, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
+      readApplicationStyles(),
       readFile("src/web/bugpaw-theme.css", "utf8"),
     ]);
     const baseRules = parseStyleRules(baseSource);
@@ -224,7 +243,7 @@ describe("BugPaw 生产视觉合同", () => {
 
   it("暗色运行与成功状态消费猫眼绿而不是主要交互色", async () => {
     const [baseSource, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
+      readApplicationStyles(),
       readFile("src/web/bugpaw-theme.css", "utf8"),
     ]);
     const baseRules = parseStyleRules(baseSource);
@@ -294,7 +313,7 @@ describe("BugPaw 生产视觉合同", () => {
   it("三套主题为全部滚动区域提供统一的非原生滚动条", async () => {
     const [source, baseSource] = await Promise.all([
       readFile("src/web/bugpaw-theme.css", "utf8"),
-      readFile("src/web/styles.css", "utf8"),
+      readApplicationStyles(),
     ]);
     const rules = parseStyleRules(source);
     const baseRules = parseStyleRules(baseSource);
@@ -318,7 +337,7 @@ describe("BugPaw 生产视觉合同", () => {
 
   it("会话整行悬停连续且输入区与三级文字保持清晰", async () => {
     const [baseSource, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
+      readApplicationStyles(),
       readFile("src/web/bugpaw-theme.css", "utf8"),
     ]);
     const baseRules = parseStyleRules(baseSource);
@@ -332,21 +351,21 @@ describe("BugPaw 生产视觉合同", () => {
   });
 
   it("聊天容器使用动态视口高度，避免移动端输入区越过可视底部", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
+    const source = await readApplicationStyles();
     const rules = parseStyleRules(source);
 
     expect(declaration(rules, ".chat-shell", "height")).toBe("100dvh");
   });
 
   it("用户消息正文不在气泡底部额外留白", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
+    const source = await readApplicationStyles();
     const rules = parseStyleRules(source);
 
     expect(declaration(rules, ".is-user .message-content p", "margin-bottom")).toBe("0px");
   });
 
   it("会话输入区使用单一焦点框、可收缩底栏和多行消息排版", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
+    const source = await readApplicationStyles();
     const rules = parseStyleRules(source);
 
     expect(declaration(rules, ".composer textarea:focus-visible", "outline")).toBe("none");
@@ -372,7 +391,7 @@ describe("BugPaw 生产视觉合同", () => {
 
   it("提问处理框保持触控目标和窄屏单列布局", async () => {
     const [source, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
+      readApplicationStyles(),
       readFile("src/web/bugpaw-theme.css", "utf8"),
     ]);
     const rules = parseStyleRules(source);
@@ -467,7 +486,7 @@ describe("BugPaw 生产视觉合同", () => {
 
   it("六个二级侧边栏共用宽度与标题视觉合同", async () => {
     const [source, themeSource] = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
+      readApplicationStyles(),
       readFile("src/web/bugpaw-theme.css", "utf8"),
     ]);
     const rules = parseStyleRules(source);
@@ -538,8 +557,7 @@ describe("BugPaw 生产视觉合同", () => {
 
   it("全部生产样式不再声明小于 10px 的可见字号", async () => {
     const sources = await Promise.all([
-      readFile("src/web/styles.css", "utf8"),
-      readFile("src/web/aigc.css", "utf8"),
+      ...applicationStylePaths.map((path) => readFile(path, "utf8")),
       readFile("src/web/bugpaw-theme.css", "utf8").catch(() => ""),
     ]);
     const violations = sources.flatMap(parseStyleRules).flatMap((rule) => {
@@ -573,7 +591,7 @@ describe("BugPaw 生产视觉合同", () => {
   });
 
   it("活动卡片保留标题首行与状态标记的对齐关系", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
+    const source = await readApplicationStyles();
 
     expect(source).toMatch(/\.live-tool-card__summary,\s*\.thinking-card__summary\s*\{[^}]*align-items:\s*start;/s);
     expect(source).toMatch(/\.activity-group__summary\s*\{[^}]*align-items:\s*center;/s);
@@ -581,7 +599,7 @@ describe("BugPaw 生产视觉合同", () => {
   });
 
   it("搜索结果与工具详情在各自容器内独立滚动", async () => {
-    const source = await readFile("src/web/styles.css", "utf8");
+    const source = await readApplicationStyles();
     const style = document.createElement("style");
     style.textContent = source;
     document.head.append(style);

@@ -1,5 +1,6 @@
 import { ArrowRight } from "lucide-react";
 import type { AppRoute } from "../router";
+import "../configuration.css";
 
 interface ConfigurationOverviewPageProps {
   onNavigate: (route: AppRoute) => void;

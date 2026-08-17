@@ -12,6 +12,8 @@ import { InheritedField } from "../components/configuration/inherited-field";
 import type { AppRoute } from "../router";
 import { formatTtsCustomParameters, parseTtsCustomParametersText } from "../tts-custom-parameters-form";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
+import "../agents.css";
 
 interface AgentDetailPageProps {
   agentId: string;

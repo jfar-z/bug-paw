@@ -1,0 +1,105 @@
+/* Pi 运行设置页专属样式，由 Pi 设置页面按需加载。 */
+
+.settings-scope-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 30px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+}
+
+.settings-scope-bar label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.settings-scope-bar select {
+  min-height: 38px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--surface-soft);
+}
+
+.settings-groups {
+  display: grid;
+  gap: 34px;
+}
+
+.settings-section > div:last-child {
+  display: grid;
+  padding-inline: 16px;
+}
+
+/* 运行设置沿用硬边分组时，标题也要与字段保持相同的安全内缩。 */
+
+.settings-section .configuration-section__heading {
+  padding-inline: 16px;
+}
+
+.settings-section .configuration-section__heading > small {
+  max-width: 220px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  text-align: right;
+}
+
+.settings-section label small svg {
+  flex: 0 0 auto;
+  color: var(--danger);
+}
+
+.settings-section label small:has(svg) {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.settings-section input[type="checkbox"] {
+  width: 18px;
+  justify-self: start;
+}
+
+.effective-settings {
+  margin-top: 38px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--panel);
+}
+
+.effective-settings header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.effective-settings h2 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.effective-settings small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.effective-settings pre {
+  max-height: 360px;
+  margin: 0;
+  padding: 16px;
+  color: var(--text-secondary);
+  background: var(--surface-soft);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.65;
+  overflow: auto;
+}

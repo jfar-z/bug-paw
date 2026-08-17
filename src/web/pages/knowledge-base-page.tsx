@@ -8,6 +8,8 @@ import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 
 import { KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT } from "../router";
+import "../configuration.css";
+import "../knowledge-base.css";
 
 export { KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT } from "../router";
 

@@ -6,6 +6,8 @@ import { api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import type { AppRoute } from "../router";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
+import "../agents.css";
 
 interface AgentsPageProps {
   onNavigate: (route: AppRoute) => void;

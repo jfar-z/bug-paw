@@ -1,5 +1,6 @@
 import { ArrowRight, BrainCircuit, Globe2, MonitorPlay, Volume2 } from "lucide-react";
 import type { AppRoute } from "../router";
+import "../configuration.css";
 
 interface CapabilitiesPageProps { onNavigate: (route: AppRoute) => void }
 
