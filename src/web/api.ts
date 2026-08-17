@@ -170,6 +170,12 @@ export function apiV1Url(url: string): string {
     : url;
 }
 
+/** 生成可内联预览或明确下载的 AIGC 任务产物地址。 */
+export function aigcTaskAssetUrl(taskId: string, assetId: string, download = false): string {
+  const suffix = download ? "?download=1" : "";
+  return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}${suffix}`);
+}
+
 /**
  * 对 fetch 做统一 JSON 和错误协议处理。
  */

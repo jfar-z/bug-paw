@@ -54,7 +54,7 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
           onClick={() => go({ page: "aigc-run" })}
         >
           <WandSparkles size={17} aria-hidden="true" />
-          <span>创作</span>
+          <span>创作与运行</span>
         </button>
         <button
           type="button"
@@ -88,8 +88,8 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
       </nav>
 
       <footer className="aigc-workbench-sidebar__footer">
-        <span className="status-dot" aria-hidden="true" />
-        <span><strong>AIGC 执行服务正常</strong><small>渠道状态见配置中心</small></span>
+        <Activity size={15} aria-hidden="true" />
+        <span><strong>连接状态按渠道检测</strong><small>前往创作页检查 ComfyUI 就绪度</small></span>
       </footer>
     </aside>
   );

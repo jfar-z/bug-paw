@@ -399,6 +399,10 @@ describe("BugPaw 生产视觉合同", () => {
       .toBe("rgb(255, 248, 238)");
     expect(declaration(rules, ':root[data-theme="bug"] .chat-sidebar .account-button small', "color"))
       .toBe("rgb(216, 203, 187)");
+    expect(groupedDeclaration(rules, ':root[data-theme="bug"] .aigc-workbench-sidebar__footer', "color"))
+      .toBe("rgb(255, 248, 238)");
+    expect(declaration(rules, ':root[data-theme="bug"] .aigc-workbench-sidebar__footer small', "color"))
+      .toBe("rgb(216, 203, 187)");
   });
 
   it("BUG 主题二级导航选中态在深色侧栏中保持可读", async () => {

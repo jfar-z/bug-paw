@@ -191,7 +191,7 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     }
   });
 
-  app.get<{ Params: { id: string; assetId: string } }>("/api/aigc/tasks/:id/assets/:assetId", async (request, reply) => {
+  app.get<{ Params: { id: string; assetId: string }; Querystring: { download?: string } }>("/api/aigc/tasks/:id/assets/:assetId", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const task = await dependencies.tasks.get(request.params.id);
     if (!task) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 任务不存在");
@@ -199,7 +199,7 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     if (!asset) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 产物不存在");
     const path = await dependencies.assets.resolveOutputPath(task.id, asset.id);
     if (!path) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 产物不存在");
-    return sendAssetFile(reply, path, asset.name, asset.mediaType, true);
+    return sendAssetFile(reply, path, asset.name, asset.mediaType, request.query.download === "1");
   });
 }
 
@@ -293,9 +293,17 @@ async function sendAssetFile(reply: Parameters<typeof sendApiError>[0], path: st
   reply.header("Cache-Control", "no-store");
   reply.header("X-Content-Type-Options", "nosniff");
   reply.type(mediaType);
-  if (download) reply.header("Content-Disposition", `attachment; filename="${name.replaceAll('"', "")}"`);
+  if (download) reply.header("Content-Disposition", downloadContentDisposition(name));
   reply.header("Content-Length", String(fileStat.size));
   return reply.send(createReadStream(path));
+}
+
+/** 兼容中文产物名，并阻止文件名向响应头注入控制字符。 */
+function downloadContentDisposition(name: string): string {
+  const normalized = name.replace(/[\r\n]/gu, "").trim() || "download";
+  const asciiFallback = normalized.replace(/[^\x20-\x7E]/gu, "_").replace(/["\\]/gu, "_") || "download";
+  const encoded = encodeURIComponent(normalized).replace(/[!'()*]/gu, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function sendAigcError(reply: Parameters<typeof sendApiError>[0], error: unknown) {

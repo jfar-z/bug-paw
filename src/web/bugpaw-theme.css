@@ -514,6 +514,20 @@ textarea:focus-visible {
   border-color: #fff8ee;
 }
 
+/* AIGC 二级侧栏的标题与状态说明固定使用深色面板前景，避免继承内容区文字令牌。 */
+:root[data-theme="bug"] .aigc-workbench-sidebar .secondary-sidebar-header__eyebrow,
+:root[data-theme="bug"] .aigc-workbench-sidebar__footer {
+  color: #fff8ee;
+}
+
+:root[data-theme="bug"] .aigc-workbench-sidebar__footer {
+  border-color: #6e5948;
+}
+
+:root[data-theme="bug"] .aigc-workbench-sidebar__footer small {
+  color: #d8cbbb;
+}
+
 :root[data-theme="bug"] .workbench-main-nav button,
 :root[data-theme="bug"] .workbench-rail__actions .icon-button,
 :root[data-theme="bug"] .chat-sidebar button,

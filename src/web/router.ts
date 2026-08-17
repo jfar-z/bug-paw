@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 export type AppRoute =
   | { page: "chat" }
   | { page: "aigc-overview" }
-  | { page: "aigc-run" }
+  | { page: "aigc-run"; interfaceId?: string }
   | { page: "aigc-interfaces" }
   | { page: "aigc-tasks" }
   | { page: "aigc-workflows" }
@@ -29,6 +29,7 @@ export type AppRoute =
   | { page: "agent-detail"; agentId: string };
 
 const NAVIGATION_EVENT = "pi-agent:navigate";
+export const NAVIGATION_BEFORE_EVENT = "pi-agent:before-navigate";
 export const WORKBENCH_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-workbench-navigation";
 export const KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-knowledge-base-navigation";
 
@@ -38,7 +39,10 @@ export const KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-knowledge
 export function parseRoute(pathname: string, search = ""): AppRoute {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   if (normalized === "/aigc") return { page: "aigc-overview" };
-  if (normalized === "/aigc/run") return { page: "aigc-run" };
+  if (normalized === "/aigc/run") {
+    const interfaceId = new URLSearchParams(search).get("interface")?.trim();
+    return interfaceId ? { page: "aigc-run", interfaceId } : { page: "aigc-run" };
+  }
   if (normalized === "/aigc/interfaces") return { page: "aigc-interfaces" };
   if (normalized === "/aigc/tasks") return { page: "aigc-tasks" };
   if (normalized === "/aigc/workflows") return { page: "aigc-workflows" };
@@ -113,7 +117,7 @@ export function routePath(route: AppRoute): string {
     case "aigc-overview":
       return "/aigc";
     case "aigc-run":
-      return "/aigc/run";
+      return route.interfaceId ? `/aigc/run?interface=${encodeURIComponent(route.interfaceId)}` : "/aigc/run";
     case "aigc-interfaces":
       return "/aigc/interfaces";
     case "aigc-tasks":
@@ -169,6 +173,8 @@ export function routePath(route: AppRoute): string {
  * 使用 History API 导航，并通知当前页面内的路由订阅者。
  */
 export function navigateTo(route: AppRoute, replace = false): void {
+  const beforeEvent = new CustomEvent<AppRoute>(NAVIGATION_BEFORE_EVENT, { cancelable: true, detail: route });
+  if (!window.dispatchEvent(beforeEvent)) return;
   const method = replace ? "replaceState" : "pushState";
   window.history[method]({}, "", routePath(route));
   window.dispatchEvent(new Event(NAVIGATION_EVENT));
