@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, Boxes, CheckCircle2, Download, GitFork, Play, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Download, File, Film, GitFork, Image as ImageIcon, Play, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type {
   AigcChannelSummary,
@@ -206,6 +206,8 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const [createdTask, setCreatedTask] = useState<AigcTaskRecord>();
+  const [activeAssetId, setActiveAssetId] = useState("");
+  const [previewAsset, setPreviewAsset] = useState<AigcTaskAsset>();
   const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string }>();
   const [testingConnection, setTestingConnection] = useState(false);
 
@@ -241,6 +243,8 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
 
   useEffect(() => {
     setCreatedTask(undefined);
+    setActiveAssetId("");
+    setPreviewAsset(undefined);
     setMessage("");
     setConnectionResult(undefined);
     if (!selected) {
@@ -270,6 +274,39 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
       return next;
     }, { operation: "加载 ComfyUI 入参", expected: aigcExpected(setMessage) });
   }, [runApiTask, selected?.id]);
+
+  useEffect(() => {
+    const taskId = createdTask?.id;
+    if (!taskId || (createdTask.status !== "queued" && createdTask.status !== "running")) return;
+    let disposed = false;
+    const refresh = async () => {
+      try {
+        const next = await api.getAigcTask(taskId);
+        if (!disposed) setCreatedTask((current) => current?.id === taskId ? next : current);
+      } catch {
+        // 短暂的轮询失败不覆盖已展示的任务状态，下一轮继续尝试。
+      }
+    };
+    const timer = window.setInterval(() => void refresh(), 3_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [createdTask?.id, createdTask?.status]);
+
+  useEffect(() => {
+    const assets = createdTask?.assets ?? [];
+    setActiveAssetId((current) => assets.some((asset) => asset.id === current) ? current : assets[0]?.id ?? "");
+  }, [createdTask?.id, createdTask?.assets]);
+
+  useEffect(() => {
+    if (!previewAsset) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewAsset(undefined);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [previewAsset]);
 
   function changeProvider(nextProvider: AigcInterfaceProtocol) {
     setProvider(nextProvider);
@@ -324,6 +361,8 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
     if (!selected || !online || submitting) return;
     setMessage("");
     setCreatedTask(undefined);
+    setActiveAssetId("");
+    setPreviewAsset(undefined);
     const inputs: Record<string, AigcRunInputValue> = {};
     for (const field of fields) {
       const value = coerceRunValue(field, values[field.name]);
@@ -345,42 +384,51 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
     setSubmitting(false);
     if (result.status !== "success") return;
     setCreatedTask(result.data);
-    setMessage("生成任务已创建，可前往任务页查看进度。");
+    setActiveAssetId(result.data.assets[0]?.id ?? "");
+    setMessage("生成任务已创建，运行状态与产物会在当前页面更新。");
   }
 
   return (
-    <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>创作与运行</h1><p>在同一页面调用 OpenAI、Grok 和 ComfyUI；选择服务后填写参数并查看任务进度。</p></header>
-      {message ? <p className="configuration-help" role="status">{message}</p> : null}
-      <div className="aigc-protocol-grid aigc-protocol-grid--compact aigc-provider-switcher" role="tablist" aria-label="生成服务">
-        {(["openai", "grok", "comfyui"] as const).map((item) => (
-          <button key={item} type="button" role="tab" aria-selected={provider === item} className={provider === item ? "aigc-overview-card aigc-protocol-card is-selected" : "aigc-overview-card aigc-protocol-card"} onClick={() => changeProvider(item)}>
-            <strong>{interfaceProtocolName(item)}</strong><small>{interfaceProtocolDescription(item)}</small><span className="aigc-provider-switcher__status">{provider === item ? "当前服务" : `${enabledInterfaces.filter((candidate) => candidate.protocol === item).length} 个接口`}</span>
-          </button>
-        ))}
-      </div>
-      <section className="configuration-form-card">
-        <div className="configuration-section__heading"><div><span>01</span><h2>生成任务</h2></div></div>
-        <label>
-          <span>AIGC 接口</span>
+    <div className="aigc-workbench-page aigc-run-page">
+      <div className="aigc-run-toolbar">
+        <header className="aigc-page-heading aigc-run-heading">
+          <h1>创作与运行</h1>
+          <p className={message ? "aigc-run-message" : "aigc-run-message is-empty"} role="status">{message || "选择渠道、接口和参数后开始生成"}</p>
+        </header>
+        <AigcProviderControl
+          options={(["openai", "grok", "comfyui"] as const).map((item) => ({
+            value: item,
+            label: interfaceProtocolName(item),
+            count: enabledInterfaces.filter((candidate) => candidate.protocol === item).length,
+          }))}
+          value={provider}
+          onChange={changeProvider}
+        />
+        <label className="aigc-run-control">
+          <span>接口</span>
           <select aria-label="AIGC 接口" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
             <option value="">请选择已启用接口</option>
             {providerInterfaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
-        {selected ? <p className="configuration-help">{capabilityLabel(selected.protocol, selected.capability)} · {interfaceProtocolName(selected.protocol)}</p> : <div className="aigc-empty-action"><p className="configuration-help">暂无已启用的 {interfaceProtocolName(provider)} 接口。</p><button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-interfaces" })}>创建 {interfaceProtocolName(provider)} 接口</button></div>}
-        {selected && !selectedChannelReady ? <p className="configuration-help aigc-warning-copy">引用的渠道不存在或未启用，请先修复接口配置。</p> : null}
-        {selected?.protocol === "comfyui" ? (
-          <div className="aigc-run-readiness">
-            <ReadinessItem ok={channels.some((channel) => channel.id === selected.channelId && channel.enabled)} label="执行渠道" detail={channels.find((channel) => channel.id === selected.channelId)?.name ?? "引用的渠道不存在"} />
-            <ReadinessItem ok={Boolean(workflow)} label="工作流" detail={workflow?.name ?? "引用的工作流不存在或尚未加载"} />
-            <ReadinessItem ok={connectionResult?.ok === true} pending={!connectionResult} label="实时连接" detail={connectionResult?.message ?? "提交前建议先检测 ComfyUI 服务"} />
-            <button type="button" className="configuration-secondary-action" disabled={testingConnection} onClick={() => void testSelectedConnection()}><TestTube2 size={15} />{testingConnection ? "检测中…" : "测试连接"}</button>
+      </div>
+
+      {selected?.protocol === "comfyui" ? (
+        <section className="aigc-run-readiness" aria-label="ComfyUI 运行检查">
+          <AigcRunReadinessItem ok={selectedChannelReady} label="执行渠道" detail={channels.find((channel) => channel.id === selected.channelId)?.name ?? "引用的渠道不存在"} />
+          <AigcRunReadinessItem ok={Boolean(workflow)} label="工作流" detail={workflow?.name ?? "引用的工作流不存在或尚未加载"} />
+          <AigcRunReadinessItem ok={connectionResult?.ok === true} pending={!connectionResult} label="连接检查" detail={connectionResult?.message ?? "尚未检测"} />
+          <button type="button" className="configuration-secondary-action" disabled={testingConnection} onClick={() => void testSelectedConnection()}><TestTube2 size={14} />{testingConnection ? "检测中…" : "测试连接"}</button>
+        </section>
+      ) : null}
+
+      <div className="aigc-run-workspace">
+        <section className="media-attachment aigc-run-parameters" aria-labelledby="aigc-run-parameters-title">
+          <div className="configuration-section__heading aigc-run-pane-heading">
+            <div><h2 id="aigc-run-parameters-title">生成参数</h2><small>{selected ? `${capabilityLabel(selected.protocol, selected.capability)} · ${fields.length} 项` : "尚未选择接口"}</small></div>
           </div>
-        ) : null}
-        {selected ? (
-          <>
-            {fields.map((field) => (
+          <div className="aigc-run-parameter-scroll">
+            {selected ? fields.map((field) => (
               <AigcRunField
                 key={field.name}
                 field={field}
@@ -392,25 +440,134 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
                 onFile={(file) => void uploadFile(field, file)}
                 onPublicFile={(file) => void uploadPublicFile(field, file)}
               />
-            ))}
-            {!fields.length ? <p className="configuration-help">该接口无需额外入参，可直接开始生成。</p> : null}
-            <div className="configuration-save-bar">
-              <button type="button" className="configuration-primary-action" disabled={!online || !selectedReady || submitting || uploading !== undefined} onClick={() => void submit()}>
-                <Play size={16} />{submitting ? "正在创建…" : "开始生成"}
-              </button>
-            </div>
-          </>
-        ) : null}
-      </section>
-      {createdTask ? (
-        <section className="aigc-overview-card">
-          <span>已创建任务</span>
-          <strong>{taskStatusLabel(createdTask.status)}</strong>
-          <small><a href={`/aigc/tasks/${encodeURIComponent(createdTask.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: createdTask.id }); }}>查看任务详情</a></small>
+            )) : (
+              <div className="aigc-run-empty"><Boxes size={22} aria-hidden="true" /><p>暂无已启用的 {interfaceProtocolName(provider)} 接口。</p><button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-interfaces" })}>创建接口</button></div>
+            )}
+            {selected && !fields.length ? <p className="configuration-help">该接口无需额外入参，可直接开始生成。</p> : null}
+            {selected && !selectedChannelReady ? <p className="configuration-help aigc-warning-copy">引用的渠道不存在或未启用，请先修复接口配置。</p> : null}
+          </div>
+          <div className="aigc-run-action-bar">
+            <span>{uploading ? "正在上传入参…" : selectedReady ? "接口已就绪" : "请先完成运行检查"}</span>
+            <button type="button" className="configuration-primary-action" disabled={!online || !selectedReady || submitting || uploading !== undefined} onClick={() => void submit()}>
+              <Play size={15} />{submitting ? "正在创建…" : "开始生成"}
+            </button>
+          </div>
         </section>
-      ) : null}
+
+        <AigcRunPreview
+          task={createdTask}
+          activeAssetId={activeAssetId}
+          onActiveAssetChange={setActiveAssetId}
+          onOpenImage={setPreviewAsset}
+        />
+      </div>
+      {previewAsset && createdTask ? <div className="media-lightbox" role="dialog" aria-modal="true" aria-label={`${previewAsset.name} 大图预览`}><button type="button" className="media-lightbox__close" aria-label="关闭产物预览" onClick={() => setPreviewAsset(undefined)}><X size={20} /></button><div className="media-lightbox__stage"><img src={aigcTaskAssetUrl(createdTask.id, previewAsset.id)} alt={previewAsset.name} /></div></div> : null}
     </div>
   );
+}
+
+interface AigcProviderOption<T extends string> {
+  value: T;
+  label: string;
+  count: number;
+}
+
+/** 渠道较少时使用分段控件，超过三个时切换为等高下拉框。 */
+export function AigcProviderControl<T extends string>({ options, value, onChange }: {
+  options: readonly AigcProviderOption<T>[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="aigc-run-control">
+      <span>渠道</span>
+      {options.length > 3 ? (
+        <select aria-label="渠道" value={value} onChange={(event) => onChange(event.target.value as T)}>
+          {options.map((option) => <option key={option.value} value={option.value}>{option.label}（{option.count}）</option>)}
+        </select>
+      ) : (
+        <div className="scheduled-task-segmented aigc-run-provider-tabs" role="tablist" aria-label="生成服务">
+          {options.map((option) => (
+            <button key={option.value} type="button" role="tab" aria-selected={value === option.value} className={value === option.value ? "is-active" : undefined} onClick={() => onChange(option.value)}>
+              <span>{option.label}</span><small> · {option.count}</small>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 紧凑展示一项 ComfyUI 运行前置状态。 */
+function AigcRunReadinessItem({ ok, pending = false, label, detail }: { ok: boolean; pending?: boolean; label: string; detail: string }) {
+  return (
+    <div className={ok ? "aigc-readiness-item aigc-run-readiness-item is-ready" : pending ? "aigc-readiness-item aigc-run-readiness-item is-pending" : "aigc-readiness-item aigc-run-readiness-item is-missing"}>
+      {ok ? <CheckCircle2 size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}
+      <span><strong>{label}</strong><small>{detail}</small></span>
+    </div>
+  );
+}
+
+/** 在创作台中展示当前任务状态，并支持切换图片、视频和音频产物。 */
+function AigcRunPreview({ task, activeAssetId, onActiveAssetChange, onOpenImage }: {
+  task?: AigcTaskRecord;
+  activeAssetId: string;
+  onActiveAssetChange: (assetId: string) => void;
+  onOpenImage: (asset: AigcTaskAsset) => void;
+}) {
+  const activeAsset = task?.assets.find((asset) => asset.id === activeAssetId) ?? task?.assets[0];
+  const source = task && activeAsset ? aigcTaskAssetUrl(task.id, activeAsset.id) : "";
+  return (
+    <section className="media-attachment aigc-run-preview" aria-labelledby="aigc-run-preview-title">
+      <div className="configuration-section__heading aigc-run-pane-heading">
+        <div><h2 id="aigc-run-preview-title">产物预览</h2><small>{task ? `${task.interfaceName} · ${task.assets.length} 个产物` : "等待生成"}</small></div>
+        <div className="aigc-run-preview-actions">
+          {task ? <span className={`aigc-status-badge is-${task.status}`}>{taskStatusLabel(task.status)}</span> : null}
+          {task && activeAsset ? <a className="icon-button" href={aigcTaskAssetUrl(task.id, activeAsset.id, true)} download={activeAsset.name} aria-label={`下载 ${activeAsset.name}`} title="下载产物"><Download size={15} /></a> : null}
+          {task ? <a className="icon-button" href={`/aigc/tasks/${encodeURIComponent(task.id)}`} aria-label="查看任务详情" title="查看任务详情" onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: task.id }); }}><Activity size={15} /></a> : null}
+        </div>
+      </div>
+      <div className="media-attachment__preview aigc-run-preview-stage">
+        {task && activeAsset?.mediaType.startsWith("image/") ? <button type="button" className="aigc-run-preview-image" aria-label={`放大预览 ${activeAsset.name}`} onClick={() => onOpenImage(activeAsset)}><img src={source} alt={activeAsset.name} /></button> : null}
+        {task && activeAsset?.mediaType.startsWith("video/") ? <video key={activeAsset.id} src={source} controls preload="metadata" aria-label={activeAsset.name} /> : null}
+        {task && activeAsset?.mediaType.startsWith("audio/") ? <div className="aigc-run-audio"><AudioLines size={34} aria-hidden="true" /><strong>{activeAsset.name}</strong><audio key={activeAsset.id} src={source} controls preload="metadata" aria-label={activeAsset.name} /></div> : null}
+        {task && activeAsset && !isPreviewableMedia(activeAsset.mediaType) ? <div className="aigc-run-preview-empty"><File size={30} aria-hidden="true" /><strong>{activeAsset.name}</strong><p>{activeAsset.mediaType}</p></div> : null}
+        {task && !activeAsset ? <AigcRunPreviewState task={task} /> : null}
+        {!task ? <div className="aigc-run-preview-empty"><ImageIcon size={30} aria-hidden="true" /><strong>尚无产物</strong><p>开始生成后，图片、视频和音频会显示在这里。</p></div> : null}
+      </div>
+      {task && task.assets.length ? (
+        <div className="aigc-task-actions aigc-run-output-switcher" role="tablist" aria-label="产物切换">
+          {task.assets.map((asset, index) => (
+            <button key={asset.id} type="button" role="tab" aria-selected={activeAsset?.id === asset.id} className={activeAsset?.id === asset.id ? "is-selected" : undefined} onClick={() => onActiveAssetChange(asset.id)}>
+              <AigcAssetIcon mediaType={asset.mediaType} />
+              <span><strong>{asset.name}</strong><small> · {index + 1} / {task.assets.length} · {formatFileSize(asset.size)}</small></span>
+            </button>
+          ))}
+        </div>
+      ) : <div className="aigc-run-preview-footer">生成结果</div>}
+    </section>
+  );
+}
+
+/** 根据未产出文件的任务终态展示明确反馈。 */
+function AigcRunPreviewState({ task }: { task: AigcTaskRecord }) {
+  if (task.status === "failed") return <div className="aigc-run-preview-empty is-error"><AlertTriangle size={30} aria-hidden="true" /><strong>生成失败</strong><p>{task.error?.message ?? "上游服务未返回可用结果"}</p></div>;
+  if (task.status === "cancelled") return <div className="aigc-run-preview-empty"><X size={30} aria-hidden="true" /><strong>任务已取消</strong><p>可以调整参数后重新生成。</p></div>;
+  if (task.status === "succeeded") return <div className="aigc-run-preview-empty"><File size={30} aria-hidden="true" /><strong>未提取到产物</strong><p>请检查接口或工作流输出映射。</p></div>;
+  return <div className="aigc-run-preview-empty is-running"><RefreshCw size={30} aria-hidden="true" /><strong>{task.status === "queued" ? "等待执行" : "正在生成"}</strong><p>任务状态每 3 秒自动更新。</p></div>;
+}
+
+/** 返回适合产物类型的轻量图标。 */
+function AigcAssetIcon({ mediaType }: { mediaType: string }) {
+  if (mediaType.startsWith("image/")) return <ImageIcon size={16} aria-hidden="true" />;
+  if (mediaType.startsWith("video/")) return <Film size={16} aria-hidden="true" />;
+  if (mediaType.startsWith("audio/")) return <AudioLines size={16} aria-hidden="true" />;
+  return <File size={16} aria-hidden="true" />;
+}
+
+/** 判断浏览器能否在创作台内联预览该媒体类型。 */
+function isPreviewableMedia(mediaType: string): boolean {
+  return mediaType.startsWith("image/") || mediaType.startsWith("video/") || mediaType.startsWith("audio/");
 }
 
 /** 渲染单个 AIGC 入参字段。 */
@@ -427,7 +584,7 @@ function AigcRunField(props: {
   const { field, value, uploaded, uploading, publicFiles, onChange, onFile, onPublicFile } = props;
   if (field.type === "bool") {
     return (
-      <label className="configuration-check-line">
+      <label className="configuration-check-line aigc-run-field aigc-run-field--bool">
         <input type="checkbox" checked={value === true} onChange={(event) => onChange(event.target.checked)} />
         <span>{field.label}{field.required ? " *" : ""}</span>
       </label>
@@ -435,7 +592,7 @@ function AigcRunField(props: {
   }
   if (field.type === "enum") {
     return (
-      <label>
+      <label className="aigc-run-field">
         <span>{field.label}{field.required ? " *" : ""}</span>
         <select aria-label={field.label} value={typeof value === "string" ? value : ""} onChange={(event) => onChange(event.target.value)}>
           <option value="">请选择</option>
@@ -452,7 +609,7 @@ function AigcRunField(props: {
         ? file.mediaType.startsWith("video/")
         : file.mediaType.startsWith("image/"));
       return (
-        <div className="configuration-field-row">
+        <div className="configuration-field-row aigc-run-field aigc-run-field--wide">
           <label>
             <span>{field.label}{field.required ? " *" : ""}</span>
             <select
@@ -478,7 +635,7 @@ function AigcRunField(props: {
       );
     }
     return (
-      <label>
+      <label className="aigc-run-field aigc-run-field--wide">
         <span>{field.label}{field.required ? " *" : ""}</span>
         <input type="file" accept={accept} aria-label={field.label} onChange={(event) => onFile(event.target.files?.[0])} />
         <small className="configuration-help">{uploading ? "上传中…" : uploaded?.name ?? "上传后作为生成入参"}</small>
@@ -487,17 +644,20 @@ function AigcRunField(props: {
   }
   const isNumber = field.type === "int" || field.type === "double";
   const inputValue = typeof value === "number" || typeof value === "string" ? value : "";
+  const multiline = field.type === "string" && (field.name === "prompt" || field.label.includes("提示词"));
   return (
-    <label>
+    <label className={multiline ? "aigc-run-field aigc-run-field--wide" : "aigc-run-field"}>
       <span>{field.label}{field.required ? " *" : ""}</span>
-      <input
-        type={isNumber ? "number" : "text"}
-        step={field.type === "double" ? "any" : undefined}
-        placeholder={field.placeholder}
-        aria-label={field.label}
-        value={inputValue}
-        onChange={(event) => onChange(isNumber ? event.target.valueAsNumber || "" : event.target.value)}
-      />
+      {multiline ? <textarea rows={4} placeholder={field.placeholder} aria-label={field.label} value={inputValue} onChange={(event) => onChange(event.target.value)} /> : (
+        <input
+          type={isNumber ? "number" : "text"}
+          step={field.type === "double" ? "any" : undefined}
+          placeholder={field.placeholder}
+          aria-label={field.label}
+          value={inputValue}
+          onChange={(event) => onChange(isNumber ? event.target.valueAsNumber || "" : event.target.value)}
+        />
+      )}
     </label>
   );
 }
