@@ -1,4 +1,4 @@
-import { Plus, Save, TestTube2, Trash2 } from "lucide-react";
+import { Save, TestTube2, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
   AigcChannelInput,
@@ -10,6 +10,7 @@ import type {
 import { api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
+import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
 
 const CACHE_KEY = "pi-agent:aigc-channels-cache";
@@ -26,6 +27,7 @@ export function AigcChannelsPage() {
   const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<false | "saving" | "testing">(false);
+  const [deleteTarget, setDeleteTarget] = useState<AigcChannelSummary>();
 
   useEffect(() => {
     const cached = readCache();
@@ -133,11 +135,11 @@ export function AigcChannelsPage() {
   }
 
   async function remove() {
-    if (!selected || !online || !document) return;
+    if (!deleteTarget || !online || !document) return;
     setBusy("saving");
     setMessage("");
     try {
-      const result = await runApiTask(() => api.deleteAigcChannel(selected.id, document.revision, document.credentialRevision), {
+      const result = await runApiTask(() => api.deleteAigcChannel(deleteTarget.id, document.revision, document.credentialRevision), {
         operation: "删除 AIGC 渠道",
         expected: aigcExpected(setMessage),
       });
@@ -146,6 +148,7 @@ export function AigcChannelsPage() {
       setDocument(next);
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
       setSelected(undefined);
+      setDeleteTarget(undefined);
       setDraft(emptyDraft);
       setDraftId("");
       setMessage("已删除 AIGC 渠道");
@@ -240,12 +243,13 @@ export function AigcChannelsPage() {
           ) : <p className="configuration-help">OpenAI 与 Grok 渠道必须配置 API Key，密钥仅保存在服务端。</p>}
           <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="AIGC API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => setApiKey(event.target.value)} /></label>
           <div className="configuration-save-bar aigc-config-actions">
-            {isEditing ? <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!online || busy !== false} onClick={() => void remove()}><Trash2 size={15} />删除</button> : null}
+            {isEditing ? <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!online || busy !== false} onClick={() => selected && setDeleteTarget(selected)}><Trash2 size={15} />删除</button> : null}
             {isEditing ? <button type="button" className="configuration-secondary-action" disabled={!online || busy !== false} onClick={() => void test()}><TestTube2 size={15} />{busy === "testing" ? "测试中…" : "测试连接"}</button> : null}
             <button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => void save()}><Save size={16} />{busy === "saving" ? "保存中…" : isEditing ? "保存配置" : "创建渠道"}</button>
           </div>
         </section>
       ) : null}
+      {deleteTarget ? <ConfirmationDialog title={`删除渠道“${deleteTarget.name}”？`} description="删除后无法恢复，保存的渠道凭证也会一并删除；引用该渠道的 AIGC 接口将不能继续运行。" confirmLabel="删除渠道" busy={busy === "saving"} onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
     </main>
   );
 }

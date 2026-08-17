@@ -1,5 +1,5 @@
-import { Activity, Boxes, GitFork, Play, RefreshCw, Save, Trash2, Upload } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Activity, AlertTriangle, Boxes, CheckCircle2, Download, GitFork, Play, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AigcChannelSummary,
   AigcInterfaceCapability,
@@ -10,17 +10,21 @@ import type {
   AigcRunInputValue,
   AigcSettingsDocument,
   AigcTaskDocument,
+  AigcTaskAsset,
   AigcTaskRecord,
+  AigcTaskStatus,
   AigcUploadedAsset,
   AigcWorkflowDetail,
   AigcWorkflowDocument,
   AigcWorkflowInputMapping,
   AigcWorkflowOutputMapping,
+  AigcWorkflowSummary,
 } from "../../shared/aigc-contracts";
-import { api, apiV1Url } from "../api";
+import { aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
+import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
-import { navigateTo, type AppRoute } from "../router";
+import { navigateTo, NAVIGATION_BEFORE_EVENT, type AppRoute } from "../router";
 import { AigcWorkflowComposer } from "./aigc-workflow-composer";
 
 interface AigcWorkbenchPageProps {
@@ -31,7 +35,7 @@ interface AigcWorkbenchPageProps {
 export function AigcWorkbenchPage({ route }: AigcWorkbenchPageProps) {
   if (route.page === "aigc-interfaces") return <AigcInterfacesPage />;
   if (route.page === "aigc-interface-detail") return <AigcInterfaceDetail interfaceId={route.interfaceId} />;
-  if (route.page === "aigc-run") return <AigcRunPage />;
+  if (route.page === "aigc-run") return <AigcRunPage preferredInterfaceId={route.interfaceId} />;
   if (route.page === "aigc-tasks") return <AigcTasksPage />;
   if (route.page === "aigc-task-detail") return <AigcTaskDetail taskId={route.taskId} />;
   if (route.page === "aigc-workflows") return <AigcWorkflowsPage />;
@@ -43,9 +47,11 @@ export function AigcWorkbenchPage({ route }: AigcWorkbenchPageProps) {
 function AigcOverview() {
   const { runApiTask } = useApiTask();
   const [channels, setChannels] = useState<AigcSettingsDocument>();
-  const [interfaces, setInterfaces] = useState<{ total: number; enabled: number }>();
-  const [workflows, setWorkflows] = useState<{ total: number }>();
+  const [interfaces, setInterfaces] = useState<AigcInterfaceRecord[]>([]);
+  const [workflows, setWorkflows] = useState<AigcWorkflowDocument>();
   const [tasks, setTasks] = useState<{ total: number; running: number; failed: number }>();
+  const [connectionResult, setConnectionResult] = useState<{ channelId: string; ok: boolean; message: string }>();
+  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     void runApiTask(async () => {
@@ -56,8 +62,8 @@ function AigcOverview() {
         api.getAigcTasks(),
       ]);
       setChannels(channelDocument);
-      setInterfaces({ total: interfaceDocument.interfaces.length, enabled: interfaceDocument.interfaces.filter((item) => item.enabled).length });
-      setWorkflows({ total: workflowDocument.workflows.length });
+      setInterfaces(interfaceDocument.interfaces);
+      setWorkflows(workflowDocument);
       setTasks({
         total: taskDocument.tasks.length,
         running: taskDocument.tasks.filter((task) => task.status === "queued" || task.status === "running").length,
@@ -67,16 +73,33 @@ function AigcOverview() {
     }, { operation: "加载 AIGC 概览" });
   }, [runApiTask]);
 
+  const enabledComfyChannels = (channels?.channels ?? []).filter((item) => item.type === "comfyui" && item.enabled);
+  const runnableComfyInterfaces = interfaces.filter((item) => {
+    if (item.protocol !== "comfyui" || !item.enabled) return false;
+    const workflowId = (item.config as { workflowId?: string }).workflowId;
+    return enabledComfyChannels.some((channel) => channel.id === item.channelId)
+      && (workflows?.workflows ?? []).some((workflow) => workflow.id === workflowId);
+  });
+  const primaryComfyChannel = enabledComfyChannels.find((channel) => channel.id === runnableComfyInterfaces[0]?.channelId) ?? enabledComfyChannels[0];
+
+  async function testComfyUi() {
+    if (!primaryComfyChannel || testing) return;
+    setTesting(true);
+    const result = await runApiTask(() => api.testAigcChannel(primaryComfyChannel.id), { operation: "测试 ComfyUI 连接" });
+    setTesting(false);
+    if (result.status === "success") setConnectionResult({ channelId: primaryComfyChannel.id, ...result.data });
+  }
+
   const cards = [
     { label: "渠道", value: channels?.channels?.length ?? "—", detail: `${channels?.channels?.filter((item) => item.enabled).length ?? 0} 个已启用` },
-    { label: "接口", value: interfaces?.total ?? "—", detail: `${interfaces?.enabled ?? 0} 个可试运行` },
-    { label: "工作流", value: workflows?.total ?? "—", detail: "ComfyUI 编排资产" },
+    { label: "接口", value: interfaces.length || "—", detail: `${interfaces.filter((item) => item.enabled).length} 个可试运行` },
+    { label: "工作流", value: workflows?.workflows.length ?? "—", detail: "ComfyUI 编排资产" },
     { label: "任务", value: tasks?.total ?? "—", detail: `${tasks?.running ?? 0} 运行中 · ${tasks?.failed ?? 0} 失败` },
   ];
 
   return (
     <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>概览</h1><p>AIGC 接口与生成任务的总览；渠道连接在配置中心维护。</p></header>
+      <header className="aigc-page-heading"><h1>概览</h1><p>从这里确认创作链路是否就绪，并快速进入 OpenAI、Grok 或 ComfyUI 运行。</p></header>
       <div className="aigc-overview-grid">
         {cards.map((card) => (
           <section key={card.label} className="aigc-overview-card">
@@ -84,12 +107,73 @@ function AigcOverview() {
           </section>
         ))}
       </div>
-      <section className="configuration-form-card">
-        <div className="configuration-section__heading"><div><span>01</span><h2>当前状态</h2></div></div>
-        <p className="configuration-help">渠道、接口和工作流可在对应二级目录中管理；任务页可查看每次生成的进度与产物。</p>
+      <section className="configuration-form-card aigc-readiness-card">
+        <div className="configuration-section__heading"><div><span>01</span><h2>ComfyUI 运行就绪检查</h2></div><small>{runnableComfyInterfaces.length ? `${runnableComfyInterfaces.length} 个接口可运行` : "尚未就绪"}</small></div>
+        <div className="aigc-readiness-list">
+          <ReadinessItem ok={enabledComfyChannels.length > 0} label="已启用 ComfyUI 渠道" detail={enabledComfyChannels.length ? enabledComfyChannels.map((item) => item.name).join("、") : "请先创建并启用渠道"} />
+          <ReadinessItem ok={(workflows?.workflows.length ?? 0) > 0} label="已导入工作流" detail={workflows?.workflows.length ? `${workflows.workflows.length} 个工作流可配置` : "请导入 ComfyUI API 工作流 JSON"} />
+          <ReadinessItem ok={runnableComfyInterfaces.length > 0} label="已创建运行接口" detail={runnableComfyInterfaces.length ? runnableComfyInterfaces.map((item) => item.name).join("、") : "接口需同时引用已启用渠道和现有工作流"} />
+          <ReadinessItem
+            ok={connectionResult?.ok === true}
+            pending={!connectionResult || connectionResult.channelId !== primaryComfyChannel?.id}
+            label="实时连接测试"
+            detail={connectionResult && connectionResult.channelId === primaryComfyChannel?.id ? connectionResult.message : "尚未检测，不会仅凭配置宣称可用"}
+          />
+        </div>
+        <div className="aigc-readiness-actions">
+          {primaryComfyChannel ? <button type="button" className="configuration-secondary-action" disabled={testing} onClick={() => void testComfyUi()}><TestTube2 size={15} />{testing ? "检测中…" : "测试 ComfyUI 连接"}</button> : <button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-channels" })}>配置 ComfyUI 渠道</button>}
+          {!workflows?.workflows.length ? <button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-workflows" })}>导入工作流</button> : null}
+          {!runnableComfyInterfaces.length ? <button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-interfaces" })}>创建运行接口</button> : null}
+          {runnableComfyInterfaces[0] ? <button type="button" className="configuration-primary-action" onClick={() => navigateTo({ page: "aigc-run", interfaceId: runnableComfyInterfaces[0].id })}><Play size={15} />运行 ComfyUI</button> : null}
+        </div>
       </section>
     </div>
   );
+}
+
+/** 展示一项可操作的运行前置检查。 */
+function ReadinessItem({ ok, pending = false, label, detail }: { ok: boolean; pending?: boolean; label: string; detail: string }) {
+  return (
+    <div className={ok ? "aigc-readiness-item is-ready" : pending ? "aigc-readiness-item is-pending" : "aigc-readiness-item is-missing"}>
+      {ok ? <CheckCircle2 size={18} aria-hidden="true" /> : <AlertTriangle size={18} aria-hidden="true" />}
+      <span><strong>{label}</strong><small>{detail}</small></span>
+    </div>
+  );
+}
+
+/** 在 AIGC 编辑表单仍有改动时阻止站内导航与浏览器关闭。 */
+function useAigcUnsavedNavigation(isDirty: boolean) {
+  const [pendingRoute, setPendingRoute] = useState<AppRoute>();
+  const allowNavigation = useRef(false);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const preventUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    const preventNavigation = (event: Event) => {
+      if (allowNavigation.current) return;
+      event.preventDefault();
+      setPendingRoute((event as CustomEvent<AppRoute>).detail);
+    };
+    window.addEventListener("beforeunload", preventUnload);
+    window.addEventListener(NAVIGATION_BEFORE_EVENT, preventNavigation);
+    return () => {
+      window.removeEventListener("beforeunload", preventUnload);
+      window.removeEventListener(NAVIGATION_BEFORE_EVENT, preventNavigation);
+    };
+  }, [isDirty]);
+
+  return {
+    pendingRoute,
+    cancel: () => setPendingRoute(undefined),
+    confirm: () => {
+      if (!pendingRoute) return;
+      allowNavigation.current = true;
+      const route = pendingRoute;
+      setPendingRoute(undefined);
+      navigateTo(route);
+      window.queueMicrotask(() => { allowNavigation.current = false; });
+    },
+  };
 }
 
 /** 创作台入参字段定义。 */
@@ -105,10 +189,12 @@ interface AigcRunFieldDefinition {
 }
 
 /** 创作台：选择已启用接口，按能力或 ComfyUI 映射动态生成入参并提交试运行。 */
-function AigcRunPage() {
+function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }) {
   const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [interfaces, setInterfaces] = useState<AigcInterfaceRecord[]>([]);
+  const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
+  const [provider, setProvider] = useState<AigcInterfaceProtocol>("openai");
   const [selectedId, setSelectedId] = useState("");
   const [workflow, setWorkflow] = useState<AigcWorkflowDetail>();
   const [values, setValues] = useState<Record<string, AigcRunInputValue>>({});
@@ -118,22 +204,30 @@ function AigcRunPage() {
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
   const [createdTask, setCreatedTask] = useState<AigcTaskRecord>();
+  const [connectionResult, setConnectionResult] = useState<{ ok: boolean; message: string }>();
+  const [testingConnection, setTestingConnection] = useState(false);
 
   const enabledInterfaces = interfaces.filter((item) => item.enabled);
+  const providerInterfaces = enabledInterfaces.filter((item) => item.protocol === provider);
   const selected = enabledInterfaces.find((item) => item.id === selectedId);
   const fields = selected ? runFields(selected, workflow) : [];
+  const selectedChannelReady = Boolean(selected && channels.some((channel) => channel.id === selected.channelId && channel.enabled));
+  const selectedReady = Boolean(selected && selectedChannelReady && (selected.protocol !== "comfyui" || workflow));
 
   useEffect(() => {
     void runApiTask(async () => {
-      const document = await api.getAigcInterfaces();
+      const [document, channelDocument] = await Promise.all([api.getAigcInterfaces(), api.getAigcChannels()]);
       setInterfaces(document.interfaces);
+      setChannels(channelDocument.channels);
       return document;
     }, { operation: "加载可用的 AIGC 接口" }).then((result) => {
       if (result.status !== "success") return;
-      const firstEnabled = result.data.interfaces.find((item) => item.enabled);
+      const preferred = result.data.interfaces.find((item) => item.enabled && item.id === preferredInterfaceId);
+      const firstEnabled = preferred ?? result.data.interfaces.find((item) => item.enabled);
+      if (firstEnabled) setProvider(firstEnabled.protocol);
       if (firstEnabled) setSelectedId(firstEnabled.id);
     });
-  }, [runApiTask]);
+  }, [preferredInterfaceId, runApiTask]);
 
   useEffect(() => {
     void runApiTask(async () => {
@@ -146,6 +240,7 @@ function AigcRunPage() {
   useEffect(() => {
     setCreatedTask(undefined);
     setMessage("");
+    setConnectionResult(undefined);
     if (!selected) {
       setWorkflow(undefined);
       setValues({});
@@ -173,6 +268,19 @@ function AigcRunPage() {
       return next;
     }, { operation: "加载 ComfyUI 入参", expected: aigcExpected(setMessage) });
   }, [runApiTask, selected?.id]);
+
+  function changeProvider(nextProvider: AigcInterfaceProtocol) {
+    setProvider(nextProvider);
+    setSelectedId(enabledInterfaces.find((item) => item.protocol === nextProvider)?.id ?? "");
+  }
+
+  async function testSelectedConnection() {
+    if (!selected || testingConnection) return;
+    setTestingConnection(true);
+    const result = await runApiTask(() => api.testAigcChannel(selected.channelId), { operation: `测试 ${interfaceProtocolName(selected.protocol)} 连接`, expected: aigcExpected(setMessage) });
+    setTestingConnection(false);
+    if (result.status === "success") setConnectionResult(result.data);
+  }
 
   async function uploadFile(field: AigcRunFieldDefinition, file?: File) {
     if (!file) return;
@@ -223,10 +331,16 @@ function AigcRunPage() {
       }
       if (value !== undefined && value !== "") inputs[field.name] = value;
     }
+    if (!selectedReady) {
+      setMessage("当前接口的渠道或工作流尚未就绪，请先修复运行检查项。");
+      return;
+    }
+    setSubmitting(true);
     const result = await runApiTask(() => api.runAigcInterface({ interfaceId: selected.id, inputs }), {
       operation: "创建 AIGC 生成任务",
       expected: aigcExpected(setMessage),
     });
+    setSubmitting(false);
     if (result.status !== "success") return;
     setCreatedTask(result.data);
     setMessage("生成任务已创建，可前往任务页查看进度。");
@@ -234,18 +348,34 @@ function AigcRunPage() {
 
   return (
     <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>创作</h1><p>选择已启用接口，填写生成参数并提交任务。</p></header>
+      <header className="aigc-page-heading"><h1>创作与运行</h1><p>在同一页面调用 OpenAI、Grok 和 ComfyUI；选择服务后填写参数并查看任务进度。</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <div className="aigc-protocol-grid aigc-protocol-grid--compact aigc-provider-switcher" role="tablist" aria-label="生成服务">
+        {(["openai", "grok", "comfyui"] as const).map((item) => (
+          <button key={item} type="button" role="tab" aria-selected={provider === item} className={provider === item ? "aigc-overview-card aigc-protocol-card is-selected" : "aigc-overview-card aigc-protocol-card"} onClick={() => changeProvider(item)}>
+            <strong>{interfaceProtocolName(item)}</strong><small>{interfaceProtocolDescription(item)}</small><span className="aigc-provider-switcher__status">{provider === item ? "当前服务" : `${enabledInterfaces.filter((candidate) => candidate.protocol === item).length} 个接口`}</span>
+          </button>
+        ))}
+      </div>
       <section className="configuration-form-card">
         <div className="configuration-section__heading"><div><span>01</span><h2>生成任务</h2></div></div>
         <label>
           <span>AIGC 接口</span>
           <select aria-label="AIGC 接口" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
             <option value="">请选择已启用接口</option>
-            {enabledInterfaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            {providerInterfaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
-        {selected ? <p className="configuration-help">{capabilityLabel(selected.protocol, selected.capability)} · {selected.protocol.toUpperCase()}</p> : <p className="configuration-help">暂无可用接口，请先在“接口”页创建并启用。</p>}
+        {selected ? <p className="configuration-help">{capabilityLabel(selected.protocol, selected.capability)} · {interfaceProtocolName(selected.protocol)}</p> : <div className="aigc-empty-action"><p className="configuration-help">暂无已启用的 {interfaceProtocolName(provider)} 接口。</p><button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-interfaces" })}>创建 {interfaceProtocolName(provider)} 接口</button></div>}
+        {selected && !selectedChannelReady ? <p className="configuration-help aigc-warning-copy">引用的渠道不存在或未启用，请先修复接口配置。</p> : null}
+        {selected?.protocol === "comfyui" ? (
+          <div className="aigc-run-readiness">
+            <ReadinessItem ok={channels.some((channel) => channel.id === selected.channelId && channel.enabled)} label="执行渠道" detail={channels.find((channel) => channel.id === selected.channelId)?.name ?? "引用的渠道不存在"} />
+            <ReadinessItem ok={Boolean(workflow)} label="工作流" detail={workflow?.name ?? "引用的工作流不存在或尚未加载"} />
+            <ReadinessItem ok={connectionResult?.ok === true} pending={!connectionResult} label="实时连接" detail={connectionResult?.message ?? "提交前建议先检测 ComfyUI 服务"} />
+            <button type="button" className="configuration-secondary-action" disabled={testingConnection} onClick={() => void testSelectedConnection()}><TestTube2 size={15} />{testingConnection ? "检测中…" : "测试连接"}</button>
+          </div>
+        ) : null}
         {selected ? (
           <>
             {fields.map((field) => (
@@ -263,7 +393,7 @@ function AigcRunPage() {
             ))}
             {!fields.length ? <p className="configuration-help">该接口无需额外入参，可直接开始生成。</p> : null}
             <div className="configuration-save-bar">
-              <button type="button" className="configuration-primary-action" disabled={!online || submitting || uploading !== undefined} onClick={() => void submit()}>
+              <button type="button" className="configuration-primary-action" disabled={!online || !selectedReady || submitting || uploading !== undefined} onClick={() => void submit()}>
                 <Play size={16} />{submitting ? "正在创建…" : "开始生成"}
               </button>
             </div>
@@ -273,7 +403,7 @@ function AigcRunPage() {
       {createdTask ? (
         <section className="aigc-overview-card">
           <span>已创建任务</span>
-          <strong>{createdTask.status}</strong>
+          <strong>{taskStatusLabel(createdTask.status)}</strong>
           <small><a href={`/aigc/tasks/${encodeURIComponent(createdTask.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: createdTask.id }); }}>查看任务详情</a></small>
         </section>
       ) : null}
@@ -486,6 +616,20 @@ function interfaceProtocolDescription(protocol: AigcInterfaceProtocol): string {
   return "工作流节点编排";
 }
 
+/** 将服务端接口记录转换成稳定的编辑表单基线。 */
+function interfaceInputFromRecord(item: AigcInterfaceRecord): AigcInterfaceInput {
+  return {
+    name: item.name,
+    description: item.description,
+    protocol: item.protocol,
+    capability: item.capability,
+    channelId: item.channelId,
+    enabled: item.enabled,
+    toolPublishEnabled: item.toolPublishEnabled,
+    config: item.config as AigcInterfaceInput["config"],
+  };
+}
+
 /** 接口列表与编辑。 */
 function AigcInterfacesPage() {
   const { runApiTask } = useApiTask();
@@ -495,7 +639,12 @@ function AigcInterfacesPage() {
   const [workflows, setWorkflows] = useState<{ id: string; name: string }[]>([]);
   const [selected, setSelected] = useState<AigcInterfaceRecord>();
   const [draft, setDraft] = useState<AigcInterfaceInput>(emptyInterface);
+  const [savedDraft, setSavedDraft] = useState<AigcInterfaceInput>(emptyInterface);
   const [message, setMessage] = useState("");
+  const [pendingAction, setPendingAction] = useState<(() => void) | undefined>();
+  const [deleteTarget, setDeleteTarget] = useState<AigcInterfaceRecord>();
+  const isDirty = JSON.stringify(draft) !== JSON.stringify(savedDraft);
+  const navigationGuard = useAigcUnsavedNavigation(isDirty);
 
   async function refresh() {
     const [next, channelDocument, workflowDocument] = await Promise.all([
@@ -517,8 +666,15 @@ function AigcInterfacesPage() {
   }, [runApiTask]);
 
   function select(item: AigcInterfaceRecord) {
-    setSelected(item);
-    setDraft({
+    if (isDirty) {
+      setPendingAction(() => () => selectImmediately(item));
+      return;
+    }
+    selectImmediately(item);
+  }
+
+  function selectImmediately(item: AigcInterfaceRecord) {
+    const nextDraft: AigcInterfaceInput = {
       name: item.name,
       description: item.description,
       protocol: item.protocol,
@@ -527,12 +683,25 @@ function AigcInterfacesPage() {
       enabled: item.enabled,
       toolPublishEnabled: item.toolPublishEnabled,
       config: item.config as AigcInterfaceInput["config"],
-    });
+    };
+    setSelected(item);
+    setDraft(nextDraft);
+    setSavedDraft(nextDraft);
   }
 
   function createDraft() {
+    if (isDirty) {
+      setPendingAction(() => createImmediately);
+      return;
+    }
+    createImmediately();
+  }
+
+  function createImmediately() {
+    const nextDraft = { ...emptyInterface, channelId: channels.find((channel) => channel.enabled)?.id ?? "" };
     setSelected(undefined);
-    setDraft({ ...emptyInterface, channelId: channels.find((channel) => channel.enabled)?.id ?? "" });
+    setDraft(nextDraft);
+    setSavedDraft(nextDraft);
   }
 
   function changeProtocol(protocol: AigcInterfaceProtocol) {
@@ -555,7 +724,7 @@ function AigcInterfacesPage() {
       if (result.status !== "success") return;
       const next = await refresh();
       const current = next.interfaces.find((item) => item.id === selected?.id) ?? next.interfaces.at(-1);
-      if (current) select(current);
+      if (current) selectImmediately(current);
       setMessage("已保存 AIGC 接口");
     } catch {
       setMessage("刷新 AIGC 接口失败");
@@ -563,13 +732,15 @@ function AigcInterfacesPage() {
   }
 
   async function remove() {
-    if (!selected || !document || !online) return;
+    if (!deleteTarget || !document || !online) return;
     setMessage("");
-    const result = await runApiTask(() => api.deleteAigcInterface(selected.id, document.revision), { operation: "删除 AIGC 接口", expected: aigcExpected(setMessage) });
+    const result = await runApiTask(() => api.deleteAigcInterface(deleteTarget.id, document.revision), { operation: "删除 AIGC 接口", expected: aigcExpected(setMessage) });
     if (result.status !== "success") return;
-    const next = await refresh();
+    await refresh();
     setSelected(undefined);
     setDraft(emptyInterface);
+    setSavedDraft(emptyInterface);
+    setDeleteTarget(undefined);
     setMessage("已删除 AIGC 接口");
   }
 
@@ -577,6 +748,7 @@ function AigcInterfacesPage() {
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>接口</h1><p>把渠道、能力与 ComfyUI 工作流组合成可手动试运行的 AIGC 接口。</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <div className="aigc-interface-workspace">
       <section className="configuration-section aigc-section">
         <div className="configuration-section__heading"><div><span>01</span><h2>接口列表</h2></div><button type="button" className="configuration-primary-action" onClick={createDraft} disabled={!online}><Boxes size={15} />新增接口</button></div>
         {(document?.interfaces ?? []).length ? (
@@ -585,7 +757,7 @@ function AigcInterfacesPage() {
               <article key={item.id} className={selected?.id === item.id ? "aigc-task-row aigc-entity-row is-selected" : "aigc-task-row aigc-entity-row"}>
                 <button type="button" className="aigc-entity-row__main" onClick={() => select(item)}>
                   <span className="aigc-entity-row__name">{item.name}</span>
-                  <span className="aigc-entity-row__meta">{item.protocol} · {capabilityLabel(item.protocol, item.capability)}</span>
+                  <span className="aigc-entity-row__meta">{interfaceProtocolName(item.protocol)} · {capabilityLabel(item.protocol, item.capability)}</span>
                   <span className={item.enabled ? "aigc-status-badge is-enabled" : "aigc-status-badge"}>{item.enabled ? "已启用" : "已停用"}</span>
                 </button>
               </article>
@@ -659,10 +831,14 @@ function AigcInterfacesPage() {
         </div>
 
         <div className="configuration-save-bar">
-          <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online} onClick={() => void remove()}><Trash2 size={15} />删除</button>
-          <button type="button" className="configuration-primary-action" disabled={!online} onClick={() => void save()}><Save size={16} />保存接口</button>
+          <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online} onClick={() => selected && setDeleteTarget(selected)}><Trash2 size={15} />删除</button>
+          <button type="button" className="configuration-primary-action" disabled={!online || !isDirty} onClick={() => void save()}><Save size={16} />{isDirty ? "保存接口" : "已保存"}</button>
         </div>
       </section>
+      </div>
+      {pendingAction ? <ConfirmationDialog title="放弃未保存修改？" description="当前接口表单还有未保存内容。继续后，这些修改将丢失。" confirmLabel="放弃修改" destructive={false} onCancel={() => setPendingAction(undefined)} onConfirm={() => { const action = pendingAction; setPendingAction(undefined); action(); }} /> : null}
+      {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="当前接口表单还有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
+      {deleteTarget ? <ConfirmationDialog title={`删除接口“${deleteTarget.name}”？`} description="删除后无法恢复，引用该接口的创作入口将立即失效，历史任务仍会保留。" confirmLabel="删除接口" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
     </div>
   );
 }
@@ -675,6 +851,8 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
   const [workflows, setWorkflows] = useState<{ id: string; name: string }[]>([]);
   const [draft, setDraft] = useState<AigcInterfaceInput>(emptyInterface);
   const [message, setMessage] = useState("");
+  const detailDirty = Boolean(item && JSON.stringify(draft) !== JSON.stringify(interfaceInputFromRecord(item)));
+  const navigationGuard = useAigcUnsavedNavigation(detailDirty);
 
   useEffect(() => {
     void runApiTask(async () => {
@@ -704,7 +882,10 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
       const document = await api.getAigcInterfaces();
       return api.updateAigcInterface(item.id, document.revision, draft);
     }, { operation: "保存 AIGC 接口", expected: aigcExpected(setMessage) });
-    if (result.status === "success") setMessage("已保存 AIGC 接口");
+    if (result.status === "success") {
+      setItem(result.data);
+      setMessage("已保存 AIGC 接口");
+    }
   }
 
   return (
@@ -718,6 +899,7 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
         {draft.protocol === "comfyui" ? <p className="configuration-help">工作流：{workflows.find((item) => item.id === (draft.config as { workflowId?: string }).workflowId)?.name ?? "未找到"}</p> : null}
         <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={() => void save()}><Save size={16} />保存接口</button></div>
       </section>
+      {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="接口详情仍有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
     </div>
   );
 }
@@ -727,6 +909,7 @@ function AigcTasksPage() {
   const { runApiTask } = useApiTask();
   const [document, setDocument] = useState<AigcTaskDocument>();
   const [message, setMessage] = useState("");
+  const [filter, setFilter] = useState<"all" | "active" | "succeeded" | "failed">("all");
 
   async function refresh() {
     const next = await api.getAigcTasks();
@@ -736,7 +919,7 @@ function AigcTasksPage() {
 
   useEffect(() => {
     void runApiTask(refresh, { operation: "加载 AIGC 任务" });
-    const timer = window.setInterval(() => void refresh(), 3_000);
+    const timer = window.setInterval(() => void refresh().catch(() => undefined), 3_000);
     return () => window.clearInterval(timer);
   }, [runApiTask]);
 
@@ -750,15 +933,25 @@ function AigcTasksPage() {
     if (result.status === "success") await refresh();
   }
 
+  const visibleTasks = (document?.tasks ?? []).filter((task) => {
+    if (filter === "active") return task.status === "queued" || task.status === "running";
+    if (filter === "failed") return task.status === "failed" || task.status === "cancelled";
+    if (filter === "succeeded") return task.status === "succeeded";
+    return true;
+  });
+
   return (
     <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>任务</h1><p>查看生成任务状态、失败原因与产物下载。</p></header>
+      <header className="aigc-page-heading"><h1>任务与产物</h1><p>按创作状态查看进度、失败原因，并进入详情直接预览生成结果。</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
+      <div className="scheduled-task-segmented aigc-task-filters" role="group" aria-label="任务状态筛选">
+        {([{ value: "all", label: "全部" }, { value: "active", label: "进行中" }, { value: "succeeded", label: "已完成" }, { value: "failed", label: "需处理" }] as const).map((item) => <button key={item.value} type="button" className={filter === item.value ? "is-active" : undefined} onClick={() => setFilter(item.value)}>{item.label}</button>)}
+      </div>
       <div className="aigc-task-list">
-        {(document?.tasks ?? []).map((task) => (
+        {visibleTasks.map((task) => (
           <section key={task.id} className="aigc-task-row">
-            <div><strong>{task.interfaceName}</strong><span>{task.status}</span><small>{task.id}</small></div>
-            <p>{task.error ? `${task.error.code}: ${task.error.message}` : `${task.assetCount} 个产物`}</p>
+            <div><strong>{task.interfaceName}</strong><span className={`aigc-status-badge is-${task.status}`}>{taskStatusLabel(task.status)}</span><small>{formatAigcTime(task.createdAt)}</small></div>
+            <p>{task.error ? task.error.message : task.status === "succeeded" ? `${task.assetCount} 个产物可预览` : task.status === "running" ? "正在生成，请保持页面打开或稍后回来查看" : "等待执行"}</p>
             <div className="aigc-task-actions">
               {(task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
               {(task.status === "failed" || task.status === "cancelled") ? <button type="button" onClick={() => void retry(task.id)}><RefreshCw size={14} />重试</button> : null}
@@ -766,7 +959,7 @@ function AigcTasksPage() {
             </div>
           </section>
         ))}
-        {!document?.tasks.length ? <p className="configuration-help">暂无 AIGC 任务。</p> : null}
+        {!visibleTasks.length ? <p className="configuration-help">当前筛选下没有任务。</p> : null}
       </div>
     </div>
   );
@@ -777,12 +970,22 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
   const { runApiTask } = useApiTask();
   const [task, setTask] = useState<AigcTaskRecord>();
   const [message, setMessage] = useState("");
+  const [previewAsset, setPreviewAsset] = useState<AigcTaskAsset>();
 
   useEffect(() => {
     void runApiTask(() => api.getAigcTask(taskId).then((next) => { setTask(next); return next; }), { operation: "加载 AIGC 任务详情" });
     const timer = window.setInterval(() => void api.getAigcTask(taskId).then(setTask).catch(() => undefined), 3_000);
     return () => window.clearInterval(timer);
   }, [runApiTask, taskId]);
+
+  useEffect(() => {
+    if (!previewAsset) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPreviewAsset(undefined);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [previewAsset]);
 
   async function retry() {
     const result = await runApiTask(() => api.retryAigcTask(taskId), { operation: "重试 AIGC 任务", expected: aigcExpected(setMessage) });
@@ -792,18 +995,35 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
   if (!task) return <div className="aigc-workbench-page"><p className="configuration-help">正在加载任务…</p></div>;
   return (
     <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>任务详情</h1><p>{task.interfaceName} · {task.status}</p></header>
+      <header className="aigc-page-heading"><h1>创作结果</h1><p>{task.interfaceName} · {taskStatusLabel(task.status)}</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
       <section className="configuration-form-card">
         <div className="aigc-task-meta"><span>任务 ID</span><code>{task.id}</code></div>
-        <div className="aigc-task-meta"><span>状态</span><strong>{task.status}</strong></div>
-        <div className="aigc-task-meta"><span>创建时间</span><time>{new Date(task.createdAt).toLocaleString()}</time></div>
+        <div className="aigc-task-meta"><span>状态</span><strong className={`aigc-status-badge is-${task.status}`}>{taskStatusLabel(task.status)}</strong></div>
+        <div className="aigc-task-meta"><span>创建时间</span><time>{formatAigcTime(task.createdAt)}</time></div>
+        {typeof task.inputs.prompt === "string" && task.inputs.prompt ? <div className="aigc-task-prompt"><span>创作描述</span><p>{task.inputs.prompt}</p></div> : null}
         {task.error ? <p className="configuration-help">错误：{task.error.code} {task.error.message}</p> : null}
-        <h2>产物</h2>
-        {task.assets.map((asset) => <p key={asset.id}><a href={apiV1Url(`/api/aigc/tasks/${encodeURIComponent(task.id)}/assets/${encodeURIComponent(asset.id)}`)}>{asset.name}</a>（{asset.mediaType}）</p>)}
-        {!task.assets.length ? <p className="configuration-help">暂无产物。</p> : null}
+        <div className="configuration-section__heading"><div><span>01</span><h2>产物预览</h2></div><small>{task.assets.length} 个文件</small></div>
+        <div className="aigc-asset-gallery">
+          {task.assets.map((asset) => {
+            const source = aigcTaskAssetUrl(task.id, asset.id);
+            return (
+              <figure key={asset.id} className="media-attachment aigc-asset-card">
+                <div className="media-attachment__preview">
+                  {asset.mediaType.startsWith("image/") ? <button type="button" className="media-attachment__open" aria-label={`放大预览 ${asset.name}`} onClick={() => setPreviewAsset(asset)}><img src={source} alt={asset.name} loading="lazy" /></button> : null}
+                  {asset.mediaType.startsWith("video/") ? <video src={source} controls preload="metadata" aria-label={asset.name} /> : null}
+                  {asset.mediaType.startsWith("audio/") ? <audio src={source} controls preload="metadata" aria-label={asset.name} /> : null}
+                  {!asset.mediaType.startsWith("image/") && !asset.mediaType.startsWith("video/") && !asset.mediaType.startsWith("audio/") ? <div className="media-attachment__file"><span>{asset.mediaType}</span></div> : null}
+                </div>
+                <figcaption><span><strong>{asset.name}</strong><small>{formatFileSize(asset.size)} · {asset.mediaType}</small></span><a href={aigcTaskAssetUrl(task.id, asset.id, true)} download={asset.name} aria-label="下载"><Download size={15} /><span>下载</span></a></figcaption>
+              </figure>
+            );
+          })}
+        </div>
+        {!task.assets.length ? <p className="configuration-help">{task.status === "succeeded" ? "任务已完成，但没有提取到产物，请检查接口或工作流输出映射。" : "生成完成后，图片、视频和音频会直接显示在这里。"}</p> : null}
         {(task.status === "failed" || task.status === "cancelled") ? <button type="button" className="configuration-secondary-action" onClick={() => void retry()}><RefreshCw size={15} />重试</button> : null}
       </section>
+      {previewAsset ? <div className="media-lightbox" role="dialog" aria-modal="true" aria-label={`${previewAsset.name} 大图预览`}><button type="button" className="media-lightbox__close" aria-label="关闭产物预览" onClick={() => setPreviewAsset(undefined)}><X size={20} /></button><div className="media-lightbox__stage"><img src={aigcTaskAssetUrl(task.id, previewAsset.id)} alt={previewAsset.name} /></div></div> : null}
     </div>
   );
 }
@@ -817,10 +1037,13 @@ function AigcWorkflowsPage() {
   const [fileName, setFileName] = useState("");
   const [rawText, setRawText] = useState("");
   const [message, setMessage] = useState("");
+  const [interfaces, setInterfaces] = useState<AigcInterfaceRecord[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<AigcWorkflowSummary>();
 
   async function refresh() {
-    const next = await api.getAigcWorkflows();
+    const [next, interfaceDocument] = await Promise.all([api.getAigcWorkflows(), api.getAigcInterfaces()]);
     setDocument(next);
+    setInterfaces(interfaceDocument.interfaces);
     return next;
   }
 
@@ -857,10 +1080,13 @@ function AigcWorkflowsPage() {
     setMessage("已导入 ComfyUI 工作流");
   }
 
-  async function remove(id: string) {
-    if (!document) return;
-    const result = await runApiTask(() => api.deleteAigcWorkflow(id, document.revision), { operation: "删除 ComfyUI 工作流", expected: aigcExpected(setMessage) });
-    if (result.status === "success") await refresh();
+  async function remove() {
+    if (!document || !deleteTarget) return;
+    const result = await runApiTask(() => api.deleteAigcWorkflow(deleteTarget.id, document.revision), { operation: "删除 ComfyUI 工作流", expected: aigcExpected(setMessage) });
+    if (result.status === "success") {
+      setDeleteTarget(undefined);
+      await refresh();
+    }
   }
 
   return (
@@ -879,11 +1105,16 @@ function AigcWorkflowsPage() {
           <section key={workflow.id} className="aigc-task-row">
             <div><strong>{workflow.name}</strong><span>{workflow.fileName}</span><small>{workflow.nodeCount} 节点 · {workflow.edgeCount} 连线</small></div>
             <p>{workflow.inputCount} 个入参 · {workflow.outputCount} 个输出映射</p>
-            <div className="aigc-task-actions"><a href={`/aigc/workflows/${encodeURIComponent(workflow.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-workflow-detail", workflowId: workflow.id }); }}>配置映射</a><button type="button" onClick={() => void remove(workflow.id)}><Trash2 size={14} />删除</button></div>
+            <div className="aigc-task-actions">
+              {interfaces.find((item) => item.enabled && item.protocol === "comfyui" && (item.config as { workflowId?: string }).workflowId === workflow.id) ? <button type="button" onClick={() => { const item = interfaces.find((candidate) => candidate.enabled && candidate.protocol === "comfyui" && (candidate.config as { workflowId?: string }).workflowId === workflow.id); if (item) navigateTo({ page: "aigc-run", interfaceId: item.id }); }}><Play size={14} />运行</button> : <button type="button" onClick={() => navigateTo({ page: "aigc-interfaces" })}><Boxes size={14} />创建运行接口</button>}
+              <a href={`/aigc/workflows/${encodeURIComponent(workflow.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-workflow-detail", workflowId: workflow.id }); }}>配置映射</a>
+              <button type="button" onClick={() => setDeleteTarget(workflow)}><Trash2 size={14} />删除</button>
+            </div>
           </section>
         ))}
         {!document?.workflows.length ? <p className="configuration-help">尚未导入工作流。</p> : null}
       </div>
+      {deleteTarget ? <ConfirmationDialog title={`删除工作流“${deleteTarget.name}”？`} description={`删除后无法恢复。${interfaces.filter((item) => item.protocol === "comfyui" && (item.config as { workflowId?: string }).workflowId === deleteTarget.id).length} 个接口正在引用它，相关创作入口将无法运行。`} confirmLabel="删除工作流" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
     </div>
   );
 }
@@ -897,6 +1128,8 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   const [inputMappings, setInputMappings] = useState<AigcWorkflowInputMapping[]>([]);
   const [outputMappings, setOutputMappings] = useState<AigcWorkflowOutputMapping[]>([]);
   const [message, setMessage] = useState("");
+  const isDirty = Boolean(detail && (name !== detail.name || JSON.stringify(inputMappings) !== JSON.stringify(detail.inputMappings) || JSON.stringify(outputMappings) !== JSON.stringify(detail.outputMappings)));
+  const navigationGuard = useAigcUnsavedNavigation(isDirty);
 
   useEffect(() => {
     void runApiTask(async () => {
@@ -941,8 +1174,9 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
         />
       ) : <p className="configuration-help">正在加载工作流节点…</p>}
       <div className="configuration-save-bar">
-        <button type="button" className="configuration-primary-action" disabled={!detail} onClick={() => void save()}><Save size={15} />保存映射</button>
+        <button type="button" className="configuration-primary-action" disabled={!detail || !isDirty} onClick={() => void save()}><Save size={15} />{isDirty ? "保存映射" : "已保存"}</button>
       </div>
+      {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="工作流映射仍有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
     </div>
   );
 }
@@ -975,6 +1209,27 @@ function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ value: Aigc
     { value: "video-extend", label: "视频续写" },
   ];
   return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片编辑" }, { value: "text-to-video", label: "文生视频" }, { value: "image-to-video", label: "图生视频" }];
+}
+
+/** 将内部任务状态转换为面向创作者的中文状态。 */
+function taskStatusLabel(status: AigcTaskStatus): string {
+  if (status === "queued") return "等待中";
+  if (status === "running") return "生成中";
+  if (status === "succeeded") return "已完成";
+  if (status === "failed") return "生成失败";
+  return "已取消";
+}
+
+/** 使用稳定中文格式展示 AIGC 任务时间。 */
+function formatAigcTime(value: string): string {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+
+/** 以便于识别的单位展示产物大小。 */
+function formatFileSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 /** 将可恢复业务错误保留在当前页面。 */

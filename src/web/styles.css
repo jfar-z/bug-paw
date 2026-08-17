@@ -4853,7 +4853,7 @@ img.message-avatar {
 .aigc-workbench-nav button {
   display: grid;
   width: 100%;
-  min-height: 38px;
+  min-height: 44px;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 9px;
@@ -4892,7 +4892,7 @@ img.message-avatar {
 .aigc-workbench-sidebar__footer small {
   display: block;
   margin-top: 2px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 10px;
 }
 
@@ -4904,7 +4904,7 @@ img.message-avatar {
 }
 
 .aigc-workbench-page {
-  width: min(100%, 920px);
+  width: min(100%, 1120px);
   margin: 0 auto;
   padding: 32px 36px 48px;
 }
@@ -5007,7 +5007,10 @@ img.message-avatar {
 
 .aigc-task-actions a,
 .aigc-task-actions button {
-  min-height: 30px;
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 6px;
   padding: 0 9px;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -5151,6 +5154,178 @@ img.message-avatar {
 
 .aigc-config-section {
   margin-top: 40px;
+}
+
+.aigc-interface-workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.75fr) minmax(0, 1.4fr);
+  align-items: start;
+  gap: 22px;
+}
+
+.aigc-interface-workspace > .aigc-config-section {
+  margin-top: 0;
+}
+
+.aigc-provider-switcher {
+  margin-bottom: 18px;
+}
+
+.aigc-provider-switcher .aigc-protocol-card {
+  min-height: 72px;
+}
+
+.aigc-provider-switcher .aigc-protocol-card.is-selected {
+  box-shadow: inset 0 -3px 0 var(--eye);
+}
+
+.aigc-provider-switcher small {
+  color: var(--text-tertiary);
+}
+
+.aigc-provider-switcher__status {
+  width: fit-content;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--surface-soft);
+  font-size: 10px;
+}
+
+.aigc-provider-switcher button.is-selected .aigc-provider-switcher__status {
+  color: var(--primary-text, #fff);
+  background: var(--eye);
+}
+
+.aigc-readiness-list,
+.aigc-run-readiness {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+}
+
+.aigc-readiness-item {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--warning);
+  background: var(--surface-soft);
+}
+
+.aigc-readiness-item.is-ready {
+  color: var(--success, var(--eye));
+}
+
+.aigc-readiness-item.is-pending {
+  color: var(--text-tertiary);
+}
+
+.aigc-readiness-item > span {
+  display: grid;
+  gap: 3px;
+}
+
+.aigc-readiness-item strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.aigc-readiness-item small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.aigc-readiness-actions,
+.aigc-run-readiness > button {
+  margin-top: 14px;
+}
+
+.aigc-readiness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.aigc-empty-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.aigc-empty-action p {
+  margin: 0;
+}
+
+.aigc-warning-copy {
+  color: var(--danger);
+}
+
+.aigc-task-filters {
+  margin-bottom: 16px;
+}
+
+.aigc-task-filters button {
+  min-height: 40px;
+}
+
+.aigc-status-badge.is-succeeded {
+  color: var(--eye);
+  background: var(--accent-soft);
+}
+
+.aigc-status-badge.is-failed,
+.aigc-status-badge.is-cancelled {
+  color: var(--danger);
+}
+
+.aigc-task-prompt {
+  margin: 16px 0 24px;
+  padding: 14px;
+  border-left: 3px solid var(--eye);
+  background: var(--surface-soft);
+}
+
+.aigc-task-prompt span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.aigc-task-prompt p {
+  margin: 6px 0 0;
+  color: var(--text-primary);
+  line-height: 1.6;
+}
+
+.aigc-asset-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.aigc-asset-card {
+  width: 100%;
+  max-width: 520px;
+}
+
+.aigc-asset-card figcaption {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.aigc-asset-card figcaption a {
+  width: auto;
+  min-height: 40px;
+  grid-template-columns: auto auto;
+  gap: 5px;
+  padding: 0 10px;
 }
 
 .aigc-fieldset {
@@ -5321,8 +5496,19 @@ img.message-avatar {
   }
 
   .aigc-protocol-grid,
-  .aigc-form-grid {
+  .aigc-form-grid,
+  .aigc-interface-workspace {
     grid-template-columns: 1fr;
+  }
+
+  .aigc-provider-switcher .aigc-protocol-card {
+    min-height: 64px;
+  }
+
+  .aigc-task-actions a,
+  .aigc-task-actions button,
+  .aigc-task-filters button {
+    min-height: 44px;
   }
 
   .aigc-entity-row {

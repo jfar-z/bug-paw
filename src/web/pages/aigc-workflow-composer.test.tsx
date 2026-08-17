@@ -67,4 +67,26 @@ describe("AigcWorkflowComposer", () => {
       required: true,
     });
   });
+
+  it("删除映射前先说明对运行产物的影响", () => {
+    const onOutputMappingsChange = vi.fn();
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[{ id: "output-1", name: "成品图", nodeId: "2", field: "outputs.images", mediaType: "image" }]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={onOutputMappingsChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(screen.getByRole("dialog", { name: "删除输出“成品图”？" })).toBeInTheDocument();
+    expect(onOutputMappingsChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "删除输出" }));
+    expect(onOutputMappingsChange).toHaveBeenCalledWith([]);
+  });
 });

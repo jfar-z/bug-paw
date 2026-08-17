@@ -8,6 +8,7 @@ import type {
   ComfyUiField,
   ComfyUiNode,
 } from "../../shared/aigc-contracts";
+import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 
 interface AigcWorkflowComposerProps {
   workflow: AigcWorkflowDetail;
@@ -63,6 +64,7 @@ function InputMappingBuilder(props: {
   const { workflow, mappings, onChange } = props;
   const [draft, setDraft] = useState<AigcWorkflowInputMapping>();
   const [editingId, setEditingId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<AigcWorkflowInputMapping>();
   const selectedNode = workflow.nodes.find((node) => node.id === draft?.nodeId);
   const selectedFields = selectedNode ? inputFields(selectedNode) : [];
 
@@ -140,7 +142,7 @@ function InputMappingBuilder(props: {
                 </div>
                 <div className="aigc-task-actions">
                   <button type="button" onClick={() => beginEdit(mapping)}><Pencil size={14} />编辑</button>
-                  <button type="button" className="is-danger" onClick={() => onChange(mappings.filter((item) => item.id !== mapping.id))}><Trash2 size={14} />删除</button>
+                  <button type="button" className="is-danger" onClick={() => setDeleteTarget(mapping)}><Trash2 size={14} />删除</button>
                 </div>
               </article>
             );
@@ -210,6 +212,7 @@ function InputMappingBuilder(props: {
           </div>
         </div>
       ) : null}
+      {deleteTarget ? <ConfirmationDialog title={`删除入参“${deleteTarget.name}”？`} description="删除后该参数将不再写入 ComfyUI 节点；保存工作流前仍可取消本次编辑。" confirmLabel="删除入参" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => { onChange(mappings.filter((item) => item.id !== deleteTarget.id)); setDeleteTarget(undefined); }} /> : null}
     </section>
   );
 }
@@ -223,6 +226,7 @@ function OutputMappingBuilder(props: {
   const { workflow, mappings, onChange } = props;
   const [draft, setDraft] = useState<AigcWorkflowOutputMapping>();
   const [editingId, setEditingId] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<AigcWorkflowOutputMapping>();
   const selectedNode = workflow.nodes.find((node) => node.id === draft?.nodeId);
   const selectedFields = selectedNode ? outputFields(selectedNode) : [];
 
@@ -292,7 +296,7 @@ function OutputMappingBuilder(props: {
                 </div>
                 <div className="aigc-task-actions">
                   <button type="button" onClick={() => beginEdit(mapping)}><Pencil size={14} />编辑</button>
-                  <button type="button" className="is-danger" onClick={() => onChange(mappings.filter((item) => item.id !== mapping.id))}><Trash2 size={14} />删除</button>
+                  <button type="button" className="is-danger" onClick={() => setDeleteTarget(mapping)}><Trash2 size={14} />删除</button>
                 </div>
               </article>
             );
@@ -349,6 +353,7 @@ function OutputMappingBuilder(props: {
           </div>
         </div>
       ) : null}
+      {deleteTarget ? <ConfirmationDialog title={`删除输出“${deleteTarget.name}”？`} description="删除后工作台将不再从该节点提取对应产物；保存工作流前仍可取消本次编辑。" confirmLabel="删除输出" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => { onChange(mappings.filter((item) => item.id !== deleteTarget.id)); setDeleteTarget(undefined); }} /> : null}
     </section>
   );
 }

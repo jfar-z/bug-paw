@@ -23,6 +23,7 @@ describe("工作台路由", () => {
   it("解析 AIGC 工作台与详情深链", () => {
     expect(parseRoute("/aigc")).toEqual({ page: "aigc-overview" });
     expect(parseRoute("/aigc/run")).toEqual({ page: "aigc-run" });
+    expect(parseRoute("/aigc/run", "?interface=comfy-main")).toEqual({ page: "aigc-run", interfaceId: "comfy-main" });
     expect(parseRoute("/aigc/interfaces")).toEqual({ page: "aigc-interfaces" });
     expect(parseRoute("/aigc/tasks")).toEqual({ page: "aigc-tasks" });
     expect(parseRoute("/aigc/workflows")).toEqual({ page: "aigc-workflows" });
@@ -31,6 +32,7 @@ describe("工作台路由", () => {
     expect(parseRoute("/aigc/workflows/wf-1")).toEqual({ page: "aigc-workflow-detail", workflowId: "wf-1" });
     expect(routePath({ page: "aigc-overview" })).toBe("/aigc");
     expect(routePath({ page: "aigc-run" })).toBe("/aigc/run");
+    expect(routePath({ page: "aigc-run", interfaceId: "comfy main" })).toBe("/aigc/run?interface=comfy%20main");
     expect(routePath({ page: "aigc-interface-detail", interfaceId: "flux" })).toBe("/aigc/interfaces/flux");
   });
 
@@ -67,5 +69,13 @@ describe("工作台路由", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     expect(result.current).toEqual({ page: "configuration-overview" });
+  });
+
+  it("允许编辑页在写入历史记录前阻止导航", () => {
+    const prevent = (event: Event) => event.preventDefault();
+    window.addEventListener("pi-agent:before-navigate", prevent);
+    navigateTo({ page: "aigc-tasks" });
+    expect(window.location.pathname).toBe("/chat");
+    window.removeEventListener("pi-agent:before-navigate", prevent);
   });
 });
