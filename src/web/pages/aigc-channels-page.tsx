@@ -169,62 +169,93 @@ export function AigcChannelsPage() {
     }
   }
 
+  const isEditing = Boolean(selected);
+  const hasConfigTarget = Boolean(selected) || Boolean(draftId);
+
   return (
-    <main className="configuration-page">
+    <main className="configuration-page aigc-channels-page">
       <header className="configuration-page__heading">
         <h1>AIGC 渠道</h1>
-        <p>维护 OpenAI、Grok 与 ComfyUI 的连接地址和凭证。ComfyUI 可匿名访问内网服务。</p>
+        <p>先选择协议新建渠道，再从已配置渠道进入编辑。协议决定请求格式，配置只负责连接参数与凭证。</p>
       </header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
-      <section className="configuration-form-card">
+
+      <section className="configuration-section aigc-section">
         <div className="configuration-section__heading">
-          <div><span>01</span><h2>渠道</h2></div>
-          <button type="button" onClick={() => createDraft()} disabled={!online}><Plus size={15} />新增</button>
+          <div><span>01</span><h2>选择协议</h2></div>
+          <small>新建渠道前先确定接入协议</small>
         </div>
-        <div className="configuration-button-row">
+        <div className="aigc-protocol-grid">
           {templates.map((template) => (
-            <button type="button" key={template.id} className="secondary-button" onClick={() => createDraft(template)}>
-              添加 {template.name}
+            <button
+              type="button"
+              key={template.id}
+              className={draft.type === template.type ? "aigc-overview-card aigc-protocol-card is-selected" : "aigc-overview-card aigc-protocol-card"}
+              onClick={() => createDraft(template)}
+              disabled={!online}
+            >
+              <span className="aigc-protocol-card__name">{template.name}</span>
+              <span className="aigc-protocol-card__type">{template.type}</span>
+              <small>{channelProtocolDescription(template.type)}</small>
+              <span className="aigc-protocol-card__action">新建 {template.name} 渠道</span>
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="configuration-section aigc-section">
+        <div className="configuration-section__heading">
+          <div><span>02</span><h2>已配置渠道</h2></div>
+          <small>{channels.length} 个渠道</small>
+        </div>
         {channels.length ? (
-          <div className="configuration-button-row">
+          <div className="aigc-channel-list">
             {channels.map((channel) => (
-              <button type="button" key={channel.id} className={selected?.id === channel.id ? "is-selected" : undefined} onClick={() => document && select(document, channel)}>
-                {channel.name}
-              </button>
+              <article key={channel.id} className={selected?.id === channel.id ? "aigc-task-row aigc-entity-row is-selected" : "aigc-task-row aigc-entity-row"}>
+                <button type="button" className="aigc-entity-row__main" onClick={() => document && select(document, channel)}>
+                  <span className="aigc-entity-row__name">{channel.name}</span>
+                  <span className="aigc-entity-row__meta">{channel.type} · {channel.baseUrl || "未配置地址"}</span>
+                  <span className={channel.enabled ? "aigc-status-badge is-enabled" : "aigc-status-badge"}>{channel.enabled ? "已启用" : "已停用"}</span>
+                </button>
+              </article>
             ))}
           </div>
-        ) : <p className="configuration-help">尚未配置 AIGC 渠道。</p>}
-        <label><span>协议</span>
-          <select aria-label="AIGC 渠道协议" value={draft.type} onChange={(event) => {
-            const type = event.target.value as AigcChannelType;
-            const template = templates.find((item) => item.type === type);
-            updateDraft("type", type);
-            if (template && !draft.baseUrl) updateDraft("baseUrl", template.defaultBaseUrl);
-          }}>
-            <option value="openai">OpenAI</option>
-            <option value="grok">Grok</option>
-            <option value="comfyui">ComfyUI</option>
-          </select>
-        </label>
-        <label><span>渠道名称</span><input aria-label="AIGC 渠道名称" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
-        <label><span>Base URL</span><input aria-label="AIGC Base URL" placeholder={selectedTemplate?.defaultBaseUrl} value={draft.baseUrl} onChange={(event) => updateDraft("baseUrl", event.target.value)} /></label>
-        <label><span>请求超时（毫秒）</span><input type="number" min={1000} max={300000} step={1000} aria-label="AIGC 请求超时" value={draft.timeoutMs} onChange={(event) => updateDraft("timeoutMs", Number(event.target.value))} /></label>
-        <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => updateDraft("enabled", event.target.checked)} /><span>允许接口引用该渠道</span></label>
-        {selectedTemplate?.credentialOptional ? (
-          <p className="configuration-help">ComfyUI 通常在内网匿名运行；如上游启用了认证，可在这里填写 API Key。</p>
-        ) : <p className="configuration-help">OpenAI 与 Grok 渠道必须配置 API Key，密钥仅保存在服务端。</p>}
-        <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="AIGC API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => setApiKey(event.target.value)} /></label>
+        ) : <p className="configuration-help">尚未配置 AIGC 渠道。请先在上方选择一个协议。</p>}
       </section>
-      <div className="configuration-save-bar">
-        <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online || busy !== false} onClick={() => void remove()}><Trash2 size={15} />删除</button>
-        <button type="button" className="configuration-secondary-action" disabled={!selected || !online || busy !== false} onClick={() => void test()}><TestTube2 size={15} />{busy === "testing" ? "测试中…" : "测试连接"}</button>
-        <button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => void save()}><Save size={16} />{busy === "saving" ? "保存中…" : "保存配置"}</button>
-      </div>
+
+      {hasConfigTarget ? (
+        <section className="configuration-form-card aigc-config-section">
+          <div className="configuration-section__heading">
+            <div><span>03</span><h2>{isEditing ? "编辑渠道" : "新增渠道"}</h2></div>
+            <small>{isEditing ? selected?.name : "填写连接参数"}</small>
+          </div>
+          <label><span>协议</span><input aria-label="AIGC 渠道协议" value={draft.type} readOnly /></label>
+          <p className="configuration-help">协议由新建时确定，编辑阶段不可切换；如需更换请新建渠道。</p>
+          <label><span>渠道名称</span><input aria-label="AIGC 渠道名称" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
+          <label><span>Base URL</span><input aria-label="AIGC Base URL" placeholder={selectedTemplate?.defaultBaseUrl} value={draft.baseUrl} onChange={(event) => updateDraft("baseUrl", event.target.value)} /></label>
+          <label><span>请求超时（毫秒）</span><input type="number" min={1000} max={300000} step={1000} aria-label="AIGC 请求超时" value={draft.timeoutMs} onChange={(event) => updateDraft("timeoutMs", Number(event.target.value))} /></label>
+          <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => updateDraft("enabled", event.target.checked)} /><span>允许接口引用该渠道</span></label>
+          {selectedTemplate?.credentialOptional ? (
+            <p className="configuration-help">ComfyUI 通常在内网匿名运行；如上游启用了认证，可在这里填写 API Key。</p>
+          ) : <p className="configuration-help">OpenAI 与 Grok 渠道必须配置 API Key，密钥仅保存在服务端。</p>}
+          <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="AIGC API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => setApiKey(event.target.value)} /></label>
+          <div className="configuration-save-bar aigc-config-actions">
+            {isEditing ? <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!online || busy !== false} onClick={() => void remove()}><Trash2 size={15} />删除</button> : null}
+            {isEditing ? <button type="button" className="configuration-secondary-action" disabled={!online || busy !== false} onClick={() => void test()}><TestTube2 size={15} />{busy === "testing" ? "测试中…" : "测试连接"}</button> : null}
+            <button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => void save()}><Save size={16} />{busy === "saving" ? "保存中…" : isEditing ? "保存配置" : "创建渠道"}</button>
+          </div>
+        </section>
+      ) : null}
     </main>
   );
+}
+
+
+/** 用简短的业务描述帮助用户区分协议能力边界。 */
+function channelProtocolDescription(type: AigcChannelType): string {
+  if (type === "openai") return "标准 OpenAI 图片与编辑接口";
+  if (type === "grok") return "OpenAI 兼容的图片与视频接口";
+  return "导入工作流后按节点编排执行";
 }
 
 const emptyDraft: AigcChannelInput = { name: "", type: "openai", baseUrl: "", enabled: true, timeoutMs: 30_000 };
