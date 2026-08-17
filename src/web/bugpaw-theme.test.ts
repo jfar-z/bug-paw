@@ -343,6 +343,7 @@ describe("BugPaw 生产视觉合同", () => {
     const baseRules = parseStyleRules(baseSource);
     const themeRules = parseStyleRules(themeSource);
 
+    expect(declaration(baseRules, ".chat-workspace", "background")).toBe("var(--canvas)");
     expect(declaration(baseRules, ".composer-dock", "background")).toBe("var(--canvas)");
     expect(declaration(themeRules, ':root[data-theme="dark"]', "--text-tertiary")).toBe("#888d98");
     expect(declaration(themeRules, ':root[data-theme="light"]', "--text-tertiary")).toBe("#64707b");

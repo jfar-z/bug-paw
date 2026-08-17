@@ -810,7 +810,8 @@ img.message-avatar {
   min-width: 0;
   min-height: 0;
   grid-template-rows: 64px minmax(0, 1fr) auto;
-  background: var(--surface);
+  /* 页面分包样式晚于主题层加载，内容区需直接与输入停靠区共用画布令牌。 */
+  background: var(--canvas);
   container-type: inline-size;
 }
 
