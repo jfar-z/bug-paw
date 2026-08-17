@@ -17,7 +17,14 @@ interface StoredAigcInterfaces {
 }
 
 const OPENAI_CAPABILITIES = new Set<AigcInterfaceCapability>(["text-to-image", "image-edit"]);
-const GROK_CAPABILITIES = new Set<AigcInterfaceCapability>(["text-to-image", "text-to-video", "image-to-video"]);
+const GROK_CAPABILITIES = new Set<AigcInterfaceCapability>([
+  "text-to-image",
+  "image-edit",
+  "text-to-video",
+  "image-to-video",
+  "video-edit",
+  "video-extend",
+]);
 
 /** 管理 AIGC 接口定义与协议组合。 */
 export class AigcInterfaceService {
@@ -144,11 +151,41 @@ async function normalizeInterfaceConfig(
     };
   }
   if (protocol === "grok") {
-    return { model: normalizeText(config.model, "Grok 模型", 160) };
+    return normalizeGrokConfig(config);
   }
   const workflowId = normalizeText(config.workflowId, "工作流标识", 120);
   if (!await workflowExists(workflowId)) throw new TypeError("所选 ComfyUI 工作流不存在");
   return { workflowId };
+}
+
+/** 校验并归一化 Grok 接口配置。 */
+function normalizeGrokConfig(config: Record<string, unknown>): AigcGrokInterfaceConfig {
+  const result: AigcGrokInterfaceConfig = {
+    model: normalizeText(config.model, "Grok 模型", 160),
+  };
+  const size = normalizeOptionalSize(config.size);
+  if (size) result.size = size;
+  const duration = normalizeOptionalInteger(config.duration, "视频时长", 1, 300);
+  if (duration !== undefined) result.duration = duration;
+  return result;
+}
+
+/** 校验可选尺寸，必须使用 WIDTHxHEIGHT 格式。 */
+function normalizeOptionalSize(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string" || !/^\d{2,5}x\d{2,5}$/u.test(value.trim())) {
+    throw new TypeError("Grok 尺寸必须使用 WIDTHxHEIGHT 格式");
+  }
+  return value.trim();
+}
+
+/** 校验可选整数，空值返回 undefined。 */
+function normalizeOptionalInteger(value: unknown, label: string, minimum: number, maximum: number): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new TypeError(`${label}必须在 ${minimum} 到 ${maximum} 之间`);
+  }
+  return value;
 }
 
 function normalizeText(value: unknown, label: string, maximum: number): string {

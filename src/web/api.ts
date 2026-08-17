@@ -24,6 +24,8 @@ import type {
   AigcInterfaceDocument,
   AigcInterfaceInput,
   AigcInterfaceRecord,
+  AigcPublicFileDocument,
+  AigcPublicFileSummary,
   AigcRunRequest,
   AigcSettingsDocument,
   AigcTaskDocument,
@@ -313,6 +315,13 @@ export const api = {
     form.append("file", file, file.name);
     return request<{ asset: AigcUploadedAsset }>("/api/aigc/inputs", { method: "POST", body: form });
   },
+  getAigcPublicFiles: () => request<AigcPublicFileDocument>("/api/aigc/public-files"),
+  uploadAigcPublicFile: (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return request<{ file: AigcPublicFileSummary }>("/api/aigc/public-files", { method: "POST", body: form });
+  },
+  deleteAigcPublicFile: (id: string) => request<void>(`/api/aigc/public-files/${encodeURIComponent(id)}`, { method: "DELETE" }),
   getWebResearch: () => request<WebResearchSettingsDocument>("/api/capabilities/web-research"),
   updateWebResearchGlobal: (revision: string, config: WebResearchGlobalConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/global", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   createWebResearchProvider: (input: CreateSearchProviderInput) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers", { method: "POST", body: JSON.stringify(input) }),

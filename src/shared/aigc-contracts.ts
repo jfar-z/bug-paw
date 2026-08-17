@@ -192,7 +192,7 @@ export interface AigcWorkflowDetailDocument {
 export type AigcInterfaceProtocol = AigcChannelType;
 
 /** 接口可暴露给用户的能力类型。 */
-export type AigcInterfaceCapability = "text-to-image" | "image-edit" | "text-to-video" | "image-to-video";
+export type AigcInterfaceCapability = "text-to-image" | "image-edit" | "text-to-video" | "image-to-video" | "video-edit" | "video-extend";
 
 /** OpenAI 协议接口参数。 */
 export interface AigcOpenAiInterfaceConfig {
@@ -205,6 +205,10 @@ export interface AigcOpenAiInterfaceConfig {
 /** Grok 协议接口参数。 */
 export interface AigcGrokInterfaceConfig {
   model: string;
+  /** 可选输出尺寸，使用 WIDTHxHEIGHT 格式。 */
+  size?: string;
+  /** 可选视频时长，单位为秒。 */
+  duration?: number;
 }
 
 /** ComfyUI 协议接口参数。 */
@@ -301,7 +305,12 @@ export interface AigcTaskDocument {
 }
 
 /** 手动试运行提交的入参。 */
-export type AigcRunInputValue = boolean | number | string | { assetId: string; name: string; mediaType: string };
+export type AigcRunInputValue =
+  | boolean
+  | number
+  | string
+  | { assetId: string; name: string; mediaType: string }
+  | { url: string; name: string; mediaType: string };
 
 /** 手动试运行请求。 */
 export interface AigcRunRequest {
@@ -315,4 +324,23 @@ export interface AigcUploadedAsset {
   name: string;
   mediaType: string;
   size: number;
+}
+
+/** 保存在公共文件区中的 AIGC 输入文件。 */
+export interface AigcPublicFileRecord {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  createdAt: string;
+}
+
+/** 返回给浏览器的公共文件摘要，包含可直接访问的 URL。 */
+export interface AigcPublicFileSummary extends AigcPublicFileRecord {
+  url: string;
+}
+
+/** 公共文件列表文档。 */
+export interface AigcPublicFileDocument {
+  files: AigcPublicFileSummary[];
 }

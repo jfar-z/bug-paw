@@ -7,7 +7,7 @@ import { pipeline } from "node:stream/promises";
 
 import type { AigcUploadedAsset } from "../../shared/aigc-contracts";
 
-const MAX_INPUT_ASSET_BYTES = 200 * 1024 * 1024;
+export const MAX_INPUT_ASSET_BYTES = 200 * 1024 * 1024;
 
 /** 管理 AIGC 临时入参与执行产物文件。 */
 export class AigcAssetService {
@@ -116,7 +116,7 @@ export async function removeOutputDirectory(rootDir: string, taskId: string): Pr
   await rm(dir, { recursive: true, force: true });
 }
 
-function validAssetId(value: string): boolean {
+export function validAssetId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/u.test(value);
 }
 
@@ -126,7 +126,7 @@ function safeSegment(value: string): string {
 }
 
 /** 净化为可读且不可跨目录的文件名。 */
-function sanitizeFileName(input: string): string {
+export function sanitizeFileName(input: string): string {
   const crossPlatformBase = basename(input.replaceAll("\\", "/"));
   const normalized = crossPlatformBase
     .normalize("NFKC")
@@ -138,7 +138,7 @@ function sanitizeFileName(input: string): string {
   return normalized || "aigc-asset";
 }
 
-function normalizeMediaType(value: string, filePath: string): string {
+export function normalizeMediaType(value: string, filePath: string): string {
   return /^[\w.+-]+\/[\w.+-]+$/.test(value)
     ? value.toLowerCase()
     : filePath.endsWith(".png") ? "image/png"

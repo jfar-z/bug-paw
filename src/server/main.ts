@@ -67,6 +67,7 @@ import { AigcConnectionValidation } from "./aigc/aigc-connection-validation";
 import { AigcWorkflowService } from "./aigc/aigc-workflow-service";
 import { AigcInterfaceService } from "./aigc/aigc-interface-service";
 import { AigcAssetService } from "./aigc/aigc-asset-service";
+import { AigcPublicFileService } from "./aigc/aigc-public-file-service";
 import { AigcTaskRepository } from "./aigc/aigc-task-repository";
 import { AigcTaskService } from "./aigc/aigc-task-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
@@ -327,6 +328,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const aigcWorkflows = new AigcWorkflowService(join(paths.appDir, "aigc-workflows.json"));
   const aigcInterfaces = new AigcInterfaceService(join(paths.appDir, "aigc-interfaces.json"), (id) => aigcWorkflows.exists(id));
   const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
+  const aigcPublicFiles = new AigcPublicFileService(join(paths.appDir, "aigc-public-files"));
   const aigcTasks = new AigcTaskService({
     repository: new AigcTaskRepository(join(paths.appDir, "aigc-tasks.json")),
     interfaces: aigcInterfaces,
@@ -669,6 +671,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     interfaces: aigcInterfaces,
     tasks: aigcTasks,
     assets: aigcAssets,
+    publicFiles: aigcPublicFiles,
   });
   registerBrowserPreviewRoutes(app, browserPreview);
   registerBrowserAutomationRoutes(app, {

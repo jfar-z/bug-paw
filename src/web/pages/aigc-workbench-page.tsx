@@ -6,6 +6,7 @@ import type {
   AigcInterfaceInput,
   AigcInterfaceRecord,
   AigcInterfaceProtocol,
+  AigcPublicFileSummary,
   AigcRunInputValue,
   AigcSettingsDocument,
   AigcTaskDocument,
@@ -97,6 +98,8 @@ interface AigcRunFieldDefinition {
   required: boolean;
   options?: string[];
   placeholder?: string;
+  /** 为 true 时图片或视频输入使用公共 URL 下拉，而不是本地临时上传。 */
+  publicUrl?: boolean;
 }
 
 /** 创作台：选择已启用接口，按能力或 ComfyUI 映射动态生成入参并提交试运行。 */
@@ -108,6 +111,7 @@ function AigcRunPage() {
   const [workflow, setWorkflow] = useState<AigcWorkflowDetail>();
   const [values, setValues] = useState<Record<string, AigcRunInputValue>>({});
   const [uploads, setUploads] = useState<Record<string, AigcUploadedAsset>>({});
+  const [publicFiles, setPublicFiles] = useState<AigcPublicFileSummary[]>([]);
   const [uploading, setUploading] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
@@ -130,6 +134,14 @@ function AigcRunPage() {
   }, [runApiTask]);
 
   useEffect(() => {
+    void runApiTask(async () => {
+      const document = await api.getAigcPublicFiles();
+      setPublicFiles(document.files);
+      return document;
+    }, { operation: "加载 AIGC 公共文件" });
+  }, [runApiTask]);
+
+  useEffect(() => {
     setCreatedTask(undefined);
     setMessage("");
     if (!selected) {
@@ -140,7 +152,7 @@ function AigcRunPage() {
     }
     if (selected.protocol !== "comfyui") {
       setWorkflow(undefined);
-      setValues({ prompt: "" });
+      setValues(initialGrokOrOpenAiValues(selected));
       setUploads({});
       return;
     }
@@ -174,6 +186,24 @@ function AigcRunPage() {
         assetId: result.data.asset.id,
         name: result.data.asset.name,
         mediaType: result.data.asset.mediaType,
+      },
+    }));
+  }
+
+  async function uploadPublicFile(field: AigcRunFieldDefinition, file?: File) {
+    if (!file) return;
+    setMessage("");
+    setUploading(field.name);
+    const result = await runApiTask(() => api.uploadAigcPublicFile(file), { operation: `上传 ${field.label} 公共文件`, expected: aigcExpected(setMessage) });
+    setUploading(undefined);
+    if (result.status !== "success") return;
+    setPublicFiles((current) => [result.data.file, ...current.filter((item) => item.id !== result.data.file.id)]);
+    setValues((current) => ({
+      ...current,
+      [field.name]: {
+        url: result.data.file.url,
+        name: result.data.file.name,
+        mediaType: result.data.file.mediaType,
       },
     }));
   }
@@ -223,8 +253,10 @@ function AigcRunPage() {
                 value={values[field.name]}
                 uploaded={uploads[field.name]}
                 uploading={uploading === field.name}
+                publicFiles={publicFiles}
                 onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
                 onFile={(file) => void uploadFile(field, file)}
+                onPublicFile={(file) => void uploadPublicFile(field, file)}
               />
             ))}
             {!fields.length ? <p className="configuration-help">该接口无需额外入参，可直接开始生成。</p> : null}
@@ -253,10 +285,12 @@ function AigcRunField(props: {
   value: AigcRunInputValue | undefined;
   uploaded?: AigcUploadedAsset;
   uploading: boolean;
+  publicFiles: AigcPublicFileSummary[];
   onChange: (value: AigcRunInputValue) => void;
   onFile: (file?: File) => void;
+  onPublicFile: (file?: File) => void;
 }) {
-  const { field, value, uploaded, uploading, onChange, onFile } = props;
+  const { field, value, uploaded, uploading, publicFiles, onChange, onFile, onPublicFile } = props;
   if (field.type === "bool") {
     return (
       <label className="configuration-check-line">
@@ -278,6 +312,37 @@ function AigcRunField(props: {
   }
   if (field.type === "image" || field.type === "video") {
     const accept = field.type === "video" ? "video/*" : "image/*";
+    if (field.publicUrl) {
+      const selectedUrl = publicUrlFromValue(value);
+      const availableFiles = publicFiles.filter((file) => field.type === "video"
+        ? file.mediaType.startsWith("video/")
+        : file.mediaType.startsWith("image/"));
+      return (
+        <div className="configuration-field-row">
+          <label>
+            <span>{field.label}{field.required ? " *" : ""}</span>
+            <select
+              aria-label={`${field.label}公共文件`}
+              value={selectedUrl}
+              onChange={(event) => {
+                const selectedFile = availableFiles.find((file) => file.url === event.target.value);
+                if (selectedFile) {
+                  onChange({ url: selectedFile.url, name: selectedFile.name, mediaType: selectedFile.mediaType });
+                }
+              }}
+            >
+              <option value="">请选择公共文件</option>
+              {availableFiles.map((file) => <option key={file.id} value={file.url}>{file.name}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>上传到公共区</span>
+            <input type="file" accept={accept} aria-label={`上传${field.label}到公共区`} onChange={(event) => onPublicFile(event.target.files?.[0])} />
+          </label>
+          <small className="configuration-help">{uploading ? "上传中…" : selectedUrl || "选择公共文件或上传后自动填充公网地址"}</small>
+        </div>
+      );
+    }
     return (
       <label>
         <span>{field.label}{field.required ? " *" : ""}</span>
@@ -303,6 +368,12 @@ function AigcRunField(props: {
   );
 }
 
+/** 从公共 URL 类型输入值中读取当前地址。 */
+function publicUrlFromValue(value: AigcRunInputValue | undefined): string {
+  if (typeof value === "object" && value !== null && "url" in value && typeof value.url === "string") return value.url;
+  return "";
+}
+
 /** 根据接口协议和工作流映射生成创作台字段。 */
 function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): AigcRunFieldDefinition[] {
   if (item.protocol === "comfyui") {
@@ -315,11 +386,52 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
       placeholder: mapping.description || `输入 ${mapping.name}`,
     }));
   }
-  const fields: AigcRunFieldDefinition[] = [{ name: "prompt", label: "提示词", type: "string", required: true, placeholder: "描述要生成的画面或视频" }];
-  if (item.capability === "image-edit" || item.capability === "image-to-video") {
+  if (item.protocol === "grok") return grokRunFields(item);
+  const fields: AigcRunFieldDefinition[] = [{ name: "prompt", label: "提示词", type: "string", required: true, placeholder: "描述要生成的画面或图片" }];
+  if (item.capability === "image-edit") {
     fields.push({ name: "image", label: "图片", type: "image", required: true });
   }
   return fields;
+}
+
+/** 根据 Grok 能力生成创作台入参字段。 */
+function grokRunFields(item: AigcInterfaceRecord): AigcRunFieldDefinition[] {
+  const isOptionalPrompt = item.capability === "video-extend";
+  const fields: AigcRunFieldDefinition[] = [{
+    name: "prompt",
+    label: isOptionalPrompt ? "续写提示词（可选）" : "提示词",
+    type: "string",
+    required: !isOptionalPrompt,
+    placeholder: isOptionalPrompt ? "描述视频续写方向" : "描述要生成的画面或视频",
+  }];
+  if (item.capability === "text-to-image") {
+    fields.push({ name: "count", label: "生成数量", type: "int", required: false, placeholder: "1" });
+  }
+  if (item.capability === "image-edit" || item.capability === "image-to-video") {
+    fields.push({ name: "image", label: "图片公网地址", type: "image", required: true, publicUrl: true });
+  }
+  if (item.capability === "video-edit" || item.capability === "video-extend") {
+    fields.push({ name: "video", label: "视频公网地址", type: "video", required: true, publicUrl: true });
+  }
+  if (["text-to-image", "image-edit", "text-to-video", "image-to-video"].includes(item.capability)) {
+    fields.push({ name: "size", label: "输出尺寸", type: "string", required: false, placeholder: "例如 1024x1024" });
+  }
+  if (["text-to-video", "image-to-video", "video-extend"].includes(item.capability)) {
+    fields.push({ name: "duration", label: "时长（秒）", type: "int", required: false, placeholder: "1 到 300" });
+  }
+  return fields;
+}
+
+/** 为 OpenAI 或 Grok 接口生成初始表单值。 */
+function initialGrokOrOpenAiValues(item: AigcInterfaceRecord): Record<string, AigcRunInputValue> {
+  const values: Record<string, AigcRunInputValue> = { prompt: "" };
+  if (item.protocol === "grok" && item.capability === "text-to-image") values.count = 1;
+  if (item.protocol === "grok") {
+    const config = item.config as { size?: string; duration?: number };
+    if (config.size) values.size = config.size;
+    if (config.duration !== undefined) values.duration = config.duration;
+  }
+  return values;
 }
 
 /** 为 ComfyUI 工作流映射生成初始值。 */
@@ -349,7 +461,8 @@ function coerceRunValue(field: AigcRunFieldDefinition, value: AigcRunInputValue 
     return text;
   }
   if (field.type === "enum") return typeof value === "string" ? value : undefined;
-  return typeof value === "object" && "assetId" in value ? value : undefined;
+  if (typeof value === "object" && ("assetId" in value || "url" in value)) return value;
+  return undefined;
 }
 
 /** 返回接口能力的展示文案。 */
@@ -469,6 +582,12 @@ function AigcInterfacesPage() {
             <input aria-label="AIGC 模型" value={(draft.config as { model?: string }).model ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, model: event.target.value } })} />
           )}
         </label>
+        {draft.protocol === "grok" ? (
+          <div className="configuration-field-row">
+            <label><span>默认尺寸</span><input aria-label="Grok 默认尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
+            <label><span>默认时长（秒）</span><input type="number" min={1} max={300} aria-label="Grok 默认时长" value={(draft.config as { duration?: number }).duration ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, duration: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined } })} /></label>
+          </div>
+        ) : null}
         {draft.protocol === "openai" ? (
           <div className="configuration-field-row">
             <label><span>尺寸</span><input aria-label="OpenAI 尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
@@ -788,7 +907,14 @@ function defaultCapability(protocol: AigcInterfaceProtocol): AigcInterfaceCapabi
 
 function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ value: AigcInterfaceCapability; label: string }> {
   if (protocol === "openai") return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片编辑" }];
-  if (protocol === "grok") return [{ value: "text-to-image", label: "文生图" }, { value: "text-to-video", label: "文生视频" }, { value: "image-to-video", label: "图生视频" }];
+  if (protocol === "grok") return [
+    { value: "text-to-image", label: "文生图" },
+    { value: "image-edit", label: "图片编辑" },
+    { value: "text-to-video", label: "文生视频" },
+    { value: "image-to-video", label: "图生视频" },
+    { value: "video-edit", label: "视频编辑" },
+    { value: "video-extend", label: "视频续写" },
+  ];
   return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片编辑" }, { value: "text-to-video", label: "文生视频" }, { value: "image-to-video", label: "图生视频" }];
 }
 
