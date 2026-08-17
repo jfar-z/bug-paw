@@ -4,6 +4,7 @@ import type {
   AigcRunRequest,
   AigcTaskDocument,
   AigcTaskError,
+  AigcTaskExecutionState,
   AigcTaskRecord,
   AigcTaskSummary,
 } from "../../shared/aigc-contracts";
@@ -28,6 +29,7 @@ interface AigcTaskServiceDependencies {
 /** 协调 AIGC 手动试运行、状态流转和任务历史。 */
 export class AigcTaskService {
   private readonly controllers = new Map<string, AbortController>();
+  private readonly executionStates = new Map<string, AigcTaskExecutionState>();
 
   /**
    * @param dependencies AIGC 任务执行依赖
@@ -36,12 +38,15 @@ export class AigcTaskService {
 
   /** 列出任务摘要。 */
   async list(): Promise<AigcTaskDocument> {
-    return { tasks: (await this.dependencies.repository.list()).map(toSummary) };
+    return {
+      tasks: (await this.dependencies.repository.list()).map((task) => toSummary(task, this.executionStates.get(task.id))),
+    };
   }
 
   /** 读取任务详情。 */
   async get(id: string): Promise<AigcTaskRecord | undefined> {
-    return this.dependencies.repository.get(id);
+    const task = await this.dependencies.repository.get(id);
+    return task ? withExecutionState(task, this.executionStates.get(id)) : undefined;
   }
 
   /** 创建任务并异步开始执行。 */
@@ -71,6 +76,7 @@ export class AigcTaskService {
     if (!task) throw new Error("AIGC 任务不存在");
     if (task.status !== "queued" && task.status !== "running") throw new Error("仅排队中或执行中的任务可以取消");
     this.controllers.get(id)?.abort();
+    this.executionStates.delete(id);
     return this.updateTask(id, { status: "cancelled", updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
   }
 
@@ -79,6 +85,7 @@ export class AigcTaskService {
     const task = await this.dependencies.repository.get(id);
     if (!task) throw new Error("AIGC 任务不存在");
     if (task.status !== "failed" && task.status !== "cancelled") throw new Error("仅失败或已取消的任务可以重试");
+    this.executionStates.delete(id);
     const next = await this.updateTask(id, {
       status: "queued",
       assets: [],
@@ -115,6 +122,12 @@ export class AigcTaskService {
         assets: this.dependencies.assets,
         workflows: this.dependencies.workflows,
         signal: controller.signal,
+        onProgress: (state) => {
+          // 进度事件可能非常密集，只保留内存快照供轮询接口读取。
+          if (!controller.signal.aborted && this.controllers.get(id) === controller) {
+            this.executionStates.set(id, { ...state });
+          }
+        },
       });
       const assets = [];
       for (const output of result.assets) {
@@ -134,6 +147,7 @@ export class AigcTaskService {
         await this.failTask(id, sanitizeError(error));
       }
     } finally {
+      this.executionStates.delete(id);
       this.controllers.delete(id);
     }
   }
@@ -156,7 +170,7 @@ export class AigcTaskService {
 }
 
 /** 将任务记录映射为列表摘要。 */
-function toSummary(task: AigcTaskRecord): AigcTaskSummary {
+function toSummary(task: AigcTaskRecord, execution?: AigcTaskExecutionState): AigcTaskSummary {
   return {
     id: task.id,
     interfaceId: task.interfaceId,
@@ -164,12 +178,18 @@ function toSummary(task: AigcTaskRecord): AigcTaskSummary {
     channelId: task.channelId,
     status: task.status,
     assetCount: task.assets.length,
+    ...(execution ? { execution: { ...execution } } : {}),
     ...(task.error ? { error: task.error } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     ...(task.startedAt ? { startedAt: task.startedAt } : {}),
     ...(task.finishedAt ? { finishedAt: task.finishedAt } : {}),
   };
+}
+
+/** 给任务详情附加不落盘的实时执行状态。 */
+function withExecutionState(task: AigcTaskRecord, execution?: AigcTaskExecutionState): AigcTaskRecord {
+  return execution ? { ...task, execution: { ...execution } } : task;
 }
 
 /** 将异常转换为不包含认证信息的任务错误。 */

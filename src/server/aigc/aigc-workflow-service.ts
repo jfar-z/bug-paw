@@ -17,8 +17,8 @@ import { createVersionedJsonStore } from "../configuration/versioned-json-store"
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 
 const MAX_WORKFLOW_JSON_BYTES = 4 * 1024 * 1024;
-const INPUT_TYPES = new Set<AigcWorkflowInputType>(["bool", "int", "double", "string", "enum", "image", "video"]);
-const OUTPUT_MEDIA_TYPES = new Set(["image", "video", "json", "text"]);
+const INPUT_TYPES = new Set<AigcWorkflowInputType>(["bool", "int", "double", "string", "enum", "image", "video", "audio"]);
+const OUTPUT_MEDIA_TYPES = new Set(["image", "video", "audio", "json", "text"]);
 
 interface StoredAigcWorkflow extends AigcWorkflowDetail {
   /** 导入时的原始工作流，仅服务端执行使用。 */

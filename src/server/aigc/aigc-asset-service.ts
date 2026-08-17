@@ -22,7 +22,7 @@ export class AigcAssetService {
     this.outputRoot = join(rootDir, "outputs");
   }
 
-  /** 保存浏览器上传的图片或视频入参。 */
+  /** 保存浏览器上传的图片、视频或音频入参。 */
   async saveInput(stream: Readable, fileName: string, mediaType: string): Promise<AigcUploadedAsset> {
     const id = randomUUID();
     await mkdir(this.inputDir, { recursive: true, mode: 0o700 });
@@ -145,5 +145,10 @@ export function normalizeMediaType(value: string, filePath: string): string {
     : filePath.endsWith(".jpg") || filePath.endsWith(".jpeg") ? "image/jpeg"
     : filePath.endsWith(".webp") ? "image/webp"
     : filePath.endsWith(".mp4") ? "video/mp4"
+    : filePath.endsWith(".mp3") ? "audio/mpeg"
+    : filePath.endsWith(".wav") ? "audio/wav"
+    : filePath.endsWith(".flac") ? "audio/flac"
+    : filePath.endsWith(".ogg") || filePath.endsWith(".oga") ? "audio/ogg"
+    : filePath.endsWith(".m4a") ? "audio/mp4"
     : "application/octet-stream";
 }

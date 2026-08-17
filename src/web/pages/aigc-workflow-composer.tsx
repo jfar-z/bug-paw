@@ -281,7 +281,7 @@ function OutputMappingBuilder(props: {
         <div><span>03</span><h2>输出映射</h2></div>
         <button type="button" className="configuration-primary-action" onClick={beginAdd}><Plus size={15} />新增输出</button>
       </div>
-      <p className="configuration-help">点选负责产出结果的节点与输出字段，并说明它属于图片、视频、JSON 还是文本。</p>
+      <p className="configuration-help">点选负责产出结果的节点与输出字段，并说明它属于图片、视频、音频、JSON 还是文本。</p>
 
       {mappings.length ? (
         <div className="aigc-mapping-list">
@@ -382,11 +382,13 @@ const inputTypeOptions: Array<{ value: AigcWorkflowInputType; label: string }> =
   { value: "enum", label: "枚举（enum）" },
   { value: "image", label: "图片（image）" },
   { value: "video", label: "视频（video）" },
+  { value: "audio", label: "音频（audio）" },
 ];
 
 const outputMediaTypeOptions: Array<{ value: AigcWorkflowOutputMapping["mediaType"]; label: string }> = [
   { value: "image", label: "图片（image）" },
   { value: "video", label: "视频（video）" },
+  { value: "audio", label: "音频（audio）" },
   { value: "json", label: "JSON" },
   { value: "text", label: "文本（text）" },
 ];

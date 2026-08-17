@@ -169,6 +169,42 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(await screen.findByText("ComfyUI 连接正常")).toBeInTheDocument();
   });
 
+  it("支持音频入参并在执行中展示可截断节点状态且阻止重复生成", async () => {
+    vi.spyOn(window, "setInterval").mockImplementation((handler) => {
+      window.queueMicrotask(() => handler());
+      return 1 as unknown as ReturnType<typeof window.setInterval>;
+    });
+    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-audio", name: "ComfyUI 音频", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-audio" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }] }));
+      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://comfyui:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/workflows/workflow-audio") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-audio", name: "音频工作流", fileName: "audio.json", originalHash: "hash", nodes: [{ id: "9", type: "SaveAudio", title: "一个非常长的音频增强与保存节点名称", fields: [] }], edges: [], inputMappings: [{ id: "audio", name: "audio", nodeId: "1", field: "inputs.audio", type: "audio", required: true, description: "参考音频" }], outputMappings: [{ id: "result", name: "result", nodeId: "9", field: "outputs.audio", mediaType: "audio" }], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" } }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      if (url === "/api/v1/aigc/inputs" && init?.method === "POST") return new Response(JSON.stringify({ asset: { id: "audio-input", name: "voice.wav", mediaType: "audio/wav", size: 1024 } }), { status: 201 });
+      if (url === "/api/v1/aigc/tasks" && init?.method === "POST") return new Response(JSON.stringify({ id: "task-audio", interfaceId: "comfy-audio", interfaceName: "ComfyUI 音频", channelId: "comfy-channel", status: "queued", inputs: {}, assets: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }), { status: 202 });
+      if (url === "/api/v1/aigc/tasks/task-audio") return new Response(JSON.stringify({ id: "task-audio", interfaceId: "comfy-audio", interfaceName: "ComfyUI 音频", channelId: "comfy-channel", status: "running", inputs: {}, assets: [], execution: { phase: "running", currentNodeId: "9", currentNodeName: "一个非常长的音频增强与保存节点名称", currentNodeType: "SaveAudio", progressValue: 17, progressMax: 30, completedNodes: 8, totalNodes: 20, updatedAt: "2026-08-18T00:00:01.000Z" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:01.000Z" }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-audio" });
+    const audioInput = await screen.findByLabelText("参考音频");
+    expect(audioInput).toHaveAttribute("accept", "audio/*");
+    fireEvent.change(audioInput, { target: { files: [new File(["audio"], "voice.wav", { type: "audio/wav" })] } });
+    await screen.findByText("voice.wav");
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    const runningButton = await screen.findByRole("button", { name: "生成中" });
+    const status = await screen.findByText(/执行中 · 一个非常长的音频增强与保存节点名称 · 17\/30/u);
+    expect(runningButton).toBeDisabled();
+    expect(screen.getByLabelText("AIGC 接口")).toBeDisabled();
+    expect(status).toHaveClass("aigc-run-action-status");
+    expect(status).toHaveAttribute("title", expect.stringContaining("节点 9"));
+    fireEvent.click(runningButton);
+    expect(fetchMock.mock.calls.filter(([url, request]) => String(url) === "/api/v1/aigc/tasks" && request?.method === "POST")).toHaveLength(1);
+  });
+
   it("在任务详情直接预览媒体产物并保留明确下载入口", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       id: "task-asset", interfaceId: "comfy-1", interfaceName: "ComfyUI 海报", channelId: "comfy-channel", status: "succeeded", inputs: { prompt: "未来城市" },

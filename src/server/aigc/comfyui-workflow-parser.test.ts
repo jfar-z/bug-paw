@@ -62,4 +62,13 @@ describe("ComfyUI 工作流解析", () => {
     expect(() => parser.parse([])).toThrow("必须是 JSON 对象");
     expect(() => parser.parse({})).toThrow("无法识别");
   });
+
+  it("识别常见音频保存节点的输出字段", () => {
+    const parsed = parser.parse({
+      "1": { class_type: "LoadAudio", inputs: { audio: "input.wav" } },
+      "2": { class_type: "SaveAudio", inputs: { audio: ["1", 0] } },
+    });
+
+    expect(parsed.nodes[1].fields).toContainEqual(expect.objectContaining({ name: "outputs.audio", kind: "output" }));
+  });
 });

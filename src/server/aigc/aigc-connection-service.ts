@@ -101,9 +101,11 @@ async function normalizeChannel(input: AigcChannelInput, id?: string): Promise<A
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const enabled = input.enabled;
   if (typeof enabled !== "boolean") throw new TypeError("启用状态必须是布尔值");
-  const timeoutMs = readInteger(input.timeoutMs, "请求超时", 1_000, 300_000, 30_000);
+  const timeoutMs = input.timeoutMs === undefined && type === "comfyui"
+    ? undefined
+    : readInteger(input.timeoutMs, "请求超时", 1_000, 300_000, 30_000);
   if (!id || !validId(id)) throw new TypeError("AIGC 渠道 ID 格式无效");
-  return { id, name, type, baseUrl, enabled, timeoutMs };
+  return { id, name, type, baseUrl, enabled, ...(timeoutMs === undefined ? {} : { timeoutMs }) };
 }
 
 /** 校验允许内网访问且不带凭证的 HTTP(S) 地址。 */
@@ -135,8 +137,8 @@ function normalizeText(value: string, label: string, maximum: number): string {
   return text;
 }
 
-function readInteger(value: number, label: string, minimum: number, maximum: number, fallback: number): number {
-  if (!Number.isInteger(value) || value < minimum || value > maximum) return fallback;
+function readInteger(value: number | undefined, label: string, minimum: number, maximum: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < minimum || value > maximum) return fallback;
   return value;
 }
 
@@ -151,7 +153,7 @@ function isStoredChannel(value: unknown): value is AigcChannelConfig {
     && AIGC_CHANNEL_TYPES.includes(value.type as AigcChannelType)
     && typeof value.baseUrl === "string"
     && typeof value.enabled === "boolean"
-    && typeof value.timeoutMs === "number";
+    && (typeof value.timeoutMs === "number" || (value.type === "comfyui" && value.timeoutMs === undefined));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

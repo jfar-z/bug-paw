@@ -469,6 +469,14 @@
   font-size: 11px;
 }
 
+.aigc-run-action-status {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .aigc-run-action-bar button {
   min-height: 36px;
 }
