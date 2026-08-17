@@ -155,6 +155,8 @@
 
 .workspace-resources-page { display: grid; height: 100%; grid-template-columns: var(--secondary-sidebar-width) minmax(0, 1fr) auto; background: var(--surface); overflow: hidden; }
 
+.workspace-resources-page.aigc-public-directory-page { grid-template-columns: minmax(0, 1fr) auto; }
+
 .workspace-agent-navigation { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border); background: var(--panel); }
 
 .workspace-agent-navigation__header { padding: 22px 22px 15px; }

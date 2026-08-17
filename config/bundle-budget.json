@@ -13,6 +13,14 @@
         "label": "AIGC 工作台",
         "gzipBytes": 6144
       },
+      "src/web/pages/aigc-outputs-page.tsx": {
+        "label": "AIGC 产物查看",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/aigc-public-directory-page.tsx": {
+        "label": "AIGC 公开目录",
+        "gzipBytes": 7168
+      },
       "src/web/pages/aigc-channels-page.tsx": {
         "label": "AIGC 渠道",
         "gzipBytes": 6144

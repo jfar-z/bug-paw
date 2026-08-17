@@ -54,4 +54,42 @@ describe("AIGC 产物路由", () => {
     expect(download.headers["content-disposition"]).toContain("attachment");
     await app.close();
   });
+
+  it("提供产物分页、任务删除与图片缩略图接口", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bugpaw-aigc-thumbnail-"));
+    roots.push(root);
+    const thumbnailPath = join(root, "thumbnail.webp");
+    await writeFile(thumbnailPath, Buffer.from("thumbnail", "utf8"));
+    const task: AigcTaskRecord = {
+      id: "task-1", interfaceId: "interface-1", interfaceName: "ComfyUI", channelId: "channel-1", status: "succeeded", inputs: {},
+      assets: [{ id: "asset-1", name: "成品.png", mediaType: "image/png", size: 13, createdAt: "2026-08-17T00:00:00.000Z" }],
+      createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z",
+    };
+    const removed: string[] = [];
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {} as never,
+      interfaces: {} as never,
+      tasks: {
+        get: async () => task,
+        listOutputs: async () => ({ items: [], counts: { image: 1, video: 0, audio: 0, other: 0 }, page: 1, pageSize: 24, total: 1, totalPages: 1 }),
+        remove: async (id: string) => { removed.push(id); return task; },
+      } as never,
+      assets: { resolveThumbnailPath: async () => thumbnailPath } as never,
+      publicFiles: {} as never,
+    });
+    await app.ready();
+
+    const page = await app.inject({ method: "GET", url: "/api/aigc/outputs?kind=image&sort=desc&page=1&pageSize=24" });
+    expect(page.statusCode).toBe(200);
+    expect(page.json()).toMatchObject({ counts: { image: 1 }, page: 1 });
+    const thumbnail = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1/thumbnail" });
+    expect(thumbnail.statusCode).toBe(200);
+    expect(thumbnail.headers["content-type"]).toContain("image/webp");
+    expect(thumbnail.headers["cache-control"]).toContain("immutable");
+    expect((await app.inject({ method: "DELETE", url: "/api/aigc/tasks/task-1" })).statusCode).toBe(204);
+    expect(removed).toEqual(["task-1"]);
+    await app.close();
+  });
 });

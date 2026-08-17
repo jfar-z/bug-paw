@@ -1,4 +1,4 @@
-import { Activity, Boxes, GitFork, LayoutDashboard, WandSparkles, X } from "lucide-react";
+import { Activity, Boxes, FolderOpen, GalleryHorizontalEnd, GitFork, LayoutDashboard, WandSparkles, X } from "lucide-react";
 import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
 import type { AppRoute } from "../router";
 
@@ -73,6 +73,24 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
         >
           <Activity size={17} aria-hidden="true" />
           <span>任务</span>
+        </button>
+        <button
+          type="button"
+          className={route.page === "aigc-outputs" ? "is-active" : undefined}
+          aria-current={route.page === "aigc-outputs" ? "page" : undefined}
+          onClick={() => go({ page: "aigc-outputs" })}
+        >
+          <GalleryHorizontalEnd size={17} aria-hidden="true" />
+          <span>产物查看</span>
+        </button>
+        <button
+          type="button"
+          className={route.page === "aigc-public-directory" ? "is-active" : undefined}
+          aria-current={route.page === "aigc-public-directory" ? "page" : undefined}
+          onClick={() => go({ page: "aigc-public-directory" })}
+        >
+          <FolderOpen size={17} aria-hidden="true" />
+          <span>公开目录</span>
         </button>
 
         <p>编排</p>

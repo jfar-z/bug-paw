@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AigcRunRequest,
+  AigcOutputKind,
+  AigcOutputPage,
   AigcTaskDocument,
   AigcTaskError,
   AigcTaskExecutionState,
@@ -30,6 +32,7 @@ interface AigcTaskServiceDependencies {
 export class AigcTaskService {
   private readonly controllers = new Map<string, AbortController>();
   private readonly executionStates = new Map<string, AigcTaskExecutionState>();
+  private readonly executions = new Map<string, Promise<void>>();
 
   /**
    * @param dependencies AIGC 任务执行依赖
@@ -66,7 +69,7 @@ export class AigcTaskService {
       createdAt: now,
       updatedAt: now,
     });
-    void this.executeTask(task.id).catch(() => undefined);
+    this.startExecution(task.id);
     return task;
   }
 
@@ -94,8 +97,50 @@ export class AigcTaskService {
       finishedAt: undefined,
       updatedAt: new Date().toISOString(),
     });
-    if (next) void this.executeTask(next.id).catch(() => undefined);
+    if (next) this.startExecution(next.id);
     return next;
+  }
+
+  /** 删除任务；活动任务先中止并等待执行收敛，再级联清理全部产物。 */
+  async remove(id: string): Promise<AigcTaskRecord> {
+    const task = await this.dependencies.repository.get(id);
+    if (!task) throw new Error("AIGC 任务不存在");
+    this.controllers.get(id)?.abort();
+    await this.executions.get(id)?.catch(() => undefined);
+    await this.dependencies.assets.removeTaskOutputs(id);
+    const removed = await this.dependencies.repository.remove(id);
+    if (!removed) throw new Error("AIGC 任务不存在");
+    this.executionStates.delete(id);
+    return removed;
+  }
+
+  /** 按媒体分组、任务 ID 顺序返回铺平后的产物页。 */
+  async listOutputs(input: { kind: AigcOutputKind; sort: "asc" | "desc"; page: number; pageSize: number }): Promise<AigcOutputPage> {
+    const tasks = await this.dependencies.repository.list();
+    const counts = { image: 0, video: 0, audio: 0, other: 0 } satisfies Record<AigcOutputKind, number>;
+    const items = tasks.flatMap((task) => task.assets.map((asset) => {
+      const kind = outputKind(asset.mediaType);
+      counts[kind] += 1;
+      return { ...asset, taskId: task.id, interfaceName: task.interfaceName, taskCreatedAt: task.createdAt, kind };
+    })).filter((asset) => asset.kind === input.kind).sort((left, right) => {
+      const taskOrder = left.taskId.localeCompare(right.taskId);
+      const order = taskOrder || left.id.localeCompare(right.id);
+      return input.sort === "asc" ? order : -order;
+    });
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / input.pageSize));
+    const page = Math.min(input.page, totalPages);
+    const offset = (page - 1) * input.pageSize;
+    return { items: items.slice(offset, offset + input.pageSize), counts, page, pageSize: input.pageSize, total, totalPages };
+  }
+
+  /** 注册单个任务执行 Promise，删除任务时可等待最终写入停止。 */
+  private startExecution(id: string): void {
+    const execution = this.executeTask(id);
+    this.executions.set(id, execution);
+    void execution.catch(() => undefined).finally(() => {
+      if (this.executions.get(id) === execution) this.executions.delete(id);
+    });
   }
 
   /** 执行任务并写入最终状态。 */
@@ -199,4 +244,12 @@ function sanitizeError(error: unknown): AigcTaskError {
     code: error instanceof TypeError ? "AIGC_INPUT_INVALID" : "AIGC_UPSTREAM_FAILED",
     message: message.includes("Bearer") || message.includes("apiKey") ? "AIGC 上游服务不可用" : message,
   };
+}
+
+/** 将 MIME 类型归入产物页的四个稳定分组。 */
+function outputKind(mediaType: string): AigcOutputKind {
+  if (mediaType.startsWith("image/")) return "image";
+  if (mediaType.startsWith("video/")) return "video";
+  if (mediaType.startsWith("audio/")) return "audio";
+  return "other";
 }

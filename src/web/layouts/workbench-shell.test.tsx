@@ -17,7 +17,7 @@ function renderShell(route: AppRoute = { page: "agents" }) {
       revision: "r1",
     }],
   }), { status: 200 })));
-  render(
+  const rendered = render(
     <ErrorToastProvider>
       <ApiTaskProvider onAuthenticationRequired={vi.fn()}>
         <WorkbenchShell
@@ -32,7 +32,7 @@ function renderShell(route: AppRoute = { page: "agents" }) {
       </ApiTaskProvider>
     </ErrorToastProvider>,
   );
-  return { onNavigate, onLogout };
+  return { ...rendered, onNavigate, onLogout };
 }
 
 describe("WorkbenchShell", () => {
@@ -128,6 +128,15 @@ describe("WorkbenchShell", () => {
 
     expect(screen.getByRole("button", { name: "创作与运行" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("navigation", { name: "AIGC 工作台导航" })).toBeInTheDocument();
+  });
+
+  it("AIGC 产物与公开目录路由保持独立选中态", () => {
+    const first = renderShell({ page: "aigc-outputs" });
+    expect(screen.getByRole("button", { name: "产物查看" })).toHaveAttribute("aria-current", "page");
+
+    first.unmount();
+    renderShell({ page: "aigc-public-directory" });
+    expect(screen.getByRole("button", { name: "公开目录" })).toHaveAttribute("aria-current", "page");
   });
 
   it("配置中心展示 AIGC 渠道入口", () => {

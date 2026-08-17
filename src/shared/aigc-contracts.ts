@@ -323,6 +323,30 @@ export interface AigcTaskDocument {
   tasks: AigcTaskSummary[];
 }
 
+/** 产物查看页支持的媒体分组。 */
+export type AigcOutputKind = "image" | "video" | "audio" | "other";
+
+/** 铺平后的单个 AIGC 任务产物。 */
+export interface AigcOutputItem extends AigcTaskAsset {
+  taskId: string;
+  interfaceName: string;
+  taskCreatedAt: string;
+  kind: AigcOutputKind;
+}
+
+/** 各媒体分组的产物数量。 */
+export type AigcOutputCounts = Record<AigcOutputKind, number>;
+
+/** 服务端分页后的 AIGC 产物列表。 */
+export interface AigcOutputPage {
+  items: AigcOutputItem[];
+  counts: AigcOutputCounts;
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 /** 手动试运行提交的入参。 */
 export type AigcRunInputValue =
   | boolean
@@ -349,6 +373,8 @@ export interface AigcUploadedAsset {
 export interface AigcPublicFileRecord {
   id: string;
   name: string;
+  /** 面向用户的逻辑目录，根目录使用空字符串。 */
+  directory: string;
   mediaType: string;
   size: number;
   createdAt: string;
@@ -362,4 +388,16 @@ export interface AigcPublicFileSummary extends AigcPublicFileRecord {
 /** 公共文件列表文档。 */
 export interface AigcPublicFileDocument {
   files: AigcPublicFileSummary[];
+}
+
+/** 公开目录中可浏览的文件或目录。 */
+export interface AigcPublicDirectoryEntry {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  modifiedAt: string;
+  id?: string;
+  mediaType?: string;
+  size?: number;
+  url?: string;
 }

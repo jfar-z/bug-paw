@@ -46,6 +46,21 @@ export class AigcTaskRepository {
     return copyTask(next);
   }
 
+  /** 删除任务并在持久化失败时恢复内存记录。 */
+  async remove(id: string): Promise<AigcTaskRecord | undefined> {
+    await this.ready;
+    const current = this.tasks.get(id);
+    if (!current) return undefined;
+    this.tasks.delete(id);
+    try {
+      await this.persist();
+      return copyTask(current);
+    } catch (error) {
+      this.tasks.set(id, current);
+      throw error;
+    }
+  }
+
   /** 加载历史文件并容错缺失或损坏内容。 */
   private async load(): Promise<void> {
     const value = await readJson<AigcTaskRecord[]>(this.filePath);

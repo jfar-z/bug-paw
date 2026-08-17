@@ -14,6 +14,7 @@ import type {
   AigcTaskExecutionState,
   AigcTaskRecord,
   AigcTaskStatus,
+  AigcTaskSummary,
   AigcUploadedAsset,
   AigcWorkflowDetail,
   AigcWorkflowDocument,
@@ -1118,6 +1119,7 @@ function AigcTasksPage() {
   const [document, setDocument] = useState<AigcTaskDocument>();
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "succeeded" | "failed">("all");
+  const [deleteTarget, setDeleteTarget] = useState<AigcTaskSummary>();
 
   async function refresh() {
     const next = await api.getAigcTasks();
@@ -1139,6 +1141,16 @@ function AigcTasksPage() {
   async function retry(id: string) {
     const result = await runApiTask(() => api.retryAigcTask(id), { operation: "重试 AIGC 任务", expected: aigcExpected(setMessage) });
     if (result.status === "success") await refresh();
+  }
+
+  async function remove() {
+    if (!deleteTarget) return;
+    const result = await runApiTask(() => api.deleteAigcTask(deleteTarget.id), { operation: "删除 AIGC 任务", expected: aigcExpected(setMessage) });
+    if (result.status === "success") {
+      setDeleteTarget(undefined);
+      setMessage("任务及其产物已删除");
+      await refresh();
+    }
   }
 
   const visibleTasks = (document?.tasks ?? []).filter((task) => {
@@ -1164,11 +1176,13 @@ function AigcTasksPage() {
               {(task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
               {(task.status === "failed" || task.status === "cancelled") ? <button type="button" onClick={() => void retry(task.id)}><RefreshCw size={14} />重试</button> : null}
               <a href={`/aigc/tasks/${encodeURIComponent(task.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: task.id }); }}>查看</a>
+              <button type="button" aria-label={`删除任务 ${task.id}`} title="删除任务" onClick={() => setDeleteTarget(task)}><Trash2 size={14} /></button>
             </div>
           </section>
         ))}
         {!visibleTasks.length ? <p className="configuration-help">当前筛选下没有任务。</p> : null}
       </div>
+      {deleteTarget ? <ConfirmationDialog title="删除任务？" description={`任务 ${deleteTarget.id} 及其 ${deleteTarget.assetCount} 个产物将被永久删除，无法恢复。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
     </div>
   );
 }
@@ -1179,6 +1193,7 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
   const [task, setTask] = useState<AigcTaskRecord>();
   const [message, setMessage] = useState("");
   const [previewAsset, setPreviewAsset] = useState<AigcTaskAsset>();
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   useEffect(() => {
     void runApiTask(() => api.getAigcTask(taskId).then((next) => { setTask(next); return next; }), { operation: "加载 AIGC 任务详情" });
@@ -1200,10 +1215,15 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
     if (result.status === "success" && result.data) setTask(result.data);
   }
 
+  async function remove() {
+    const result = await runApiTask(() => api.deleteAigcTask(taskId), { operation: "删除 AIGC 任务", expected: aigcExpected(setMessage) });
+    if (result.status === "success") navigateTo({ page: "aigc-tasks" });
+  }
+
   if (!task) return <div className="aigc-workbench-page"><p className="configuration-help">正在加载任务…</p></div>;
   return (
     <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>创作结果</h1><p>{task.interfaceName} · {taskStatusLabel(task.status)}</p></header>
+      <header className="aigc-page-heading"><h1>创作结果</h1><p>{task.interfaceName} · {taskStatusLabel(task.status)}</p><button type="button" className="danger-button" onClick={() => setDeleteOpen(true)}><Trash2 size={15} />删除任务</button></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
       <section className="configuration-form-card">
         <div className="aigc-task-meta"><span>任务 ID</span><code>{task.id}</code></div>
@@ -1232,6 +1252,7 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
         {(task.status === "failed" || task.status === "cancelled") ? <button type="button" className="configuration-secondary-action" onClick={() => void retry()}><RefreshCw size={15} />重试</button> : null}
       </section>
       {previewAsset ? <div className="media-lightbox" role="dialog" aria-modal="true" aria-label={`${previewAsset.name} 大图预览`}><button type="button" className="media-lightbox__close" aria-label="关闭产物预览" onClick={() => setPreviewAsset(undefined)}><X size={20} /></button><div className="media-lightbox__stage"><img src={aigcTaskAssetUrl(task.id, previewAsset.id)} alt={previewAsset.name} /></div></div> : null}
+      {deleteOpen ? <ConfirmationDialog title="删除任务？" description={`任务 ${task.id} 及其 ${task.assets.length} 个产物将被永久删除，无法恢复。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteOpen(false)} onConfirm={() => void remove()} /> : null}
     </div>
   );
 }

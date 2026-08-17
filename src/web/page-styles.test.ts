@@ -18,6 +18,7 @@ const boundaries: StyleBoundary[] = [
   { stylesheet: "scheduled-tasks.css", selector: ".scheduled-task-card", pages: ["scheduled-tasks-page.tsx"] },
   { stylesheet: "knowledge-base.css", selector: ".knowledge-base-page", pages: ["knowledge-base-page.tsx"] },
   { stylesheet: "chat.css", selector: ".chat-sidebar", pages: ["chat-page.tsx"] },
+  { stylesheet: "aigc-assets.css", selector: ".aigc-assets-page", pages: ["aigc-outputs-page.tsx"] },
 ];
 
 describe("独立页面样式边界", () => {

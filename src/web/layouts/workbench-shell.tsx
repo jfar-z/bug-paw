@@ -191,6 +191,8 @@ function isAigcRoute(route: AppRoute): boolean {
     "aigc-run",
     "aigc-interfaces",
     "aigc-tasks",
+    "aigc-outputs",
+    "aigc-public-directory",
     "aigc-workflows",
     "aigc-interface-detail",
     "aigc-task-detail",
