@@ -389,7 +389,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   }
 
   return (
-    <div className="aigc-workbench-page aigc-run-page">
+    <div className={selected?.protocol === "comfyui" ? "aigc-workbench-page aigc-run-page has-readiness" : "aigc-workbench-page aigc-run-page"}>
       <div className="aigc-run-toolbar">
         <header className="aigc-page-heading aigc-run-heading">
           <h1>创作与运行</h1>
@@ -423,7 +423,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
       ) : null}
 
       <div className="aigc-run-workspace">
-        <section className="media-attachment aigc-run-parameters" aria-labelledby="aigc-run-parameters-title">
+        <section className="aigc-run-parameters" aria-labelledby="aigc-run-parameters-title">
           <div className="configuration-section__heading aigc-run-pane-heading">
             <div><h2 id="aigc-run-parameters-title">生成参数</h2><small>{selected ? `${capabilityLabel(selected.protocol, selected.capability)} · ${fields.length} 项` : "尚未选择接口"}</small></div>
           </div>
@@ -518,7 +518,7 @@ function AigcRunPreview({ task, activeAssetId, onActiveAssetChange, onOpenImage 
   const activeAsset = task?.assets.find((asset) => asset.id === activeAssetId) ?? task?.assets[0];
   const source = task && activeAsset ? aigcTaskAssetUrl(task.id, activeAsset.id) : "";
   return (
-    <section className="media-attachment aigc-run-preview" aria-labelledby="aigc-run-preview-title">
+    <section className="aigc-run-preview" aria-labelledby="aigc-run-preview-title">
       <div className="configuration-section__heading aigc-run-pane-heading">
         <div><h2 id="aigc-run-preview-title">产物预览</h2><small>{task ? `${task.interfaceName} · ${task.assets.length} 个产物` : "等待生成"}</small></div>
         <div className="aigc-run-preview-actions">
@@ -527,13 +527,13 @@ function AigcRunPreview({ task, activeAssetId, onActiveAssetChange, onOpenImage 
           {task ? <a className="icon-button" href={`/aigc/tasks/${encodeURIComponent(task.id)}`} aria-label="查看任务详情" title="查看任务详情" onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: task.id }); }}><Activity size={15} /></a> : null}
         </div>
       </div>
-      <div className="media-attachment__preview aigc-run-preview-stage">
+      <div className="aigc-run-preview-stage">
         {task && activeAsset?.mediaType.startsWith("image/") ? <button type="button" className="aigc-run-preview-image" aria-label={`放大预览 ${activeAsset.name}`} onClick={() => onOpenImage(activeAsset)}><img src={source} alt={activeAsset.name} /></button> : null}
         {task && activeAsset?.mediaType.startsWith("video/") ? <video key={activeAsset.id} src={source} controls preload="metadata" aria-label={activeAsset.name} /> : null}
         {task && activeAsset?.mediaType.startsWith("audio/") ? <div className="aigc-run-audio"><AudioLines size={34} aria-hidden="true" /><strong>{activeAsset.name}</strong><audio key={activeAsset.id} src={source} controls preload="metadata" aria-label={activeAsset.name} /></div> : null}
         {task && activeAsset && !isPreviewableMedia(activeAsset.mediaType) ? <div className="aigc-run-preview-empty"><File size={30} aria-hidden="true" /><strong>{activeAsset.name}</strong><p>{activeAsset.mediaType}</p></div> : null}
         {task && !activeAsset ? <AigcRunPreviewState task={task} /> : null}
-        {!task ? <div className="aigc-run-preview-empty"><ImageIcon size={30} aria-hidden="true" /><strong>尚无产物</strong><p>开始生成后，图片、视频和音频会显示在这里。</p></div> : null}
+        {!task ? <div className="aigc-run-preview-empty"><ImageIcon size={30} aria-hidden="true" /><strong>等待生成</strong><p>尚未创建任务</p></div> : null}
       </div>
       {task && task.assets.length ? (
         <div className="aigc-task-actions aigc-run-output-switcher" role="tablist" aria-label="产物切换">
@@ -544,7 +544,7 @@ function AigcRunPreview({ task, activeAssetId, onActiveAssetChange, onOpenImage 
             </button>
           ))}
         </div>
-      ) : <div className="aigc-run-preview-footer">生成结果</div>}
+      ) : null}
     </section>
   );
 }
@@ -1170,12 +1170,12 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
           {task.assets.map((asset) => {
             const source = aigcTaskAssetUrl(task.id, asset.id);
             return (
-              <figure key={asset.id} className="media-attachment aigc-asset-card">
-                <div className="media-attachment__preview">
-                  {asset.mediaType.startsWith("image/") ? <button type="button" className="media-attachment__open" aria-label={`放大预览 ${asset.name}`} onClick={() => setPreviewAsset(asset)}><img src={source} alt={asset.name} loading="lazy" /></button> : null}
+              <figure key={asset.id} className="aigc-asset-card">
+                <div className="aigc-asset-card__preview">
+                  {asset.mediaType.startsWith("image/") ? <button type="button" className="aigc-asset-card__open" aria-label={`放大预览 ${asset.name}`} onClick={() => setPreviewAsset(asset)}><img src={source} alt={asset.name} loading="lazy" /></button> : null}
                   {asset.mediaType.startsWith("video/") ? <video src={source} controls preload="metadata" aria-label={asset.name} /> : null}
                   {asset.mediaType.startsWith("audio/") ? <audio src={source} controls preload="metadata" aria-label={asset.name} /> : null}
-                  {!asset.mediaType.startsWith("image/") && !asset.mediaType.startsWith("video/") && !asset.mediaType.startsWith("audio/") ? <div className="media-attachment__file"><span>{asset.mediaType}</span></div> : null}
+                  {!asset.mediaType.startsWith("image/") && !asset.mediaType.startsWith("video/") && !asset.mediaType.startsWith("audio/") ? <div className="aigc-asset-card__file"><span>{asset.mediaType}</span></div> : null}
                 </div>
                 <figcaption><span><strong>{asset.name}</strong><small>{formatFileSize(asset.size)} · {asset.mediaType}</small></span><a href={aigcTaskAssetUrl(task.id, asset.id, true)} download={asset.name} aria-label="下载"><Download size={15} /><span>下载</span></a></figcaption>
               </figure>
