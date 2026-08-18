@@ -102,6 +102,29 @@ describe("AigcWorkflowComposer", () => {
     expect(screen.getByRole("button", { name: "选为映射节点" })).toBeDisabled();
   });
 
+  it("进入节点浏览后可以返回节点列表且保留映射目标", () => {
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[{ id: "prompt", name: "prompt", nodeId: "1", field: "inputs.text", type: "string", required: true }]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByLabelText("当前浏览节点详情")).toHaveTextContent("正向提示词");
+
+    fireEvent.click(screen.getByRole("button", { name: "节点列表" }));
+
+    expect(screen.queryByLabelText("当前浏览节点详情")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("节点搜索结果")).toHaveTextContent("正向提示词");
+    expect(screen.getByLabelText("当前映射目标")).toHaveTextContent("正向提示词");
+  });
+
   it("保存参数有值时启用的条件节点组", () => {
     const onInputMappingsChange = vi.fn();
     render(

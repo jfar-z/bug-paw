@@ -1,4 +1,4 @@
-import { Check, GitBranch, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, GitBranch, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
   AigcWorkflowDetail,
@@ -422,12 +422,22 @@ function WorkflowNodeNavigator(props: WorkflowNodeNavigatorProps) {
     onActivationNodeIdsChange([...next]);
   }
 
+  /** 返回初始节点列表，同时保留已经选择的映射目标和条件节点。 */
+  function returnToNodeList() {
+    setQuery("");
+    onBrowseNodeChange("");
+  }
+
   return (
     <div className="aigc-node-navigator">
       <div className="aigc-node-search">
         <Search size={14} aria-hidden="true" />
         <input aria-label="搜索工作流节点" placeholder="搜索名称、类型或 ID" value={query} onChange={(event) => setQuery(event.target.value)} />
-        <small>{workflow.nodes.length} 节点</small>
+        {browseNodeId ? (
+          <button type="button" className="aigc-node-list-return" title="返回节点列表" onClick={returnToNodeList}>
+            <ArrowLeft size={13} aria-hidden="true" />节点列表
+          </button>
+        ) : <small>{workflow.nodes.length} 节点</small>}
       </div>
 
       {(normalizedQuery || !browseNodeId) ? (
