@@ -78,6 +78,13 @@ export interface AigcSettingsDocument {
 /** 工作流入参可选的参数类型。 */
 export type AigcWorkflowInputType = "bool" | "int" | "double" | "string" | "enum" | "image" | "video" | "audio";
 
+/** 入参有值时保留的 ComfyUI 条件节点组。 */
+export interface AigcWorkflowInputActivation {
+  when: "provided";
+  /** 未提供该入参时，从 API Prompt 中删除的完整节点组。 */
+  nodeIds: string[];
+}
+
 /** ComfyUI 工作流中的单个输入字段映射。 */
 export interface AigcWorkflowInputMapping {
   id: string;
@@ -92,6 +99,8 @@ export interface AigcWorkflowInputMapping {
   enumOptions?: string[];
   defaultValue?: string | number | boolean;
   description?: string;
+  /** 可选参数未提供时，裁剪与该参数绑定的条件分支。 */
+  activation?: AigcWorkflowInputActivation;
 }
 
 /** ComfyUI 工作流输出字段映射。 */

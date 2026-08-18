@@ -814,64 +814,6 @@
   grid-column: 1 / -1;
 }
 
-.aigc-mapping-list {
-  display: grid;
-  gap: 9px;
-  margin-top: 18px;
-}
-
-.aigc-mapping-card {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.aigc-mapping-card__main {
-  display: grid;
-  min-width: 0;
-  gap: 5px;
-}
-
-.aigc-mapping-card .aigc-task-actions button.is-danger {
-  color: var(--danger);
-}
-
-.aigc-mapping-editor {
-  display: grid;
-  gap: 18px;
-  margin-top: 16px;
-}
-
-.aigc-node-picker,
-.aigc-field-picker {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 8px;
-}
-
-.aigc-node-picker button,
-.aigc-field-picker button {
-  display: grid;
-  min-height: 52px;
-  align-content: center;
-  gap: 4px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  color: var(--text-secondary);
-  background: var(--surface);
-  text-align: left;
-  cursor: pointer;
-  transition: 140ms ease;
-  transition-property: border-color, color, background;
-}
-
-.aigc-node-picker button.is-selected,
-.aigc-field-picker button.is-selected {
-  border-color: var(--eye);
-  color: var(--text-primary);
-  background: var(--accent-soft);
-}
-
 @container (max-width: 840px) {
   .aigc-run-toolbar,
   .aigc-run-readiness,
@@ -945,7 +887,4 @@
     flex-wrap: wrap;
   }
 
-  .aigc-mapping-card {
-    grid-template-columns: 1fr;
-  }
 }

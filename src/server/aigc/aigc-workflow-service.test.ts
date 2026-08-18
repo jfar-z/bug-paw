@@ -97,4 +97,63 @@ describe("AIGC 工作流服务", () => {
     expect(created.workflow.inputMappings[0]).toMatchObject({ type: "audio" });
     expect(created.workflow.outputMappings[0]).toMatchObject({ mediaType: "audio" });
   });
+
+  it("保存参数有值时启用的条件节点组", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "多参考生视频",
+      fileName: "multi-reference.json",
+      workflowJson: conditionalWorkflow(),
+      inputMappings: [{
+        id: "reference-2",
+        name: "reference_image_2",
+        nodeId: "34",
+        field: "inputs.image",
+        type: "image",
+        required: false,
+        activation: { when: "provided", nodeIds: ["34", "47"] },
+      }],
+      outputMappings: [],
+    });
+
+    expect(created.workflow.inputMappings[0].activation).toEqual({ when: "provided", nodeIds: ["34", "47"] });
+  });
+
+  it("拒绝无效或交叉的条件节点组", async () => {
+    const service = await fixture();
+    const base = {
+      name: "条件工作流",
+      fileName: "conditional.json",
+      workflowJson: conditionalWorkflow(),
+      outputMappings: [],
+    };
+    await expect(service.create({
+      ...base,
+      inputMappings: [{ id: "required", name: "required", nodeId: "34", field: "inputs.image", type: "image" as const, required: true, activation: { when: "provided" as const, nodeIds: ["34"] } }],
+    })).rejects.toThrow("只能绑定可选入参");
+    await expect(service.create({
+      ...base,
+      inputMappings: [{ id: "missing-target", name: "missing_target", nodeId: "34", field: "inputs.image", type: "image" as const, required: false, activation: { when: "provided" as const, nodeIds: ["47"] } }],
+    })).rejects.toThrow("必须包含入参映射节点");
+    await expect(service.create({
+      ...base,
+      inputMappings: [{ id: "missing-node", name: "missing_node", nodeId: "34", field: "inputs.image", type: "image" as const, required: false, activation: { when: "provided" as const, nodeIds: ["34", "999"] } }],
+    })).rejects.toThrow("不存在的节点");
+    await expect(service.create({
+      ...base,
+      inputMappings: [
+        { id: "first", name: "first", nodeId: "34", field: "inputs.image", type: "image" as const, required: false, activation: { when: "provided" as const, nodeIds: ["34", "47"] } },
+        { id: "second", name: "second", nodeId: "47", field: "inputs.image", type: "image" as const, required: false, activation: { when: "provided" as const, nodeIds: ["47"] } },
+      ],
+    })).rejects.toThrow("不能包含重复节点");
+  });
 });
+
+/** 多参考条件分支测试工作流。 */
+function conditionalWorkflow() {
+  return {
+    "34": { class_type: "LoadImage", inputs: { image: "" } },
+    "47": { class_type: "ReferenceVisionEncode", inputs: { image: ["34", 0] } },
+    "61": { class_type: "MultiReferenceMerge", inputs: { reference_2: ["47", 0] } },
+  };
+}
