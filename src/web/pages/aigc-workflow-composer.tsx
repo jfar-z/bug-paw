@@ -403,10 +403,11 @@ function WorkflowNodeNavigator(props: WorkflowNodeNavigatorProps) {
   const [query, setQuery] = useState("");
   const browseNode = workflow.nodes.find((node) => node.id === browseNodeId);
   const normalizedQuery = query.trim().toLocaleLowerCase();
+  // 大型工作流由列表滚动承载，不能静默截断后续节点。
   const searchResults = workflow.nodes.filter((node) => {
     if (!normalizedQuery) return !browseNodeId && nodeHasFields(node, mappingKind);
     return [node.id, node.type, node.title ?? ""].some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
-  }).slice(0, 12);
+  });
   const upstreamEdges = browseNodeId ? workflow.edges.filter((edge) => edge.targetNodeId === browseNodeId) : [];
   const downstreamEdges = browseNodeId ? workflow.edges.filter((edge) => edge.sourceNodeId === browseNodeId) : [];
   const activationSet = new Set(activationNodeIds ?? []);

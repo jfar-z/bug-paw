@@ -125,6 +125,39 @@ describe("AigcWorkflowComposer", () => {
     expect(screen.getByLabelText("当前映射目标")).toHaveTextContent("正向提示词");
   });
 
+  it("节点超过十二个时仍可通过滚动列表访问全部可映射节点", () => {
+    const extendedNodes: AigcWorkflowDetail["nodes"] = Array.from({ length: 13 }, (_, index) => {
+      const id = String(index + 4);
+      return {
+        id,
+        type: "CustomInputNode",
+        title: `扩展节点 ${id}`,
+        fields: [{ name: "inputs.value", kind: "input", valueType: "string" }],
+      };
+    });
+    const largeWorkflow: AigcWorkflowDetail = {
+      ...workflow,
+      nodes: [...workflow.nodes, ...extendedNodes],
+    };
+
+    render(
+      <AigcWorkflowComposer
+        workflow={largeWorkflow}
+        name="大型工作流"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增入参" }));
+
+    expect(screen.getByText("16 节点")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "浏览节点 扩展节点 16" })).toBeInTheDocument();
+  });
+
   it("保存参数有值时启用的条件节点组", () => {
     const onInputMappingsChange = vi.fn();
     render(
