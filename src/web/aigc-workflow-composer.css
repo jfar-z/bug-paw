@@ -111,6 +111,27 @@
   white-space: nowrap;
 }
 
+.aigc-node-list-return {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: var(--surface-raised, var(--surface));
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.aigc-node-list-return:hover,
+.aigc-node-list-return:focus-visible {
+  border-color: var(--eye);
+  color: var(--text-primary);
+}
+
 .aigc-node-search-results {
   display: grid;
   gap: 9px;
