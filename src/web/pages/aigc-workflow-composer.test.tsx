@@ -25,8 +25,17 @@ const workflow: AigcWorkflowDetail = {
       title: "保存图片",
       fields: [{ name: "outputs.images", kind: "output" }],
     },
+    {
+      id: "3",
+      type: "LoadImage",
+      title: "参考图片",
+      fields: [{ name: "inputs.image", kind: "input", valueType: "image" }],
+    },
   ],
-  edges: [],
+  edges: [
+    { id: "edge-1-2", sourceNodeId: "1", sourceField: "outputs.CONDITIONING", targetNodeId: "2", targetField: "inputs.images" },
+    { id: "edge-3-1", sourceNodeId: "3", sourceField: "outputs.IMAGE", targetNodeId: "1", targetField: "inputs.image" },
+  ],
   inputMappings: [],
   outputMappings: [],
   createdAt: "2026-08-17T00:00:00.000Z",
@@ -34,7 +43,7 @@ const workflow: AigcWorkflowDetail = {
 };
 
 describe("AigcWorkflowComposer", () => {
-  it("可通过点选节点和字段新增一条入参映射", () => {
+  it("搜索和浏览节点后需明确选为映射目标", () => {
     const onInputMappingsChange = vi.fn();
     render(
       <AigcWorkflowComposer
@@ -51,7 +60,10 @@ describe("AigcWorkflowComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "新增入参" }));
     expect(screen.getByLabelText("入参名称")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /CLIPTextEncode/i }));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "CLIPTextEncode" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 正向提示词" }));
+    expect(screen.getByLabelText("当前映射目标")).toHaveTextContent("尚未选择");
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
     fireEvent.click(screen.getByRole("button", { name: /inputs.text/i }));
     fireEvent.change(screen.getByLabelText("入参名称"), { target: { value: "prompt" } });
     fireEvent.click(screen.getByRole("button", { name: "添加映射" }));
@@ -65,6 +77,61 @@ describe("AigcWorkflowComposer", () => {
       field: "inputs.text",
       type: "string",
       required: true,
+    });
+  });
+
+  it("点击上下游节点只改变当前浏览节点", () => {
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[{ id: "prompt", name: "prompt", nodeId: "1", field: "inputs.text", type: "string", required: true }]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(screen.getByLabelText("当前映射目标")).toHaveTextContent("正向提示词");
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 保存图片" }));
+
+    expect(screen.getByLabelText("当前浏览节点详情")).toHaveTextContent("保存图片");
+    expect(screen.getByLabelText("当前映射目标")).toHaveTextContent("正向提示词");
+    expect(screen.getByRole("button", { name: "选为映射节点" })).toBeDisabled();
+  });
+
+  it("保存参数有值时启用的条件节点组", () => {
+    const onInputMappingsChange = vi.fn();
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={onInputMappingsChange}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增入参" }));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "CLIPTextEncode" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 正向提示词" }));
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+    fireEvent.click(screen.getByLabelText("有值时启用分支"));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "LoadImage" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 参考图片" }));
+    fireEvent.click(screen.getByLabelText("条件节点 参考图片"));
+    fireEvent.change(screen.getByLabelText("入参名称"), { target: { value: "reference_image" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加映射" }));
+
+    const mappings = onInputMappingsChange.mock.calls[0][0] as typeof workflow.inputMappings;
+    expect(mappings[0]).toMatchObject({
+      name: "reference_image",
+      required: false,
+      activation: { when: "provided", nodeIds: ["1", "3"] },
     });
   });
 
@@ -88,6 +155,33 @@ describe("AigcWorkflowComposer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "删除输出" }));
     expect(onOutputMappingsChange).toHaveBeenCalledWith([]);
+  });
+
+  it("输出映射复用拓扑浏览且需明确选择目标", () => {
+    const onOutputMappingsChange = vi.fn();
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={onOutputMappingsChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "SaveImage" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 保存图片" }));
+    expect(screen.getByLabelText("当前映射目标")).toHaveTextContent("尚未选择");
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+    fireEvent.change(screen.getByLabelText("输出名称"), { target: { value: "result" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加输出" }));
+
+    expect(onOutputMappingsChange).toHaveBeenCalledWith([
+      expect.objectContaining({ name: "result", nodeId: "2", field: "outputs.images", mediaType: "image" }),
+    ]);
   });
 
   it("输入和输出映射均提供音频类型", () => {

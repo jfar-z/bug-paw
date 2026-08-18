@@ -19,6 +19,7 @@ const boundaries: StyleBoundary[] = [
   { stylesheet: "knowledge-base.css", selector: ".knowledge-base-page", pages: ["knowledge-base-page.tsx"] },
   { stylesheet: "chat.css", selector: ".chat-sidebar", pages: ["chat-page.tsx"] },
   { stylesheet: "aigc-assets.css", selector: ".aigc-assets-page", pages: ["aigc-outputs-page.tsx"] },
+  { stylesheet: "aigc-workflow-composer.css", selector: ".aigc-node-navigator", pages: ["aigc-workflow-composer.tsx"] },
 ];
 
 describe("独立页面样式边界", () => {
@@ -34,6 +35,17 @@ describe("独立页面样式边界", () => {
         expect(source).toContain(`import "../${boundary.stylesheet}";`);
       }
     }
+  });
+
+  it("工作流编排器按详情路由懒加载", async () => {
+    const [aigcStyles, pageSource] = await Promise.all([
+      readFile("src/web/aigc.css", "utf8"),
+      readFile("src/web/pages/aigc-workbench-page.tsx", "utf8"),
+    ]);
+
+    expect(aigcStyles).not.toContain(".aigc-node-navigator");
+    expect(pageSource).toContain('import("./aigc-workflow-composer")');
+    expect(pageSource).toContain("<Suspense");
   });
 
   it("Markdown 内容样式跟随内容组件加载", async () => {

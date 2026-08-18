@@ -70,10 +70,12 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
   /** 根据映射生成可执行的 API 格式工作流。 */
   private async buildPrompt(raw: unknown, mappings: AigcWorkflowInputMapping[], input: AigcExecutionInput): Promise<Record<string, unknown>> {
     const apiWorkflow = isUiWorkflow(raw) ? convertUiToApi(raw) : toApiWorkflow(raw);
+    const removedNodeIds = new Set<string>();
     for (const mapping of mappings) {
       const value = input.inputs[mapping.name];
       if (value === undefined || value === null || value === "") {
         if (mapping.required) throw new TypeError(`工作流入参 ${mapping.name} 不能为空`);
+        for (const nodeId of mapping.activation?.nodeIds ?? []) removedNodeIds.add(nodeId);
         continue;
       }
       if (mapping.type === "image" || mapping.type === "video" || mapping.type === "audio") {
@@ -83,6 +85,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       }
       setPath(apiWorkflow, mapping.nodeId, mapping.field, coerceValue(mapping, value));
     }
+    pruneConditionalNodes(apiWorkflow, removedNodeIds);
     return apiWorkflow;
   }
 
@@ -299,6 +302,26 @@ function setPath(workflow: Record<string, unknown>, nodeId: string, field: strin
   if (!isRecord(node) || !isRecord(node.inputs)) throw new TypeError(`工作流节点 ${nodeId} 不存在`);
   const base = field.replace(/^(inputs|widgets_values)\./, "");
   node.inputs[base] = value;
+}
+
+/** 删除未启用的条件节点，并清理剩余节点指向它们的输入连接。 */
+function pruneConditionalNodes(workflow: Record<string, unknown>, removedNodeIds: Set<string>): void {
+  if (removedNodeIds.size === 0) return;
+  for (const nodeId of removedNodeIds) delete workflow[nodeId];
+  for (const node of Object.values(workflow)) {
+    if (!isRecord(node) || !isRecord(node.inputs)) continue;
+    for (const [field, value] of Object.entries(node.inputs)) {
+      if (isNodeConnection(value) && removedNodeIds.has(String(value[0]))) delete node.inputs[field];
+    }
+  }
+}
+
+/** 判断 ComfyUI API Prompt 中的单条节点连接。 */
+function isNodeConnection(value: unknown): value is [string | number, number] {
+  return Array.isArray(value)
+    && value.length >= 2
+    && (typeof value[0] === "string" || typeof value[0] === "number")
+    && typeof value[1] === "number";
 }
 
 /** 读取字段路径末尾名称。 */

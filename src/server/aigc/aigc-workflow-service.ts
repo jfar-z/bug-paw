@@ -155,7 +155,7 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
     originalHash: workflow.originalHash,
     nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
     edges: workflow.edges.map((edge) => ({ ...edge })),
-    inputMappings: workflow.inputMappings.map((mapping) => ({ ...mapping })),
+    inputMappings: workflow.inputMappings.map(cloneInputMapping),
     outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
@@ -173,7 +173,7 @@ function normalizeSettings(value: unknown): StoredAigcWorkflows {
         raw: workflow.raw,
         nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
         edges: workflow.edges.map((edge) => ({ ...edge })),
-        inputMappings: workflow.inputMappings.map((mapping) => ({ ...mapping })),
+        inputMappings: workflow.inputMappings.map(cloneInputMapping),
         outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
       })),
   };
@@ -194,26 +194,69 @@ function normalizeFileName(value: string): string {
 function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkflowInputMapping[] {
   if (!Array.isArray(value)) return [];
   const nodeIds = new Set(nodes.map((node) => node.id));
-  return value.map((mapping) => {
+  const normalized = value.map((mapping) => {
     if (!isRecord(mapping)) throw new TypeError("工作流入参映射格式无效");
-    if (!nodeIds.has(String(mapping.nodeId))) throw new TypeError("工作流入参引用了不存在的节点");
+    const mappingNodeId = String(mapping.nodeId);
+    if (!nodeIds.has(mappingNodeId)) throw new TypeError("工作流入参引用了不存在的节点");
     if (typeof mapping.name !== "string" || !mapping.name.trim() || mapping.name.length > 80) throw new TypeError("工作流入参名称长度无效");
     if (typeof mapping.field !== "string" || !mapping.field.startsWith("inputs.") || mapping.field.includes("\0")) throw new TypeError("工作流入参字段路径无效");
     const type = mapping.type as AigcWorkflowInputType;
     if (!INPUT_TYPES.has(type)) throw new TypeError("工作流入参类型无效");
     const enumOptions = type === "enum" ? normalizeEnumOptions(mapping.enumOptions) : undefined;
+    const required = mapping.required !== false;
+    const activation = normalizeInputActivation(mapping.activation, mappingNodeId, required, nodeIds);
     return {
       id: typeof mapping.id === "string" && mapping.id ? mapping.id : randomUUID(),
       name: mapping.name.trim(),
-      nodeId: String(mapping.nodeId),
+      nodeId: mappingNodeId,
       field: mapping.field,
       type,
-      required: mapping.required !== false,
+      required,
       ...(enumOptions ? { enumOptions } : {}),
       ...(mapping.defaultValue !== undefined ? { defaultValue: normalizeDefaultValue(type, mapping.defaultValue) } : {}),
       ...(typeof mapping.description === "string" && mapping.description ? { description: mapping.description.slice(0, 240) } : {}),
+      ...(activation ? { activation } : {}),
     };
   });
+  assertDisjointActivationGroups(normalized);
+  return normalized;
+}
+
+/** 校验并规范化条件节点组。 */
+function normalizeInputActivation(
+  value: unknown,
+  mappingNodeId: string,
+  required: boolean,
+  validNodeIds: Set<string>,
+): AigcWorkflowInputMapping["activation"] {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || value.when !== "provided" || !Array.isArray(value.nodeIds) || value.nodeIds.length === 0) {
+    throw new TypeError("工作流条件节点组格式无效");
+  }
+  if (required) throw new TypeError("工作流条件节点组只能绑定可选入参");
+  const nodeIds = [...new Set(value.nodeIds.map(String))];
+  if (!nodeIds.includes(mappingNodeId)) throw new TypeError("工作流条件节点组必须包含入参映射节点");
+  if (nodeIds.some((nodeId) => !validNodeIds.has(nodeId))) throw new TypeError("工作流条件节点组引用了不存在的节点");
+  return { when: "provided", nodeIds };
+}
+
+/** 避免一个缺失参数误删另一个参数仍需使用的条件节点。 */
+function assertDisjointActivationGroups(mappings: AigcWorkflowInputMapping[]): void {
+  const claimedNodeIds = new Set<string>();
+  for (const mapping of mappings) {
+    for (const nodeId of mapping.activation?.nodeIds ?? []) {
+      if (claimedNodeIds.has(nodeId)) throw new TypeError("工作流条件节点组不能包含重复节点");
+      claimedNodeIds.add(nodeId);
+    }
+  }
+}
+
+/** 深复制入参映射中的节点组，避免调用方修改持久化内容。 */
+function cloneInputMapping(mapping: AigcWorkflowInputMapping): AigcWorkflowInputMapping {
+  return {
+    ...mapping,
+    ...(mapping.activation ? { activation: { ...mapping.activation, nodeIds: [...mapping.activation.nodeIds] } } : {}),
+  };
 }
 
 function normalizeOutputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkflowOutputMapping[] {

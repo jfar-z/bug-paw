@@ -13,6 +13,10 @@
         "label": "AIGC 工作台",
         "gzipBytes": 6144
       },
+      "src/web/pages/aigc-workflow-composer.tsx": {
+        "label": "AIGC 工作流编排器",
+        "gzipBytes": 2048
+      },
       "src/web/pages/aigc-outputs-page.tsx": {
         "label": "AIGC 产物查看",
         "gzipBytes": 4096

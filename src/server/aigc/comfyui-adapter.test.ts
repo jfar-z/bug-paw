@@ -78,6 +78,56 @@ describe("ComfyUiAigcAdapter", () => {
     expect(historyRequests).toBe(126);
     expect(result.assets[0]).toMatchObject({ name: "result.png", mediaType: "image/png" });
   });
+
+  it("条件参数缺失时裁剪节点组及组外输入引用", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-conditional" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-conditional"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-conditional")) return json({ "prompt-conditional": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(conditionalWorkflow(), {}));
+
+    expect(submittedPrompt).not.toHaveProperty("34");
+    expect(submittedPrompt).not.toHaveProperty("47");
+    expect(submittedPrompt).toHaveProperty("61");
+    expect(submittedPrompt).not.toHaveProperty("61.inputs.reference_2");
+    expect(submittedPrompt).toHaveProperty("61.inputs.reference_1", ["20", 0]);
+  });
+
+  it("条件参数有值时保留节点组并上传媒体", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/upload/image")) return json({ name: "reference-2.png" });
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-conditional" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-conditional"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-conditional")) return json({ "prompt-conditional": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const execution = input(conditionalWorkflow(), {
+      reference_image_2: { assetId: "asset-reference-2", name: "reference-2.png", mediaType: "image/png" },
+    });
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(execution);
+
+    expect(execution.assets.resolveInputPath).toHaveBeenCalledWith("asset-reference-2");
+    expect(submittedPrompt).toHaveProperty("34.inputs.image", "reference-2.png");
+    expect(submittedPrompt).toHaveProperty("47.inputs.image", ["34", 0]);
+  });
 });
 
 function input(
@@ -138,6 +188,37 @@ function imageWorkflow(): AigcWorkflowDetail & { raw: unknown } {
     raw: { "2": { class_type: "SaveImage", inputs: {} } },
     inputMappings: [],
     outputMappings: [{ id: "result", name: "result", nodeId: "2", field: "outputs.images", mediaType: "image" }],
+  };
+}
+
+function conditionalWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...audioWorkflow(),
+    id: "workflow-conditional",
+    raw: {
+      "20": { class_type: "ReferenceVisionEncode", inputs: {} },
+      "34": { class_type: "LoadImage", inputs: { image: "" } },
+      "47": { class_type: "ReferenceVisionEncode", inputs: { image: ["34", 0] } },
+      "61": { class_type: "MultiReferenceMerge", inputs: { reference_1: ["20", 0], reference_2: ["47", 0] } },
+      "80": { class_type: "SaveImage", inputs: { images: ["61", 0] } },
+    },
+    nodes: [
+      { id: "20", type: "ReferenceVisionEncode", fields: [] },
+      { id: "34", type: "LoadImage", title: "参考图 2", fields: [] },
+      { id: "47", type: "ReferenceVisionEncode", fields: [] },
+      { id: "61", type: "MultiReferenceMerge", fields: [] },
+      { id: "80", type: "SaveImage", fields: [] },
+    ],
+    inputMappings: [{
+      id: "reference-2",
+      name: "reference_image_2",
+      nodeId: "34",
+      field: "inputs.image",
+      type: "image",
+      required: false,
+      activation: { when: "provided", nodeIds: ["34", "47"] },
+    }],
+    outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
   };
 }
 

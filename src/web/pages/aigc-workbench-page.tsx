@@ -1,5 +1,5 @@
 import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Download, File, Film, GitFork, Image as ImageIcon, Play, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type {
   AigcChannelSummary,
   AigcInterfaceCapability,
@@ -27,9 +27,13 @@ import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
 import { navigateTo, NAVIGATION_BEFORE_EVENT, type AppRoute } from "../router";
-import { AigcWorkflowComposer } from "./aigc-workflow-composer";
 import "../configuration.css";
 import "../aigc.css";
+
+const AigcWorkflowComposer = lazy(async () => {
+  const module = await import("./aigc-workflow-composer");
+  return { default: module.AigcWorkflowComposer };
+});
 
 interface AigcWorkbenchPageProps {
   route: AppRoute;
@@ -1392,15 +1396,17 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       <header className="aigc-page-heading"><h1>工作流详情</h1><p>{detail?.fileName ?? workflowId}</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
       {detail ? (
-        <AigcWorkflowComposer
-          workflow={detail}
-          name={name}
-          onNameChange={setName}
-          inputMappings={inputMappings}
-          outputMappings={outputMappings}
-          onInputMappingsChange={setInputMappings}
-          onOutputMappingsChange={setOutputMappings}
-        />
+        <Suspense fallback={<p className="configuration-help">正在加载工作流编排器…</p>}>
+          <AigcWorkflowComposer
+            workflow={detail}
+            name={name}
+            onNameChange={setName}
+            inputMappings={inputMappings}
+            outputMappings={outputMappings}
+            onInputMappingsChange={setInputMappings}
+            onOutputMappingsChange={setOutputMappings}
+          />
+        </Suspense>
       ) : <p className="configuration-help">正在加载工作流节点…</p>}
       <div className="configuration-save-bar">
         <button type="button" className="configuration-primary-action" disabled={!detail || !isDirty} onClick={() => void save()}><Save size={15} />{isDirty ? "保存映射" : "已保存"}</button>
