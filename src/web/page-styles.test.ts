@@ -14,7 +14,7 @@ const boundaries: StyleBoundary[] = [
   { stylesheet: "agents.css", selector: ".agent-card", pages: ["agents-page.tsx", "agent-detail-page.tsx"] },
   { stylesheet: "providers.css", selector: ".provider-workspace", pages: ["providers-page.tsx"] },
   { stylesheet: "pi-settings.css", selector: ".settings-scope-bar", pages: ["pi-settings-page.tsx"] },
-  { stylesheet: "resources.css", selector: ".workspace-resources-page", pages: ["resources-page.tsx", "workspace-resources-page.tsx", "scheduled-tasks-page.tsx"] },
+  { stylesheet: "resources.css", selector: ".workspace-resources-page", pages: ["resources-page.tsx", "workspace-resources-page.tsx", "scheduled-tasks-page.tsx", "chat-page.tsx"] },
   { stylesheet: "scheduled-tasks.css", selector: ".scheduled-task-card", pages: ["scheduled-tasks-page.tsx"] },
   { stylesheet: "knowledge-base.css", selector: ".knowledge-base-page", pages: ["knowledge-base-page.tsx"] },
   { stylesheet: "chat.css", selector: ".chat-sidebar", pages: ["chat-page.tsx"] },
