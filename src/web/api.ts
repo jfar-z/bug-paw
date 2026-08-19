@@ -20,6 +20,7 @@ import type { QuestionAnswerSubmissionResult } from "../shared/question-response
 import type { AvatarCropArea } from "../shared/avatar-contracts";
 import type {
   AigcChannelInput,
+  AigcComfyUiInputFile,
   AigcCreateChannelInput,
   AigcInterfaceDocument,
   AigcInterfaceInput,
@@ -179,6 +180,11 @@ export function aigcTaskAssetUrl(taskId: string, assetId: string, download = fal
   return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}${suffix}`);
 }
 
+/** 生成 AIGC 临时入参文件的内联预览地址。 */
+export function aigcInputAssetUrl(assetId: string): string {
+  return apiV1Url(`/api/aigc/inputs/${encodeURIComponent(assetId)}`);
+}
+
 /** 生成 AIGC 图片产物的服务端缩略图地址。 */
 export function aigcTaskThumbnailUrl(taskId: string, assetId: string): string {
   return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}/thumbnail`);
@@ -336,6 +342,10 @@ export const api = {
     const form = new FormData();
     form.append("file", file, file.name);
     return request<{ asset: AigcUploadedAsset }>("/api/aigc/inputs", { method: "POST", body: form });
+  },
+  getAigcComfyUiInputFiles: (channelId: string, nodeClass: string, field: string) => {
+    const query = new URLSearchParams({ channelId, nodeClass, field });
+    return request<{ files: AigcComfyUiInputFile[] }>(`/api/aigc/comfyui-input-files?${query.toString()}`);
   },
   getAigcPublicFiles: () => request<AigcPublicFileDocument>("/api/aigc/public-files"),
   uploadAigcPublicFile: (file: File) => {

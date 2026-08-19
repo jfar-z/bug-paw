@@ -40,6 +40,7 @@ describe("AIGC 产物路由", () => {
       tasks: { get: async () => task } as never,
       assets: { resolveOutputPath: async () => assetPath } as never,
       publicFiles: {} as never,
+      comfyuiInputs: {} as never,
     });
     await app.ready();
 
@@ -78,6 +79,7 @@ describe("AIGC 产物路由", () => {
       } as never,
       assets: { resolveThumbnailPath: async () => thumbnailPath } as never,
       publicFiles: {} as never,
+      comfyuiInputs: {} as never,
     });
     await app.ready();
 

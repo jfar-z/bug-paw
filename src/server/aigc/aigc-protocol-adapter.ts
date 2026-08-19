@@ -4,6 +4,7 @@ import type {
   AigcTaskExecutionState,
 } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "./aigc-asset-service";
+import type { AigcPublicFileService } from "./aigc-public-file-service";
 import type { AigcWorkflowService } from "./aigc-workflow-service";
 
 export interface AigcExecutionInput {
@@ -12,6 +13,7 @@ export interface AigcExecutionInput {
   apiKey?: string;
   inputs: Record<string, unknown>;
   assets: AigcAssetService;
+  publicFiles?: AigcPublicFileService;
   workflows?: AigcWorkflowService;
   signal: AbortSignal;
   /** 上报执行中的瞬态进度，调用方不得在此执行高频持久化。 */

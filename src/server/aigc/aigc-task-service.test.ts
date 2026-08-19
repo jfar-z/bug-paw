@@ -57,6 +57,7 @@ describe("AIGC 任务服务", () => {
       connections,
       credentials: new CredentialService(join(root, "auth.json")),
       assets,
+      publicFiles: {} as never,
       adapters: { openai: adapter },
     });
     return { service, item: created.item, adapter, assets };
