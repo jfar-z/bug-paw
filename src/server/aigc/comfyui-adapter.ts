@@ -214,7 +214,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         if (value !== undefined) assets.push({ name: `${mapping.name || "output"}.json`, mediaType: "application/json", content: Buffer.from(JSON.stringify(value), "utf8") });
         continue;
       }
-      const list = mediaArray(value, mapping.mediaType);
+      const list = mediaArray(value, mapping.mediaType, nodeOutput);
       for (const file of list) {
         if (!isRecord(file) || typeof file.filename !== "string") continue;
         const url = new URL(`${input.channel.baseUrl}/view`);
@@ -345,15 +345,51 @@ function readAssetReference(value: unknown): { assetId: string; name?: string; m
   };
 }
 
-function mediaArray(value: unknown, mediaType: "image" | "video" | "audio"): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (isRecord(value) && typeof value.filename === "string") return [value];
-  if (mediaType === "video" && isRecord(value) && Array.isArray(value.videos)) return value.videos;
-  if (mediaType === "video" && isRecord(value) && Array.isArray(value.gifs)) return value.gifs;
-  if (mediaType === "image" && isRecord(value) && Array.isArray(value.images)) return value.images;
-  if (mediaType === "audio" && isRecord(value) && Array.isArray(value.audio)) return value.audio;
-  if (mediaType === "audio" && isRecord(value) && Array.isArray(value.audios)) return value.audios;
+/** 将 ComfyUI 节点输出归一化为可下载的文件描述数组。 */
+function mediaArray(value: unknown, mediaType: "image" | "video" | "audio", nodeOutput?: Record<string, unknown>): unknown[] {
+  const sources = [value, nodeOutput].filter(isRecord);
+  const bucketNames = mediaBucketNames(mediaType);
+  for (const source of sources) {
+    for (const bucketName of bucketNames) {
+      const bucket = source[bucketName];
+      const files = mediaBucketFiles(bucket).filter((file) => isMediaFile(file, mediaType));
+      if (files.length > 0) return files;
+    }
+  }
+  if (Array.isArray(value)) return value.filter((file) => isMediaFile(file, mediaType));
   return [];
+}
+
+/** 返回按媒体类型排序的 ComfyUI UI 输出桶名称。 */
+function mediaBucketNames(mediaType: "image" | "video" | "audio"): string[] {
+  if (mediaType === "audio") return ["audio", "audios"];
+  if (mediaType === "video") return ["videos", "gifs", "images"];
+  return ["images"];
+}
+
+/** 将单个输出桶转换为扁平的文件描述数组。 */
+function mediaBucketFiles(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value;
+  if (isRecord(value)) {
+    if (typeof value.filename === "string") return [value];
+    return Object.values(value).flatMap((entry) => mediaBucketFiles(entry));
+  }
+  return [];
+}
+
+/** 依据文件名扩展判断该输出描述是否符合目标媒体类型。 */
+function isMediaFile(file: unknown, mediaType: "image" | "video" | "audio"): boolean {
+  if (!isRecord(file) || typeof file.filename !== "string") return false;
+  const normalized = file.filename.toLowerCase();
+  const extensions = mediaFileExtensions(mediaType);
+  return extensions.some((extension) => normalized.endsWith(extension));
+}
+
+/** 返回各类媒体可识别的文件扩展名。 */
+function mediaFileExtensions(mediaType: "image" | "video" | "audio"): string[] {
+  if (mediaType === "video") return [".mp4", ".webm", ".mov", ".mkv", ".avi"];
+  if (mediaType === "audio") return [".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac"];
+  return [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff"];
 }
 
 function outputMediaType(kind: "image" | "video" | "audio", fileName: string): string {

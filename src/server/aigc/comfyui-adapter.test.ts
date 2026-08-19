@@ -53,6 +53,24 @@ describe("ComfyUiAigcAdapter", () => {
     ]));
   });
 
+  it("视频节点实际写入 images 桶时仍可按视频类型下载", async () => {
+    const request = vi.fn(async (requestInput: string | URL | Request) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) return json({ prompt_id: "prompt-video" });
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-video"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-video")) {
+        return json({ "prompt-video": { outputs: { "2": { images: [{ filename: "result.mp4", subfolder: "video\\temp", type: "output" }], animated: [true] } } } });
+      }
+      if (url.includes("/view?")) return new Response(Buffer.from("video"), { status: 200, headers: { "Content-Type": "video/mp4" } });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    const result = await adapter.execute(input(videoWorkflow(), {}));
+
+    expect(result.assets).toEqual([{ name: "result.mp4", mediaType: "video/mp4", content: Buffer.from("video") }]);
+  });
+
   it("未配置超时时可等待超过旧有一百二十次轮询上限", async () => {
     let historyRequests = 0;
     const controller = new AbortController();
@@ -188,6 +206,16 @@ function imageWorkflow(): AigcWorkflowDetail & { raw: unknown } {
     raw: { "2": { class_type: "SaveImage", inputs: {} } },
     inputMappings: [],
     outputMappings: [{ id: "result", name: "result", nodeId: "2", field: "outputs.images", mediaType: "image" }],
+  };
+}
+
+function videoWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...audioWorkflow(),
+    id: "workflow-video",
+    raw: { "2": { class_type: "SaveVideo", inputs: {} } },
+    inputMappings: [],
+    outputMappings: [{ id: "result", name: "result", nodeId: "2", field: "outputs.videos", mediaType: "video" }],
   };
 }
 
