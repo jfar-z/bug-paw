@@ -272,12 +272,24 @@ function OutputMappingBuilder(props: {
       ...current,
       name: current.name || firstField?.name || "",
       nodeId,
-      field: firstField?.name ?? "",
+      field: autoOutputField(node),
     } : current);
   }
 
   function updateDraft<K extends keyof AigcWorkflowOutputMapping>(key: K, value: AigcWorkflowOutputMapping[K]) {
-    setDraft((current) => current ? { ...current, [key]: value } : current);
+    setDraft((current) => {
+      if (!current) return current;
+      const next = { ...current, [key]: value };
+      if (key === "mediaType") {
+        const mediaType = value as AigcWorkflowOutputMapping["mediaType"];
+        const node = workflow.nodes.find((item) => item.id === current.nodeId);
+        const firstField = node ? outputFields(node)[0] : undefined;
+        next.field = outputMediaTypeRequiresField(mediaType)
+          ? (firstField?.name ?? "outputs.*")
+          : autoOutputField(node);
+      }
+      return next;
+    });
   }
 
   function closeEditor() {
@@ -287,8 +299,13 @@ function OutputMappingBuilder(props: {
   }
 
   function commit() {
-    if (!draft || !draft.name.trim() || !draft.nodeId || !draft.field) return;
-    const normalized = { ...draft, name: draft.name.trim() };
+    if (!draft || !draft.name.trim() || !draft.nodeId) return;
+    if (outputMediaTypeRequiresField(draft.mediaType) && !draft.field) return;
+    const selectedNodeForCommit = workflow.nodes.find((item) => item.id === draft.nodeId);
+    const field = outputMediaTypeRequiresField(draft.mediaType)
+      ? draft.field
+      : autoOutputField(selectedNodeForCommit);
+    const normalized = { ...draft, name: draft.name.trim(), field };
     if (editingId) onChange(mappings.map((mapping) => mapping.id === editingId ? { ...normalized, id: editingId } : mapping));
     else onChange([...mappings, { ...normalized, id: crypto.randomUUID() }]);
     closeEditor();
@@ -300,7 +317,7 @@ function OutputMappingBuilder(props: {
         <div><span>03</span><h2>输出映射</h2></div>
         <button type="button" className="configuration-primary-action" onClick={beginAdd}><Plus size={15} />新增输出</button>
       </div>
-      <p className="configuration-help">沿工作流关系找到产物节点，明确选为映射目标后再选择输出字段。</p>
+      <p className="configuration-help">沿工作流关系找到产物节点，选择节点和媒体类型即可；媒体产物会自动识别输出槽位。</p>
 
       {mappings.length ? (
         <div className="aigc-mapping-list">
@@ -310,7 +327,7 @@ function OutputMappingBuilder(props: {
               <article key={mapping.id} className="aigc-task-row aigc-mapping-card">
                 <div className="aigc-mapping-card__main">
                   <strong>{mapping.name}</strong>
-                  <span title={`${nodeLabel(node, mapping.nodeId)} · ${mapping.field}`}>{nodeLabel(node, mapping.nodeId)} · {mapping.field}</span>
+                  <span title={`${nodeLabel(node, mapping.nodeId)} · ${outputFieldLabel(mapping.field, mapping.mediaType)}`}>{nodeLabel(node, mapping.nodeId)} · {outputFieldLabel(mapping.field, mapping.mediaType)}</span>
                   <small>{mapping.mediaType}</small>
                 </div>
                 <div className="aigc-task-actions">
@@ -339,19 +356,26 @@ function OutputMappingBuilder(props: {
               onSelectMappingNode={selectMappingNode}
             />
             <div className="aigc-mapping-config">
-              <MappingTargetSummary node={selectedNode} nodeId={draft.nodeId} field={draft.field} />
-              <div className="aigc-fieldset">
-                <div className="aigc-fieldset__heading"><strong>映射字段</strong><small>通常选择 outputs.images、outputs.videos 或 outputs.audio</small></div>
-                <div className="aigc-field-picker">
-                  {selectedFields.map((field) => (
-                    <button type="button" key={field.name} className={draft.field === field.name ? "is-selected" : undefined} onClick={() => updateDraft("field", field.name)}>
-                      <strong title={field.name}>{field.name}</strong><small>{field.kind}</small>
-                    </button>
-                  ))}
-                  {!draft.nodeId ? <p className="configuration-help">请先从左侧将一个节点选为映射节点。</p> : null}
-                  {draft.nodeId && !selectedFields.length ? <p className="configuration-help">该节点没有可读取的输出字段。</p> : null}
+              <MappingTargetSummary node={selectedNode} nodeId={draft.nodeId} field={outputFieldLabel(draft.field, draft.mediaType)} />
+              {outputMediaTypeRequiresField(draft.mediaType) ? (
+                <div className="aigc-fieldset">
+                  <div className="aigc-fieldset__heading"><strong>映射字段</strong><small>文本或 JSON 输出需要选择具体字段</small></div>
+                  <div className="aigc-field-picker">
+                    {selectedFields.map((field) => (
+                      <button type="button" key={field.name} className={draft.field === field.name ? "is-selected" : undefined} onClick={() => updateDraft("field", field.name)}>
+                        <strong title={field.name}>{field.name}</strong><small>{field.kind}</small>
+                      </button>
+                    ))}
+                    {!draft.nodeId ? <p className="configuration-help">请先从左侧将一个节点选为映射节点。</p> : null}
+                    {draft.nodeId && !selectedFields.length ? <p className="configuration-help">该节点没有可读取的输出字段。</p> : null}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="aigc-fieldset">
+                  <div className="aigc-fieldset__heading"><strong>产物槽位</strong><small>自动扫描该节点的输出槽位</small></div>
+                  <p className="configuration-help">图片、视频、音频产物会按文件名和媒体类型自动识别，无需手工选择 outputs.images 或 outputs.videos。</p>
+                </div>
+              )}
               <div className="aigc-fieldset">
                 <div className="aigc-fieldset__heading"><strong>输出配置</strong><small>定义产物名称和媒体类型</small></div>
                 <div className="aigc-form-grid">
@@ -366,7 +390,7 @@ function OutputMappingBuilder(props: {
           </div>
           <div className="configuration-save-bar">
             <button type="button" className="configuration-secondary-action" onClick={closeEditor}>取消</button>
-            <button type="button" className="configuration-primary-action" disabled={!draft.name.trim() || !draft.nodeId || !draft.field} onClick={commit}><Check size={15} />{editingId ? "保存修改" : "添加输出"}</button>
+            <button type="button" className="configuration-primary-action" disabled={!draft.name.trim() || !draft.nodeId || (outputMediaTypeRequiresField(draft.mediaType) && !draft.field)} onClick={commit}><Check size={15} />{editingId ? "保存修改" : "添加输出"}</button>
           </div>
         </div>
       ) : null}
@@ -586,6 +610,22 @@ function inputFields(node: ComfyUiNode): ComfyUiField[] {
 /** 获取可读取的节点输出字段。 */
 function outputFields(node: ComfyUiNode): ComfyUiField[] {
   return node.fields.filter((field) => field.kind === "output");
+}
+
+/** 判断文本或 JSON 输出是否需要用户显式选择字段。 */
+function outputMediaTypeRequiresField(mediaType: AigcWorkflowOutputMapping["mediaType"]): boolean {
+  return mediaType === "text" || mediaType === "json";
+}
+
+/** 生成媒体产物可提交的自动输出字段路径。 */
+function autoOutputField(node?: ComfyUiNode): string {
+  const firstField = node ? outputFields(node)[0] : undefined;
+  return firstField?.name ?? "outputs.*";
+}
+
+/** 按媒体类型展示输出字段或自动识别状态。 */
+function outputFieldLabel(field: string, mediaType: AigcWorkflowOutputMapping["mediaType"]): string {
+  return outputMediaTypeRequiresField(mediaType) ? field : "自动识别";
 }
 
 function nodeHasFields(node: ComfyUiNode, kind: "input" | "output"): boolean {

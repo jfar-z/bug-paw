@@ -240,6 +240,58 @@ describe("AigcWorkflowComposer", () => {
     ]);
   });
 
+  it("媒体输出只选择节点并自动识别输出槽位", () => {
+    const onOutputMappingsChange = vi.fn();
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={onOutputMappingsChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "SaveImage" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 保存图片" }));
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+
+    expect(screen.getByText(/自动扫描该节点的输出槽位/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /outputs.images/i })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("输出名称"), { target: { value: "result" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加输出" }));
+
+    expect(onOutputMappingsChange).toHaveBeenCalledWith([
+      expect.objectContaining({ name: "result", nodeId: "2", field: "outputs.images", mediaType: "image" }),
+    ]);
+  });
+
+  it("文本或 JSON 输出仍需要选择具体字段", () => {
+    render(
+      <AigcWorkflowComposer
+        workflow={workflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={vi.fn()}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "SaveImage" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 保存图片" }));
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+    fireEvent.change(screen.getByLabelText("输出媒体类型"), { target: { value: "json" } });
+
+    expect(screen.getByRole("button", { name: /outputs.images/i })).toBeInTheDocument();
+  });
+
   it("输入和输出映射均提供音频类型", () => {
     render(
       <AigcWorkflowComposer
