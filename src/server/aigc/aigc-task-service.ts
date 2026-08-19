@@ -14,6 +14,7 @@ import type { CredentialService } from "../configuration/credential-service";
 import { AigcAssetService } from "./aigc-asset-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
 import type { AigcInterfaceService } from "./aigc-interface-service";
+import type { AigcPublicFileService } from "./aigc-public-file-service";
 import type { AigcProtocolAdapter } from "./aigc-protocol-adapter";
 import type { AigcTaskRepository } from "./aigc-task-repository";
 import type { AigcWorkflowService } from "./aigc-workflow-service";
@@ -25,6 +26,7 @@ interface AigcTaskServiceDependencies {
   connections: AigcConnectionService;
   credentials: CredentialService;
   assets: AigcAssetService;
+  publicFiles: AigcPublicFileService;
   adapters: Record<string, AigcProtocolAdapter>;
 }
 
@@ -165,6 +167,7 @@ export class AigcTaskService {
         apiKey,
         inputs: task.inputs,
         assets: this.dependencies.assets,
+        publicFiles: this.dependencies.publicFiles,
         workflows: this.dependencies.workflows,
         signal: controller.signal,
         onProgress: (state) => {

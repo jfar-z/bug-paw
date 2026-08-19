@@ -356,13 +356,28 @@ export interface AigcOutputPage {
   totalPages: number;
 }
 
+/** 媒体入参可选的来源。 */
+export type AigcRunMediaSource = "upload" | "public" | "comfyui_input";
+
+/** ComfyUI input 目录中的一个可选文件。 */
+export interface AigcComfyUiInputFile {
+  /** ComfyUI 可引用的文件名。 */
+  filename: string;
+  subfolder?: string;
+  type?: string;
+  /** 面向用户的展示名称。 */
+  name: string;
+  mediaType: string;
+}
+
 /** 手动试运行提交的入参。 */
 export type AigcRunInputValue =
   | boolean
   | number
   | string
-  | { assetId: string; name: string; mediaType: string }
-  | { url: string; name: string; mediaType: string };
+  | { assetId: string; name: string; mediaType: string; source?: "upload" | "public" }
+  | { url: string; name: string; mediaType: string }
+  | { filename: string; name: string; mediaType: string; subfolder?: string; type?: string; source: "comfyui_input" };
 
 /** 手动试运行请求。 */
 export interface AigcRunRequest {

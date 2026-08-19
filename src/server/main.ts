@@ -68,6 +68,7 @@ import { AigcWorkflowService } from "./aigc/aigc-workflow-service";
 import { AigcInterfaceService } from "./aigc/aigc-interface-service";
 import { AigcAssetService } from "./aigc/aigc-asset-service";
 import { AigcPublicFileService } from "./aigc/aigc-public-file-service";
+import { AigcComfyUiInputService } from "./aigc/aigc-comfyui-input-service";
 import { AigcTaskRepository } from "./aigc/aigc-task-repository";
 import { AigcTaskService } from "./aigc/aigc-task-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
@@ -329,6 +330,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const aigcInterfaces = new AigcInterfaceService(join(paths.appDir, "aigc-interfaces.json"), (id) => aigcWorkflows.exists(id));
   const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
   const aigcPublicFiles = new AigcPublicFileService(join(paths.appDir, "aigc-public-files"));
+  const aigcComfyUiInputs = new AigcComfyUiInputService(aigcConnections, aigcCredentials);
   const aigcTasks = new AigcTaskService({
     repository: new AigcTaskRepository(join(paths.appDir, "aigc-tasks.json")),
     interfaces: aigcInterfaces,
@@ -336,6 +338,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     connections: aigcConnections,
     credentials: aigcCredentials,
     assets: aigcAssets,
+    publicFiles: aigcPublicFiles,
     adapters: {
       openai: new OpenAiAigcAdapter(),
       grok: new GrokAigcAdapter(),
@@ -672,6 +675,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     tasks: aigcTasks,
     assets: aigcAssets,
     publicFiles: aigcPublicFiles,
+    comfyuiInputs: aigcComfyUiInputs,
   });
   registerBrowserPreviewRoutes(app, browserPreview);
   registerBrowserAutomationRoutes(app, {

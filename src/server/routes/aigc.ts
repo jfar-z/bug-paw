@@ -13,6 +13,7 @@ import type {
   AigcWorkflowUpdateInput,
 } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "../aigc/aigc-asset-service";
+import type { AigcComfyUiInputService } from "../aigc/aigc-comfyui-input-service";
 import type { AigcInterfaceService } from "../aigc/aigc-interface-service";
 import { AigcPublicDirectoryError, type AigcPublicFileService } from "../aigc/aigc-public-file-service";
 import type { AigcTaskService } from "../aigc/aigc-task-service";
@@ -29,6 +30,7 @@ interface AigcRouteDependencies {
   tasks: AigcTaskService;
   assets: AigcAssetService;
   publicFiles: AigcPublicFileService;
+  comfyuiInputs: AigcComfyUiInputService;
 }
 
 /** 注册 AIGC 工作台的工作流、接口、任务与资产接口。 */
@@ -38,6 +40,7 @@ export function registerAigcRoutes(app: FastifyInstance, dependencies: AigcRoute
   registerTaskRoutes(app, dependencies);
   registerAssetRoutes(app, dependencies);
   registerPublicFileRoutes(app, dependencies);
+  registerComfyUiInputRoutes(app, dependencies);
 }
 
 function registerWorkflowRoutes(app: FastifyInstance, dependencies: AigcRouteDependencies): void {
@@ -237,6 +240,21 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     const path = await dependencies.assets.resolveThumbnailPath(task.id, asset.id);
     if (!path) return sendApiError(reply, 404, "NOT_FOUND", "AIGC 图片产物不存在");
     return sendAssetFile(reply, path, `${asset.name}.webp`, "image/webp", false, "private, max-age=86400, immutable");
+  });
+}
+
+function registerComfyUiInputRoutes(app: FastifyInstance, dependencies: AigcRouteDependencies): void {
+  app.get<{ Querystring: { channelId?: string; nodeClass?: string; field?: string } }>("/api/aigc/comfyui-input-files", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!request.query.channelId || !request.query.nodeClass || !request.query.field) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "请提供 ComfyUI 渠道、节点类型和字段路径");
+    }
+    try {
+      const files = await dependencies.comfyuiInputs.list(request.query.channelId, request.query.nodeClass, request.query.field);
+      return reply.send({ files });
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
   });
 }
 

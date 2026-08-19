@@ -2,12 +2,14 @@ import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Download, Fil
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type {
   AigcChannelSummary,
+  AigcComfyUiInputFile,
   AigcInterfaceCapability,
   AigcInterfaceInput,
   AigcInterfaceRecord,
   AigcInterfaceProtocol,
   AigcPublicFileSummary,
   AigcRunInputValue,
+  AigcRunMediaSource,
   AigcSettingsDocument,
   AigcTaskDocument,
   AigcTaskAsset,
@@ -22,7 +24,7 @@ import type {
   AigcWorkflowOutputMapping,
   AigcWorkflowSummary,
 } from "../../shared/aigc-contracts";
-import { aigcTaskAssetUrl, api } from "../api";
+import { aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
@@ -194,6 +196,10 @@ interface AigcRunFieldDefinition {
   placeholder?: string;
   /** 为 true 时图片或视频输入使用公共 URL 下拉，而不是本地临时上传。 */
   publicUrl?: boolean;
+  /** ComfyUI 媒体入参对应的节点类型，用于读取 input 目录候选。 */
+  nodeClass?: string;
+  /** ComfyUI 媒体入参的字段路径，例如 inputs.image。 */
+  fieldPath?: string;
 }
 
 /** 创作台：选择已启用接口，按能力或 ComfyUI 映射动态生成入参并提交试运行。 */
@@ -208,6 +214,9 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   const [values, setValues] = useState<Record<string, AigcRunInputValue>>({});
   const [uploads, setUploads] = useState<Record<string, AigcUploadedAsset>>({});
   const [publicFiles, setPublicFiles] = useState<AigcPublicFileSummary[]>([]);
+  const [mediaSources, setMediaSources] = useState<Record<string, AigcRunMediaSource>>({});
+  const [comfyInputFiles, setComfyInputFiles] = useState<Record<string, AigcComfyUiInputFile[]>>({});
+  const [comfyInputLoading, setComfyInputLoading] = useState<Record<string, boolean>>({});
   const [uploading, setUploading] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState("");
@@ -221,6 +230,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   const providerInterfaces = enabledInterfaces.filter((item) => item.protocol === provider);
   const selected = enabledInterfaces.find((item) => item.id === selectedId);
   const fields = selected ? runFields(selected, workflow) : [];
+  const selectedChannel = channels.find((channel) => channel.id === selected?.channelId);
   const selectedChannelReady = Boolean(selected && channels.some((channel) => channel.id === selected.channelId && channel.enabled));
   const selectedReady = Boolean(selected && selectedChannelReady && (selected.protocol !== "comfyui" || workflow));
   const taskActive = createdTask?.status === "queued" || createdTask?.status === "running";
@@ -258,12 +268,18 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
       setWorkflow(undefined);
       setValues({});
       setUploads({});
+      setMediaSources({});
+      setComfyInputFiles({});
+      setComfyInputLoading({});
       return;
     }
     if (selected.protocol !== "comfyui") {
       setWorkflow(undefined);
       setValues(initialGrokOrOpenAiValues(selected));
       setUploads({});
+      setMediaSources({});
+      setComfyInputFiles({});
+      setComfyInputLoading({});
       return;
     }
     const workflowId = (selected.config as { workflowId?: string }).workflowId;
@@ -271,6 +287,9 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
       setWorkflow(undefined);
       setValues({});
       setUploads({});
+      setMediaSources({});
+      setComfyInputFiles({});
+      setComfyInputLoading({});
       return;
     }
     void runApiTask(async () => {
@@ -278,6 +297,9 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
       setWorkflow(next.workflow);
       setValues(initialComfyUiValues(next.workflow.inputMappings));
       setUploads({});
+      setMediaSources({});
+      setComfyInputFiles({});
+      setComfyInputLoading({});
       return next;
     }, { operation: "加载 ComfyUI 入参", expected: aigcExpected(setMessage) });
   }, [runApiTask, selected?.id]);
@@ -365,6 +387,59 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
     }));
   }
 
+  function changeMediaSource(field: AigcRunFieldDefinition, source: AigcRunMediaSource) {
+    setMediaSources((current) => ({ ...current, [field.name]: source }));
+    setValues((current) => {
+      const next = { ...current };
+      delete next[field.name];
+      return next;
+    });
+    setUploads((current) => {
+      const next = { ...current };
+      delete next[field.name];
+      return next;
+    });
+    if (source === "comfyui_input") void loadComfyInputFiles(field);
+  }
+
+  async function loadComfyInputFiles(field: AigcRunFieldDefinition) {
+    if (!selected || !field.nodeClass || !field.fieldPath) return;
+    setComfyInputLoading((current) => ({ ...current, [field.name]: true }));
+    const result = await runApiTask(
+      () => api.getAigcComfyUiInputFiles(selected.channelId, field.nodeClass!, field.fieldPath!),
+      { operation: `读取 ComfyUI input`, expected: aigcExpected(setMessage) },
+    );
+    setComfyInputLoading((current) => ({ ...current, [field.name]: false }));
+    if (result.status !== "success") return;
+    setComfyInputFiles((current) => ({ ...current, [field.name]: result.data.files }));
+  }
+
+  function selectPublicMediaFile(field: AigcRunFieldDefinition, file: AigcPublicFileSummary) {
+    setValues((current) => ({
+      ...current,
+      [field.name]: {
+        assetId: file.id,
+        name: file.name,
+        mediaType: file.mediaType,
+        source: "public",
+      },
+    }));
+  }
+
+  function selectComfyInputFile(field: AigcRunFieldDefinition, file: AigcComfyUiInputFile) {
+    setValues((current) => ({
+      ...current,
+      [field.name]: {
+        filename: file.filename,
+        name: file.name,
+        mediaType: file.mediaType,
+        ...(file.subfolder ? { subfolder: file.subfolder } : {}),
+        ...(file.type ? { type: file.type } : {}),
+        source: "comfyui_input",
+      },
+    }));
+  }
+
   async function submit() {
     if (!selected || !online || submitting || taskActive) return;
     setMessage("");
@@ -447,9 +522,16 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
                 uploaded={uploads[field.name]}
                 uploading={uploading === field.name}
                 publicFiles={publicFiles}
+                mediaSource={mediaSources[field.name] ?? "upload"}
+                comfyInputFiles={comfyInputFiles[field.name] ?? []}
+                comfyInputLoading={comfyInputLoading[field.name] === true}
+                comfyPreviewBaseUrl={selectedChannel?.baseUrl}
                 onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
                 onFile={(file) => void uploadFile(field, file)}
                 onPublicFile={(file) => void uploadPublicFile(field, file)}
+                onMediaSourceChange={(source) => changeMediaSource(field, source)}
+                onSelectPublicFile={(file) => selectPublicMediaFile(field, file)}
+                onSelectComfyInputFile={(file) => selectComfyInputFile(field, file)}
               />
             )) : (
               <div className="aigc-run-empty"><Boxes size={22} aria-hidden="true" /><p>暂无已启用的 {interfaceProtocolName(provider)} 接口。</p><button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-interfaces" })}>创建接口</button></div>
@@ -630,11 +712,34 @@ function AigcRunField(props: {
   uploaded?: AigcUploadedAsset;
   uploading: boolean;
   publicFiles: AigcPublicFileSummary[];
+  mediaSource: AigcRunMediaSource;
+  comfyInputFiles: AigcComfyUiInputFile[];
+  comfyInputLoading: boolean;
+  comfyPreviewBaseUrl?: string;
   onChange: (value: AigcRunInputValue) => void;
   onFile: (file?: File) => void;
   onPublicFile: (file?: File) => void;
+  onMediaSourceChange: (source: AigcRunMediaSource) => void;
+  onSelectPublicFile: (file: AigcPublicFileSummary) => void;
+  onSelectComfyInputFile: (file: AigcComfyUiInputFile) => void;
 }) {
-  const { field, value, uploaded, uploading, publicFiles, onChange, onFile, onPublicFile } = props;
+  const {
+    field,
+    value,
+    uploaded,
+    uploading,
+    publicFiles,
+    mediaSource,
+    comfyInputFiles,
+    comfyInputLoading,
+    comfyPreviewBaseUrl,
+    onChange,
+    onFile,
+    onPublicFile,
+    onMediaSourceChange,
+    onSelectPublicFile,
+    onSelectComfyInputFile,
+  } = props;
   if (field.type === "bool") {
     return (
       <label className="configuration-check-line aigc-run-field aigc-run-field--bool">
@@ -685,12 +790,74 @@ function AigcRunField(props: {
         </div>
       );
     }
+    const availableFiles = publicFiles.filter((file) => file.mediaType.startsWith(`${field.type}/`));
+    const selectedPublicId = publicMediaIdFromValue(value);
+    const selectedComfyInput = comfyInputFileFromValue(value);
     return (
-      <label className="aigc-run-field aigc-run-field--wide">
+      <div className="aigc-run-field aigc-run-field--wide aigc-media-input">
         <span>{field.label}{field.required ? " *" : ""}</span>
-        <input type="file" accept={accept} aria-label={field.label} onChange={(event) => onFile(event.target.files?.[0])} />
-        <small className="configuration-help">{uploading ? "上传中…" : uploaded?.name ?? "上传后作为生成入参"}</small>
-      </label>
+        <div className="aigc-media-source-tabs" role="tablist" aria-label={`${field.label}输入来源`}>
+          {mediaSourceOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="tab"
+              aria-selected={mediaSource === option.value}
+              className={mediaSource === option.value ? "is-selected" : undefined}
+              onClick={() => onMediaSourceChange(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        {mediaSource === "upload" ? (
+          <label className="aigc-media-input-upload">
+            <span>本地上传</span>
+            <input type="file" accept={accept} aria-label={field.label} onChange={(event) => onFile(event.target.files?.[0])} />
+            <small className="configuration-help">{uploading ? "上传中…" : uploaded?.name ?? "上传后作为生成入参"}</small>
+          </label>
+        ) : null}
+        {mediaSource === "public" ? (
+          <label>
+            <span>BugPaw 公开目录</span>
+            <select
+              aria-label={`${field.label}公开目录`}
+              value={selectedPublicId ?? ""}
+              onChange={(event) => {
+                const selectedFile = availableFiles.find((file) => file.id === event.target.value);
+                if (selectedFile) onSelectPublicFile(selectedFile);
+              }}
+            >
+              <option value="">请选择公开目录文件</option>
+              {availableFiles.map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}
+            </select>
+          </label>
+        ) : null}
+        {mediaSource === "comfyui_input" ? (
+          <label>
+            <span>ComfyUI input</span>
+            <select
+              aria-label={`${field.label}ComfyUI input`}
+              value={selectedComfyInput?.filename ?? ""}
+              disabled={comfyInputLoading}
+              onChange={(event) => {
+                const selectedFile = comfyInputFiles.find((file) => file.filename === event.target.value);
+                if (selectedFile) onSelectComfyInputFile(selectedFile);
+              }}
+            >
+              <option value="">{comfyInputLoading ? "正在读取 input 目录…" : "请选择 ComfyUI input 文件"}</option>
+              {comfyInputFiles.map((file) => <option key={file.filename} value={file.filename}>{file.name}</option>)}
+            </select>
+          </label>
+        ) : null}
+        <MediaInputPreview
+          field={field}
+          value={value}
+          uploaded={uploaded}
+          publicFiles={publicFiles}
+          comfyPreviewBaseUrl={comfyPreviewBaseUrl}
+        />
+      </div>
     );
   }
   const isNumber = field.type === "int" || field.type === "double";
@@ -713,6 +880,94 @@ function AigcRunField(props: {
   );
 }
 
+const mediaSourceOptions: Array<{ value: AigcRunMediaSource; label: string }> = [
+  { value: "upload", label: "本地上传" },
+  { value: "public", label: "公开目录" },
+  { value: "comfyui_input", label: "ComfyUI input" },
+];
+
+/** 从媒体入参中读取 BugPaw 公共文件 ID。 */
+function publicMediaIdFromValue(value: AigcRunInputValue | undefined): string | undefined {
+  if (typeof value === "object" && value !== null && "assetId" in value && value.source === "public") return value.assetId;
+  return undefined;
+}
+
+/** 从媒体入参中读取 ComfyUI input 文件。 */
+function comfyInputFileFromValue(value: AigcRunInputValue | undefined): AigcComfyUiInputFile | undefined {
+  if (typeof value === "object" && value !== null && "filename" in value && value.source === "comfyui_input") {
+    return {
+      filename: value.filename,
+      name: value.name,
+      mediaType: value.mediaType,
+      ...(typeof value.subfolder === "string" ? { subfolder: value.subfolder } : {}),
+      ...(typeof value.type === "string" ? { type: value.type } : {}),
+    };
+  }
+  return undefined;
+}
+
+/** 为已选择的媒体入参展示内联预览和来源说明。 */
+function MediaInputPreview({ field, value, uploaded, publicFiles, comfyPreviewBaseUrl }: {
+  field: AigcRunFieldDefinition;
+  value: AigcRunInputValue | undefined;
+  uploaded?: AigcUploadedAsset;
+  publicFiles: AigcPublicFileSummary[];
+  comfyPreviewBaseUrl?: string;
+}) {
+  const source = mediaPreviewSource(field, value, uploaded, publicFiles, comfyPreviewBaseUrl);
+  if (!source.url) {
+    return <small className="configuration-help">{source.label}</small>;
+  }
+  if (source.mediaType.startsWith("image/")) return <img className="aigc-media-input-preview" src={source.url} alt={source.label} />;
+  if (source.mediaType.startsWith("video/")) return <video className="aigc-media-input-preview" src={source.url} controls preload="metadata" aria-label={source.label} />;
+  if (source.mediaType.startsWith("audio/")) return <audio className="aigc-media-input-preview" src={source.url} controls preload="metadata" aria-label={source.label} />;
+  return <small className="configuration-help">{source.label}</small>;
+}
+
+/** 汇总媒体入参的预览地址与说明。 */
+function mediaPreviewSource(
+  field: AigcRunFieldDefinition,
+  value: AigcRunInputValue | undefined,
+  uploaded: AigcUploadedAsset | undefined,
+  publicFiles: AigcPublicFileSummary[],
+  comfyPreviewBaseUrl: string | undefined,
+): { url?: string; mediaType: string; label: string } {
+  if (typeof value !== "object" || value === null) {
+    return { mediaType: "application/octet-stream", label: "请先选择生成入参" };
+  }
+  if ("url" in value && typeof value.url === "string") {
+    return { url: value.url, mediaType: value.mediaType, label: value.name };
+  }
+  if ("assetId" in value && value.source === "public") {
+    const publicFile = publicFiles.find((file) => file.id === value.assetId);
+    return {
+      url: publicFile?.url,
+      mediaType: value.mediaType,
+      label: publicFile?.name ?? value.name,
+    };
+  }
+  if ("assetId" in value && value.source !== "public") {
+    return {
+      url: aigcInputAssetUrl(value.assetId),
+      mediaType: value.mediaType,
+      label: uploaded?.name ?? value.name,
+    };
+  }
+  if ("filename" in value) {
+    const params = new URLSearchParams({
+      filename: value.filename,
+      type: value.type ?? "input",
+    });
+    if (value.subfolder) params.set("subfolder", value.subfolder);
+    return {
+      url: comfyPreviewBaseUrl ? `${comfyPreviewBaseUrl}/view?${params.toString()}` : undefined,
+      mediaType: value.mediaType,
+      label: value.name,
+    };
+  }
+  return { mediaType: "application/octet-stream", label: "请先选择生成入参" };
+}
+
 /** 从公共 URL 类型输入值中读取当前地址。 */
 function publicUrlFromValue(value: AigcRunInputValue | undefined): string {
   if (typeof value === "object" && value !== null && "url" in value && typeof value.url === "string") return value.url;
@@ -722,14 +977,19 @@ function publicUrlFromValue(value: AigcRunInputValue | undefined): string {
 /** 根据接口协议和工作流映射生成创作台字段。 */
 function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): AigcRunFieldDefinition[] {
   if (item.protocol === "comfyui") {
-    return (workflow?.inputMappings ?? []).map((mapping) => ({
-      name: mapping.name,
-      label: mapping.description || mapping.name,
-      type: mapping.type,
-      required: mapping.required,
-      options: mapping.enumOptions,
-      placeholder: mapping.description || `输入 ${mapping.name}`,
-    }));
+    return (workflow?.inputMappings ?? []).map((mapping) => {
+      const node = workflow?.nodes.find((candidate) => candidate.id === mapping.nodeId);
+      return {
+        name: mapping.name,
+        label: mapping.description || mapping.name,
+        type: mapping.type,
+        required: mapping.required,
+        options: mapping.enumOptions,
+        placeholder: mapping.description || `输入 ${mapping.name}`,
+        nodeClass: node?.type,
+        fieldPath: mapping.field,
+      };
+    });
   }
   if (item.protocol === "grok") return grokRunFields(item);
   const fields: AigcRunFieldDefinition[] = [{ name: "prompt", label: "提示词", type: "string", required: true, placeholder: "描述要生成的画面或图片" }];
@@ -806,7 +1066,7 @@ function coerceRunValue(field: AigcRunFieldDefinition, value: AigcRunInputValue 
     return text;
   }
   if (field.type === "enum") return typeof value === "string" ? value : undefined;
-  if (typeof value === "object" && ("assetId" in value || "url" in value)) return value;
+  if (typeof value === "object" && ("assetId" in value || "url" in value || "filename" in value)) return value;
   return undefined;
 }
 

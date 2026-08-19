@@ -146,6 +146,58 @@ describe("ComfyUiAigcAdapter", () => {
     expect(submittedPrompt).toHaveProperty("34.inputs.image", "reference-2.png");
     expect(submittedPrompt).toHaveProperty("47.inputs.image", ["34", 0]);
   });
+
+  it("公开目录媒体入参先解析 BugPaw 文件再上传到 ComfyUI", async () => {
+    let uploadedForm: FormData | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/upload/image")) {
+        uploadedForm = init?.body as FormData;
+        return json({ name: "public-upload.png" });
+      }
+      if (url.endsWith("/prompt")) return json({ prompt_id: "prompt-public" });
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-public"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-public")) return json({ "prompt-public": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const execution = input(conditionalWorkflow(), {
+      reference_image_2: { assetId: "public-file", name: "公开参考.png", mediaType: "image/png", source: "public" },
+    });
+    execution.publicFiles = { resolvePath: vi.fn(async () => "/etc/hostname") } as unknown as AigcExecutionInput["publicFiles"];
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(execution);
+
+    expect(execution.publicFiles!.resolvePath).toHaveBeenCalledWith("public-file");
+    expect(execution.assets.resolveInputPath).not.toHaveBeenCalled();
+    expect((uploadedForm?.get("image") as File).name).toBe("公开参考.png");
+  });
+
+  it("选择 ComfyUI input 文件时直接写入文件名而不重复上传", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/upload/image")) throw new Error("ComfyUI input 文件不应重复上传");
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-comfy-input" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-comfy-input"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-comfy-input")) return json({ "prompt-comfy-input": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const execution = input(conditionalWorkflow(), {
+      reference_image_2: { filename: "existing-input.png", name: "existing-input.png", mediaType: "image/png", source: "comfyui_input" },
+    });
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(execution);
+
+    expect(execution.assets.resolveInputPath).not.toHaveBeenCalled();
+    expect(submittedPrompt).toHaveProperty("34.inputs.image", "existing-input.png");
+  });
 });
 
 function input(

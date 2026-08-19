@@ -89,10 +89,16 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     return apiWorkflow;
   }
 
-  /** 上传图片、视频或音频文件并返回 ComfyUI 可引用的文件名。 */
+  /** 解析媒体入参来源并写入 ComfyUI 可引用的 input 文件。 */
   private async uploadAsset(input: AigcExecutionInput, mapping: AigcWorkflowInputMapping, value: unknown): Promise<string> {
     const asset = readAssetReference(value);
-    const filePath = await input.assets.resolveInputPath(asset.assetId);
+    if (asset.source === "comfyui_input") {
+      if (!asset.filename) throw new TypeError(`工作流入参 ${mapping.name} 的文件名无效`);
+      return asset.filename;
+    }
+    const filePath = asset.source === "public"
+      ? await input.publicFiles?.resolvePath(asset.assetId)
+      : await input.assets.resolveInputPath(asset.assetId);
     if (!filePath) throw new TypeError(`工作流入参 ${mapping.name} 的文件不存在`);
     const buffer = await readFile(filePath);
     const form = new FormData();
@@ -336,9 +342,28 @@ function coerceValue(mapping: AigcWorkflowInputMapping, value: unknown): unknown
   return value;
 }
 
-function readAssetReference(value: unknown): { assetId: string; name?: string; mediaType?: string } {
-  if (!isRecord(value) || typeof value.assetId !== "string" || !value.assetId) throw new TypeError("媒体入参格式无效");
+function readAssetReference(value: unknown): {
+  source: "upload" | "public" | "comfyui_input";
+  assetId: string;
+  filename?: string;
+  name?: string;
+  mediaType?: string;
+} {
+  if (!isRecord(value)) throw new TypeError("媒体入参格式无效");
+  const source = value.source === "public" || value.source === "comfyui_input" ? value.source : "upload";
+  if (source === "comfyui_input") {
+    if (typeof value.filename !== "string" || !value.filename) throw new TypeError("媒体入参格式无效");
+    return {
+      source,
+      assetId: "",
+      filename: value.filename,
+      ...(typeof value.name === "string" ? { name: value.name } : {}),
+      ...(typeof value.mediaType === "string" ? { mediaType: value.mediaType } : {}),
+    };
+  }
+  if (typeof value.assetId !== "string" || !value.assetId) throw new TypeError("媒体入参格式无效");
   return {
+    source,
     assetId: value.assetId,
     ...(typeof value.name === "string" ? { name: value.name } : {}),
     ...(typeof value.mediaType === "string" ? { mediaType: value.mediaType } : {}),

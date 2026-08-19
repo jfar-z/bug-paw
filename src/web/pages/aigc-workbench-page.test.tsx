@@ -205,6 +205,55 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(fetchMock.mock.calls.filter(([url, request]) => String(url) === "/api/v1/aigc/tasks" && request?.method === "POST")).toHaveLength(1);
   });
 
+  it("ComfyUI 图片入参支持从公开目录选择并提交公开文件引用", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-image", name: "ComfyUI 图片", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-image" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }] }));
+      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://127.0.0.1:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/workflows/workflow-image") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-image", name: "图片工作流", fileName: "image.json", originalHash: "hash", nodes: [{ id: "1", type: "LoadImage", title: "载入图片", fields: [] }], edges: [], inputMappings: [{ id: "image", name: "image", nodeId: "1", field: "inputs.image", type: "image", required: true, description: "参考图" }], outputMappings: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" } }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [{ id: "public-file", name: "poster.png", mediaType: "image/png", size: 10, createdAt: "2026-08-18T00:00:00.000Z", url: "/aigc-public/files/public-file" }] }));
+      if (url === "/api/v1/aigc/tasks" && init?.method === "POST") return new Response(JSON.stringify({ id: "task-image", interfaceId: "comfy-image", interfaceName: "ComfyUI 图片", channelId: "comfy-channel", status: "queued", inputs: {}, assets: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }), { status: 202 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-image" });
+    fireEvent.click(await screen.findByRole("tab", { name: "公开目录" }));
+    fireEvent.change(await screen.findByLabelText("参考图公开目录"), { target: { value: "public-file" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([requestUrl, init]) => String(requestUrl) === "/api/v1/aigc/tasks" && init?.method === "POST");
+      expect(post).toBeDefined();
+      expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ inputs: { image: { assetId: "public-file", source: "public" } } });
+    });
+  });
+
+  it("ComfyUI 图片入参支持读取 ComfyUI input 并直接提交文件名", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-image", name: "ComfyUI 图片", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-image" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }] }));
+      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://127.0.0.1:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/workflows/workflow-image") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-image", name: "图片工作流", fileName: "image.json", originalHash: "hash", nodes: [{ id: "1", type: "LoadImage", title: "载入图片", fields: [] }], edges: [], inputMappings: [{ id: "image", name: "image", nodeId: "1", field: "inputs.image", type: "image", required: true, description: "参考图" }], outputMappings: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" } }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      if (url.startsWith("/api/v1/aigc/comfyui-input-files")) return new Response(JSON.stringify({ files: [{ filename: "existing.png", name: "existing.png", mediaType: "image/png" }] }));
+      if (url === "/api/v1/aigc/tasks" && init?.method === "POST") return new Response(JSON.stringify({ id: "task-image", interfaceId: "comfy-image", interfaceName: "ComfyUI 图片", channelId: "comfy-channel", status: "queued", inputs: {}, assets: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }), { status: 202 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-image" });
+    fireEvent.click(await screen.findByRole("tab", { name: "ComfyUI input" }));
+    fireEvent.change(await screen.findByLabelText("参考图ComfyUI input"), { target: { value: "existing.png" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([requestUrl, init]) => String(requestUrl) === "/api/v1/aigc/tasks" && init?.method === "POST");
+      expect(post).toBeDefined();
+      expect(JSON.parse(String(post?.[1]?.body))).toMatchObject({ inputs: { image: { filename: "existing.png", source: "comfyui_input" } } });
+    });
+  });
+
   it("在任务详情直接预览媒体产物并保留明确下载入口", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       id: "task-asset", interfaceId: "comfy-1", interfaceName: "ComfyUI 海报", channelId: "comfy-channel", status: "succeeded", inputs: { prompt: "未来城市" },
