@@ -106,7 +106,7 @@ function InputMappingBuilder(props: {
       nodeId,
       field: firstField?.name ?? "",
       type: metadata?.valueType ?? firstField?.valueType ?? current.type,
-      ...(metadata?.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
+      enumOptions: metadata?.enumOptions ? [...metadata.enumOptions] : undefined,
       ...(current.defaultValue === undefined && metadata?.defaultValue !== undefined ? { defaultValue: metadata.defaultValue } : {}),
       ...(current.activation ? { activation: { when: "provided", nodeIds: [nodeId] } } : {}),
     } : current);
@@ -120,7 +120,7 @@ function InputMappingBuilder(props: {
       ...current,
       field: field.name,
       type: metadata?.valueType ?? field.valueType ?? current.type,
-      ...(metadata?.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
+      enumOptions: metadata?.enumOptions ? [...metadata.enumOptions] : undefined,
       ...(metadata?.defaultValue !== undefined ? { defaultValue: metadata.defaultValue } : {}),
     } : current);
     setDefaultValueDraft(metadata?.defaultValue === undefined ? "" : defaultValueDraftFromScalar(metadata.defaultValue, metadata.valueType));
@@ -129,6 +129,16 @@ function InputMappingBuilder(props: {
 
   function updateDraft<K extends keyof AigcWorkflowInputMapping>(key: K, value: AigcWorkflowInputMapping[K]) {
     setDraft((current) => current ? { ...current, [key]: value } : current);
+  }
+
+  function changeInputType(type: AigcWorkflowInputType) {
+    const metadata = selectedNode ? fieldMetadata(workflow, selectedNode, draft?.field ?? "") : undefined;
+    setDraft((current) => current ? {
+      ...current,
+      type,
+      enumOptions: type === "enum" && metadata?.enumOptions ? [...metadata.enumOptions] : current.enumOptions,
+    } : current);
+    setDefaultValueError("");
   }
 
   function toggleActivation(enabled: boolean) {
@@ -161,21 +171,27 @@ function InputMappingBuilder(props: {
   function commit() {
     if (!draft || !draft.name.trim() || !draft.nodeId || !draft.field) return;
     if (draft.activation && draft.activation.nodeIds.length === 0) return;
-    const parsedDefault = parseDefaultValueDraft(draft.type, defaultValueDraft, draft.enumOptions);
+    const selectedMetadata = selectedNode ? fieldMetadata(workflow, selectedNode, draft.field) : undefined;
+    const enumOptions = draft.type === "enum" ? effectiveEnumOptions(draft, selectedMetadata) : undefined;
+    if (draft.type === "enum" && !enumOptions?.length) {
+      setDefaultValueError("枚举参数必须至少包含一个候选值");
+      return;
+    }
+    const parsedDefault = parseDefaultValueDraft(draft.type, defaultValueDraft, enumOptions);
     if (parsedDefault.error) {
       setDefaultValueError(parsedDefault.error);
       return;
     }
-    const selectedMetadata = selectedNode ? fieldMetadata(workflow, selectedNode, draft.field) : undefined;
-    const constraintError = defaultValueConstraintError(parsedDefault.value, draft.type, selectedMetadata, draft.enumOptions);
+    const constraintError = defaultValueConstraintError(parsedDefault.value, draft.type, selectedMetadata, enumOptions);
     if (constraintError) {
       setDefaultValueError(constraintError);
       return;
     }
-    const { defaultValue: _defaultValue, ...draftWithoutDefault } = draft;
+    const { defaultValue: _defaultValue, enumOptions: _enumOptions, ...draftWithoutDefault } = draft;
     const normalized = cloneInputMapping({
       ...draftWithoutDefault,
       name: draft.name.trim(),
+      ...(enumOptions?.length ? { enumOptions: [...enumOptions] } : {}),
       ...(parsedDefault.value !== undefined ? { defaultValue: parsedDefault.value } : {}),
     });
     if (editingId) onChange(mappings.map((mapping) => mapping.id === editingId ? { ...normalized, id: editingId } : mapping));
@@ -251,7 +267,7 @@ function InputMappingBuilder(props: {
                 <div className="aigc-fieldset__heading"><strong>参数配置</strong><small>定义工作流入参对外暴露的名称和数据类型</small></div>
                 <div className="aigc-form-grid">
                   <label><span>参数名</span><input aria-label="入参名称" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} /></label>
-                  <label><span>类型</span><select aria-label="入参类型" value={draft.type} onChange={(event) => updateDraft("type", event.target.value as AigcWorkflowInputType)}>
+                  <label><span>类型</span><select aria-label="入参类型" value={draft.type} onChange={(event) => changeInputType(event.target.value as AigcWorkflowInputType)}>
                     {inputTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select></label>
                   <DefaultValueField mapping={draft} metadata={selectedNode ? fieldMetadata(workflow, selectedNode, draft.field) : undefined} value={defaultValueDraft} error={defaultValueError} onChange={(value) => { setDefaultValueDraft(value); setDefaultValueError(""); }} />
@@ -688,7 +704,7 @@ function parameterNameFromField(field: ComfyUiField): string {
 function cloneInputMapping(mapping: AigcWorkflowInputMapping): AigcWorkflowInputMapping {
   return {
     ...mapping,
-    enumOptions: [...(mapping.enumOptions ?? [])],
+    ...(mapping.enumOptions ? { enumOptions: [...mapping.enumOptions] } : {}),
     ...(mapping.activation ? { activation: { ...mapping.activation, nodeIds: [...mapping.activation.nodeIds] } } : {}),
   };
 }
@@ -721,7 +737,7 @@ function DefaultValueField(props: {
   onChange: (value: string) => void;
 }) {
   const { mapping, metadata, value, error, onChange } = props;
-  const options = mapping.enumOptions ?? metadata?.enumOptions ?? [];
+  const options = effectiveEnumOptions(mapping, metadata) ?? [];
   return (
     <label>
       <span>默认值</span>
@@ -776,6 +792,11 @@ function defaultValueConstraintError(value: string | number | boolean | undefine
   const allowed = enumOptions ?? metadata?.enumOptions;
   if (type === "enum" && value !== undefined && allowed && !allowed.some((option) => Object.is(option, value))) return "默认值不在枚举候选中";
   return undefined;
+}
+
+/** 映射未显式覆盖候选值时继续使用节点定义，避免空数组遮蔽同步结果。 */
+function effectiveEnumOptions(mapping: AigcWorkflowInputMapping, metadata?: ComfyUiFieldMetadata): Array<string | number | boolean> | undefined {
+  return mapping.enumOptions?.length ? mapping.enumOptions : metadata?.enumOptions;
 }
 
 /** 读取指定节点字段的权威元数据。 */

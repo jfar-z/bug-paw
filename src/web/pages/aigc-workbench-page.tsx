@@ -28,6 +28,7 @@ import type {
 import { aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
+import { ConfigurationSelect } from "../components/configuration/configuration-select";
 import { useOnlineStatus } from "../use-online-status";
 import { navigateTo, NAVIGATION_BEFORE_EVENT, type AppRoute } from "../router";
 import "../configuration.css";
@@ -582,9 +583,13 @@ export function AigcProviderControl<T extends string>({ options, value, onChange
     <div className="aigc-run-control">
       <span>渠道</span>
       {options.length > 3 ? (
-        <select aria-label="渠道" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value as T)}>
-          {options.map((option) => <option key={option.value} value={option.value}>{option.label}（{option.count}）</option>)}
-        </select>
+        <ConfigurationSelect
+          ariaLabel="渠道"
+          options={options.map((option) => ({ value: option.value, label: option.label, description: `${option.count} 个接口` }))}
+          value={value}
+          disabled={disabled}
+          onChange={onChange}
+        />
       ) : (
         <div className="scheduled-task-segmented aigc-run-provider-tabs" role="tablist" aria-label="生成服务">
           {options.map((option) => (
@@ -755,19 +760,17 @@ function AigcRunField(props: {
     );
   }
   if (field.type === "enum") {
-    const selectedIndex = field.options?.findIndex((option) => Object.is(option, value)) ?? -1;
     return (
-      <label className="aigc-run-field">
+      <div className="aigc-run-field">
         <span>{field.label}{field.required ? " *" : ""}</span>
-        <select aria-label={field.label} value={selectedIndex >= 0 ? String(selectedIndex) : ""} onChange={(event) => {
-          const option = field.options?.[Number(event.target.value)];
-          if (option !== undefined) onChange(option);
-        }}>
-          <option value="">请选择</option>
-          {(field.options ?? []).map((option, index) => <option key={`${typeof option}:${String(option)}`} value={index}>{String(option)}</option>)}
-        </select>
+        <ConfigurationSelect
+          ariaLabel={field.label}
+          options={(field.options ?? []).map((option) => ({ value: option, label: String(option) }))}
+          value={typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : undefined}
+          onChange={onChange}
+        />
         {field.help ? <small>{field.help}</small> : null}
-      </label>
+      </div>
     );
   }
   if (field.type === "image" || field.type === "video" || field.type === "audio") {
@@ -999,7 +1002,7 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
         label: mapping.description || mapping.name,
         type: mapping.type,
         required: mapping.required,
-        options: mapping.enumOptions ?? metadata?.enumOptions,
+        options: mapping.enumOptions?.length ? mapping.enumOptions : metadata?.enumOptions,
         placeholder: metadata?.placeholder || mapping.description || `输入 ${mapping.name}`,
         min: metadata?.min,
         max: metadata?.max,
@@ -1071,11 +1074,11 @@ function initialComfyUiValues(workflow: AigcWorkflowDetail): Record<string, Aigc
   const values: Record<string, AigcRunInputValue> = {};
   for (const mapping of workflow.inputMappings) {
     const node = workflow.nodes.find((candidate) => candidate.id === mapping.nodeId);
-    const metadataDefault = node ? workflow.nodeMetadata?.[node.type]?.fields[mapping.field]?.defaultValue : undefined;
-    const defaultValue = mapping.defaultValue ?? metadataDefault;
+    const metadata = node ? workflow.nodeMetadata?.[node.type]?.fields[mapping.field] : undefined;
+    const defaultValue = mapping.defaultValue ?? metadata?.defaultValue;
     if (mapping.type === "bool") values[mapping.name] = typeof defaultValue === "boolean" ? defaultValue : false;
     else if (mapping.type === "int" || mapping.type === "double") values[mapping.name] = typeof defaultValue === "number" ? defaultValue : "";
-    else if (mapping.type === "enum") values[mapping.name] = defaultValue ?? mapping.enumOptions?.[0] ?? "";
+    else if (mapping.type === "enum") values[mapping.name] = defaultValue ?? metadata?.enumOptions?.[0] ?? mapping.enumOptions?.[0] ?? "";
     else if (mapping.type === "string") values[mapping.name] = typeof defaultValue === "string" ? defaultValue : "";
   }
   return values;
@@ -1300,10 +1303,13 @@ function AigcInterfacesPage() {
             <label><span>能力</span><select aria-label="AIGC 接口能力" value={draft.capability} onChange={(event) => setDraft({ ...draft, capability: event.target.value as AigcInterfaceCapability })}>
               {capabilityOptions(draft.protocol).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select></label>
-            <label><span>渠道</span><select aria-label="AIGC 渠道" value={draft.channelId} onChange={(event) => setDraft({ ...draft, channelId: event.target.value })}>
-              <option value="">请选择渠道</option>
-              {channels.filter((channel) => channel.type === draft.protocol).map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
-            </select></label>
+            <div className="aigc-config-field"><span>渠道</span><ConfigurationSelect
+              ariaLabel="AIGC 渠道"
+              options={channels.filter((channel) => channel.type === draft.protocol).map((channel) => ({ value: channel.id, label: channel.name, description: channel.enabled ? "已启用" : "已停用" }))}
+              value={draft.channelId || undefined}
+              placeholder="请选择渠道"
+              onChange={(channelId) => setDraft({ ...draft, channelId })}
+            /></div>
           </div>
           {!channels.some((channel) => channel.type === draft.protocol) ? <p className="configuration-help">当前协议还没有可用渠道，请先到配置中心创建 {interfaceProtocolName(draft.protocol)} 渠道。</p> : null}
           <label><span>{draft.protocol === "comfyui" ? "工作流" : "模型"}</span>
@@ -1712,9 +1718,14 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>工作流详情</h1><p>{detail?.fileName ?? workflowId}</p></header>
       <div className="aigc-workflow-sync-bar">
-        <label><span>ComfyUI 渠道</span><select aria-label="节点定义同步渠道" value={channelId} onChange={(event) => setChannelId(event.target.value)}>
-          {channels.length ? channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>) : <option value="">暂无可用渠道</option>}
-        </select></label>
+        <div className="aigc-config-field"><span>ComfyUI 渠道</span><ConfigurationSelect
+          ariaLabel="节点定义同步渠道"
+          options={channels.map((channel) => ({ value: channel.id, label: channel.name }))}
+          value={channelId || undefined}
+          placeholder="暂无可用渠道"
+          disabled={!channels.length}
+          onChange={setChannelId}
+        /></div>
         <button type="button" className="configuration-secondary-action" disabled={!detail || !channelId || isDirty || syncingMetadata} title={isDirty ? "请先保存映射后再同步" : undefined} onClick={() => void syncNodeMetadata()}><RefreshCw size={15} />{syncingMetadata ? "同步中…" : "同步节点定义"}</button>
         <small>{detail?.nodeMetadataSyncedAt ? `最近同步 ${formatAigcTime(detail.nodeMetadataSyncedAt)}` : "尚未同步节点定义"}</small>
       </div>

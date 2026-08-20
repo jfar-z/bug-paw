@@ -10,13 +10,15 @@
   gap: 8px;
 }
 
-.aigc-workflow-sync-bar label {
+.aigc-workflow-sync-bar label,
+.aigc-workflow-sync-bar .aigc-config-field {
   display: grid;
   min-width: min(260px, 100%);
   gap: 5px;
 }
 
 .aigc-workflow-sync-bar label > span,
+.aigc-workflow-sync-bar .aigc-config-field > span,
 .aigc-workflow-sync-bar > small {
   color: var(--text-tertiary);
   font-size: 10px;

@@ -23,7 +23,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("渠道超过三个时使用与接口等高的下拉框", () => {
+  it("渠道超过三个时使用可筛选的自绘下拉框", () => {
     const onChange = vi.fn();
     render(<AigcProviderControl options={[
       { value: "openai", label: "OpenAI", count: 1 },
@@ -33,9 +33,12 @@ describe("AigcWorkbenchPage 创作台", () => {
     ]} value="openai" onChange={onChange} />);
 
     const channelSelect = screen.getByLabelText("渠道");
-    expect(channelSelect).toHaveValue("openai");
+    expect(channelSelect).toHaveTextContent("OpenAI");
+    expect(channelSelect.tagName).toBe("BUTTON");
     expect(screen.queryByRole("tablist", { name: "生成服务" })).not.toBeInTheDocument();
-    fireEvent.change(channelSelect, { target: { value: "future" } });
+    fireEvent.click(channelSelect);
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选渠道" }), { target: { value: "Future" } });
+    fireEvent.click(screen.getByRole("option", { name: /Future/ }));
     expect(onChange).toHaveBeenCalledWith("future");
   });
 
@@ -167,6 +170,35 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(screen.getByRole("heading", { name: "创作与运行" }).closest(".aigc-run-page")).toHaveClass("has-readiness");
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
     expect(await screen.findByText("ComfyUI 连接正常")).toBeInTheDocument();
+  });
+
+  it("创作台从同步元数据加载可筛选 COMBO 候选项", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-combo", name: "ComfyUI 采样", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-combo" }, createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z" }] }));
+      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://comfyui:8188", enabled: true, timeoutMs: 30000, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/workflows/workflow-combo") return new Response(JSON.stringify({ revision: "w1", workflow: {
+        id: "workflow-combo", name: "采样工作流", fileName: "sampler.json", originalHash: "hash",
+        nodes: [{ id: "1", type: "KSamplerSelect", title: "采样器", fields: [{ name: "inputs.sampler_name", kind: "input", valueType: "string" }] }],
+        edges: [],
+        inputMappings: [{ id: "sampler", name: "sampler", nodeId: "1", field: "inputs.sampler_name", type: "enum", required: true, description: "采样器" }],
+        outputMappings: [],
+        nodeMetadata: { KSamplerSelect: { fields: { "inputs.sampler_name": { comfyType: "COMBO", valueType: "enum", defaultValue: "euler", enumOptions: ["euler", "dpmpp_2m"] } } } },
+        createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z",
+      } }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-combo" });
+
+    const combo = await screen.findByRole("button", { name: "采样器" });
+    expect(combo).toHaveTextContent("euler");
+    fireEvent.click(combo);
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选采样器" }), { target: { value: "dpmpp" } });
+    fireEvent.click(screen.getByRole("option", { name: "dpmpp_2m" }));
+    expect(combo).toHaveTextContent("dpmpp_2m");
   });
 
   it("支持音频入参并在执行中展示可截断节点状态且阻止重复生成", async () => {
