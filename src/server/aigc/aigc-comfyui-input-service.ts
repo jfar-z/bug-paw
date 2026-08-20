@@ -1,4 +1,11 @@
-import type { AigcChannelConfig, AigcComfyUiInputFile } from "../../shared/aigc-contracts";
+import type {
+  AigcChannelConfig,
+  AigcComfyUiInputFile,
+  AigcWorkflowInputType,
+  ComfyUiFieldMetadata,
+  ComfyUiNodeMetadataSyncResult,
+  ComfyUiNodeTypeMetadata,
+} from "../../shared/aigc-contracts";
 import type { CredentialService } from "../configuration/credential-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
 
@@ -19,21 +26,122 @@ export class AigcComfyUiInputService {
 
   /** 读取指定节点字段的 ComfyUI input 文件列表。 */
   async list(channelId: string, nodeClass: string, field: string): Promise<AigcComfyUiInputFile[]> {
-    const channel = (await this.connections.read()).channels.find((candidate) => candidate.id === channelId);
-    if (!channel) throw new TypeError("AIGC 渠道不存在");
-    if (channel.type !== "comfyui") throw new TypeError("该渠道不是 ComfyUI");
-    const apiKey = await this.credentials.getApiKey(channel.id);
-    const response = await this.request(`${channel.baseUrl}/object_info/${encodeURIComponent(nodeClass)}`, {
-      method: "GET",
-      headers: requestHeaders(channel, apiKey),
-      signal: channel.timeoutMs === undefined
-        ? undefined
-        : AbortSignal.timeout(Math.max(1_000, channel.timeoutMs)),
-    });
+    const { channel, apiKey } = await this.resolveChannel(channelId);
+    const response = await this.requestNodeInfo(channel, apiKey, nodeClass);
     if (!response.ok) throw new TypeError(`ComfyUI 节点定义读取失败，上游返回 ${response.status}`);
     const payload = await response.json();
     return inputFileOptions(payload, nodeClass, field);
   }
+
+  /** 读取并宽容解析工作流引用的节点定义。 */
+  async getNodeMetadata(channelId: string, nodeClasses: string[]): Promise<ComfyUiNodeMetadataSyncResult> {
+    const { channel, apiKey } = await this.resolveChannel(channelId);
+    const uniqueClasses = [...new Set(nodeClasses.map((item) => item.trim()).filter(Boolean))];
+    const metadata: ComfyUiNodeMetadataSyncResult["metadata"] = {};
+    const missingNodeClasses: string[] = [];
+
+    // 固定批次并发，避免大型工作流瞬间压满 ComfyUI 请求队列。
+    for (let index = 0; index < uniqueClasses.length; index += 6) {
+      const batch = uniqueClasses.slice(index, index + 6);
+      await Promise.all(batch.map(async (nodeClass) => {
+        try {
+          const response = await this.requestNodeInfo(channel, apiKey, nodeClass);
+          if (!response.ok) throw new TypeError(`上游返回 ${response.status}`);
+          const parsed = parseNodeMetadata(await response.json(), nodeClass);
+          if (!parsed) throw new TypeError("节点定义格式无效");
+          metadata[nodeClass] = parsed;
+        } catch {
+          missingNodeClasses.push(nodeClass);
+        }
+      }));
+    }
+
+    const syncedNodeClasses = uniqueClasses.filter((nodeClass) => metadata[nodeClass]);
+    if (uniqueClasses.length > 0 && syncedNodeClasses.length === 0) throw new TypeError("ComfyUI 节点定义全部读取失败");
+    return { metadata, syncedNodeClasses, missingNodeClasses, syncedAt: new Date().toISOString() };
+  }
+
+  /** 校验渠道并读取可选凭证。 */
+  private async resolveChannel(channelId: string): Promise<{ channel: AigcChannelConfig; apiKey?: string }> {
+    const channel = (await this.connections.read()).channels.find((candidate) => candidate.id === channelId);
+    if (!channel) throw new TypeError("AIGC 渠道不存在");
+    if (channel.type !== "comfyui") throw new TypeError("该渠道不是 ComfyUI");
+    return { channel, apiKey: await this.credentials.getApiKey(channel.id) };
+  }
+
+  /** 复用统一认证、超时与 URL 编码规则读取节点定义。 */
+  private requestNodeInfo(channel: AigcChannelConfig, apiKey: string | undefined, nodeClass: string): Promise<Response> {
+    return this.request(`${channel.baseUrl}/object_info/${encodeURIComponent(nodeClass)}`, {
+      method: "GET",
+      headers: requestHeaders(channel, apiKey),
+      signal: channel.timeoutMs === undefined ? undefined : AbortSignal.timeout(Math.max(1_000, channel.timeoutMs)),
+    });
+  }
+}
+
+/** 将单节点或全量 object_info 响应解析为稳定元数据。 */
+export function parseNodeMetadata(payload: unknown, nodeClass: string): ComfyUiNodeTypeMetadata | undefined {
+  const nodeInfo = nodeInfoFromPayload(payload, nodeClass);
+  if (!nodeInfo || !isRecord(nodeInfo.input)) return undefined;
+  const fields: Record<string, ComfyUiFieldMetadata> = {};
+  for (const [groupName, required] of [["required", true], ["optional", false]] as const) {
+    const group = nodeInfo.input[groupName];
+    if (!isRecord(group)) continue;
+    for (const [name, definition] of Object.entries(group)) {
+      const field = parseFieldMetadata(definition, required);
+      if (field) fields[`inputs.${name.replace(/^inputs\./u, "")}`] = field;
+    }
+  }
+  return {
+    fields,
+    ...(typeof nodeInfo.display_name === "string" ? { displayName: nodeInfo.display_name } : {}),
+    ...(typeof nodeInfo.description === "string" ? { description: nodeInfo.description } : {}),
+    ...(typeof nodeInfo.category === "string" ? { category: nodeInfo.category } : {}),
+  };
+}
+
+/** 宽容提取 ComfyUI 字段类型、默认值与常见控件约束。 */
+function parseFieldMetadata(definition: unknown, required: boolean): ComfyUiFieldMetadata | undefined {
+  if (!Array.isArray(definition) || definition.length === 0) return undefined;
+  const typeDefinition = definition[0];
+  const options = isRecord(definition[1]) ? definition[1] : {};
+  const enumOptions = Array.isArray(typeDefinition) ? typeDefinition.filter(isScalar) : undefined;
+  const isUploadField = Array.isArray(typeDefinition) && (options.image_upload === true || options.upload === true);
+  const comfyType = isUploadField ? "IMAGE" : enumOptions ? "COMBO" : typeof typeDefinition === "string" ? typeDefinition : "";
+  if (!comfyType) return undefined;
+  const valueType = isUploadField ? "image" : enumOptions ? "enum" : comfyValueType(comfyType, options);
+  return {
+    comfyType,
+    required,
+    ...(valueType ? { valueType } : {}),
+    ...(isScalar(options.default) ? { defaultValue: options.default } : {}),
+    ...(finiteNumber(options.min) !== undefined ? { min: finiteNumber(options.min) } : {}),
+    ...(finiteNumber(options.max) !== undefined ? { max: finiteNumber(options.max) } : {}),
+    ...(finiteNumber(options.step) !== undefined ? { step: finiteNumber(options.step) } : {}),
+    ...(finiteNumber(options.round) !== undefined ? { round: finiteNumber(options.round) } : {}),
+    ...(!isUploadField && enumOptions?.length ? { enumOptions } : {}),
+    ...(typeof options.tooltip === "string" ? { tooltip: options.tooltip } : {}),
+    ...(typeof options.multiline === "boolean" ? { multiline: options.multiline } : {}),
+    ...(typeof options.placeholder === "string" ? { placeholder: options.placeholder } : {}),
+  };
+}
+
+/** 把 ComfyUI 原始类型映射为 BugPaw 入参类型。 */
+function comfyValueType(comfyType: string, options: Record<string, unknown>): AigcWorkflowInputType | undefined {
+  if (comfyType === "INT") return "int";
+  if (comfyType === "FLOAT") return "double";
+  if (comfyType === "STRING") return "string";
+  if (comfyType === "BOOLEAN") return "bool";
+  if (comfyType === "IMAGE" && (options.image_upload === true || options.upload === true)) return "image";
+  return undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isScalar(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "boolean" || finiteNumber(value) !== undefined;
 }
 
 /** 生成 ComfyUI 节点定义请求头。 */

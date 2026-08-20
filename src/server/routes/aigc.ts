@@ -86,6 +86,34 @@ function registerWorkflowRoutes(app: FastifyInstance, dependencies: AigcRouteDep
     }
   });
 
+  app.post<{ Params: { id: string } }>("/api/aigc/workflows/:id/sync-node-metadata", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body || typeof body.channelId !== "string" || typeof body.revision !== "string") {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "请提供 ComfyUI 渠道和配置版本");
+    }
+    try {
+      const current = await dependencies.workflows.get(request.params.id);
+      const nodeClasses = current.workflow.nodes.map((node) => node.type);
+      const synced = await dependencies.comfyuiInputs.getNodeMetadata(body.channelId, nodeClasses);
+      const updated = await dependencies.workflows.syncNodeMetadata(
+        request.params.id,
+        synced.metadata,
+        synced.syncedAt,
+        body.revision,
+      );
+      return reply.send({
+        revision: updated.revision,
+        workflow: updated.workflow,
+        syncedNodeClasses: synced.syncedNodeClasses,
+        missingNodeClasses: synced.missingNodeClasses,
+        syncedAt: synced.syncedAt,
+      });
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
   app.delete<{ Params: { id: string } }>("/api/aigc/workflows/:id", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const body = isRecord(request.body) ? request.body : undefined;

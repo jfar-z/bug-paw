@@ -198,6 +198,21 @@ describe("ComfyUiAigcAdapter", () => {
     expect(execution.assets.resolveInputPath).not.toHaveBeenCalled();
     expect(submittedPrompt).toHaveProperty("34.inputs.image", "existing-input.png");
   });
+
+  it("提交 Prompt 前拒绝超出节点元数据范围的运行值", async () => {
+    const workflow: AigcWorkflowDetail & { raw: unknown } = {
+      ...imageWorkflow(),
+      raw: { "1": { class_type: "KSampler", inputs: { cfg: 8 } }, "2": { class_type: "SaveImage", inputs: {} } },
+      nodes: [{ id: "1", type: "KSampler", fields: [] }, { id: "2", type: "SaveImage", fields: [] }],
+      inputMappings: [{ id: "cfg", name: "cfg", nodeId: "1", field: "inputs.cfg", type: "double", required: true }],
+      nodeMetadata: { KSampler: { fields: { "inputs.cfg": { comfyType: "FLOAT", valueType: "double", min: 0, max: 20 } } } },
+    };
+    const request = vi.fn();
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await expect(adapter.execute(input(workflow, { cfg: 21 }))).rejects.toThrow("不能大于 20");
+    expect(request).not.toHaveBeenCalled();
+  });
 });
 
 function input(

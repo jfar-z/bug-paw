@@ -81,6 +81,39 @@ describe("AIGC 工作流服务", () => {
     expect(updated.workflow.inputMappings[0].type).toBe("image");
   });
 
+  it("合并节点元数据并校验映射默认值范围和数值枚举", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "采样工作流",
+      fileName: "sampler.json",
+      workflowJson: { "1": { class_type: "KSampler", inputs: { cfg: 0, sampler: 2 } } },
+      inputMappings: [],
+      outputMappings: [],
+    });
+    const synced = await service.syncNodeMetadata(created.workflow.id, {
+      KSampler: {
+        fields: {
+          "inputs.cfg": { comfyType: "FLOAT", valueType: "double", min: 0, max: 20 },
+          "inputs.sampler": { comfyType: "COMBO", valueType: "enum", enumOptions: [1, 2, 3] },
+        },
+      },
+    }, "2026-08-20T08:00:00.000Z", created.revision);
+
+    expect(synced.workflow.nodeMetadataSyncedAt).toBe("2026-08-20T08:00:00.000Z");
+    await expect(service.update(created.workflow.id, {
+      name: "采样工作流",
+      inputMappings: [{ id: "cfg", name: "cfg", nodeId: "1", field: "inputs.cfg", type: "double", required: false, defaultValue: 21 }],
+      outputMappings: [],
+    }, synced.revision)).rejects.toThrow("不能大于 20");
+
+    const updated = await service.update(created.workflow.id, {
+      name: "采样工作流",
+      inputMappings: [{ id: "sampler", name: "sampler", nodeId: "1", field: "inputs.sampler", type: "enum", required: true, enumOptions: [1, 2, 3], defaultValue: 2 }],
+      outputMappings: [],
+    }, synced.revision);
+    expect(updated.workflow.inputMappings[0]).toMatchObject({ enumOptions: [1, 2, 3], defaultValue: 2 });
+  });
+
   it("保存音频输入和输出映射", async () => {
     const service = await fixture();
     const created = await service.create({

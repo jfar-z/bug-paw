@@ -78,6 +78,44 @@ export interface AigcSettingsDocument {
 /** 工作流入参可选的参数类型。 */
 export type AigcWorkflowInputType = "bool" | "int" | "double" | "string" | "enum" | "image" | "video" | "audio";
 
+/** ComfyUI 枚举字段允许保留的原始标量值。 */
+export type AigcWorkflowEnumValue = string | number | boolean;
+
+/** 从 ComfyUI object_info 解析出的字段约束。 */
+export interface ComfyUiFieldMetadata {
+  comfyType: string;
+  valueType?: AigcWorkflowInputType;
+  required?: boolean;
+  defaultValue?: AigcWorkflowEnumValue;
+  min?: number;
+  max?: number;
+  step?: number;
+  round?: number;
+  enumOptions?: AigcWorkflowEnumValue[];
+  tooltip?: string;
+  multiline?: boolean;
+  placeholder?: string;
+}
+
+/** 单类 ComfyUI 节点的展示信息和输入字段约束。 */
+export interface ComfyUiNodeTypeMetadata {
+  displayName?: string;
+  description?: string;
+  category?: string;
+  fields: Record<string, ComfyUiFieldMetadata>;
+}
+
+/** 按 ComfyUI class_type 索引的节点元数据。 */
+export type ComfyUiNodeMetadata = Record<string, ComfyUiNodeTypeMetadata>;
+
+/** 一次节点元数据同步的结果摘要。 */
+export interface ComfyUiNodeMetadataSyncResult {
+  metadata: ComfyUiNodeMetadata;
+  syncedNodeClasses: string[];
+  missingNodeClasses: string[];
+  syncedAt: string;
+}
+
 /** 入参有值时保留的 ComfyUI 条件节点组。 */
 export interface AigcWorkflowInputActivation {
   when: "provided";
@@ -96,7 +134,7 @@ export interface AigcWorkflowInputMapping {
   type: AigcWorkflowInputType;
   required: boolean;
   /** enum 类型可选的候选值。 */
-  enumOptions?: string[];
+  enumOptions?: AigcWorkflowEnumValue[];
   defaultValue?: string | number | boolean;
   description?: string;
   /** 可选参数未提供时，裁剪与该参数绑定的条件分支。 */
@@ -164,6 +202,9 @@ export interface AigcWorkflowDetail {
   edges: ComfyUiEdge[];
   inputMappings: AigcWorkflowInputMapping[];
   outputMappings: AigcWorkflowOutputMapping[];
+  /** 最近成功同步并保存的 ComfyUI 节点定义。 */
+  nodeMetadata?: ComfyUiNodeMetadata;
+  nodeMetadataSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
 }

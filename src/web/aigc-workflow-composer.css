@@ -3,6 +3,33 @@
   gap: 18px;
 }
 
+.aigc-workflow-sync-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.aigc-workflow-sync-bar label {
+  display: grid;
+  min-width: min(260px, 100%);
+  gap: 5px;
+}
+
+.aigc-workflow-sync-bar label > span,
+.aigc-workflow-sync-bar > small {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.aigc-workflow-sync-bar > small {
+  align-self: center;
+}
+
+.aigc-field-error {
+  color: var(--danger);
+}
+
 .aigc-workflow-summary .configuration-section__heading > small {
   overflow: hidden;
   max-width: min(44vw, 520px);

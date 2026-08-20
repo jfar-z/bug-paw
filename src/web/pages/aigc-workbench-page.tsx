@@ -23,6 +23,7 @@ import type {
   AigcWorkflowInputMapping,
   AigcWorkflowOutputMapping,
   AigcWorkflowSummary,
+  ComfyUiFieldMetadata,
 } from "../../shared/aigc-contracts";
 import { aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
@@ -192,8 +193,13 @@ interface AigcRunFieldDefinition {
   label: string;
   type: AigcWorkflowInputMapping["type"];
   required: boolean;
-  options?: string[];
+  options?: Array<string | number | boolean>;
   placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  multiline?: boolean;
+  help?: string;
   /** 为 true 时图片或视频输入使用公共 URL 下拉，而不是本地临时上传。 */
   publicUrl?: boolean;
   /** ComfyUI 媒体入参对应的节点类型，用于读取 input 目录候选。 */
@@ -295,7 +301,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
     void runApiTask(async () => {
       const next = await api.getAigcWorkflow(workflowId);
       setWorkflow(next.workflow);
-      setValues(initialComfyUiValues(next.workflow.inputMappings));
+      setValues(initialComfyUiValues(next.workflow));
       setUploads({});
       setMediaSources({});
       setComfyInputFiles({});
@@ -749,13 +755,18 @@ function AigcRunField(props: {
     );
   }
   if (field.type === "enum") {
+    const selectedIndex = field.options?.findIndex((option) => Object.is(option, value)) ?? -1;
     return (
       <label className="aigc-run-field">
         <span>{field.label}{field.required ? " *" : ""}</span>
-        <select aria-label={field.label} value={typeof value === "string" ? value : ""} onChange={(event) => onChange(event.target.value)}>
+        <select aria-label={field.label} value={selectedIndex >= 0 ? String(selectedIndex) : ""} onChange={(event) => {
+          const option = field.options?.[Number(event.target.value)];
+          if (option !== undefined) onChange(option);
+        }}>
           <option value="">请选择</option>
-          {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
+          {(field.options ?? []).map((option, index) => <option key={`${typeof option}:${String(option)}`} value={index}>{String(option)}</option>)}
         </select>
+        {field.help ? <small>{field.help}</small> : null}
       </label>
     );
   }
@@ -862,20 +873,23 @@ function AigcRunField(props: {
   }
   const isNumber = field.type === "int" || field.type === "double";
   const inputValue = typeof value === "number" || typeof value === "string" ? value : "";
-  const multiline = field.type === "string" && (field.name === "prompt" || field.label.includes("提示词"));
+  const multiline = field.type === "string" && (field.multiline || field.name === "prompt" || field.label.includes("提示词"));
   return (
     <label className={multiline ? "aigc-run-field aigc-run-field--wide" : "aigc-run-field"}>
       <span>{field.label}{field.required ? " *" : ""}</span>
       {multiline ? <textarea rows={4} placeholder={field.placeholder} aria-label={field.label} value={inputValue} onChange={(event) => onChange(event.target.value)} /> : (
         <input
           type={isNumber ? "number" : "text"}
-          step={field.type === "double" ? "any" : undefined}
+          min={field.min}
+          max={field.max}
+          step={field.step ?? (field.type === "double" ? "any" : undefined)}
           placeholder={field.placeholder}
           aria-label={field.label}
           value={inputValue}
-          onChange={(event) => onChange(isNumber ? event.target.valueAsNumber || "" : event.target.value)}
+          onChange={(event) => onChange(event.target.value)}
         />
       )}
+      {field.help ? <small>{field.help}</small> : null}
     </label>
   );
 }
@@ -979,13 +993,19 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
   if (item.protocol === "comfyui") {
     return (workflow?.inputMappings ?? []).map((mapping) => {
       const node = workflow?.nodes.find((candidate) => candidate.id === mapping.nodeId);
+      const metadata = node ? workflow?.nodeMetadata?.[node.type]?.fields[mapping.field] : undefined;
       return {
         name: mapping.name,
         label: mapping.description || mapping.name,
         type: mapping.type,
         required: mapping.required,
-        options: mapping.enumOptions,
-        placeholder: mapping.description || `输入 ${mapping.name}`,
+        options: mapping.enumOptions ?? metadata?.enumOptions,
+        placeholder: metadata?.placeholder || mapping.description || `输入 ${mapping.name}`,
+        min: metadata?.min,
+        max: metadata?.max,
+        step: metadata?.step,
+        multiline: metadata?.multiline,
+        help: [metadata?.tooltip || runFieldRangeHelp(metadata), mapping.defaultValue === undefined && metadata?.defaultValue !== undefined ? `节点默认值 ${String(metadata.defaultValue)}` : ""].filter(Boolean).join(" · ") || undefined,
         nodeClass: node?.type,
         fieldPath: mapping.field,
       };
@@ -997,6 +1017,13 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
     fields.push({ name: "image", label: "图片", type: "image", required: true });
   }
   return fields;
+}
+
+/** 将数值元数据压缩为运行表单中的范围提示。 */
+function runFieldRangeHelp(metadata?: ComfyUiFieldMetadata): string | undefined {
+  if (!metadata) return undefined;
+  const range = metadata.min !== undefined || metadata.max !== undefined ? `${metadata.min ?? "−∞"}–${metadata.max ?? "+∞"}` : "";
+  return [range, metadata.step !== undefined ? `步进 ${metadata.step}` : ""].filter(Boolean).join(" · ") || undefined;
 }
 
 /** 根据 Grok 能力生成创作台入参字段。 */
@@ -1040,13 +1067,16 @@ function initialGrokOrOpenAiValues(item: AigcInterfaceRecord): Record<string, Ai
 }
 
 /** 为 ComfyUI 工作流映射生成初始值。 */
-function initialComfyUiValues(mappings: AigcWorkflowInputMapping[]): Record<string, AigcRunInputValue> {
+function initialComfyUiValues(workflow: AigcWorkflowDetail): Record<string, AigcRunInputValue> {
   const values: Record<string, AigcRunInputValue> = {};
-  for (const mapping of mappings) {
-    if (mapping.type === "bool") values[mapping.name] = typeof mapping.defaultValue === "boolean" ? mapping.defaultValue : false;
-    else if (mapping.type === "int" || mapping.type === "double") values[mapping.name] = typeof mapping.defaultValue === "number" ? mapping.defaultValue : "";
-    else if (mapping.type === "enum") values[mapping.name] = typeof mapping.defaultValue === "string" ? mapping.defaultValue : mapping.enumOptions?.[0] ?? "";
-    else if (mapping.type === "string") values[mapping.name] = typeof mapping.defaultValue === "string" ? mapping.defaultValue : "";
+  for (const mapping of workflow.inputMappings) {
+    const node = workflow.nodes.find((candidate) => candidate.id === mapping.nodeId);
+    const metadataDefault = node ? workflow.nodeMetadata?.[node.type]?.fields[mapping.field]?.defaultValue : undefined;
+    const defaultValue = mapping.defaultValue ?? metadataDefault;
+    if (mapping.type === "bool") values[mapping.name] = typeof defaultValue === "boolean" ? defaultValue : false;
+    else if (mapping.type === "int" || mapping.type === "double") values[mapping.name] = typeof defaultValue === "number" ? defaultValue : "";
+    else if (mapping.type === "enum") values[mapping.name] = defaultValue ?? mapping.enumOptions?.[0] ?? "";
+    else if (mapping.type === "string") values[mapping.name] = typeof defaultValue === "string" ? defaultValue : "";
   }
   return values;
 }
@@ -1065,7 +1095,7 @@ function coerceRunValue(field: AigcRunFieldDefinition, value: AigcRunInputValue 
     const text = String(value).trim();
     return text;
   }
-  if (field.type === "enum") return typeof value === "string" ? value : undefined;
+  if (field.type === "enum") return typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : undefined;
   if (typeof value === "object" && ("assetId" in value || "url" in value || "filename" in value)) return value;
   return undefined;
 }
@@ -1621,17 +1651,23 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   const [inputMappings, setInputMappings] = useState<AigcWorkflowInputMapping[]>([]);
   const [outputMappings, setOutputMappings] = useState<AigcWorkflowOutputMapping[]>([]);
   const [message, setMessage] = useState("");
+  const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
+  const [channelId, setChannelId] = useState("");
+  const [syncingMetadata, setSyncingMetadata] = useState(false);
   const isDirty = Boolean(detail && (name !== detail.name || JSON.stringify(inputMappings) !== JSON.stringify(detail.inputMappings) || JSON.stringify(outputMappings) !== JSON.stringify(detail.outputMappings)));
   const navigationGuard = useAigcUnsavedNavigation(isDirty);
 
   useEffect(() => {
     void runApiTask(async () => {
-      const next = await api.getAigcWorkflow(workflowId);
+      const [next, channelDocument] = await Promise.all([api.getAigcWorkflow(workflowId), api.getAigcChannels()]);
+      const comfyChannels = channelDocument.channels.filter((channel) => channel.type === "comfyui" && channel.enabled);
       setDetail(next.workflow);
       setRevision(next.revision);
       setName(next.workflow.name);
       setInputMappings(next.workflow.inputMappings);
       setOutputMappings(next.workflow.outputMappings);
+      setChannels(comfyChannels);
+      setChannelId((current) => current || comfyChannels[0]?.id || "");
       return next;
     }, { operation: "加载 ComfyUI 工作流详情" });
   }, [runApiTask, workflowId]);
@@ -1651,9 +1687,37 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
     }
   }
 
+  async function syncNodeMetadata() {
+    if (!channelId || isDirty) return;
+    setSyncingMetadata(true);
+    try {
+      const result = await runApiTask(() => api.syncAigcWorkflowNodeMetadata(workflowId, channelId, revision), {
+        operation: "同步 ComfyUI 节点定义",
+        expected: aigcExpected(setMessage),
+      });
+      if (result.status === "success") {
+        setDetail(result.data.workflow);
+        setRevision(result.data.revision);
+        setName(result.data.workflow.name);
+        setInputMappings(result.data.workflow.inputMappings);
+        setOutputMappings(result.data.workflow.outputMappings);
+        setMessage(`已同步 ${result.data.syncedNodeClasses.length} 类节点${result.data.missingNodeClasses.length ? `，${result.data.missingNodeClasses.length} 类未识别` : ""}`);
+      }
+    } finally {
+      setSyncingMetadata(false);
+    }
+  }
+
   return (
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>工作流详情</h1><p>{detail?.fileName ?? workflowId}</p></header>
+      <div className="aigc-workflow-sync-bar">
+        <label><span>ComfyUI 渠道</span><select aria-label="节点定义同步渠道" value={channelId} onChange={(event) => setChannelId(event.target.value)}>
+          {channels.length ? channels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>) : <option value="">暂无可用渠道</option>}
+        </select></label>
+        <button type="button" className="configuration-secondary-action" disabled={!detail || !channelId || isDirty || syncingMetadata} title={isDirty ? "请先保存映射后再同步" : undefined} onClick={() => void syncNodeMetadata()}><RefreshCw size={15} />{syncingMetadata ? "同步中…" : "同步节点定义"}</button>
+        <small>{detail?.nodeMetadataSyncedAt ? `最近同步 ${formatAigcTime(detail.nodeMetadataSyncedAt)}` : "尚未同步节点定义"}</small>
+      </div>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
       {detail ? (
         <Suspense fallback={<p className="configuration-help">正在加载工作流编排器…</p>}>

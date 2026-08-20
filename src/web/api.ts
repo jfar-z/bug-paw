@@ -39,6 +39,7 @@ import type {
   AigcWorkflowCreateInput,
   AigcWorkflowDetail,
   AigcWorkflowDetailDocument,
+  ComfyUiNodeMetadataSyncResult,
   AigcWorkflowDocument,
   AigcWorkflowUpdateInput,
 } from "../shared/aigc-contracts";
@@ -326,6 +327,7 @@ export const api = {
   createAigcWorkflow: (input: AigcWorkflowCreateInput) => request<AigcWorkflowDetail>("/api/aigc/workflows", { method: "POST", body: JSON.stringify(input) }),
   getAigcWorkflow: (id: string) => request<AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}`),
   updateAigcWorkflow: (id: string, revision: string, input: AigcWorkflowUpdateInput) => request<AigcWorkflowDetail>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  syncAigcWorkflowNodeMetadata: (id: string, channelId: string, revision: string) => request<ComfyUiNodeMetadataSyncResult & AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}/sync-node-metadata`, { method: "POST", body: JSON.stringify({ channelId, revision }) }),
   deleteAigcWorkflow: (id: string, revision: string) => request<void>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getAigcInterfaces: () => request<AigcInterfaceDocument>("/api/aigc/interfaces"),
   createAigcInterface: (input: AigcInterfaceInput) => request<AigcInterfaceRecord>("/api/aigc/interfaces", { method: "POST", body: JSON.stringify(input) }),

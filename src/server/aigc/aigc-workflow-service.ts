@@ -11,7 +11,9 @@ import type {
   AigcWorkflowSummary,
   AigcWorkflowUpdateInput,
   ComfyUiEdge,
+  ComfyUiFieldMetadata,
   ComfyUiNode,
+  ComfyUiNodeMetadata,
 } from "../../shared/aigc-contracts";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
@@ -76,8 +78,34 @@ export class AigcWorkflowService {
     const next = {
       ...previous,
       name: normalizeName(input.name),
-      inputMappings: normalizeInputMappings(input.inputMappings, previous.nodes),
+      inputMappings: normalizeInputMappings(input.inputMappings, previous.nodes, previous.nodeMetadata),
       outputMappings: normalizeOutputMappings(input.outputMappings, previous.nodes),
+      updatedAt: new Date().toISOString(),
+    };
+    const workflows = [...settings.workflows];
+    workflows[index] = next;
+    const written = await this.store.write({ workflows }, revision);
+    return { revision: written.revision, workflow: toDetail(next) };
+  }
+
+  /** 原子合并当前工作流实际引用的节点元数据。 */
+  async syncNodeMetadata(
+    id: string,
+    metadata: ComfyUiNodeMetadata,
+    syncedAt: string,
+    revision: string,
+  ): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
+    const loaded = await this.store.read();
+    const settings = normalizeSettings(loaded.value);
+    const index = settings.workflows.findIndex((workflow) => workflow.id === id);
+    if (index < 0) throw new Error("AIGC 工作流不存在");
+    const previous = settings.workflows[index];
+    const referencedTypes = new Set(previous.nodes.map((node) => node.type));
+    const accepted = Object.fromEntries(Object.entries(metadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)));
+    const next: StoredAigcWorkflow = {
+      ...previous,
+      nodeMetadata: { ...(previous.nodeMetadata ?? {}), ...accepted },
+      nodeMetadataSyncedAt: syncedAt,
       updatedAt: new Date().toISOString(),
     };
     const workflows = [...settings.workflows];
@@ -157,6 +185,8 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
     edges: workflow.edges.map((edge) => ({ ...edge })),
     inputMappings: workflow.inputMappings.map(cloneInputMapping),
     outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
+    ...(workflow.nodeMetadata ? { nodeMetadata: cloneNodeMetadata(workflow.nodeMetadata) } : {}),
+    ...(workflow.nodeMetadataSyncedAt ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
   };
@@ -175,6 +205,8 @@ function normalizeSettings(value: unknown): StoredAigcWorkflows {
         edges: workflow.edges.map((edge) => ({ ...edge })),
         inputMappings: workflow.inputMappings.map(cloneInputMapping),
         outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
+        ...(isRecord(workflow.nodeMetadata) ? { nodeMetadata: normalizeNodeMetadata(workflow.nodeMetadata) } : {}),
+        ...(typeof workflow.nodeMetadataSyncedAt === "string" ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
       })),
   };
 }
@@ -191,7 +223,7 @@ function normalizeFileName(value: string): string {
   return name;
 }
 
-function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkflowInputMapping[] {
+function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[], nodeMetadata?: ComfyUiNodeMetadata): AigcWorkflowInputMapping[] {
   if (!Array.isArray(value)) return [];
   const nodeIds = new Set(nodes.map((node) => node.id));
   const normalized = value.map((mapping) => {
@@ -205,6 +237,9 @@ function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkf
     const enumOptions = type === "enum" ? normalizeEnumOptions(mapping.enumOptions) : undefined;
     const required = mapping.required !== false;
     const activation = normalizeInputActivation(mapping.activation, mappingNodeId, required, nodeIds);
+    const defaultValue = mapping.defaultValue !== undefined ? normalizeDefaultValue(type, mapping.defaultValue, enumOptions) : undefined;
+    const fieldMetadata = nodeMetadata?.[nodes.find((node) => node.id === mappingNodeId)?.type ?? ""]?.fields[mapping.field];
+    if (defaultValue !== undefined) validateMetadataValue(mapping.name.trim(), type, defaultValue, fieldMetadata, enumOptions);
     return {
       id: typeof mapping.id === "string" && mapping.id ? mapping.id : randomUUID(),
       name: mapping.name.trim(),
@@ -213,7 +248,7 @@ function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkf
       type,
       required,
       ...(enumOptions ? { enumOptions } : {}),
-      ...(mapping.defaultValue !== undefined ? { defaultValue: normalizeDefaultValue(type, mapping.defaultValue) } : {}),
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
       ...(typeof mapping.description === "string" && mapping.description ? { description: mapping.description.slice(0, 240) } : {}),
       ...(activation ? { activation } : {}),
     };
@@ -255,6 +290,7 @@ function assertDisjointActivationGroups(mappings: AigcWorkflowInputMapping[]): v
 function cloneInputMapping(mapping: AigcWorkflowInputMapping): AigcWorkflowInputMapping {
   return {
     ...mapping,
+    ...(mapping.enumOptions ? { enumOptions: [...mapping.enumOptions] } : {}),
     ...(mapping.activation ? { activation: { ...mapping.activation, nodeIds: [...mapping.activation.nodeIds] } } : {}),
   };
 }
@@ -279,18 +315,87 @@ function normalizeOutputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWork
   });
 }
 
-function normalizeEnumOptions(value: unknown): string[] {
+function normalizeEnumOptions(value: unknown): Array<string | number | boolean> {
   if (!Array.isArray(value) || value.length === 0) throw new TypeError("enum 入参必须提供候选值");
-  const options = value.map((option) => String(option).trim()).filter(Boolean);
-  if (options.length !== value.length || new Set(options).size !== options.length) throw new TypeError("enum 入参候选值无效");
+  const options = value.map((option) => typeof option === "string" ? option.trim() : option);
+  if (options.some((option) => !isScalar(option) || option === "") || new Set(options.map(scalarKey)).size !== options.length) {
+    throw new TypeError("enum 入参候选值无效");
+  }
   return options;
 }
 
-function normalizeDefaultValue(type: AigcWorkflowInputType, value: unknown): string | number | boolean {
+function normalizeDefaultValue(
+  type: AigcWorkflowInputType,
+  value: unknown,
+  enumOptions?: Array<string | number | boolean>,
+): string | number | boolean {
   if (type === "bool" && typeof value === "boolean") return value;
-  if ((type === "int" || type === "double") && typeof value === "number" && Number.isFinite(value)) return value;
+  if (type === "int" && typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) return value;
+  if (type === "double" && typeof value === "number" && Number.isFinite(value)) return value;
   if (type === "string" && typeof value === "string") return value;
+  if (type === "enum" && isScalar(value) && enumOptions?.some((option) => Object.is(option, value))) return value;
   throw new TypeError("工作流入参默认值类型无效");
+}
+
+/** 校验默认值和运行值共享的 ComfyUI 值域约束。 */
+export function validateMetadataValue(
+  name: string,
+  type: AigcWorkflowInputType,
+  value: unknown,
+  metadata?: ComfyUiFieldMetadata,
+  enumOptions?: Array<string | number | boolean>,
+): void {
+  if (type === "int" && (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value))) {
+    throw new TypeError(`参数 ${name} 必须是有限整数`);
+  }
+  if (type === "double" && (typeof value !== "number" || !Number.isFinite(value))) throw new TypeError(`参数 ${name} 必须是有限数值`);
+  if (typeof value === "number") {
+    if (metadata?.min !== undefined && value < metadata.min) throw new TypeError(`参数 ${name} 不能小于 ${metadata.min}`);
+    if (metadata?.max !== undefined && value > metadata.max) throw new TypeError(`参数 ${name} 不能大于 ${metadata.max}`);
+  }
+  const allowed = enumOptions ?? metadata?.enumOptions;
+  if (type === "enum" && allowed && !allowed.some((option) => Object.is(option, value))) {
+    throw new TypeError(`参数 ${name} 不在允许的枚举候选中`);
+  }
+}
+
+/** 宽容恢复旧存储中的节点元数据，只保留已知安全字段。 */
+function normalizeNodeMetadata(value: Record<string, unknown>): ComfyUiNodeMetadata {
+  const result: ComfyUiNodeMetadata = {};
+  for (const [nodeClass, nodeValue] of Object.entries(value)) {
+    if (!isRecord(nodeValue) || !isRecord(nodeValue.fields)) continue;
+    const fields: ComfyUiNodeMetadata[string]["fields"] = {};
+    for (const [fieldName, fieldValue] of Object.entries(nodeValue.fields)) {
+      if (!isRecord(fieldValue) || typeof fieldValue.comfyType !== "string") continue;
+      fields[fieldName] = fieldValue as unknown as ComfyUiFieldMetadata;
+    }
+    result[nodeClass] = {
+      fields,
+      ...(typeof nodeValue.displayName === "string" ? { displayName: nodeValue.displayName } : {}),
+      ...(typeof nodeValue.description === "string" ? { description: nodeValue.description } : {}),
+      ...(typeof nodeValue.category === "string" ? { category: nodeValue.category } : {}),
+    };
+  }
+  return result;
+}
+
+/** 深复制元数据，防止调用方修改存储快照。 */
+function cloneNodeMetadata(value: ComfyUiNodeMetadata): ComfyUiNodeMetadata {
+  return Object.fromEntries(Object.entries(value).map(([nodeClass, node]) => [nodeClass, {
+    ...node,
+    fields: Object.fromEntries(Object.entries(node.fields).map(([field, metadata]) => [field, {
+      ...metadata,
+      ...(metadata.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
+    }])),
+  }]));
+}
+
+function isScalar(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value));
+}
+
+function scalarKey(value: string | number | boolean): string {
+  return `${typeof value}:${String(value)}`;
 }
 
 function isStoredWorkflow(value: unknown): value is StoredAigcWorkflow {
