@@ -536,6 +536,14 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".quick-workspace-drawer__header > .icon-button", "flex")).toBe("0 0 auto");
   });
 
+  it("快捷资源覆盖预览位于固定列表头之上", async () => {
+    const source = await readFile("src/web/resources.css", "utf8");
+    const rules = parseStyleRules(source);
+
+    expect(declaration(rules, ".workspace-browser--quick .workspace-file-preview--overlay", "z-index"))
+      .toBe("5");
+  });
+
   it("移动端快捷资源抽屉覆盖完整视口", async () => {
     const source = await readFile("src/web/resources.css", "utf8");
 
