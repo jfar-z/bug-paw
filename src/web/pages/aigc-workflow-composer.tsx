@@ -7,6 +7,7 @@ import type {
   AigcWorkflowOutputMapping,
   ComfyUiEdge,
   ComfyUiField,
+  ComfyUiFieldMetadata,
   ComfyUiNode,
 } from "../../shared/aigc-contracts";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
@@ -58,6 +59,8 @@ function InputMappingBuilder(props: {
   const [draft, setDraft] = useState<AigcWorkflowInputMapping>();
   const [browseNodeId, setBrowseNodeId] = useState("");
   const [editingId, setEditingId] = useState("");
+  const [defaultValueDraft, setDefaultValueDraft] = useState("");
+  const [defaultValueError, setDefaultValueError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AigcWorkflowInputMapping>();
   const selectedNode = workflow.nodes.find((node) => node.id === draft?.nodeId);
   const selectedFields = selectedNode ? inputFields(selectedNode) : [];
@@ -81,29 +84,47 @@ function InputMappingBuilder(props: {
     });
     setBrowseNodeId("");
     setEditingId("");
+    setDefaultValueDraft("");
+    setDefaultValueError("");
   }
 
   function beginEdit(mapping: AigcWorkflowInputMapping) {
     setDraft(cloneInputMapping(mapping));
     setBrowseNodeId(mapping.nodeId);
     setEditingId(mapping.id);
+    setDefaultValueDraft(inputDefaultValueDraft(mapping));
+    setDefaultValueError("");
   }
 
   function selectMappingNode(nodeId: string) {
     const node = workflow.nodes.find((item) => item.id === nodeId);
     const firstField = node ? inputFields(node)[0] : undefined;
+    const metadata = node && firstField ? fieldMetadata(workflow, node, firstField.name) : undefined;
     setDraft((current) => current ? {
       ...current,
       name: current.name || (firstField ? parameterNameFromField(firstField) : ""),
       nodeId,
       field: firstField?.name ?? "",
-      type: firstField?.valueType ?? current.type,
+      type: metadata?.valueType ?? firstField?.valueType ?? current.type,
+      ...(metadata?.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
+      ...(current.defaultValue === undefined && metadata?.defaultValue !== undefined ? { defaultValue: metadata.defaultValue } : {}),
       ...(current.activation ? { activation: { when: "provided", nodeIds: [nodeId] } } : {}),
     } : current);
+    if (metadata?.defaultValue !== undefined) setDefaultValueDraft(defaultValueDraftFromScalar(metadata.defaultValue, metadata.valueType));
+    setDefaultValueError("");
   }
 
   function selectField(field: ComfyUiField) {
-    setDraft((current) => current ? { ...current, field: field.name, type: field.valueType ?? current.type } : current);
+    const metadata = selectedNode ? fieldMetadata(workflow, selectedNode, field.name) : undefined;
+    setDraft((current) => current ? {
+      ...current,
+      field: field.name,
+      type: metadata?.valueType ?? field.valueType ?? current.type,
+      ...(metadata?.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
+      ...(metadata?.defaultValue !== undefined ? { defaultValue: metadata.defaultValue } : {}),
+    } : current);
+    setDefaultValueDraft(metadata?.defaultValue === undefined ? "" : defaultValueDraftFromScalar(metadata.defaultValue, metadata.valueType));
+    setDefaultValueError("");
   }
 
   function updateDraft<K extends keyof AigcWorkflowInputMapping>(key: K, value: AigcWorkflowInputMapping[K]) {
@@ -133,12 +154,30 @@ function InputMappingBuilder(props: {
     setDraft(undefined);
     setBrowseNodeId("");
     setEditingId("");
+    setDefaultValueDraft("");
+    setDefaultValueError("");
   }
 
   function commit() {
     if (!draft || !draft.name.trim() || !draft.nodeId || !draft.field) return;
     if (draft.activation && draft.activation.nodeIds.length === 0) return;
-    const normalized = cloneInputMapping({ ...draft, name: draft.name.trim() });
+    const parsedDefault = parseDefaultValueDraft(draft.type, defaultValueDraft, draft.enumOptions);
+    if (parsedDefault.error) {
+      setDefaultValueError(parsedDefault.error);
+      return;
+    }
+    const selectedMetadata = selectedNode ? fieldMetadata(workflow, selectedNode, draft.field) : undefined;
+    const constraintError = defaultValueConstraintError(parsedDefault.value, draft.type, selectedMetadata, draft.enumOptions);
+    if (constraintError) {
+      setDefaultValueError(constraintError);
+      return;
+    }
+    const { defaultValue: _defaultValue, ...draftWithoutDefault } = draft;
+    const normalized = cloneInputMapping({
+      ...draftWithoutDefault,
+      name: draft.name.trim(),
+      ...(parsedDefault.value !== undefined ? { defaultValue: parsedDefault.value } : {}),
+    });
     if (editingId) onChange(mappings.map((mapping) => mapping.id === editingId ? { ...normalized, id: editingId } : mapping));
     else onChange([...mappings, { ...normalized, id: crypto.randomUUID() }]);
     closeEditor();
@@ -200,7 +239,7 @@ function InputMappingBuilder(props: {
                 <div className="aigc-field-picker">
                   {selectedFields.map((field) => (
                     <button type="button" key={field.name} className={draft.field === field.name ? "is-selected" : undefined} onClick={() => selectField(field)}>
-                      <strong title={field.name}>{field.name}</strong><small>{field.valueType ?? field.kind}</small>
+                      <strong title={field.name}>{field.name}</strong><small>{fieldMetadataSummary(fieldMetadata(workflow, selectedNode, field.name)) ?? field.valueType ?? field.kind}</small>
                     </button>
                   ))}
                   {!draft.nodeId ? <p className="configuration-help">请先从左侧将一个节点选为映射节点。</p> : null}
@@ -215,10 +254,10 @@ function InputMappingBuilder(props: {
                   <label><span>类型</span><select aria-label="入参类型" value={draft.type} onChange={(event) => updateDraft("type", event.target.value as AigcWorkflowInputType)}>
                     {inputTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select></label>
-                  <label><span>默认值</span><input aria-label="入参默认值" value={inputDefaultValue(draft)} onChange={(event) => updateDraft("defaultValue", coerceDefaultValue(draft.type, event.target.value))} /></label>
+                  <DefaultValueField mapping={draft} metadata={selectedNode ? fieldMetadata(workflow, selectedNode, draft.field) : undefined} value={defaultValueDraft} error={defaultValueError} onChange={(value) => { setDefaultValueDraft(value); setDefaultValueError(""); }} />
                   <label className="configuration-check-line aigc-check-cell"><input type="checkbox" checked={draft.required} disabled={Boolean(draft.activation)} onChange={(event) => updateDraft("required", event.target.checked)} /><span>必填</span></label>
                   <label className="aigc-span-2"><span>说明</span><input aria-label="入参说明" value={draft.description ?? ""} onChange={(event) => updateDraft("description", event.target.value)} /></label>
-                  {draft.type === "enum" ? <label className="aigc-span-2"><span>枚举选项</span><textarea aria-label="枚举选项" rows={3} value={(draft.enumOptions ?? []).join("\n")} onChange={(event) => updateDraft("enumOptions", event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} /></label> : null}
+                  {draft.type === "enum" && !fieldMetadata(workflow, selectedNode, draft.field)?.enumOptions ? <label className="aigc-span-2"><span>枚举选项</span><textarea aria-label="枚举选项" rows={3} value={(draft.enumOptions ?? []).join("\n")} onChange={(event) => updateDraft("enumOptions", event.target.value.split("\n").map((item) => item.trim()).filter(Boolean))} /></label> : null}
                 </div>
                 <label className="configuration-check-line aigc-activation-toggle">
                   <input type="checkbox" aria-label="有值时启用分支" checked={Boolean(draft.activation)} disabled={!draft.nodeId} onChange={(event) => toggleActivation(event.target.checked)} />
@@ -673,21 +712,89 @@ const outputMediaTypeOptions: Array<{ value: AigcWorkflowOutputMapping["mediaTyp
   { value: "text", label: "文本（text）" },
 ];
 
-/** 将表单文本转换为对应类型的默认值。 */
-function coerceDefaultValue(type: AigcWorkflowInputType, value: string): string | number | boolean | undefined {
-  if (!value) return undefined;
-  if (type === "bool") return value === "true";
-  if (type === "int" || type === "double") {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : undefined;
-  }
-  return value;
+/** 根据字段类型渲染不会吞掉数值输入中间态的默认值控件。 */
+function DefaultValueField(props: {
+  mapping: AigcWorkflowInputMapping;
+  metadata?: ComfyUiFieldMetadata;
+  value: string;
+  error: string;
+  onChange: (value: string) => void;
+}) {
+  const { mapping, metadata, value, error, onChange } = props;
+  const options = mapping.enumOptions ?? metadata?.enumOptions ?? [];
+  return (
+    <label>
+      <span>默认值</span>
+      {mapping.type === "bool" ? (
+        <select aria-label="入参默认值" value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">未设置</option><option value="true">true</option><option value="false">false</option>
+        </select>
+      ) : mapping.type === "enum" ? (
+        <select aria-label="入参默认值" value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">未设置</option>
+          {options.map((option) => <option key={scalarKey(option)} value={scalarKey(option)}>{String(option)}</option>)}
+        </select>
+      ) : (
+        <input type="text" inputMode={mapping.type === "int" || mapping.type === "double" ? "decimal" : undefined} aria-label="入参默认值" aria-invalid={error ? "true" : undefined} placeholder={metadata?.placeholder} value={value} onChange={(event) => onChange(event.target.value)} />
+      )}
+      {error ? <small className="aigc-field-error" role="alert">{error}</small> : metadataRangeText(metadata) ? <small>{metadataRangeText(metadata)}</small> : null}
+    </label>
+  );
 }
 
-/** 将默认值稳定显示为可编辑文本。 */
-function inputDefaultValue(mapping: AigcWorkflowInputMapping): string {
+/** 将默认值稳定转换为文本草稿或枚举标量键。 */
+function inputDefaultValueDraft(mapping: AigcWorkflowInputMapping): string {
   if (mapping.defaultValue === undefined) return "";
-  if (mapping.defaultValue === true) return "true";
-  if (mapping.defaultValue === false) return "false";
-  return String(mapping.defaultValue);
+  return defaultValueDraftFromScalar(mapping.defaultValue, mapping.type);
+}
+
+function defaultValueDraftFromScalar(value: string | number | boolean, type?: AigcWorkflowInputType): string {
+  return type === "enum" ? scalarKey(value) : String(value);
+}
+
+/** 提交编辑器时才把数值草稿解析为最终标量。 */
+function parseDefaultValueDraft(type: AigcWorkflowInputType, draft: string, enumOptions?: Array<string | number | boolean>): { value?: string | number | boolean; error?: string } {
+  if (draft === "") return {};
+  if (type === "bool") return draft === "true" ? { value: true } : draft === "false" ? { value: false } : { error: "布尔默认值无效" };
+  if (type === "enum") {
+    const value = enumOptions?.find((option) => scalarKey(option) === draft);
+    return value === undefined ? { error: "请选择有效的枚举默认值" } : { value };
+  }
+  if (type === "int" || type === "double") {
+    const number = Number(draft);
+    if (!Number.isFinite(number)) return { error: "请输入完整的有限数值" };
+    if (type === "int" && !Number.isInteger(number)) return { error: "整数默认值不能包含小数" };
+    return { value: number };
+  }
+  return { value: draft };
+}
+
+/** 在浏览器内即时提示可确定的值域错误，服务端仍会再次校验。 */
+function defaultValueConstraintError(value: string | number | boolean | undefined, type: AigcWorkflowInputType, metadata?: ComfyUiFieldMetadata, enumOptions?: Array<string | number | boolean>): string | undefined {
+  if (typeof value === "number" && metadata?.min !== undefined && value < metadata.min) return `不能小于 ${metadata.min}`;
+  if (typeof value === "number" && metadata?.max !== undefined && value > metadata.max) return `不能大于 ${metadata.max}`;
+  const allowed = enumOptions ?? metadata?.enumOptions;
+  if (type === "enum" && value !== undefined && allowed && !allowed.some((option) => Object.is(option, value))) return "默认值不在枚举候选中";
+  return undefined;
+}
+
+/** 读取指定节点字段的权威元数据。 */
+function fieldMetadata(workflow: AigcWorkflowDetail, node: ComfyUiNode | undefined, field: string): ComfyUiFieldMetadata | undefined {
+  return node ? workflow.nodeMetadata?.[node.type]?.fields[field] : undefined;
+}
+
+/** 为字段卡片生成紧凑的类型与范围摘要。 */
+function fieldMetadataSummary(metadata?: ComfyUiFieldMetadata): string | undefined {
+  if (!metadata) return undefined;
+  return [metadata.comfyType, metadataRangeText(metadata)].filter(Boolean).join(" · ");
+}
+
+function metadataRangeText(metadata?: ComfyUiFieldMetadata): string | undefined {
+  if (!metadata) return undefined;
+  const range = metadata.min !== undefined || metadata.max !== undefined ? `${metadata.min ?? "−∞"}–${metadata.max ?? "+∞"}` : "";
+  return [range, metadata.step !== undefined ? `步进 ${metadata.step}` : ""].filter(Boolean).join(" · ") || undefined;
+}
+
+function scalarKey(value: string | number | boolean): string {
+  return `${typeof value}:${String(value)}`;
 }

@@ -311,4 +311,37 @@ describe("AigcWorkflowComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "新增输出" }));
     expect(screen.getByLabelText("输出媒体类型")).toContainHTML('<option value="audio">音频（audio）</option>');
   });
+
+  it("按节点元数据选择浮点类型并保留数值草稿到提交", () => {
+    const onInputMappingsChange = vi.fn();
+    const metadataWorkflow: AigcWorkflowDetail = {
+      ...workflow,
+      nodes: [...workflow.nodes, { id: "4", type: "KSampler", title: "采样器", fields: [{ name: "inputs.cfg", kind: "input", valueType: "int" }] }],
+      nodeMetadata: { KSampler: { fields: { "inputs.cfg": { comfyType: "FLOAT", valueType: "double", min: -1, max: 20, step: 0.1 } } } },
+    };
+    render(
+      <AigcWorkflowComposer
+        workflow={metadataWorkflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={onInputMappingsChange}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增入参" }));
+    fireEvent.change(screen.getByLabelText("搜索工作流节点"), { target: { value: "KSampler" } });
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 采样器" }));
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+    expect(screen.getByLabelText("入参类型")).toHaveValue("double");
+    expect(screen.getByText("FLOAT · -1–20 · 步进 0.1")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("入参默认值"), { target: { value: "-" } });
+    expect(screen.getByLabelText("入参默认值")).toHaveValue("-");
+    fireEvent.change(screen.getByLabelText("入参默认值"), { target: { value: "-0.5" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加映射" }));
+    expect(onInputMappingsChange).toHaveBeenCalledWith([expect.objectContaining({ type: "double", defaultValue: -0.5 })]);
+  });
 });

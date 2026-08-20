@@ -95,3 +95,38 @@ describe("AIGC 产物路由", () => {
     await app.close();
   });
 });
+
+describe("AIGC 工作流节点元数据路由", () => {
+  it("同步节点定义并返回新的配置版本和摘要", async () => {
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {
+        get: async () => ({ revision: "r1", workflow: { nodes: [{ type: "KSampler" }, { type: "KSampler" }] } }),
+        syncNodeMetadata: async () => ({ revision: "r2", workflow: { id: "workflow-1", nodeMetadataSyncedAt: "2026-08-20T08:00:00.000Z" } }),
+      } as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: {
+        getNodeMetadata: async () => ({
+          metadata: { KSampler: { fields: {} } },
+          syncedNodeClasses: ["KSampler"],
+          missingNodeClasses: [],
+          syncedAt: "2026-08-20T08:00:00.000Z",
+        }),
+      } as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/aigc/workflows/workflow-1/sync-node-metadata",
+      payload: { channelId: "comfy", revision: "r1" },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ revision: "r2", syncedNodeClasses: ["KSampler"], workflow: { id: "workflow-1" } });
+    await app.close();
+  });
+});

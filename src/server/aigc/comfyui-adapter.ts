@@ -11,6 +11,7 @@ import type {
   AigcWorkflowOutputMapping,
 } from "../../shared/aigc-contracts";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
+import { validateMetadataValue } from "./aigc-workflow-service";
 
 const POLL_INTERVAL_MS = 1_000;
 const QUEUE_POLL_EVERY = 3;
@@ -42,7 +43,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     if (workflow.inputMappings.some((mapping) => ["image", "video", "audio"].includes(mapping.type))) {
       progress.phase("uploading");
     }
-    const prompt = await this.buildPrompt(workflow.raw, workflow.inputMappings, input);
+    const prompt = await this.buildPrompt(workflow, input);
     const clientId = randomUUID();
     const tracker = this.openStatusSocket(input.channel.baseUrl, clientId, progress);
     try {
@@ -68,10 +69,13 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
   }
 
   /** 根据映射生成可执行的 API 格式工作流。 */
-  private async buildPrompt(raw: unknown, mappings: AigcWorkflowInputMapping[], input: AigcExecutionInput): Promise<Record<string, unknown>> {
-    const apiWorkflow = isUiWorkflow(raw) ? convertUiToApi(raw) : toApiWorkflow(raw);
+  private async buildPrompt(
+    workflow: AigcWorkflowDetail & { raw: unknown },
+    input: AigcExecutionInput,
+  ): Promise<Record<string, unknown>> {
+    const apiWorkflow = isUiWorkflow(workflow.raw) ? convertUiToApi(workflow.raw) : toApiWorkflow(workflow.raw);
     const removedNodeIds = new Set<string>();
-    for (const mapping of mappings) {
+    for (const mapping of workflow.inputMappings) {
       const value = input.inputs[mapping.name];
       if (value === undefined || value === null || value === "") {
         if (mapping.required) throw new TypeError(`工作流入参 ${mapping.name} 不能为空`);
@@ -83,7 +87,11 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         setPath(apiWorkflow, mapping.nodeId, mapping.field, uploaded);
         continue;
       }
-      setPath(apiWorkflow, mapping.nodeId, mapping.field, coerceValue(mapping, value));
+      const normalized = coerceValue(mapping, value);
+      const nodeClass = workflow.nodes.find((node) => node.id === mapping.nodeId)?.type;
+      const metadata = nodeClass ? workflow.nodeMetadata?.[nodeClass]?.fields[mapping.field] : undefined;
+      validateMetadataValue(mapping.name, mapping.type, normalized, metadata, mapping.enumOptions);
+      setPath(apiWorkflow, mapping.nodeId, mapping.field, normalized);
     }
     pruneConditionalNodes(apiWorkflow, removedNodeIds);
     return apiWorkflow;
@@ -337,8 +345,10 @@ function fieldBaseName(field: string): string {
 
 function coerceValue(mapping: AigcWorkflowInputMapping, value: unknown): unknown {
   if (mapping.type === "bool" && typeof value === "boolean") return value;
-  if ((mapping.type === "int" || mapping.type === "double") && typeof value === "number" && Number.isFinite(value)) return value;
-  if (mapping.type === "string" || mapping.type === "enum") return String(value);
+  if (mapping.type === "int" && typeof value === "number" && Number.isFinite(value) && Number.isInteger(value)) return value;
+  if (mapping.type === "double" && typeof value === "number" && Number.isFinite(value)) return value;
+  if (mapping.type === "string") return String(value);
+  if (mapping.type === "enum" && (typeof value === "string" || typeof value === "number" || typeof value === "boolean")) return value;
   return value;
 }
 
