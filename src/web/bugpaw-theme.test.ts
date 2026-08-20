@@ -526,6 +526,16 @@ describe("BugPaw 生产视觉合同", () => {
     }
   });
 
+  it("快捷资源抽屉标题保持分栏和三段纵向信息层级", async () => {
+    const source = await readApplicationStyles();
+    const rules = parseStyleRules(source);
+
+    expect(declaration(rules, ".quick-workspace-drawer__header", "display")).toBe("flex");
+    expect(declaration(rules, ".quick-workspace-drawer__header", "justify-content")).toBe("space-between");
+    expect(declaration(rules, ".quick-workspace-drawer__header > div", "display")).toBe("grid");
+    expect(declaration(rules, ".quick-workspace-drawer__header > .icon-button", "flex")).toBe("0 0 auto");
+  });
+
   it("知识库与其他工作区页面使用一致的主画布背景", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8");
     const rules = parseStyleRules(source);

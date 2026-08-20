@@ -50,7 +50,7 @@ export function QuickWorkspaceDrawer(props: QuickWorkspaceDrawerProps) {
   return createPortal(<>
     {props.open ? <button type="button" className="sidebar-scrim" style={{ display: "block", position: "fixed", inset: 0, zIndex: 29, border: 0, background: "rgba(8, 12, 9, 0.48)", backdropFilter: "blur(2px)" }} aria-label="点击遮罩关闭快捷资源管理" onClick={props.onClose} /> : null}
     <aside ref={drawerRef} className={`quick-workspace-drawer${props.open ? " is-open" : ""}${props.swiping || reduceMotion ? " is-swiping" : ""}`} style={drawerStyle} aria-label="快捷资源管理" aria-hidden={!props.open && !props.swiping} inert={!props.open && !props.swiping ? true : undefined} tabIndex={-1}>
-      <header className="workspace-agent-navigation__header">
+      <header className="quick-workspace-drawer__header">
         <div><span>WORKSPACE · FILES</span><strong>快捷资源管理</strong><small>{props.agentName ? `${props.agentName} 的工作目录` : "当前 Agent 工作目录"}</small></div>
         <button type="button" className="icon-button" aria-label="关闭快捷资源管理" onClick={props.onClose}><X size={18} aria-hidden="true" /></button>
       </header>

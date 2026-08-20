@@ -255,6 +255,19 @@
 
 .quick-workspace-drawer.is-swiping { transition: none; }
 
+/* 快捷抽屉保留独立标题结构，避免侧边栏标题组件调整后破坏三段信息层级。 */
+.quick-workspace-drawer__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 22px 15px; }
+
+.quick-workspace-drawer__header > div { display: grid; min-width: 0; gap: 3px; }
+
+.quick-workspace-drawer__header span { color: var(--fg); font-family: var(--font-mono); font-size: 11px; letter-spacing: .09em; }
+
+.quick-workspace-drawer__header strong { font-size: 15px; }
+
+.quick-workspace-drawer__header small { overflow: hidden; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.quick-workspace-drawer__header > .icon-button { flex: 0 0 auto; }
+
 .workspace-browser--quick { position: relative; min-height: 0; flex: 1; padding: 18px; overflow: auto; }
 
 .workspace-browser--quick .workspace-file-preview--overlay { position: absolute; inset: 0; border: 0; }
