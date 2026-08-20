@@ -536,6 +536,15 @@ describe("BugPaw 生产视觉合同", () => {
     expect(declaration(rules, ".quick-workspace-drawer__header > .icon-button", "flex")).toBe("0 0 auto");
   });
 
+  it("移动端快捷资源抽屉覆盖完整视口", async () => {
+    const source = await readFile("src/web/resources.css", "utf8");
+
+    expect(mediaDeclaration(source, "(max-width: 760px)", ".quick-workspace-drawer", "width"))
+      .toBe("100%");
+    expect(mediaDeclaration(source, "(max-width: 760px)", ".quick-workspace-drawer", "border-left"))
+      .toBe("0px");
+  });
+
   it("知识库与其他工作区页面使用一致的主画布背景", async () => {
     const source = await readFile("src/web/bugpaw-theme.css", "utf8");
     const rules = parseStyleRules(source);

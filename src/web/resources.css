@@ -294,7 +294,7 @@
 
 @media (max-width: 760px) {
   .quick-workspace-open-button { display: none; }
-  .quick-workspace-drawer { width: min(92vw, 680px); border-left: 0; }
+  .quick-workspace-drawer { width: 100%; border-left: 0; }
   .workspace-resources-page { display: block; height: 100%; overflow: auto; }
   .workspace-agent-navigation { display: none; }
   .workspace-agent-navigation__scrim { display: block; }
