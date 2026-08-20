@@ -28,7 +28,11 @@ describe("QuickWorkspaceDrawer", () => {
     const onClose = vi.fn();
     render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><QuickWorkspaceDrawer open agentId="agent-a" agentName="默认 Agent" onClose={onClose} /></ApiTaskProvider></ErrorToastProvider>);
 
-    expect(screen.getByRole("complementary", { name: "快捷资源管理" })).toHaveClass("is-open");
+    const drawer = screen.getByRole("complementary", { name: "快捷资源管理" });
+    expect(drawer).toHaveClass("is-open");
+    const header = drawer.querySelector(".quick-workspace-drawer__header")!;
+    expect([...header.querySelectorAll("span, strong, small")].map((element) => element.textContent))
+      .toEqual(["WORKSPACE · FILES", "快捷资源管理", "默认 Agent 的工作目录"]);
     expect(screen.queryByText("切换 Agent")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭快捷资源管理" }));
     expect(onClose).toHaveBeenCalledOnce();
