@@ -344,4 +344,37 @@ describe("AigcWorkflowComposer", () => {
     fireEvent.click(screen.getByRole("button", { name: "添加映射" }));
     expect(onInputMappingsChange).toHaveBeenCalledWith([expect.objectContaining({ type: "double", defaultValue: -0.5 })]);
   });
+
+  it("编辑旧字符串映射时可改为节点定义提供的枚举类型", () => {
+    const onInputMappingsChange = vi.fn();
+    const metadataWorkflow: AigcWorkflowDetail = {
+      ...workflow,
+      nodes: [{ id: "1", type: "ResolutionSelector", title: "分辨率", fields: [{ name: "inputs.aspect_ratio", kind: "input", valueType: "string" }] }],
+      nodeMetadata: { ResolutionSelector: { fields: { "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["1:1", "16:9"] } } } },
+      inputMappings: [{ id: "ratio", name: "比例", nodeId: "1", field: "inputs.aspect_ratio", type: "string", required: true }],
+    };
+    render(
+      <AigcWorkflowComposer
+        workflow={metadataWorkflow}
+        name="文生图"
+        onNameChange={vi.fn()}
+        inputMappings={metadataWorkflow.inputMappings}
+        outputMappings={[]}
+        onInputMappingsChange={onInputMappingsChange}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    fireEvent.change(screen.getByLabelText("入参类型"), { target: { value: "enum" } });
+    fireEvent.change(screen.getByLabelText("入参默认值"), { target: { value: "string:16:9" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+
+    expect(onInputMappingsChange).toHaveBeenCalledWith([expect.objectContaining({
+      id: "ratio",
+      type: "enum",
+      enumOptions: ["1:1", "16:9"],
+      defaultValue: "16:9",
+    })]);
+  });
 });

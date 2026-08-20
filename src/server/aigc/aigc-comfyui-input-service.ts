@@ -105,16 +105,24 @@ function parseFieldMetadata(definition: unknown, required: boolean): ComfyUiFiel
   if (!Array.isArray(definition) || definition.length === 0) return undefined;
   const typeDefinition = definition[0];
   const options = isRecord(definition[1]) ? definition[1] : {};
-  const enumOptions = Array.isArray(typeDefinition) ? typeDefinition.filter(isScalar) : undefined;
+  const enumOptions = Array.isArray(typeDefinition)
+    ? typeDefinition.filter(isScalar)
+    : typeDefinition === "COMBO" && Array.isArray(options.options)
+      ? options.options.filter(isScalar)
+      : undefined;
   const isUploadField = Array.isArray(typeDefinition) && (options.image_upload === true || options.upload === true);
   const comfyType = isUploadField ? "IMAGE" : enumOptions ? "COMBO" : typeof typeDefinition === "string" ? typeDefinition : "";
   if (!comfyType) return undefined;
-  const valueType = isUploadField ? "image" : enumOptions ? "enum" : comfyValueType(comfyType, options);
+  const valueType = isUploadField ? "image" : comfyType === "COMBO" ? "enum" : comfyValueType(comfyType, options);
+  const defaultValue = isScalar(options.default)
+    && (!enumOptions?.length || enumOptions.some((option) => Object.is(option, options.default)))
+    ? options.default
+    : undefined;
   return {
     comfyType,
     required,
     ...(valueType ? { valueType } : {}),
-    ...(isScalar(options.default) ? { defaultValue: options.default } : {}),
+    ...(defaultValue !== undefined ? { defaultValue } : {}),
     ...(finiteNumber(options.min) !== undefined ? { min: finiteNumber(options.min) } : {}),
     ...(finiteNumber(options.max) !== undefined ? { max: finiteNumber(options.max) } : {}),
     ...(finiteNumber(options.step) !== undefined ? { step: finiteNumber(options.step) } : {}),

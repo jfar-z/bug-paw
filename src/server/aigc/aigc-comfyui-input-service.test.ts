@@ -94,6 +94,24 @@ describe("AigcComfyUiInputService", () => {
     });
   });
 
+  it("解析新版 COMBO options 并忽略不属于候选项的默认值", () => {
+    expect(parseNodeMetadata({
+      KSamplerSelect: {
+        input: {
+          required: {
+            sampler_name: ["COMBO", { multiselect: false, options: ["euler", "dpmpp_2m"], default: "euler" }],
+            scheduler: ["COMBO", { options: ["normal", "karras"], default: false }],
+          },
+        },
+      },
+    }, "KSamplerSelect")).toEqual({
+      fields: {
+        "inputs.sampler_name": { comfyType: "COMBO", valueType: "enum", required: true, defaultValue: "euler", enumOptions: ["euler", "dpmpp_2m"] },
+        "inputs.scheduler": { comfyType: "COMBO", valueType: "enum", required: true, enumOptions: ["normal", "karras"] },
+      },
+    });
+  });
+
   it("去重节点类型并保留部分成功的同步结果", async () => {
     const channel: AigcChannelConfig = { id: "comfy", name: "本机", type: "comfyui", baseUrl: "http://comfy", enabled: true };
     const request = vi.fn(async (input: string | URL | Request) => {
