@@ -4,6 +4,48 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.6 - 2026-08-20
+
+### 新增 / Added
+
+- 增加完整的 AIGC 工作台，统一管理渠道、协议接口、创作运行与使用入口，支持 OpenAI、Grok 和 ComfyUI 能力。
+- 补齐 Grok 图片编辑、视频编辑续写，以及通过公共文件区选择媒体输入的工作流。
+- 重构 AIGC 信息架构与创作运行界面，提供紧凑参数布局、媒体产物切换预览和清晰的运行状态反馈。
+- 增加 AIGC 产物查看、任务与产物级联删除、缩略图分组分页、公开目录管理和稳定公开 URL。
+- 增加 ComfyUI 可视化拓扑编排、条件分支映射、媒体输出节点选择，以及无需手工指定字段的图片、视频和音频产物映射。
+- 增加 ComfyUI 本地上传、公开目录和服务端 input 目录三种媒体输入路径，并支持图片、视频与音频参数。
+- 增加 ComfyUI 节点元数据同步、枚举和值域表单控件、并发同步与 revision 保护，同时兼容新版和旧版 COMBO 元数据。
+- 增加本地语音输入能力，在支持的浏览器中直接将录音转为会话输入文本。
+- 拆分独立页面与 AIGC 页面样式，增加逐页面 Bundle 预算、PWA 预缓存合同和公开 Web 页面分包规范。
+
+- Added a complete AIGC workbench for channels, protocol interfaces, creation runs, and usage entry points across OpenAI, Grok, and ComfyUI capabilities.
+- Completed Grok image editing, video editing and continuation, plus media inputs selected from the public file area.
+- Redesigned AIGC information architecture and creation runs with compact parameter layouts, switchable media previews, and clearer runtime feedback.
+- Added AIGC output browsing, cascading task/output deletion, grouped thumbnail pagination, public-directory management, and stable public URLs.
+- Added visual ComfyUI topology composition, conditional branch mapping, media-output node selection, and field-free mapping for image, video, and audio outputs.
+- Added three ComfyUI media-input paths: local uploads, the public directory, and the server-side input directory, with image, video, and audio parameters.
+- Added ComfyUI node-metadata synchronization, enum/range controls, bounded concurrent sync, revision protection, and compatibility with both new and legacy COMBO metadata.
+- Added local speech input so supported browsers can transcribe recordings directly into the conversation composer.
+- Split page-specific and AIGC styles, introduced per-page bundle budgets and PWA precache contracts, and documented the public Web page-splitting standard.
+
+### 修复 / Fixed
+
+- 修复 AIGC 详情跳转重复触发移动端入场层，以及会话输入区在样式分包后的背景断层。
+- 修复 ComfyUI 长任务轮询上限、音频输入输出、WebSocket 节点进度、瞬态状态、长状态截断和运行中重复提交。
+- 修复 ComfyUI 节点浏览返回入口、节点列表静默截断，以及超过十二个节点后无法访问全部映射目标的问题。
+- 修复 ComfyUI 视频产物写入 images 槽位时无法识别，并完善媒体输出回退逻辑。
+- 修复快捷资源管理样式未随聊天页面加载、抽屉标题信息挤成单行及关闭按钮错位。
+- 修复移动端快捷资源抽屉未覆盖完整视口而露出白边的问题。
+- 修复文件预览时固定的“选择”和“操作”列表头遮挡预览内容的问题。
+
+- Fixed duplicate mobile entrance layers during AIGC detail navigation and the composer background seam introduced by style splitting.
+- Fixed ComfyUI long-run polling limits, audio inputs/outputs, WebSocket node progress, transient states, long-status truncation, and duplicate submissions while running.
+- Fixed ComfyUI node-browser return navigation, silent node-list truncation, and inaccessible mapping targets beyond twelve nodes.
+- Fixed detection of ComfyUI video artifacts emitted through image slots and strengthened media-output fallback behavior.
+- Fixed quick-workspace styles missing from chat, drawer-title content collapsing into one line, and the close button shifting out of place.
+- Fixed the mobile quick-workspace drawer exposing a white edge instead of covering the full viewport.
+- Fixed sticky selection and action headers rendering above file-preview content.
+
 ## 0.1.5 - 2026-08-15
 
 ### 新增 / Added
