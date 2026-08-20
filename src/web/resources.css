@@ -270,7 +270,8 @@
 
 .workspace-browser--quick { position: relative; min-height: 0; flex: 1; padding: 18px; overflow: auto; }
 
-.workspace-browser--quick .workspace-file-preview--overlay { position: absolute; inset: 0; border: 0; }
+/* 覆盖式预览需高于表格固定列，避免“选择”和“操作”表头遮挡文件内容。 */
+.workspace-browser--quick .workspace-file-preview--overlay { position: absolute; z-index: 5; inset: 0; border: 0; }
 
 .workspace-dialog-backdrop, .workspace-agent-navigation__scrim { position: fixed; z-index: 70; inset: 0; border: 0; background: rgba(13, 18, 15, .45); }
 
