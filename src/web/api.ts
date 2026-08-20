@@ -18,6 +18,31 @@ import type { SessionTextSearchPage } from "../shared/session-text-search";
 import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared/session-question-contracts";
 import type { QuestionAnswerSubmissionResult } from "../shared/question-response-protocol";
 import type { AvatarCropArea } from "../shared/avatar-contracts";
+import type {
+  AigcChannelInput,
+  AigcComfyUiInputFile,
+  AigcCreateChannelInput,
+  AigcInterfaceDocument,
+  AigcInterfaceInput,
+  AigcInterfaceRecord,
+  AigcOutputKind,
+  AigcOutputPage,
+  AigcPublicDirectoryEntry,
+  AigcPublicFileDocument,
+  AigcPublicFileSummary,
+  AigcRunRequest,
+  AigcSettingsDocument,
+  AigcTaskDocument,
+  AigcTaskRecord,
+  AigcUpdateChannelInput,
+  AigcUploadedAsset,
+  AigcWorkflowCreateInput,
+  AigcWorkflowDetail,
+  AigcWorkflowDetailDocument,
+  ComfyUiNodeMetadataSyncResult,
+  AigcWorkflowDocument,
+  AigcWorkflowUpdateInput,
+} from "../shared/aigc-contracts";
 
 export type { ScheduledTask, ScheduledTaskRun, SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget };
 
@@ -150,6 +175,28 @@ export function apiV1Url(url: string): string {
     : url;
 }
 
+/** 生成可内联预览或明确下载的 AIGC 任务产物地址。 */
+export function aigcTaskAssetUrl(taskId: string, assetId: string, download = false): string {
+  const suffix = download ? "?download=1" : "";
+  return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}${suffix}`);
+}
+
+/** 生成 AIGC 临时入参文件的内联预览地址。 */
+export function aigcInputAssetUrl(assetId: string): string {
+  return apiV1Url(`/api/aigc/inputs/${encodeURIComponent(assetId)}`);
+}
+
+/** 生成 AIGC 图片产物的服务端缩略图地址。 */
+export function aigcTaskThumbnailUrl(taskId: string, assetId: string): string {
+  return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}/thumbnail`);
+}
+
+/** 根据公开文件稳定地址生成预览或下载链接。 */
+export function aigcPublicFileUrl(url: string, download = false): string {
+  if (!download) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}download=1`;
+}
+
 /**
  * 对 fetch 做统一 JSON 和错误协议处理。
  */
@@ -270,6 +317,56 @@ export const api = {
   createTtsProfile: (input: TtsProfileInput) => request<{ revision: string }>("/api/capabilities/tts", { method: "POST", body: JSON.stringify(input) }),
   updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  getAigcChannels: () => request<AigcSettingsDocument>("/api/capabilities/aigc/channels"),
+  createAigcChannel: (input: AigcCreateChannelInput) => request<AigcSettingsDocument>("/api/capabilities/aigc/channels", { method: "POST", body: JSON.stringify(input) }),
+  updateAigcChannel: (id: string, input: AigcUpdateChannelInput) => request<AigcSettingsDocument>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteAigcChannel: (id: string, configRevision: string, credentialRevision: string) => request<void>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ configRevision, credentialRevision }) }),
+  testAigcChannel: (id: string) => request<{ ok: boolean; message: string }>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}/test`, { method: "POST" }),
+  getAigcChannelCredential: (id: string) => request<{ apiKey: string }>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}/credential`),
+  getAigcWorkflows: () => request<AigcWorkflowDocument>("/api/aigc/workflows"),
+  createAigcWorkflow: (input: AigcWorkflowCreateInput) => request<AigcWorkflowDetail>("/api/aigc/workflows", { method: "POST", body: JSON.stringify(input) }),
+  getAigcWorkflow: (id: string) => request<AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}`),
+  updateAigcWorkflow: (id: string, revision: string, input: AigcWorkflowUpdateInput) => request<AigcWorkflowDetail>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  syncAigcWorkflowNodeMetadata: (id: string, channelId: string, revision: string) => request<ComfyUiNodeMetadataSyncResult & AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}/sync-node-metadata`, { method: "POST", body: JSON.stringify({ channelId, revision }) }),
+  deleteAigcWorkflow: (id: string, revision: string) => request<void>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  getAigcInterfaces: () => request<AigcInterfaceDocument>("/api/aigc/interfaces"),
+  createAigcInterface: (input: AigcInterfaceInput) => request<AigcInterfaceRecord>("/api/aigc/interfaces", { method: "POST", body: JSON.stringify(input) }),
+  updateAigcInterface: (id: string, revision: string, input: AigcInterfaceInput) => request<AigcInterfaceRecord>(`/api/aigc/interfaces/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  deleteAigcInterface: (id: string, revision: string) => request<void>(`/api/aigc/interfaces/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  getAigcTasks: () => request<AigcTaskDocument>("/api/aigc/tasks"),
+  getAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}`),
+  getAigcOutputs: (kind: AigcOutputKind, sort: "asc" | "desc", page: number, pageSize = 24) => request<AigcOutputPage>(`/api/aigc/outputs?kind=${encodeURIComponent(kind)}&sort=${sort}&page=${page}&pageSize=${pageSize}`),
+  deleteAigcTask: (id: string) => request<void>(`/api/aigc/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  runAigcInterface: (input: AigcRunRequest) => request<AigcTaskRecord>("/api/aigc/tasks", { method: "POST", body: JSON.stringify(input) }),
+  cancelAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  retryAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+  uploadAigcInput: (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return request<{ asset: AigcUploadedAsset }>("/api/aigc/inputs", { method: "POST", body: form });
+  },
+  getAigcComfyUiInputFiles: (channelId: string, nodeClass: string, field: string) => {
+    const query = new URLSearchParams({ channelId, nodeClass, field });
+    return request<{ files: AigcComfyUiInputFile[] }>(`/api/aigc/comfyui-input-files?${query.toString()}`);
+  },
+  getAigcPublicFiles: () => request<AigcPublicFileDocument>("/api/aigc/public-files"),
+  uploadAigcPublicFile: (file: File) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return request<{ file: AigcPublicFileSummary }>("/api/aigc/public-files", { method: "POST", body: form });
+  },
+  deleteAigcPublicFile: (id: string) => request<void>(`/api/aigc/public-files/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  listAigcPublicDirectoryEntries: (directory = "") => request<{ entries: AigcPublicDirectoryEntry[] }>(`/api/aigc/public-directory/entries?directory=${encodeURIComponent(directory)}`),
+  searchAigcPublicDirectoryEntries: (query: string) => request<{ entries: AigcPublicDirectoryEntry[] }>(`/api/aigc/public-directory/search?query=${encodeURIComponent(query)}`),
+  getAigcPublicDirectoryText: (path: string) => request<WorkspaceTextPreview>(`/api/aigc/public-directory/text?path=${encodeURIComponent(path)}`),
+  uploadAigcPublicDirectoryFiles: (directory: string, files: File[]) => {
+    const form = new FormData();
+    files.forEach((file) => form.append("files", file, file.name));
+    return request<{ files: AigcPublicFileSummary[] }>(`/api/aigc/public-directory/uploads?directory=${encodeURIComponent(directory)}`, { method: "POST", body: form });
+  },
+  createAigcPublicDirectory: (directory: string, name: string) => request<AigcPublicDirectoryEntry>("/api/aigc/public-directory/directories", { method: "POST", body: JSON.stringify({ directory, name }) }),
+  updateAigcPublicDirectoryEntry: (body: { operation: "rename"; path: string; name: string } | { operation: "move"; path: string; targetDirectory: string; createTargetDirectory?: boolean }) => request<AigcPublicDirectoryEntry>("/api/aigc/public-directory/entries", { method: "PATCH", body: JSON.stringify(body) }),
+  deleteAigcPublicDirectoryEntries: (paths: string[]) => request<void>("/api/aigc/public-directory/entries", { method: "DELETE", body: JSON.stringify({ paths }) }),
   getWebResearch: () => request<WebResearchSettingsDocument>("/api/capabilities/web-research"),
   updateWebResearchGlobal: (revision: string, config: WebResearchGlobalConfig) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/global", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   createWebResearchProvider: (input: CreateSearchProviderInput) => request<WebResearchSettingsDocument>("/api/capabilities/web-research/providers", { method: "POST", body: JSON.stringify(input) }),

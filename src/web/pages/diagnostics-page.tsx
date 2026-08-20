@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type DiagnosticsReport } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
+import "../configuration.css";
 
 const FRONTEND_RELOAD_DELAY_MS = 500;
 

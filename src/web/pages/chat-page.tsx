@@ -22,6 +22,9 @@ import {
   Volume2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import "../configuration.css";
+import "../chat.css";
+import "../resources.css";
 import { MessageNavigator, type MessageNavigationEntry } from "../components/message-navigator";
 import { ProductMark } from "../components/product-mark";
 import type { ThemePreference } from "../theme";

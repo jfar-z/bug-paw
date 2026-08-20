@@ -10,6 +10,8 @@ import { SecretInput } from "../components/secret-input";
 import { ThinkingLevelMapEditor } from "../components/configuration/thinking-level-map-editor";
 import { getThinkingProtocolPreview, thinkingProtocolOptions } from "../components/configuration/thinking-protocol-preview";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
+import "../providers.css";
 
 interface ProviderNode extends Record<string, unknown> {
   name?: string;

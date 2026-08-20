@@ -6,6 +6,8 @@ import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { TaskLog } from "../components/configuration/task-log";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
+import "../configuration.css";
+import "../resources.css";
 
 /**
  * 展示核心资源目录、注册工具和经确认的安装任务。

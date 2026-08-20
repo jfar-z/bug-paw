@@ -1,5 +1,98 @@
 {
   "entryJsGzipBytes": 235520,
-  "cssGzipBytes": 49152,
-  "lazyChunkGzipBytes": 153600
+  "lazyChunkGzipBytes": 153600,
+  "css": {
+    "entryGzipBytes": 24576,
+    "totalGzipBytes": 65536,
+    "routes": {
+      "src/web/pages/chat-page.tsx": {
+        "label": "聊天工作台",
+        "gzipBytes": 27648
+      },
+      "src/web/pages/aigc-workbench-page.tsx": {
+        "label": "AIGC 工作台",
+        "gzipBytes": 7168
+      },
+      "src/web/pages/aigc-workflow-composer.tsx": {
+        "label": "AIGC 工作流编排器",
+        "gzipBytes": 2048
+      },
+      "src/web/pages/aigc-outputs-page.tsx": {
+        "label": "AIGC 产物查看",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/aigc-public-directory-page.tsx": {
+        "label": "AIGC 公开目录",
+        "gzipBytes": 7168
+      },
+      "src/web/pages/aigc-channels-page.tsx": {
+        "label": "AIGC 渠道",
+        "gzipBytes": 6144
+      },
+      "src/web/pages/agent-detail-page.tsx": {
+        "label": "Agent 详情",
+        "gzipBytes": 6144
+      },
+      "src/web/pages/agents-page.tsx": {
+        "label": "Agent 管理",
+        "gzipBytes": 6144
+      },
+      "src/web/pages/configuration-overview-page.tsx": {
+        "label": "配置概览",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/capabilities-page.tsx": {
+        "label": "能力扩展",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/web-research-page.tsx": {
+        "label": "联网搜索",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/browser-automation-page.tsx": {
+        "label": "浏览器执行",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/tts-page.tsx": {
+        "label": "语音合成",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/knowledge-retrieval-page.tsx": {
+        "label": "语义检索",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/providers-page.tsx": {
+        "label": "Provider 管理",
+        "gzipBytes": 5632
+      },
+      "src/web/pages/pi-settings-page.tsx": {
+        "label": "Pi 运行设置",
+        "gzipBytes": 4608
+      },
+      "src/web/pages/resources-page.tsx": {
+        "label": "资源目录",
+        "gzipBytes": 7168
+      },
+      "src/web/pages/workspace-resources-page.tsx": {
+        "label": "工作区资源",
+        "gzipBytes": 7168
+      },
+      "src/web/pages/knowledge-base-page.tsx": {
+        "label": "知识库",
+        "gzipBytes": 18432
+      },
+      "src/web/pages/configuration-operations-page.tsx": {
+        "label": "配置操作",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/diagnostics-page.tsx": {
+        "label": "系统诊断",
+        "gzipBytes": 4096
+      },
+      "src/web/pages/scheduled-tasks-page.tsx": {
+        "label": "定时任务",
+        "gzipBytes": 10240
+      }
+    }
+  }
 }

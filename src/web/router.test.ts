@@ -20,6 +20,31 @@ describe("工作台路由", () => {
     expect(routePath({ page: "scheduled-tasks" })).toBe("/scheduled-tasks");
   });
 
+  it("解析 AIGC 工作台与详情深链", () => {
+    expect(parseRoute("/aigc")).toEqual({ page: "aigc-overview" });
+    expect(parseRoute("/aigc/run")).toEqual({ page: "aigc-run" });
+    expect(parseRoute("/aigc/run", "?interface=comfy-main")).toEqual({ page: "aigc-run", interfaceId: "comfy-main" });
+    expect(parseRoute("/aigc/interfaces")).toEqual({ page: "aigc-interfaces" });
+    expect(parseRoute("/aigc/tasks")).toEqual({ page: "aigc-tasks" });
+    expect(parseRoute("/aigc/outputs")).toEqual({ page: "aigc-outputs" });
+    expect(parseRoute("/aigc/public-directory")).toEqual({ page: "aigc-public-directory" });
+    expect(parseRoute("/aigc/workflows")).toEqual({ page: "aigc-workflows" });
+    expect(parseRoute("/aigc/interfaces/flux")).toEqual({ page: "aigc-interface-detail", interfaceId: "flux" });
+    expect(parseRoute("/aigc/tasks/task-1")).toEqual({ page: "aigc-task-detail", taskId: "task-1" });
+    expect(parseRoute("/aigc/workflows/wf-1")).toEqual({ page: "aigc-workflow-detail", workflowId: "wf-1" });
+    expect(routePath({ page: "aigc-overview" })).toBe("/aigc");
+    expect(routePath({ page: "aigc-run" })).toBe("/aigc/run");
+    expect(routePath({ page: "aigc-run", interfaceId: "comfy main" })).toBe("/aigc/run?interface=comfy%20main");
+    expect(routePath({ page: "aigc-interface-detail", interfaceId: "flux" })).toBe("/aigc/interfaces/flux");
+    expect(routePath({ page: "aigc-outputs" })).toBe("/aigc/outputs");
+    expect(routePath({ page: "aigc-public-directory" })).toBe("/aigc/public-directory");
+  });
+
+  it("解析配置中心 AIGC 渠道页", () => {
+    expect(parseRoute("/settings/capabilities/aigc-channels")).toEqual({ page: "aigc-channels" });
+    expect(routePath({ page: "aigc-channels" })).toBe("/settings/capabilities/aigc-channels");
+  });
+
   it("解析配置中心深链", () => {
     expect(parseRoute("/settings/agents/default")).toEqual({
       page: "agent-detail",
@@ -48,5 +73,13 @@ describe("工作台路由", () => {
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     expect(result.current).toEqual({ page: "configuration-overview" });
+  });
+
+  it("允许编辑页在写入历史记录前阻止导航", () => {
+    const prevent = (event: Event) => event.preventDefault();
+    window.addEventListener("pi-agent:before-navigate", prevent);
+    navigateTo({ page: "aigc-tasks" });
+    expect(window.location.pathname).toBe("/chat");
+    window.removeEventListener("pi-agent:before-navigate", prevent);
   });
 });

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { HighlightedCodeBlock } from "./highlighted-code-block";
 
-const applicationStyles = readFileSync("src/web/styles.css", "utf8");
+const applicationStyles = readFileSync("src/web/markdown-content.css", "utf8");
 
 describe("HighlightedCodeBlock", () => {
   it("普通代码块在容器内保留格式并自动换行", () => {

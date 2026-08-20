@@ -2,6 +2,16 @@ import { useEffect, useState } from "react";
 
 export type AppRoute =
   | { page: "chat" }
+  | { page: "aigc-overview" }
+  | { page: "aigc-run"; interfaceId?: string }
+  | { page: "aigc-interfaces" }
+  | { page: "aigc-tasks" }
+  | { page: "aigc-outputs" }
+  | { page: "aigc-public-directory" }
+  | { page: "aigc-workflows" }
+  | { page: "aigc-interface-detail"; interfaceId: string }
+  | { page: "aigc-task-detail"; taskId: string }
+  | { page: "aigc-workflow-detail"; workflowId: string }
   | { page: "workspace-resources" }
   | { page: "knowledge-base" }
   | { page: "scheduled-tasks" }
@@ -11,6 +21,7 @@ export type AppRoute =
   | { page: "browser-automation" }
   | { page: "tts" }
   | { page: "knowledge-retrieval" }
+  | { page: "aigc-channels" }
   | { page: "agents"; onboarding?: "create" }
   | { page: "providers" }
   | { page: "pi-settings" }
@@ -20,6 +31,7 @@ export type AppRoute =
   | { page: "agent-detail"; agentId: string };
 
 const NAVIGATION_EVENT = "pi-agent:navigate";
+export const NAVIGATION_BEFORE_EVENT = "pi-agent:before-navigate";
 export const WORKBENCH_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-workbench-navigation";
 export const KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-knowledge-base-navigation";
 
@@ -28,6 +40,40 @@ export const KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-knowledge
  */
 export function parseRoute(pathname: string, search = ""): AppRoute {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  if (normalized === "/aigc") return { page: "aigc-overview" };
+  if (normalized === "/aigc/run") {
+    const interfaceId = new URLSearchParams(search).get("interface")?.trim();
+    return interfaceId ? { page: "aigc-run", interfaceId } : { page: "aigc-run" };
+  }
+  if (normalized === "/aigc/interfaces") return { page: "aigc-interfaces" };
+  if (normalized === "/aigc/tasks") return { page: "aigc-tasks" };
+  if (normalized === "/aigc/outputs") return { page: "aigc-outputs" };
+  if (normalized === "/aigc/public-directory") return { page: "aigc-public-directory" };
+  if (normalized === "/aigc/workflows") return { page: "aigc-workflows" };
+  const aigcInterfaceMatch = normalized.match(/^\/aigc\/interfaces\/([^/]+)$/);
+  if (aigcInterfaceMatch) {
+    try {
+      return { page: "aigc-interface-detail", interfaceId: decodeURIComponent(aigcInterfaceMatch[1]) };
+    } catch {
+      return { page: "chat" };
+    }
+  }
+  const aigcTaskMatch = normalized.match(/^\/aigc\/tasks\/([^/]+)$/);
+  if (aigcTaskMatch) {
+    try {
+      return { page: "aigc-task-detail", taskId: decodeURIComponent(aigcTaskMatch[1]) };
+    } catch {
+      return { page: "chat" };
+    }
+  }
+  const aigcWorkflowMatch = normalized.match(/^\/aigc\/workflows\/([^/]+)$/);
+  if (aigcWorkflowMatch) {
+    try {
+      return { page: "aigc-workflow-detail", workflowId: decodeURIComponent(aigcWorkflowMatch[1]) };
+    } catch {
+      return { page: "chat" };
+    }
+  }
   if (normalized === "/resources") return { page: "workspace-resources" };
   if (normalized === "/knowledge-base") return { page: "knowledge-base" };
   if (normalized === "/scheduled-tasks") return { page: "scheduled-tasks" };
@@ -39,6 +85,7 @@ export function parseRoute(pathname: string, search = ""): AppRoute {
   if (normalized === "/settings/capabilities/browser") return { page: "browser-automation" };
   if (normalized === "/settings/capabilities/tts") return { page: "tts" };
   if (normalized === "/settings/capabilities/knowledge-retrieval") return { page: "knowledge-retrieval" };
+  if (normalized === "/settings/capabilities/aigc-channels") return { page: "aigc-channels" };
   if (normalized === "/settings/agents") {
     return new URLSearchParams(search).get("onboarding") === "create"
       ? { page: "agents", onboarding: "create" }
@@ -71,6 +118,26 @@ export function parseRoute(pathname: string, search = ""): AppRoute {
  */
 export function routePath(route: AppRoute): string {
   switch (route.page) {
+    case "aigc-overview":
+      return "/aigc";
+    case "aigc-run":
+      return route.interfaceId ? `/aigc/run?interface=${encodeURIComponent(route.interfaceId)}` : "/aigc/run";
+    case "aigc-interfaces":
+      return "/aigc/interfaces";
+    case "aigc-tasks":
+      return "/aigc/tasks";
+    case "aigc-outputs":
+      return "/aigc/outputs";
+    case "aigc-public-directory":
+      return "/aigc/public-directory";
+    case "aigc-workflows":
+      return "/aigc/workflows";
+    case "aigc-interface-detail":
+      return `/aigc/interfaces/${encodeURIComponent(route.interfaceId)}`;
+    case "aigc-task-detail":
+      return `/aigc/tasks/${encodeURIComponent(route.taskId)}`;
+    case "aigc-workflow-detail":
+      return `/aigc/workflows/${encodeURIComponent(route.workflowId)}`;
     case "workspace-resources":
       return "/resources";
     case "knowledge-base":
@@ -89,6 +156,8 @@ export function routePath(route: AppRoute): string {
       return "/settings/capabilities/tts";
     case "knowledge-retrieval":
       return "/settings/capabilities/knowledge-retrieval";
+    case "aigc-channels":
+      return "/settings/capabilities/aigc-channels";
     case "agents":
       return route.onboarding === "create" ? "/settings/agents?onboarding=create" : "/settings/agents";
     case "providers":
@@ -112,6 +181,8 @@ export function routePath(route: AppRoute): string {
  * 使用 History API 导航，并通知当前页面内的路由订阅者。
  */
 export function navigateTo(route: AppRoute, replace = false): void {
+  const beforeEvent = new CustomEvent<AppRoute>(NAVIGATION_BEFORE_EVENT, { cancelable: true, detail: route });
+  if (!window.dispatchEvent(beforeEvent)) return;
   const method = replace ? "replaceState" : "pushState";
   window.history[method]({}, "", routePath(route));
   window.dispatchEvent(new Event(NAVIGATION_EVENT));

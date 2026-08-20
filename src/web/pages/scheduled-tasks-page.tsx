@@ -6,6 +6,9 @@ import { isDeletedSessionTarget, type ScheduledTaskSchedule } from "../../shared
 import { api, type ScheduledTask, type ScheduledTaskRun, type SessionSummary } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { WorkspaceAgentNavigation, WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT } from "../components/workspace-agent-navigation";
+import "../configuration.css";
+import "../resources.css";
+import "../scheduled-tasks.css";
 
 const presets = [["每 5 分钟", "*/5 * * * *"], ["每小时", "0 * * * *"], ["工作日 9 点", "0 9 * * 1-5"], ["每天 9 点", "0 9 * * *"], ["每周一 9 点", "0 9 * * 1"], ["每月 1 日", "0 9 1 * *"]] as const;
 const fields = [

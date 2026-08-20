@@ -4,6 +4,8 @@ import { api } from "../api";
 import { useApiTask } from "../api-task-provider";
 import { WorkspaceAgentNavigation, WORKSPACE_AGENT_NAVIGATION_TOGGLE_EVENT } from "../components/workspace-agent-navigation";
 import { WorkspaceBrowser } from "../components/workspace-browser";
+import "../configuration.css";
+import "../resources.css";
 
 /** 管理所有 Agent 的工作目录，并将文件操作交给复用资源浏览器。 */
 export function WorkspaceResourcesPage() {
