@@ -19,6 +19,7 @@ const boundaries: StyleBoundary[] = [
   { stylesheet: "knowledge-base.css", selector: ".knowledge-base-page", pages: ["knowledge-base-page.tsx"] },
   { stylesheet: "chat.css", selector: ".chat-sidebar", pages: ["chat-page.tsx"] },
   { stylesheet: "aigc-assets.css", selector: ".aigc-assets-page", pages: ["aigc-outputs-page.tsx"] },
+  { stylesheet: "aigc-media-editor.css", selector: ".aigc-media-editor-page", pages: ["aigc-media-editor-page.tsx"] },
   { stylesheet: "aigc-workflow-composer.css", selector: ".aigc-node-navigator", pages: ["aigc-workflow-composer.tsx"] },
 ];
 

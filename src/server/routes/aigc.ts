@@ -3,6 +3,10 @@ import { stat } from "node:fs/promises";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 
 import type {
+  AigcMediaProjectCreateInput,
+  AigcMediaProjectUpdateInput,
+} from "../../shared/aigc-media-editor-contracts";
+import type {
   AigcOutputKind,
   AigcPublicDirectoryEntry,
   AigcPublicFileRecord,
@@ -14,6 +18,7 @@ import type {
 } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "../aigc/aigc-asset-service";
 import type { AigcComfyUiInputService } from "../aigc/aigc-comfyui-input-service";
+import { AigcMediaProjectError, type AigcMediaProjectService } from "../aigc/aigc-media-project-service";
 import type { AigcInterfaceService } from "../aigc/aigc-interface-service";
 import { AigcPublicDirectoryError, type AigcPublicFileService } from "../aigc/aigc-public-file-service";
 import type { AigcTaskService } from "../aigc/aigc-task-service";
@@ -31,6 +36,7 @@ interface AigcRouteDependencies {
   assets: AigcAssetService;
   publicFiles: AigcPublicFileService;
   comfyuiInputs: AigcComfyUiInputService;
+  mediaProjects?: AigcMediaProjectService;
 }
 
 /** 注册 AIGC 工作台的工作流、接口、任务与资产接口。 */
@@ -41,6 +47,90 @@ export function registerAigcRoutes(app: FastifyInstance, dependencies: AigcRoute
   registerAssetRoutes(app, dependencies);
   registerPublicFileRoutes(app, dependencies);
   registerComfyUiInputRoutes(app, dependencies);
+  if (dependencies.mediaProjects) registerMediaProjectRoutes(app, dependencies.authService, dependencies.mediaProjects);
+}
+
+/** 注册轻剪辑工程、串行导出及结果文件路由。 */
+function registerMediaProjectRoutes(app: FastifyInstance, authService: AuthService, projects: AigcMediaProjectService): void {
+  app.get("/api/aigc/media-projects", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    return reply.send(await projects.list());
+  });
+
+  app.post("/api/aigc/media-projects", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body || (body.kind !== "video" && body.kind !== "audio") || (body.name !== undefined && typeof body.name !== "string")) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "剪辑工程创建参数无效");
+    }
+    try {
+      return reply.code(201).send(await projects.create(body as unknown as AigcMediaProjectCreateInput));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/aigc/media-projects/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    const project = await projects.get(request.params.id);
+    return project ? reply.send(project) : sendApiError(reply, 404, "NOT_FOUND", "剪辑工程不存在");
+  });
+
+  app.patch<{ Params: { id: string } }>("/api/aigc/media-projects/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body || typeof body.revision !== "string" || typeof body.name !== "string" || !Array.isArray(body.clips)) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "剪辑工程保存参数无效");
+    }
+    try {
+      return reply.send(await projects.update(request.params.id, body as unknown as AigcMediaProjectUpdateInput));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/aigc/media-projects/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    try {
+      await projects.remove(request.params.id);
+      return reply.code(204).send();
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/aigc/media-projects/:id/render", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    try {
+      return reply.code(202).send(await projects.render(request.params.id));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string } }>("/api/aigc/media-renders/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    const job = await projects.getRender(request.params.id);
+    return job ? reply.send(job) : sendApiError(reply, 404, "NOT_FOUND", "导出任务不存在");
+  });
+
+  app.post<{ Params: { id: string } }>("/api/aigc/media-renders/:id/cancel", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    try {
+      return reply.send(await projects.cancelRender(request.params.id));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { download?: string } }>("/api/aigc/media-renders/:id/output", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, authService))) return;
+    const job = await projects.getRender(request.params.id);
+    if (!job || job.status !== "succeeded" || !job.fileName || !job.mediaType) return sendApiError(reply, 404, "NOT_FOUND", "导出文件不存在");
+    const path = await projects.resolveRenderPath(request.params.id);
+    if (!path) return sendApiError(reply, 404, "NOT_FOUND", "导出文件不存在");
+    return sendAssetFile(reply, path, job.fileName, job.mediaType, request.query.download === "1");
+  });
 }
 
 function registerWorkflowRoutes(app: FastifyInstance, dependencies: AigcRouteDependencies): void {
@@ -467,8 +557,35 @@ async function sendAssetFile(reply: Parameters<typeof sendApiError>[0], path: st
   reply.header("X-Content-Type-Options", "nosniff");
   reply.type(mediaType);
   if (download) reply.header("Content-Disposition", downloadContentDisposition(name));
+  reply.header("Accept-Ranges", "bytes");
+  const range = parseByteRange(reply.request.headers.range, fileStat.size);
+  if (range === "invalid") {
+    reply.header("Content-Range", `bytes */${fileStat.size}`);
+    return reply.code(416).send();
+  }
+  if (range) {
+    reply.header("Content-Range", `bytes ${range.start}-${range.end}/${fileStat.size}`);
+    reply.header("Content-Length", String(range.end - range.start + 1));
+    return reply.code(206).send(createReadStream(path, range));
+  }
   reply.header("Content-Length", String(fileStat.size));
   return reply.send(createReadStream(path));
+}
+
+/** 只接受浏览器媒体元素使用的单一 bytes Range。 */
+function parseByteRange(value: string | undefined, size: number): { start: number; end: number } | "invalid" | undefined {
+  if (!value) return undefined;
+  const match = value.match(/^bytes=(\d*)-(\d*)$/u);
+  if (!match || (!match[1] && !match[2]) || size <= 0) return "invalid";
+  if (!match[1]) {
+    const suffix = Number(match[2]);
+    if (!Number.isInteger(suffix) || suffix <= 0) return "invalid";
+    return { start: Math.max(0, size - suffix), end: size - 1 };
+  }
+  const start = Number(match[1]);
+  const requestedEnd = match[2] ? Number(match[2]) : size - 1;
+  if (!Number.isInteger(start) || !Number.isInteger(requestedEnd) || start < 0 || start >= size || requestedEnd < start) return "invalid";
+  return { start, end: Math.min(requestedEnd, size - 1) };
 }
 
 /** 兼容中文产物名，并阻止文件名向响应头注入控制字符。 */
@@ -480,6 +597,10 @@ function downloadContentDisposition(name: string): string {
 }
 
 function sendAigcError(reply: Parameters<typeof sendApiError>[0], error: unknown) {
+  if (error instanceof AigcMediaProjectError) {
+    const status = error.code === "NOT_FOUND" ? 404 : error.code === "CONFLICT" ? 409 : error.code === "QUEUE_FULL" ? 429 : 400;
+    return sendApiError(reply, status, error.code === "CONFLICT" ? "CONFLICT" : error.code === "NOT_FOUND" ? "NOT_FOUND" : "VALIDATION_FAILED", error.message);
+  }
   if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
   if (error instanceof AigcPublicDirectoryError) {
     const status = error.code === "NOT_FOUND" ? 404 : error.code === "CONFLICT" ? 409 : error.code === "TEXT_PREVIEW_UNAVAILABLE" ? 422 : 400;

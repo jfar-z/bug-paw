@@ -192,6 +192,7 @@ function isAigcRoute(route: AppRoute): boolean {
     "aigc-interfaces",
     "aigc-tasks",
     "aigc-outputs",
+    "aigc-media-editor",
     "aigc-public-directory",
     "aigc-workflows",
     "aigc-interface-detail",
