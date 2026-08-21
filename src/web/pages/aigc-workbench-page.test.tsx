@@ -43,9 +43,10 @@ describe("AigcWorkbenchPage 创作台", () => {
   });
 
   it("由两个懒加载入口共享独立页面样式", async () => {
-    const [globalStyles, aigcStyles, workbenchSource, channelsSource] = await Promise.all([
+    const [globalStyles, aigcStyles, referenceGroupStyles, workbenchSource, channelsSource] = await Promise.all([
       readFile("src/web/styles.css", "utf8"),
       readFile("src/web/aigc.css", "utf8"),
+      readFile("src/web/aigc-run-reference-groups.css", "utf8"),
       readFile("src/web/pages/aigc-workbench-page.tsx", "utf8"),
       readFile("src/web/pages/aigc-channels-page.tsx", "utf8"),
     ]);
@@ -54,7 +55,9 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(aigcStyles).toContain(".aigc-workbench-page {");
     expect(aigcStyles).toContain(".aigc-run-preview-stage {");
     expect(aigcStyles).toContain(".aigc-asset-card__preview {");
+    expect(referenceGroupStyles).toMatch(/\.aigc-run-reference-group\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/s);
     expect(workbenchSource).toContain('import "../aigc.css";');
+    expect(workbenchSource).toContain('import "../aigc-run-reference-groups.css";');
     expect(workbenchSource).not.toContain('className="media-attachment');
     expect(channelsSource).toContain('import "../aigc.css";');
   });
