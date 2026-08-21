@@ -5,11 +5,50 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 import type { AigcTaskRecord } from "../../shared/aigc-contracts";
+import { registerAigcChannelRoutes } from "./aigc-channels";
 import { registerAigcRoutes } from "./aigc";
 
 const roots: string[] = [];
+
+describe("AIGC 运行态渠道路由", () => {
+  it("返回执行状态但不暴露渠道服务地址", async () => {
+    const app = Fastify();
+    registerAigcChannelRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      management: {
+        document: async () => ({
+          revision: "r1",
+          credentialRevision: "c1",
+          channelTemplates: [],
+          credentials: [],
+          channels: [{
+            id: "private-comfy",
+            name: "内网 ComfyUI",
+            type: "comfyui",
+            baseUrl: "http://192.168.1.20:8188",
+            enabled: true,
+            hasApiKey: false,
+          }],
+        }),
+      } as never,
+      validation: {} as never,
+      credentials: {} as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({ method: "GET", url: "/api/aigc/runtime-channels" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      channels: [{ id: "private-comfy", name: "内网 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }],
+    });
+    expect(response.body).not.toContain("192.168.1.20");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    await app.close();
+  });
+});
 
 describe("AIGC 产物路由", () => {
   afterEach(async () => {
@@ -127,6 +166,79 @@ describe("AIGC 工作流节点元数据路由", () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({ revision: "r2", syncedNodeClasses: ["KSampler"], workflow: { id: "workflow-1" } });
+    await app.close();
+  });
+});
+
+describe("ComfyUI input 媒体代理路由", () => {
+  it("仅返回同源媒体内容和安全响应头", async () => {
+    const app = Fastify();
+    const requested: Array<{ channelId: string; filename: string; range?: string }> = [];
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {} as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: {
+        content: async (channelId: string, file: { filename: string }, range?: string) => {
+          requested.push({ channelId, filename: file.filename, range });
+          return {
+            stream: Readable.from([Buffer.from("video")]),
+            status: 206,
+            mediaType: "video/mp4",
+            contentLength: "5",
+            acceptRanges: "bytes",
+            contentRange: "bytes 0-4/5",
+          };
+        },
+      } as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/aigc/comfyui-input-files/content?channelId=private&filename=clip.mp4&type=input",
+      headers: { range: "bytes=0-4" },
+    });
+    expect(response.statusCode).toBe(206);
+    expect(response.body).toBe("video");
+    expect(response.headers).toMatchObject({
+      "content-type": "video/mp4",
+      "content-length": "5",
+      "accept-ranges": "bytes",
+      "content-range": "bytes 0-4/5",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+    });
+    expect(JSON.stringify(response.headers)).not.toContain("192.168.");
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers.server).toBeUndefined();
+    expect(requested).toEqual([{ channelId: "private", filename: "clip.mp4", range: "bytes=0-4" }]);
+    await app.close();
+  });
+
+  it("代理失败时不返回上游内网错误详情", async () => {
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {} as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: { content: async () => { throw new Error("http://192.168.1.20:8188 failed"); } } as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/aigc/comfyui-input-files/content?channelId=private&filename=clip.mp4",
+    });
+    expect(response.statusCode).toBe(502);
+    expect(response.body).not.toContain("192.168.1.20");
+    expect(response.body).toContain("预览暂时不可用");
     await app.close();
   });
 });

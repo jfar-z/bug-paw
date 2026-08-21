@@ -31,6 +31,7 @@ import type {
   AigcPublicFileDocument,
   AigcPublicFileSummary,
   AigcRunRequest,
+  AigcRuntimeChannelSummary,
   AigcSettingsDocument,
   AigcTaskDocument,
   AigcTaskRecord,
@@ -186,6 +187,13 @@ export function aigcInputAssetUrl(assetId: string): string {
   return apiV1Url(`/api/aigc/inputs/${encodeURIComponent(assetId)}`);
 }
 
+/** 生成不暴露 ComfyUI 渠道地址的同源 input 媒体预览地址。 */
+export function aigcComfyUiInputContentUrl(channelId: string, file: AigcComfyUiInputFile): string {
+  const query = new URLSearchParams({ channelId, filename: file.filename, type: file.type ?? "input" });
+  if (file.subfolder) query.set("subfolder", file.subfolder);
+  return apiV1Url(`/api/aigc/comfyui-input-files/content?${query.toString()}`);
+}
+
 /** 生成 AIGC 图片产物的服务端缩略图地址。 */
 export function aigcTaskThumbnailUrl(taskId: string, assetId: string): string {
   return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}/thumbnail`);
@@ -318,6 +326,7 @@ export const api = {
   updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getAigcChannels: () => request<AigcSettingsDocument>("/api/capabilities/aigc/channels"),
+  getAigcRuntimeChannels: () => request<{ channels: AigcRuntimeChannelSummary[] }>("/api/aigc/runtime-channels"),
   createAigcChannel: (input: AigcCreateChannelInput) => request<AigcSettingsDocument>("/api/capabilities/aigc/channels", { method: "POST", body: JSON.stringify(input) }),
   updateAigcChannel: (id: string, input: AigcUpdateChannelInput) => request<AigcSettingsDocument>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteAigcChannel: (id: string, configRevision: string, credentialRevision: string) => request<void>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ configRevision, credentialRevision }) }),

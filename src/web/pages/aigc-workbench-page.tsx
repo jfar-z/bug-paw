@@ -10,6 +10,7 @@ import type {
   AigcPublicFileSummary,
   AigcRunInputValue,
   AigcRunMediaSource,
+  AigcRuntimeChannelSummary,
   AigcSettingsDocument,
   AigcTaskDocument,
   AigcTaskAsset,
@@ -26,7 +27,7 @@ import type {
   AigcWorkflowSummary,
   ComfyUiFieldMetadata,
 } from "../../shared/aigc-contracts";
-import { aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
+import { aigcComfyUiInputContentUrl, aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { ConfigurationSelect } from "../components/configuration/configuration-select";
@@ -216,7 +217,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   const { runApiTask } = useApiTask();
   const online = useOnlineStatus();
   const [interfaces, setInterfaces] = useState<AigcInterfaceRecord[]>([]);
-  const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
+  const [channels, setChannels] = useState<AigcRuntimeChannelSummary[]>([]);
   const [provider, setProvider] = useState<AigcInterfaceProtocol>("openai");
   const [selectedId, setSelectedId] = useState("");
   const [workflow, setWorkflow] = useState<AigcWorkflowDetail>();
@@ -239,14 +240,13 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   const providerInterfaces = enabledInterfaces.filter((item) => item.protocol === provider);
   const selected = enabledInterfaces.find((item) => item.id === selectedId);
   const fields = selected ? runFields(selected, workflow) : [];
-  const selectedChannel = channels.find((channel) => channel.id === selected?.channelId);
   const selectedChannelReady = Boolean(selected && channels.some((channel) => channel.id === selected.channelId && channel.enabled));
   const selectedReady = Boolean(selected && selectedChannelReady && (selected.protocol !== "comfyui" || workflow));
   const taskActive = createdTask?.status === "queued" || createdTask?.status === "running";
 
   useEffect(() => {
     void runApiTask(async () => {
-      const [document, channelDocument] = await Promise.all([api.getAigcInterfaces(), api.getAigcChannels()]);
+      const [document, channelDocument] = await Promise.all([api.getAigcInterfaces(), api.getAigcRuntimeChannels()]);
       setInterfaces(document.interfaces);
       setChannels(channelDocument.channels);
       return document;
@@ -495,7 +495,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
         mediaSource={mediaSources[field.name] ?? "upload"}
         comfyInputFiles={comfyInputFiles[field.name] ?? []}
         comfyInputLoading={comfyInputLoading[field.name] === true}
-        comfyPreviewBaseUrl={selectedChannel?.baseUrl}
+        comfyChannelId={selected?.channelId}
         onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
         onFile={(file) => void uploadFile(field, file)}
         onPublicFile={(file) => void uploadPublicFile(field, file)}
@@ -745,7 +745,7 @@ function AigcRunField(props: {
   mediaSource: AigcRunMediaSource;
   comfyInputFiles: AigcComfyUiInputFile[];
   comfyInputLoading: boolean;
-  comfyPreviewBaseUrl?: string;
+  comfyChannelId?: string;
   onChange: (value: AigcRunInputValue) => void;
   onFile: (file?: File) => void;
   onPublicFile: (file?: File) => void;
@@ -762,7 +762,7 @@ function AigcRunField(props: {
     mediaSource,
     comfyInputFiles,
     comfyInputLoading,
-    comfyPreviewBaseUrl,
+    comfyChannelId,
     onChange,
     onFile,
     onPublicFile,
@@ -801,19 +801,18 @@ function AigcRunField(props: {
         <div className="configuration-field-row aigc-run-field aigc-run-field--wide">
           <label>
             <span>{field.label}{field.required ? " *" : ""}</span>
-            <select
-              aria-label={`${field.label}公共文件`}
+            <ConfigurationSelect
+              ariaLabel={`${field.label}公共文件`}
+              options={availableFiles.map((file) => ({ value: file.url, label: file.name }))}
               value={selectedUrl}
-              onChange={(event) => {
-                const selectedFile = availableFiles.find((file) => file.url === event.target.value);
+              placeholder="请选择公共文件"
+              onChange={(url) => {
+                const selectedFile = availableFiles.find((file) => file.url === url);
                 if (selectedFile) {
                   onChange({ url: selectedFile.url, name: selectedFile.name, mediaType: selectedFile.mediaType });
                 }
               }}
-            >
-              <option value="">请选择公共文件</option>
-              {availableFiles.map((file) => <option key={file.id} value={file.url}>{file.name}</option>)}
-            </select>
+            />
           </label>
           <label>
             <span>上传到公共区</span>
@@ -828,68 +827,74 @@ function AigcRunField(props: {
     const selectedComfyInput = comfyInputFileFromValue(value);
     return (
       <div className="aigc-run-field aigc-run-field--wide aigc-media-input">
-        <span>{field.label}{field.required ? " *" : ""}</span>
-        <div className="aigc-media-source-tabs" role="tablist" aria-label={`${field.label}输入来源`}>
-          {mediaSourceOptions.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="tab"
-              aria-selected={mediaSource === option.value}
-              className={mediaSource === option.value ? "is-selected" : undefined}
-              onClick={() => onMediaSourceChange(option.value)}
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className="aigc-media-input__controls">
+          <span>{field.label}{field.required ? " *" : ""}</span>
+          <div className="aigc-media-source-tabs" role="tablist" aria-label={`${field.label}输入来源`}>
+            {mediaSourceOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="tab"
+                aria-selected={mediaSource === option.value}
+                className={mediaSource === option.value ? "is-selected" : undefined}
+                onClick={() => onMediaSourceChange(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {mediaSource === "upload" ? (
+            <label className="aigc-media-input-upload">
+              <span>本地上传</span>
+              <input type="file" accept={accept} aria-label={field.label} onChange={(event) => onFile(event.target.files?.[0])} />
+              <small className="configuration-help">{uploading ? "上传中…" : uploaded?.name ?? "上传后作为生成入参"}</small>
+            </label>
+          ) : null}
+          {mediaSource === "public" ? (
+            <label>
+              <span>BugPaw 公开目录</span>
+              <ConfigurationSelect
+                ariaLabel={`${field.label}公开目录`}
+                options={availableFiles.map((file) => ({ value: file.id, label: file.name }))}
+                value={selectedPublicId}
+                placeholder="请选择公开目录文件"
+                onChange={(id) => {
+                  const selectedFile = availableFiles.find((file) => file.id === id);
+                  if (selectedFile) onSelectPublicFile(selectedFile);
+                }}
+              />
+            </label>
+          ) : null}
+          {mediaSource === "comfyui_input" ? (
+            <label>
+              <span>ComfyUI input</span>
+              <ConfigurationSelect
+                ariaLabel={`${field.label}ComfyUI input`}
+                options={comfyInputFiles.map((file) => ({
+                  value: comfyInputFileKey(file),
+                  label: file.name,
+                  ...(file.subfolder ? { description: file.subfolder } : {}),
+                }))}
+                value={selectedComfyInput ? comfyInputFileKey(selectedComfyInput) : undefined}
+                disabled={comfyInputLoading}
+                placeholder={comfyInputLoading ? "正在读取 input 目录…" : "请选择 ComfyUI input 文件"}
+                onChange={(key) => {
+                  const selectedFile = comfyInputFiles.find((file) => comfyInputFileKey(file) === key);
+                  if (selectedFile) onSelectComfyInputFile(selectedFile);
+                }}
+              />
+            </label>
+          ) : null}
         </div>
-        {mediaSource === "upload" ? (
-          <label className="aigc-media-input-upload">
-            <span>本地上传</span>
-            <input type="file" accept={accept} aria-label={field.label} onChange={(event) => onFile(event.target.files?.[0])} />
-            <small className="configuration-help">{uploading ? "上传中…" : uploaded?.name ?? "上传后作为生成入参"}</small>
-          </label>
-        ) : null}
-        {mediaSource === "public" ? (
-          <label>
-            <span>BugPaw 公开目录</span>
-            <select
-              aria-label={`${field.label}公开目录`}
-              value={selectedPublicId ?? ""}
-              onChange={(event) => {
-                const selectedFile = availableFiles.find((file) => file.id === event.target.value);
-                if (selectedFile) onSelectPublicFile(selectedFile);
-              }}
-            >
-              <option value="">请选择公开目录文件</option>
-              {availableFiles.map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}
-            </select>
-          </label>
-        ) : null}
-        {mediaSource === "comfyui_input" ? (
-          <label>
-            <span>ComfyUI input</span>
-            <select
-              aria-label={`${field.label}ComfyUI input`}
-              value={selectedComfyInput?.filename ?? ""}
-              disabled={comfyInputLoading}
-              onChange={(event) => {
-                const selectedFile = comfyInputFiles.find((file) => file.filename === event.target.value);
-                if (selectedFile) onSelectComfyInputFile(selectedFile);
-              }}
-            >
-              <option value="">{comfyInputLoading ? "正在读取 input 目录…" : "请选择 ComfyUI input 文件"}</option>
-              {comfyInputFiles.map((file) => <option key={file.filename} value={file.filename}>{file.name}</option>)}
-            </select>
-          </label>
-        ) : null}
-        <MediaInputPreview
-          field={field}
-          value={value}
-          uploaded={uploaded}
-          publicFiles={publicFiles}
-          comfyPreviewBaseUrl={comfyPreviewBaseUrl}
-        />
+        <div className="aigc-media-input__preview">
+          <MediaInputPreview
+            field={field}
+            value={value}
+            uploaded={uploaded}
+            publicFiles={publicFiles}
+            comfyChannelId={comfyChannelId}
+          />
+        </div>
       </div>
     );
   }
@@ -942,15 +947,20 @@ function comfyInputFileFromValue(value: AigcRunInputValue | undefined): AigcComf
   return undefined;
 }
 
+/** 使用完整文件定位信息区分 ComfyUI input 中可能同名的候选。 */
+function comfyInputFileKey(file: Pick<AigcComfyUiInputFile, "filename" | "subfolder" | "type">): string {
+  return JSON.stringify([file.type ?? "input", file.subfolder ?? "", file.filename]);
+}
+
 /** 为已选择的媒体入参展示内联预览和来源说明。 */
-function MediaInputPreview({ field, value, uploaded, publicFiles, comfyPreviewBaseUrl }: {
+function MediaInputPreview({ field, value, uploaded, publicFiles, comfyChannelId }: {
   field: AigcRunFieldDefinition;
   value: AigcRunInputValue | undefined;
   uploaded?: AigcUploadedAsset;
   publicFiles: AigcPublicFileSummary[];
-  comfyPreviewBaseUrl?: string;
+  comfyChannelId?: string;
 }) {
-  const source = mediaPreviewSource(field, value, uploaded, publicFiles, comfyPreviewBaseUrl);
+  const source = mediaPreviewSource(field, value, uploaded, publicFiles, comfyChannelId);
   if (!source.url) {
     return <small className="configuration-help">{source.label}</small>;
   }
@@ -966,7 +976,7 @@ function mediaPreviewSource(
   value: AigcRunInputValue | undefined,
   uploaded: AigcUploadedAsset | undefined,
   publicFiles: AigcPublicFileSummary[],
-  comfyPreviewBaseUrl: string | undefined,
+  comfyChannelId: string | undefined,
 ): { url?: string; mediaType: string; label: string } {
   if (typeof value !== "object" || value === null) {
     return { mediaType: "application/octet-stream", label: "请先选择生成入参" };
@@ -990,13 +1000,9 @@ function mediaPreviewSource(
     };
   }
   if ("filename" in value) {
-    const params = new URLSearchParams({
-      filename: value.filename,
-      type: value.type ?? "input",
-    });
-    if (value.subfolder) params.set("subfolder", value.subfolder);
+    const file = comfyInputFileFromValue(value);
     return {
-      url: comfyPreviewBaseUrl ? `${comfyPreviewBaseUrl}/view?${params.toString()}` : undefined,
+      url: comfyChannelId && file ? aigcComfyUiInputContentUrl(comfyChannelId, file) : undefined,
       mediaType: value.mediaType,
       label: value.name,
     };

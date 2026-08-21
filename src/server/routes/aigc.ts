@@ -284,6 +284,31 @@ function registerComfyUiInputRoutes(app: FastifyInstance, dependencies: AigcRout
       return sendAigcError(reply, error);
     }
   });
+
+  app.get<{ Querystring: { channelId?: string; filename?: string; subfolder?: string; type?: string } }>("/api/aigc/comfyui-input-files/content", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    if (!request.query.channelId || !request.query.filename) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "请提供 ComfyUI 渠道和 input 文件名");
+    }
+    try {
+      const content = await dependencies.comfyuiInputs.content(request.query.channelId, {
+        filename: request.query.filename,
+        ...(request.query.subfolder !== undefined ? { subfolder: request.query.subfolder } : {}),
+        ...(request.query.type !== undefined ? { type: request.query.type } : {}),
+      }, firstHeader(request.headers.range));
+      reply.code(content.status);
+      reply.header("Cache-Control", "private, no-store");
+      reply.header("X-Content-Type-Options", "nosniff");
+      reply.type(content.mediaType);
+      if (content.contentLength) reply.header("Content-Length", content.contentLength);
+      if (content.acceptRanges) reply.header("Accept-Ranges", content.acceptRanges);
+      if (content.contentRange) reply.header("Content-Range", content.contentRange);
+      return reply.send(content.stream);
+    } catch {
+      // 上游响应可能包含内网地址或实现细节，代理失败时统一返回脱敏错误。
+      return sendApiError(reply, 502, "REQUEST_FAILED", "ComfyUI input 预览暂时不可用");
+    }
+  });
 }
 
 function registerAssetRoutes(app: FastifyInstance, dependencies: AigcRouteDependencies): void {

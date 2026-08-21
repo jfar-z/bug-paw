@@ -35,6 +35,9 @@ export interface AigcChannelSummary extends AigcChannelConfig {
   hasApiKey: boolean;
 }
 
+/** 工作流执行页可见的渠道状态，不包含可能指向内网的服务地址。 */
+export type AigcRuntimeChannelSummary = Pick<AigcChannelSummary, "id" | "name" | "type" | "enabled" | "hasApiKey">;
+
 /** 浏览器提交的渠道配置字段。 */
 export interface AigcChannelInput {
   name: string;
