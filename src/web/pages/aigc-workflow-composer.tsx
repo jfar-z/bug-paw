@@ -1,7 +1,8 @@
-import { ArrowLeft, Check, GitBranch, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowLeft, Check, GitBranch, GripVertical, Layers3, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type {
   AigcWorkflowDetail,
+  AigcWorkflowInputGroup,
   AigcWorkflowInputMapping,
   AigcWorkflowInputType,
   AigcWorkflowOutputMapping,
@@ -10,6 +11,7 @@ import type {
   ComfyUiFieldMetadata,
   ComfyUiNode,
 } from "../../shared/aigc-contracts";
+import { commonReferenceInputFields, referenceInputFamilies, traceReferenceInputBranches } from "../../shared/aigc-reference-input-groups";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import "../aigc-workflow-composer.css";
 
@@ -18,14 +20,16 @@ interface AigcWorkflowComposerProps {
   name: string;
   onNameChange: (name: string) => void;
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
   onInputMappingsChange: (mappings: AigcWorkflowInputMapping[]) => void;
+  onInputGroupsChange?: (groups: AigcWorkflowInputGroup[]) => void;
   onOutputMappingsChange: (mappings: AigcWorkflowOutputMapping[]) => void;
 }
 
 /** ComfyUI 工作流可视化编排器，使用拓扑关系区分浏览节点与映射目标。 */
 export function AigcWorkflowComposer(props: AigcWorkflowComposerProps) {
-  const { workflow, name, onNameChange, inputMappings, outputMappings, onInputMappingsChange, onOutputMappingsChange } = props;
+  const { workflow, name, onNameChange, inputMappings, inputGroups = [], outputMappings, onInputMappingsChange, onInputGroupsChange = () => undefined, onOutputMappingsChange } = props;
 
   return (
     <div className="aigc-workflow-composer">
@@ -43,7 +47,7 @@ export function AigcWorkflowComposer(props: AigcWorkflowComposerProps) {
         </div>
       </section>
 
-      <InputMappingBuilder workflow={workflow} mappings={inputMappings} onChange={onInputMappingsChange} />
+      <InputMappingBuilder workflow={workflow} mappings={inputMappings} groups={inputGroups} onChange={onInputMappingsChange} onGroupsChange={onInputGroupsChange} />
       <OutputMappingBuilder workflow={workflow} mappings={outputMappings} onChange={onOutputMappingsChange} />
     </div>
   );
@@ -53,15 +57,21 @@ export function AigcWorkflowComposer(props: AigcWorkflowComposerProps) {
 function InputMappingBuilder(props: {
   workflow: AigcWorkflowDetail;
   mappings: AigcWorkflowInputMapping[];
+  groups: AigcWorkflowInputGroup[];
   onChange: (mappings: AigcWorkflowInputMapping[]) => void;
+  onGroupsChange: (groups: AigcWorkflowInputGroup[]) => void;
 }) {
-  const { workflow, mappings, onChange } = props;
+  const { workflow, mappings, groups, onChange, onGroupsChange } = props;
   const [draft, setDraft] = useState<AigcWorkflowInputMapping>();
   const [browseNodeId, setBrowseNodeId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [defaultValueDraft, setDefaultValueDraft] = useState("");
   const [defaultValueError, setDefaultValueError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AigcWorkflowInputMapping>();
+  const [deleteGroupTarget, setDeleteGroupTarget] = useState<AigcWorkflowInputGroup>();
+  const [groupDraft, setGroupDraft] = useState<ReferenceGroupDraft>();
+  const [groupError, setGroupError] = useState("");
+  const [draggedItemId, setDraggedItemId] = useState("");
   const selectedNode = workflow.nodes.find((node) => node.id === draft?.nodeId);
   const selectedFields = selectedNode ? inputFields(selectedNode) : [];
   const blockedActivationNodeIds = useMemo(() => new Set(
@@ -69,6 +79,65 @@ function InputMappingBuilder(props: {
       .filter((mapping) => mapping.id !== editingId)
       .flatMap((mapping) => mapping.activation?.nodeIds ?? []),
   ), [editingId, mappings]);
+  const listItems = useMemo(() => inputListItems(mappings, groups), [groups, mappings]);
+  function beginGroup() {
+    setGroupDraft({ boundaryNodeId: "", targetFieldPrefix: "", label: "参考素材", namePrefix: "reference", type: "image", field: "" });
+    setGroupError("");
+  }
+
+  function updateGroupDraft(patch: Partial<ReferenceGroupDraft>) {
+    setGroupDraft((current) => current ? { ...current, ...patch } : current);
+    setGroupError("");
+  }
+
+  function commitGroup() {
+    if (!groupDraft) return;
+    try {
+      const branches = traceReferenceInputBranches(workflow, groupDraft.boundaryNodeId, groupDraft.targetFieldPrefix);
+      const fields = commonReferenceInputFields(workflow, branches);
+      const field = groupDraft.field || (fields.length === 1 ? fields[0] : "");
+      if (!groupDraft.label.trim() || !groupDraft.namePrefix.trim() || !field || !branches.length) {
+        setGroupError("请完整选择汇总节点、接口、输入字段并填写组名称和参数前缀");
+        return;
+      }
+      const occupied = new Set(groups.flatMap((group) => group.mappingIds));
+      const reusedIds = new Set<string>();
+      const members = branches.map((branch, index) => {
+        const existing = mappings.find((mapping) => mapping.nodeId === branch.rootNodeId && !occupied.has(mapping.id) && !reusedIds.has(mapping.id));
+        const id = existing?.id ?? crypto.randomUUID();
+        reusedIds.add(id);
+        return {
+          ...(existing ?? {}),
+          id,
+          name: existing?.name ?? uniqueMappingName(`${groupDraft.namePrefix.trim()}_${index + 1}`, mappings),
+          nodeId: branch.rootNodeId,
+          field,
+          type: groupDraft.type,
+          required: false,
+          activation: { when: "provided" as const, nodeIds: [...branch.activationNodeIds] },
+        } satisfies AigcWorkflowInputMapping;
+      });
+      // 组成员必须连续，汇总接口顺序就是运行时槽位顺序。
+      onChange([...mappings.filter((mapping) => !reusedIds.has(mapping.id)), ...members]);
+      onGroupsChange([...groups, {
+        id: crypto.randomUUID(),
+        label: groupDraft.label.trim(),
+        type: groupDraft.type,
+        mappingIds: members.map((mapping) => mapping.id),
+        boundaryNodeId: groupDraft.boundaryNodeId,
+        targetFieldPrefix: groupDraft.targetFieldPrefix,
+      }]);
+      setGroupDraft(undefined);
+    } catch (error) {
+      setGroupError(error instanceof Error ? error.message : "无法识别参考输入分支");
+    }
+  }
+
+  function moveInputItem(targetItemId: string) {
+    if (!draggedItemId || draggedItemId === targetItemId) return;
+    onChange(reorderInputMappings(mappings, groups, draggedItemId, targetItemId));
+    setDraggedItemId("");
+  }
 
   function beginAdd() {
     setDraft({
@@ -208,16 +277,37 @@ function InputMappingBuilder(props: {
     <section className="configuration-form-card aigc-config-section">
       <div className="configuration-section__heading">
         <div><span>02</span><h2>入参映射</h2></div>
-        <button type="button" className="configuration-primary-action" onClick={beginAdd}><Plus size={15} />新增入参</button>
+        <div className="aigc-section-actions">
+          <button type="button" className="configuration-secondary-action" onClick={beginGroup}><Layers3 size={15} />创建参考组</button>
+          <button type="button" className="configuration-primary-action" onClick={beginAdd}><Plus size={15} />新增入参</button>
+        </div>
       </div>
       <p className="configuration-help">浏览节点关系后明确选择映射目标；可选参数还可以按是否有值启用一组条件节点。</p>
 
       {mappings.length ? (
         <div className="aigc-mapping-list">
-          {mappings.map((mapping) => {
+          {listItems.map((item) => {
+            if (item.kind === "group") {
+              const group = item.group;
+              return (
+                <article key={group.id} className="aigc-task-row aigc-mapping-card aigc-mapping-card--group" draggable onDragStart={() => setDraggedItemId(item.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => moveInputItem(item.id)}>
+                  <button type="button" className="aigc-drag-handle" aria-label={`拖动调整${group.label}顺序`} title="拖动调整顺序"><GripVertical size={16} /></button>
+                  <div className="aigc-mapping-card__main">
+                    <strong>{group.label}</strong>
+                    <span>{group.type} · {group.mappingIds.length} 个槽位</span>
+                    <small>汇总节点 #{group.boundaryNodeId} · {group.targetFieldPrefix}</small>
+                  </div>
+                  <div className="aigc-task-actions">
+                    <button type="button" className="is-danger" onClick={() => setDeleteGroupTarget(group)}><Trash2 size={14} />删除</button>
+                  </div>
+                </article>
+              );
+            }
+            const mapping = item.mapping;
             const node = workflow.nodes.find((item) => item.id === mapping.nodeId);
             return (
-              <article key={mapping.id} className="aigc-task-row aigc-mapping-card">
+              <article key={mapping.id} className="aigc-task-row aigc-mapping-card" draggable onDragStart={() => setDraggedItemId(item.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => moveInputItem(item.id)}>
+                <button type="button" className="aigc-drag-handle" aria-label={`拖动调整${mapping.name}顺序`} title="拖动调整顺序"><GripVertical size={16} /></button>
                 <div className="aigc-mapping-card__main">
                   <strong>{mapping.name}</strong>
                   <span title={`${nodeLabel(node, mapping.nodeId)} · ${mapping.field}`}>{nodeLabel(node, mapping.nodeId)} · {mapping.field}</span>
@@ -294,8 +384,62 @@ function InputMappingBuilder(props: {
           </div>
         </div>
       ) : null}
+      {groupDraft ? <ReferenceGroupEditor workflow={workflow} draft={groupDraft} error={groupError} onChange={updateGroupDraft} onCancel={() => setGroupDraft(undefined)} onCommit={commitGroup} /> : null}
       {deleteTarget ? <ConfirmationDialog title={`删除入参“${deleteTarget.name}”？`} description="删除后该参数将不再写入 ComfyUI 节点；关联的条件分支配置也会一并删除。" confirmLabel="删除入参" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => { onChange(mappings.filter((item) => item.id !== deleteTarget.id)); setDeleteTarget(undefined); }} /> : null}
+      {deleteGroupTarget ? <ConfirmationDialog title={`删除参考组“${deleteGroupTarget.label}”？`} description="删除后该组及其底层入参映射会一并移除。" confirmLabel="删除参考组" onCancel={() => setDeleteGroupTarget(undefined)} onConfirm={() => { const ids = new Set(deleteGroupTarget.mappingIds); onChange(mappings.filter((item) => !ids.has(item.id))); onGroupsChange(groups.filter((item) => item.id !== deleteGroupTarget.id)); setDeleteGroupTarget(undefined); }} /> : null}
     </section>
+  );
+}
+
+interface ReferenceGroupDraft {
+  boundaryNodeId: string;
+  targetFieldPrefix: string;
+  label: string;
+  namePrefix: string;
+  type: AigcWorkflowInputGroup["type"];
+  field: string;
+}
+
+/** 参考组向导只依据用户选择和工作流拓扑，不推断素材语义。 */
+function ReferenceGroupEditor({ workflow, draft, error, onChange, onCancel, onCommit }: {
+  workflow: AigcWorkflowDetail;
+  draft: ReferenceGroupDraft;
+  error: string;
+  onChange: (patch: Partial<ReferenceGroupDraft>) => void;
+  onCancel: () => void;
+  onCommit: () => void;
+}) {
+  const boundaries = workflow.nodes.filter((node) => referenceInputFamilies(workflow, node.id).length > 0);
+  const families = referenceInputFamilies(workflow, draft.boundaryNodeId);
+  const result = referenceGroupPreview(workflow, draft.boundaryNodeId, draft.targetFieldPrefix);
+  const field = draft.field || (result.fields.length === 1 ? result.fields[0] : "");
+  return (
+    <div className="aigc-mapping-editor aigc-reference-group-editor">
+      <div className="configuration-section__heading"><strong>创建参考输入组</strong><button type="button" className="icon-button" aria-label="关闭参考组编辑" onClick={onCancel}><X size={15} /></button></div>
+      <div className="aigc-form-grid">
+        <label><span>汇总节点</span><select aria-label="参考组汇总节点" value={draft.boundaryNodeId} onChange={(event) => { const boundaryNodeId = event.target.value; onChange({ boundaryNodeId, targetFieldPrefix: referenceInputFamilies(workflow, boundaryNodeId)[0]?.prefix ?? "", field: "" }); }}>
+          <option value="">请选择节点</option>
+          {boundaries.map((node) => <option key={node.id} value={node.id}>{nodeLabel(node, node.id)}</option>)}
+        </select></label>
+        <label><span>汇总接口</span><select aria-label="参考组汇总接口" value={draft.targetFieldPrefix} onChange={(event) => onChange({ targetFieldPrefix: event.target.value, field: "" })}>
+          <option value="">请选择接口</option>
+          {families.map((family) => <option key={family.prefix} value={family.prefix}>{family.prefix} ({family.targetFields.length})</option>)}
+        </select></label>
+        <label><span>组名称</span><input aria-label="参考组名称" value={draft.label} onChange={(event) => onChange({ label: event.target.value })} /></label>
+        <label><span>参数前缀</span><input aria-label="参考组参数前缀" value={draft.namePrefix} onChange={(event) => onChange({ namePrefix: event.target.value })} /></label>
+        <label><span>用户输入类型</span><select aria-label="参考组输入类型" value={draft.type} onChange={(event) => onChange({ type: event.target.value as ReferenceGroupDraft["type"] })}>
+          <option value="image">图片</option><option value="video">视频</option><option value="audio">音频</option>
+        </select></label>
+        <label><span>根节点输入字段</span><select aria-label="参考组输入字段" value={field} onChange={(event) => onChange({ field: event.target.value })}>
+          <option value="">请选择字段</option>
+          {result.fields.map((candidate) => <option key={candidate} value={candidate}>{candidate}</option>)}
+        </select></label>
+      </div>
+      {result.error ? <p className="aigc-field-error" role="alert">{result.error}</p> : null}
+      {!result.error && result.branches.length ? <div className="aigc-reference-preview"><strong>{result.branches.length} 个参考槽位</strong><span>按汇总接口顺序固定</span><small>{result.branches.map((branch) => `#${branch.rootNodeId}（${branch.activationNodeIds.length} 节点）`).join(" · ")}</small></div> : null}
+      {error ? <p className="aigc-field-error" role="alert">{error}</p> : null}
+      <div className="configuration-save-bar"><button type="button" className="configuration-secondary-action" onClick={onCancel}>取消</button><button type="button" className="configuration-primary-action" disabled={!draft.boundaryNodeId || !draft.targetFieldPrefix || !draft.label.trim() || !draft.namePrefix.trim() || !field || Boolean(result.error)} onClick={() => { if (!draft.field && field) onChange({ field }); onCommit(); }}><Check size={15} />创建参考组</button></div>
+    </div>
   );
 }
 
@@ -310,6 +454,7 @@ function OutputMappingBuilder(props: {
   const [browseNodeId, setBrowseNodeId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AigcWorkflowOutputMapping>();
+  const [draggedMappingId, setDraggedMappingId] = useState("");
   const selectedNode = workflow.nodes.find((node) => node.id === draft?.nodeId);
   const selectedFields = selectedNode ? outputFields(selectedNode) : [];
 
@@ -371,6 +516,12 @@ function OutputMappingBuilder(props: {
     closeEditor();
   }
 
+  function moveOutput(targetId: string) {
+    if (!draggedMappingId || draggedMappingId === targetId) return;
+    onChange(moveArrayItem(mappings, draggedMappingId, targetId));
+    setDraggedMappingId("");
+  }
+
   return (
     <section className="configuration-form-card aigc-config-section">
       <div className="configuration-section__heading">
@@ -384,7 +535,8 @@ function OutputMappingBuilder(props: {
           {mappings.map((mapping) => {
             const node = workflow.nodes.find((item) => item.id === mapping.nodeId);
             return (
-              <article key={mapping.id} className="aigc-task-row aigc-mapping-card">
+              <article key={mapping.id} className="aigc-task-row aigc-mapping-card" draggable onDragStart={() => setDraggedMappingId(mapping.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => moveOutput(mapping.id)}>
+                <button type="button" className="aigc-drag-handle" aria-label={`拖动调整${mapping.name}顺序`} title="拖动调整顺序"><GripVertical size={16} /></button>
                 <div className="aigc-mapping-card__main">
                   <strong>{mapping.name}</strong>
                   <span title={`${nodeLabel(node, mapping.nodeId)} · ${outputFieldLabel(mapping.field, mapping.mediaType)}`}>{nodeLabel(node, mapping.nodeId)} · {outputFieldLabel(mapping.field, mapping.mediaType)}</span>
@@ -724,6 +876,70 @@ const inputTypeOptions: Array<{ value: AigcWorkflowInputType; label: string }> =
   { value: "video", label: "视频（video）" },
   { value: "audio", label: "音频（audio）" },
 ];
+
+type InputListItem =
+  | { id: string; kind: "mapping"; mapping: AigcWorkflowInputMapping; mappingIds: string[] }
+  | { id: string; kind: "group"; group: AigcWorkflowInputGroup; mappingIds: string[] };
+
+/** 将参考组压缩为一个顶层入参列表项。 */
+function inputListItems(mappings: AigcWorkflowInputMapping[], groups: AigcWorkflowInputGroup[]): InputListItem[] {
+  const groupByMappingId = new Map(groups.flatMap((group) => group.mappingIds.map((mappingId) => [mappingId, group] as const)));
+  const emittedGroups = new Set<string>();
+  const items: InputListItem[] = [];
+  for (const mapping of mappings) {
+    const group = groupByMappingId.get(mapping.id);
+    if (!group) items.push({ id: mapping.id, kind: "mapping", mapping, mappingIds: [mapping.id] });
+    else if (!emittedGroups.has(group.id)) {
+      emittedGroups.add(group.id);
+      items.push({ id: group.id, kind: "group", group, mappingIds: [...group.mappingIds] });
+    }
+  }
+  return items;
+}
+
+/** 以顶层参数块为单位重排，参考组内部顺序保持不变。 */
+export function reorderInputMappings(mappings: AigcWorkflowInputMapping[], groups: AigcWorkflowInputGroup[], sourceId: string, targetId: string): AigcWorkflowInputMapping[] {
+  const items = inputListItems(mappings, groups);
+  const sourceIndex = items.findIndex((item) => item.id === sourceId);
+  const targetIndex = items.findIndex((item) => item.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return mappings;
+  const reordered = [...items];
+  const [source] = reordered.splice(sourceIndex, 1);
+  reordered.splice(targetIndex, 0, source);
+  const mappingById = new Map(mappings.map((mapping) => [mapping.id, mapping]));
+  return reordered.flatMap((item) => item.mappingIds.map((id) => mappingById.get(id)).filter((mapping): mapping is AigcWorkflowInputMapping => Boolean(mapping)));
+}
+
+/** 将普通映射移动到目标映射位置。 */
+function moveArrayItem<T extends { id: string }>(items: T[], sourceId: string, targetId: string): T[] {
+  const sourceIndex = items.findIndex((item) => item.id === sourceId);
+  const targetIndex = items.findIndex((item) => item.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return items;
+  const reordered = [...items];
+  const [source] = reordered.splice(sourceIndex, 1);
+  reordered.splice(targetIndex, 0, source);
+  return reordered;
+}
+
+/** 安全生成参考组拓扑预览，避免不合法分支中断编辑器渲染。 */
+function referenceGroupPreview(workflow: AigcWorkflowDetail, boundaryNodeId: string, prefix: string) {
+  if (!boundaryNodeId || !prefix) return { branches: [], fields: [], error: "" };
+  try {
+    const branches = traceReferenceInputBranches(workflow, boundaryNodeId, prefix);
+    return { branches, fields: commonReferenceInputFields(workflow, branches), error: "" };
+  } catch (error) {
+    return { branches: [], fields: [], error: error instanceof Error ? error.message : "无法识别参考输入分支" };
+  }
+}
+
+/** 避免自动创建的映射名称与现有参数重名。 */
+function uniqueMappingName(candidate: string, mappings: AigcWorkflowInputMapping[]): string {
+  const names = new Set(mappings.map((mapping) => mapping.name));
+  if (!names.has(candidate)) return candidate;
+  let suffix = 2;
+  while (names.has(`${candidate}_${suffix}`)) suffix += 1;
+  return `${candidate}_${suffix}`;
+}
 
 const outputMediaTypeOptions: Array<{ value: AigcWorkflowOutputMapping["mediaType"]; label: string }> = [
   { value: "image", label: "图片（image）" },

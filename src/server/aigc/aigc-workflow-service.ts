@@ -5,6 +5,7 @@ import type {
   AigcWorkflowDetail,
   AigcWorkflowDetailDocument,
   AigcWorkflowDocument,
+  AigcWorkflowInputGroup,
   AigcWorkflowInputMapping,
   AigcWorkflowInputType,
   AigcWorkflowOutputMapping,
@@ -76,10 +77,14 @@ export class AigcWorkflowService {
     const index = settings.workflows.findIndex((workflow) => workflow.id === id);
     if (index < 0) throw new Error("AIGC 工作流不存在");
     const previous = settings.workflows[index];
+    const inputMappings = normalizeInputMappings(input.inputMappings, previous.nodes, previous.edges, previous.nodeMetadata);
     const next = {
       ...previous,
       name: normalizeName(input.name),
-      inputMappings: normalizeInputMappings(input.inputMappings, previous.nodes, previous.edges, previous.nodeMetadata),
+      inputMappings,
+      inputGroups: input.inputGroups === undefined
+        ? normalizeInputGroups(previous.inputGroups ?? [], inputMappings, previous.nodes)
+        : normalizeInputGroups(input.inputGroups, inputMappings, previous.nodes),
       outputMappings: normalizeOutputMappings(input.outputMappings, previous.nodes),
       updatedAt: new Date().toISOString(),
     };
@@ -143,6 +148,7 @@ export class AigcWorkflowService {
     if (bytes > MAX_WORKFLOW_JSON_BYTES) throw new TypeError("ComfyUI 工作流文件不能超过 4 MiB");
     const parsed = this.parser.parse(raw);
     const now = new Date().toISOString();
+    const inputMappings = normalizeInputMappings(input.inputMappings, parsed.nodes, parsed.edges);
     return {
       id,
       name,
@@ -151,7 +157,8 @@ export class AigcWorkflowService {
       raw,
       nodes: parsed.nodes,
       edges: parsed.edges,
-      inputMappings: normalizeInputMappings(input.inputMappings, parsed.nodes, parsed.edges),
+      inputMappings,
+      inputGroups: normalizeInputGroups(input.inputGroups, inputMappings, parsed.nodes),
       outputMappings: normalizeOutputMappings(input.outputMappings, parsed.nodes),
       createdAt: now,
       updatedAt: now,
@@ -186,6 +193,7 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
     nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
     edges: workflow.edges.map((edge) => ({ ...edge })),
     inputMappings: workflow.inputMappings.map(cloneInputMapping),
+    inputGroups: (workflow.inputGroups ?? []).map(cloneInputGroup),
     outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
     ...(workflow.nodeMetadata ? { nodeMetadata: cloneNodeMetadata(workflow.nodeMetadata) } : {}),
     ...(Object.keys(resolvedFieldMetadata).length ? { resolvedFieldMetadata } : {}),
@@ -207,6 +215,7 @@ function normalizeSettings(value: unknown): StoredAigcWorkflows {
         nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
         edges: workflow.edges.map((edge) => ({ ...edge })),
         inputMappings: workflow.inputMappings.map(cloneInputMapping),
+        inputGroups: Array.isArray(workflow.inputGroups) ? workflow.inputGroups.map(cloneInputGroup) : [],
         outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
         ...(isRecord(workflow.nodeMetadata) ? { nodeMetadata: normalizeNodeMetadata(workflow.nodeMetadata) } : {}),
         ...(typeof workflow.nodeMetadataSyncedAt === "string" ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
@@ -308,6 +317,58 @@ function cloneInputMapping(mapping: AigcWorkflowInputMapping): AigcWorkflowInput
     ...(mapping.enumOptions ? { enumOptions: [...mapping.enumOptions] } : {}),
     ...(mapping.activation ? { activation: { ...mapping.activation, nodeIds: [...mapping.activation.nodeIds] } } : {}),
   };
+}
+
+/** 校验参考输入组与底层映射的对应关系和稳定顺序。 */
+function normalizeInputGroups(value: unknown, mappings: AigcWorkflowInputMapping[], nodes: ComfyUiNode[]): AigcWorkflowInputGroup[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new TypeError("工作流参考输入组格式无效");
+  const mappingById = new Map(mappings.map((mapping) => [mapping.id, mapping]));
+  const mappingIndex = new Map(mappings.map((mapping, index) => [mapping.id, index]));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const claimedMappingIds = new Set<string>();
+  const groupIds = new Set<string>();
+  return value.map((group) => {
+    if (!isRecord(group)) throw new TypeError("工作流参考输入组格式无效");
+    const id = typeof group.id === "string" && group.id ? group.id : randomUUID();
+    if (groupIds.has(id)) throw new TypeError("工作流参考输入组标识不能重复");
+    groupIds.add(id);
+    const label = typeof group.label === "string" ? group.label.trim() : "";
+    if (!label || label.length > 80) throw new TypeError("工作流参考输入组名称长度无效");
+    if (group.type !== "image" && group.type !== "video" && group.type !== "audio") {
+      throw new TypeError("工作流参考输入组类型无效");
+    }
+    if (typeof group.boundaryNodeId !== "string" || !nodeIds.has(group.boundaryNodeId)) {
+      throw new TypeError("工作流参考输入组引用了不存在的汇总节点");
+    }
+    if (typeof group.targetFieldPrefix !== "string" || !group.targetFieldPrefix.startsWith("inputs.") || group.targetFieldPrefix.includes("\0")) {
+      throw new TypeError("工作流参考输入组接口路径无效");
+    }
+    if (!Array.isArray(group.mappingIds) || group.mappingIds.length === 0) {
+      throw new TypeError("工作流参考输入组必须包含入参映射");
+    }
+    const mappingIds = group.mappingIds.map(String);
+    if (new Set(mappingIds).size !== mappingIds.length) throw new TypeError("工作流参考输入组包含重复入参");
+    for (const mappingId of mappingIds) {
+      const mapping = mappingById.get(mappingId);
+      if (!mapping) throw new TypeError("工作流参考输入组引用了不存在的入参");
+      if (claimedMappingIds.has(mappingId)) throw new TypeError("工作流入参不能同时属于多个参考输入组");
+      if (mapping.type !== group.type || mapping.required || !mapping.activation) {
+        throw new TypeError("参考输入组成员必须是同类型的可选条件入参");
+      }
+      claimedMappingIds.add(mappingId);
+    }
+    const indices = mappingIds.map((mappingId) => mappingIndex.get(mappingId) ?? -1);
+    if (indices.some((index, position) => position > 0 && index !== indices[position - 1] + 1)) {
+      throw new TypeError("参考输入组成员必须在入参列表中连续排列");
+    }
+    return { id, label, type: group.type, mappingIds, boundaryNodeId: group.boundaryNodeId, targetFieldPrefix: group.targetFieldPrefix };
+  });
+}
+
+/** 深复制参考输入组的成员顺序。 */
+function cloneInputGroup(group: AigcWorkflowInputGroup): AigcWorkflowInputGroup {
+  return { ...group, mappingIds: [...group.mappingIds] };
 }
 
 function normalizeOutputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkflowOutputMapping[] {

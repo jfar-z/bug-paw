@@ -172,6 +172,32 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(await screen.findByText("ComfyUI 连接正常")).toBeInTheDocument();
   });
 
+  it("参考输入组只展示已填槽位和下一个空槽位", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-reference", name: "参考生视频", description: "", protocol: "comfyui", capability: "image-to-video", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-reference" }, createdAt: "2026-08-21T00:00:00.000Z", updatedAt: "2026-08-21T00:00:00.000Z" }] }));
+      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://comfyui:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/workflows/workflow-reference") return new Response(JSON.stringify({ revision: "w1", workflow: {
+        id: "workflow-reference", name: "参考生视频", fileName: "reference.json", originalHash: "hash",
+        nodes: [{ id: "1", type: "LoadImage", fields: [{ name: "inputs.image", kind: "input" }] }, { id: "2", type: "LoadImage", fields: [{ name: "inputs.image", kind: "input" }] }], edges: [],
+        inputMappings: [{ id: "image-1", name: "reference_image_1", nodeId: "1", field: "inputs.image", type: "image", required: false, description: "参考图片 1", activation: { when: "provided", nodeIds: ["1"] } }, { id: "image-2", name: "reference_image_2", nodeId: "2", field: "inputs.image", type: "image", required: false, description: "参考图片 2", activation: { when: "provided", nodeIds: ["2"] } }],
+        inputGroups: [{ id: "images", label: "参考图片", type: "image", mappingIds: ["image-1", "image-2"], boundaryNodeId: "9", targetFieldPrefix: "inputs.ref_images" }], outputMappings: [], createdAt: "2026-08-21T00:00:00.000Z", updatedAt: "2026-08-21T00:00:00.000Z",
+      } }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      if (url === "/api/v1/aigc/inputs" && init?.method === "POST") return new Response(JSON.stringify({ asset: { id: "asset-1", name: "reference.png", mediaType: "image/png", size: 10 } }), { status: 201 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-reference" });
+
+    expect(await screen.findByText("0/2 已添加")).toBeInTheDocument();
+    expect(screen.getByLabelText("参考图片 1")).toBeInTheDocument();
+    expect(screen.queryByLabelText("参考图片 2")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("参考图片 1"), { target: { files: [new File(["image"], "reference.png", { type: "image/png" })] } });
+    expect(await screen.findByText("1/2 已添加")).toBeInTheDocument();
+    expect(screen.getByLabelText("参考图片 2")).toBeInTheDocument();
+  });
+
   it("创作台从同步元数据加载可筛选 COMBO 候选项", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

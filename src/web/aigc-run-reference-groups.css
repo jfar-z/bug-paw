@@ -1,0 +1,49 @@
+/* 参考输入组仅由工作台运行入口使用，避免增加 AIGC 渠道页共享样式体积。 */
+.aigc-run-reference-group {
+  display: grid;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.aigc-run-reference-group__heading,
+.aigc-run-reference-group__heading > div,
+.aigc-run-reference-slot__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aigc-run-reference-group__heading {
+  justify-content: space-between;
+}
+
+.aigc-run-reference-group__heading strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.aigc-run-reference-group__heading small,
+.aigc-run-reference-group__heading > span,
+.aigc-run-reference-slot__heading > span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.aigc-run-reference-group__slots {
+  display: grid;
+  gap: 10px;
+}
+
+.aigc-run-reference-slot {
+  display: grid;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.aigc-run-reference-slot__heading {
+  min-height: 28px;
+  justify-content: space-between;
+}

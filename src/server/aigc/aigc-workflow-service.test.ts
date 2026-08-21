@@ -192,6 +192,33 @@ describe("AIGC 工作流服务", () => {
     expect(created.workflow.inputMappings[0].activation).toEqual({ when: "provided", nodeIds: ["34", "47"] });
   });
 
+  it("保存参考输入组并校验成员类型与连续顺序", async () => {
+    const service = await fixture();
+    const inputMappings = [
+      { id: "first", name: "reference_1", nodeId: "34", field: "inputs.image", type: "image" as const, required: false, activation: { when: "provided" as const, nodeIds: ["34"] } },
+      { id: "second", name: "reference_2", nodeId: "47", field: "inputs.image", type: "image" as const, required: false, activation: { when: "provided" as const, nodeIds: ["47"] } },
+    ];
+    const created = await service.create({
+      name: "参考组",
+      fileName: "reference-group.json",
+      workflowJson: conditionalWorkflow(),
+      inputMappings,
+      inputGroups: [{ id: "images", label: "参考图片", type: "image", mappingIds: ["first", "second"], boundaryNodeId: "61", targetFieldPrefix: "inputs.references" }],
+      outputMappings: [],
+    });
+
+    expect(created.workflow.inputGroups).toEqual([expect.objectContaining({ id: "images", mappingIds: ["first", "second"] })]);
+    const loaded = await service.get(created.workflow.id);
+    expect(loaded.workflow.inputGroups?.[0].label).toBe("参考图片");
+
+    await expect(service.update(created.workflow.id, {
+      name: "参考组",
+      inputMappings: [inputMappings[0], { id: "prompt", name: "prompt", nodeId: "61", field: "inputs.prompt", type: "string", required: true }, inputMappings[1]],
+      inputGroups: created.workflow.inputGroups,
+      outputMappings: [],
+    }, created.revision)).rejects.toThrow("连续排列");
+  });
+
   it("拒绝无效或交叉的条件节点组", async () => {
     const service = await fixture();
     const base = {
