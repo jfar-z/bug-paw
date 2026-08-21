@@ -160,6 +160,19 @@ export interface AigcWorkflowInputMapping {
   activation?: AigcWorkflowInputActivation;
 }
 
+/** 由多个同类可选映射组成的参考素材输入组。 */
+export interface AigcWorkflowInputGroup {
+  id: string;
+  label: string;
+  type: "image" | "video" | "audio";
+  /** 成员顺序同时决定运行时素材槽位顺序。 */
+  mappingIds: string[];
+  /** 用户指定的共享汇总节点。 */
+  boundaryNodeId: string;
+  /** 用户选择的汇总接口系列，例如 inputs.references。 */
+  targetFieldPrefix: string;
+}
+
 /** ComfyUI 工作流输出字段映射。 */
 export interface AigcWorkflowOutputMapping {
   id: string;
@@ -220,6 +233,7 @@ export interface AigcWorkflowDetail {
   nodes: ComfyUiNode[];
   edges: ComfyUiEdge[];
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
   /** 最近成功同步并保存的 ComfyUI 节点定义。 */
   nodeMetadata?: ComfyUiNodeMetadata;
@@ -243,6 +257,7 @@ export interface AigcWorkflowCreateInput {
   /** 完整的 ComfyUI 工作流 JSON，由服务端解析但不会执行脚本。 */
   workflowJson: unknown;
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
 }
 
@@ -250,6 +265,7 @@ export interface AigcWorkflowCreateInput {
 export interface AigcWorkflowUpdateInput {
   name: string;
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
 }
 

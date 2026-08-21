@@ -20,6 +20,7 @@ import type {
   AigcUploadedAsset,
   AigcWorkflowDetail,
   AigcWorkflowDocument,
+  AigcWorkflowInputGroup,
   AigcWorkflowInputMapping,
   AigcWorkflowOutputMapping,
   AigcWorkflowSummary,
@@ -33,6 +34,7 @@ import { useOnlineStatus } from "../use-online-status";
 import { navigateTo, NAVIGATION_BEFORE_EVENT, type AppRoute } from "../router";
 import "../configuration.css";
 import "../aigc.css";
+import "../aigc-run-reference-groups.css";
 
 const AigcWorkflowComposer = lazy(async () => {
   const module = await import("./aigc-workflow-composer");
@@ -479,6 +481,35 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   }
 
   const actionStatus = runActionStatus({ task: createdTask, uploading: uploading !== undefined, ready: selectedReady });
+  const displayItems = runDisplayItems(fields, workflow, values);
+
+  function renderRunField(field: AigcRunFieldDefinition) {
+    return (
+      <AigcRunField
+        key={field.name}
+        field={field}
+        value={values[field.name]}
+        uploaded={uploads[field.name]}
+        uploading={uploading === field.name}
+        publicFiles={publicFiles}
+        mediaSource={mediaSources[field.name] ?? "upload"}
+        comfyInputFiles={comfyInputFiles[field.name] ?? []}
+        comfyInputLoading={comfyInputLoading[field.name] === true}
+        comfyPreviewBaseUrl={selectedChannel?.baseUrl}
+        onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
+        onFile={(file) => void uploadFile(field, file)}
+        onPublicFile={(file) => void uploadPublicFile(field, file)}
+        onMediaSourceChange={(source) => changeMediaSource(field, source)}
+        onSelectPublicFile={(file) => selectPublicMediaFile(field, file)}
+        onSelectComfyInputFile={(file) => selectComfyInputFile(field, file)}
+      />
+    );
+  }
+
+  function clearRunField(field: AigcRunFieldDefinition) {
+    setValues((current) => { const next = { ...current }; delete next[field.name]; return next; });
+    setUploads((current) => { const next = { ...current }; delete next[field.name]; return next; });
+  }
 
   return (
     <div className={selected?.protocol === "comfyui" ? "aigc-workbench-page aigc-run-page has-readiness" : "aigc-workbench-page aigc-run-page"}>
@@ -521,25 +552,13 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
             <div><h2 id="aigc-run-parameters-title">生成参数</h2><small>{selected ? `${capabilityLabel(selected.protocol, selected.capability)} · ${fields.length} 项` : "尚未选择接口"}</small></div>
           </div>
           <div className="aigc-run-parameter-scroll">
-            {selected ? fields.map((field) => (
-              <AigcRunField
-                key={field.name}
-                field={field}
-                value={values[field.name]}
-                uploaded={uploads[field.name]}
-                uploading={uploading === field.name}
-                publicFiles={publicFiles}
-                mediaSource={mediaSources[field.name] ?? "upload"}
-                comfyInputFiles={comfyInputFiles[field.name] ?? []}
-                comfyInputLoading={comfyInputLoading[field.name] === true}
-                comfyPreviewBaseUrl={selectedChannel?.baseUrl}
-                onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
-                onFile={(file) => void uploadFile(field, file)}
-                onPublicFile={(file) => void uploadPublicFile(field, file)}
-                onMediaSourceChange={(source) => changeMediaSource(field, source)}
-                onSelectPublicFile={(file) => selectPublicMediaFile(field, file)}
-                onSelectComfyInputFile={(file) => selectComfyInputFile(field, file)}
-              />
+            {selected ? displayItems.map((item) => item.kind === "field" ? renderRunField(item.field) : (
+              <section key={item.group.id} className="aigc-run-reference-group" aria-labelledby={`reference-group-${item.group.id}`}>
+                <div className="aigc-run-reference-group__heading"><div><strong id={`reference-group-${item.group.id}`}>{item.group.label}</strong><small>{item.filledCount}/{item.fields.length} 已添加</small></div><span>{item.group.type}</span></div>
+                <div className="aigc-run-reference-group__slots">
+                  {item.visibleFields.map((field) => <div key={field.name} className="aigc-run-reference-slot"><div className="aigc-run-reference-slot__heading"><span>槽位 {item.fields.indexOf(field) + 1}</span>{hasRunValue(values[field.name]) ? <button type="button" className="icon-button" aria-label={`清空${field.label}`} title="清空槽位" onClick={() => clearRunField(field)}><Trash2 size={14} /></button> : null}</div>{renderRunField(field)}</div>)}
+                </div>
+              </section>
             )) : (
               <div className="aigc-run-empty"><Boxes size={22} aria-hidden="true" /><p>暂无已启用的 {interfaceProtocolName(provider)} 接口。</p><button type="button" className="configuration-secondary-action" onClick={() => navigateTo({ page: "aigc-interfaces" })}>创建接口</button></div>
             )}
@@ -1020,6 +1039,41 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
     fields.push({ name: "image", label: "图片", type: "image", required: true });
   }
   return fields;
+}
+
+type AigcRunDisplayItem =
+  | { kind: "field"; field: AigcRunFieldDefinition }
+  | { kind: "group"; group: AigcWorkflowInputGroup; fields: AigcRunFieldDefinition[]; visibleFields: AigcRunFieldDefinition[]; filledCount: number };
+
+/** 按工作流入参顺序展示顶层参数，参考组仅展开已有值和下一个空槽位。 */
+function runDisplayItems(fields: AigcRunFieldDefinition[], workflow: AigcWorkflowDetail | undefined, values: Record<string, AigcRunInputValue>): AigcRunDisplayItem[] {
+  const groups = workflow?.inputGroups ?? [];
+  if (!groups.length || !workflow) return fields.map((field) => ({ kind: "field", field }));
+  const fieldByMappingId = new Map(workflow.inputMappings.map((mapping) => [mapping.id, fields.find((field) => field.name === mapping.name)]));
+  const groupByMappingId = new Map(groups.flatMap((group) => group.mappingIds.map((mappingId) => [mappingId, group] as const)));
+  const emittedGroups = new Set<string>();
+  const result: AigcRunDisplayItem[] = [];
+  for (const mapping of workflow.inputMappings) {
+    const group = groupByMappingId.get(mapping.id);
+    const field = fieldByMappingId.get(mapping.id);
+    if (!group) {
+      if (field) result.push({ kind: "field", field });
+      continue;
+    }
+    if (emittedGroups.has(group.id)) continue;
+    emittedGroups.add(group.id);
+    const groupFields = group.mappingIds.map((mappingId) => fieldByMappingId.get(mappingId)).filter((candidate): candidate is AigcRunFieldDefinition => Boolean(candidate));
+    const firstEmpty = groupFields.find((candidate) => !hasRunValue(values[candidate.name]));
+    const visibleFields = groupFields.filter((candidate) => hasRunValue(values[candidate.name]) || candidate === firstEmpty);
+    result.push({ kind: "group", group, fields: groupFields, visibleFields, filledCount: groupFields.filter((candidate) => hasRunValue(values[candidate.name])).length });
+  }
+  return result;
+}
+
+/** 判断运行参数是否已经占用参考槽位。 */
+function hasRunValue(value: AigcRunInputValue | undefined): boolean {
+  if (value === undefined || value === null || value === "") return false;
+  return typeof value !== "object" || Object.keys(value).length > 0;
 }
 
 /** 将数值元数据压缩为运行表单中的范围提示。 */
@@ -1662,12 +1716,13 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   const [revision, setRevision] = useState("");
   const [name, setName] = useState("");
   const [inputMappings, setInputMappings] = useState<AigcWorkflowInputMapping[]>([]);
+  const [inputGroups, setInputGroups] = useState<AigcWorkflowInputGroup[]>([]);
   const [outputMappings, setOutputMappings] = useState<AigcWorkflowOutputMapping[]>([]);
   const [message, setMessage] = useState("");
   const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
   const [channelId, setChannelId] = useState("");
   const [syncingMetadata, setSyncingMetadata] = useState(false);
-  const isDirty = Boolean(detail && (name !== detail.name || JSON.stringify(inputMappings) !== JSON.stringify(detail.inputMappings) || JSON.stringify(outputMappings) !== JSON.stringify(detail.outputMappings)));
+  const isDirty = Boolean(detail && (name !== detail.name || JSON.stringify(inputMappings) !== JSON.stringify(detail.inputMappings) || JSON.stringify(inputGroups) !== JSON.stringify(detail.inputGroups ?? []) || JSON.stringify(outputMappings) !== JSON.stringify(detail.outputMappings)));
   const navigationGuard = useAigcUnsavedNavigation(isDirty);
 
   useEffect(() => {
@@ -1678,6 +1733,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       setRevision(next.revision);
       setName(next.workflow.name);
       setInputMappings(next.workflow.inputMappings);
+      setInputGroups(next.workflow.inputGroups ?? []);
       setOutputMappings(next.workflow.outputMappings);
       setChannels(comfyChannels);
       setChannelId((current) => current || comfyChannels[0]?.id || "");
@@ -1686,7 +1742,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   }, [runApiTask, workflowId]);
 
   async function save() {
-    const result = await runApiTask(() => api.updateAigcWorkflow(workflowId, revision, { name, inputMappings, outputMappings }), {
+    const result = await runApiTask(() => api.updateAigcWorkflow(workflowId, revision, { name, inputMappings, inputGroups, outputMappings }), {
       operation: "保存 ComfyUI 工作流映射",
       expected: aigcExpected(setMessage),
     });
@@ -1696,6 +1752,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       setRevision(next.revision);
       setDetail(next.workflow);
       setInputMappings(next.workflow.inputMappings);
+      setInputGroups(next.workflow.inputGroups ?? []);
       setOutputMappings(next.workflow.outputMappings);
     }
   }
@@ -1713,6 +1770,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
         setRevision(result.data.revision);
         setName(result.data.workflow.name);
         setInputMappings(result.data.workflow.inputMappings);
+        setInputGroups(result.data.workflow.inputGroups ?? []);
         setOutputMappings(result.data.workflow.outputMappings);
         setMessage(`已同步 ${result.data.syncedNodeClasses.length} 类节点${result.data.missingNodeClasses.length ? `，${result.data.missingNodeClasses.length} 类未识别` : ""}`);
       }
@@ -1744,8 +1802,10 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
             name={name}
             onNameChange={setName}
             inputMappings={inputMappings}
+            inputGroups={inputGroups}
             outputMappings={outputMappings}
             onInputMappingsChange={setInputMappings}
+            onInputGroupsChange={setInputGroups}
             onOutputMappingsChange={setOutputMappings}
           />
         </Suspense>

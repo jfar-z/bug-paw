@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AigcWorkflowDetail } from "../../shared/aigc-contracts";
-import { AigcWorkflowComposer } from "./aigc-workflow-composer";
+import { AigcWorkflowComposer, reorderInputMappings } from "./aigc-workflow-composer";
 
 const workflow: AigcWorkflowDetail = {
   id: "workflow-1",
@@ -43,6 +43,64 @@ const workflow: AigcWorkflowDetail = {
 };
 
 describe("AigcWorkflowComposer", () => {
+  it("按顶层参数排序并保持参考组成员顺序", () => {
+    const mappings = [
+      { id: "prompt", name: "prompt", nodeId: "1", field: "inputs.text", type: "string" as const, required: true },
+      { id: "video-1", name: "video_1", nodeId: "3", field: "inputs.video", type: "video" as const, required: false },
+      { id: "video-2", name: "video_2", nodeId: "4", field: "inputs.video", type: "video" as const, required: false },
+      { id: "width", name: "width", nodeId: "1", field: "inputs.width", type: "int" as const, required: true },
+    ];
+    const result = reorderInputMappings(mappings, [{ id: "videos", label: "参考视频", type: "video", mappingIds: ["video-1", "video-2"], boundaryNodeId: "9", targetFieldPrefix: "inputs.references" }], "videos", "prompt");
+    expect(result.map((mapping) => mapping.id)).toEqual(["video-1", "video-2", "prompt", "width"]);
+  });
+
+  it("拖动输出参数可逐项改变顺序", () => {
+    const onOutputMappingsChange = vi.fn();
+    render(<AigcWorkflowComposer workflow={workflow} name="文生图" onNameChange={vi.fn()} inputMappings={[]} outputMappings={[{ id: "preview", name: "预览图", nodeId: "2", field: "outputs.images", mediaType: "image" }, { id: "final", name: "成品图", nodeId: "2", field: "outputs.images", mediaType: "image" }]} onInputMappingsChange={vi.fn()} onOutputMappingsChange={onOutputMappingsChange} />);
+
+    fireEvent.dragStart(screen.getByRole("button", { name: "拖动调整成品图顺序" }));
+    const target = screen.getByRole("button", { name: "拖动调整预览图顺序" }).closest("article");
+    expect(target).not.toBeNull();
+    fireEvent.dragOver(target!);
+    fireEvent.drop(target!);
+    expect(onOutputMappingsChange.mock.calls[0][0].map((mapping: { id: string }) => mapping.id)).toEqual(["final", "preview"]);
+  });
+
+  it("从汇总接口倒推视频加载链并使用用户指定类型", () => {
+    const onInputMappingsChange = vi.fn();
+    const onInputGroupsChange = vi.fn();
+    const videoWorkflow: AigcWorkflowDetail = {
+      ...workflow,
+      nodes: [
+        { id: "10", type: "LoadVideo", title: "视频一", fields: [{ name: "inputs.file", kind: "input" }] },
+        { id: "11", type: "GetVideoComponents", fields: [] },
+        { id: "20", type: "LoadVideo", title: "视频二", fields: [{ name: "inputs.file", kind: "input" }] },
+        { id: "21", type: "GetVideoComponents", fields: [] },
+        { id: "30", type: "ReferenceInputs", title: "参考汇总", fields: [{ name: "inputs.ref_videos.ref_video_0", kind: "input" }, { name: "inputs.ref_videos.ref_video_1", kind: "input" }] },
+      ],
+      edges: [
+        { id: "a", sourceNodeId: "10", sourceField: "outputs.video", targetNodeId: "11", targetField: "inputs.video" },
+        { id: "b", sourceNodeId: "11", sourceField: "outputs.frames", targetNodeId: "30", targetField: "inputs.ref_videos.ref_video_0" },
+        { id: "c", sourceNodeId: "20", sourceField: "outputs.video", targetNodeId: "21", targetField: "inputs.video" },
+        { id: "d", sourceNodeId: "21", sourceField: "outputs.frames", targetNodeId: "30", targetField: "inputs.ref_videos.ref_video_1" },
+      ],
+    };
+    render(<AigcWorkflowComposer workflow={videoWorkflow} name="视频" onNameChange={vi.fn()} inputMappings={[]} inputGroups={[]} outputMappings={[]} onInputMappingsChange={onInputMappingsChange} onInputGroupsChange={onInputGroupsChange} onOutputMappingsChange={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "创建参考组" }));
+    fireEvent.change(screen.getByLabelText("参考组汇总节点"), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText("参考组名称"), { target: { value: "参考视频" } });
+    fireEvent.change(screen.getByLabelText("参考组参数前缀"), { target: { value: "reference_video" } });
+    fireEvent.change(screen.getByLabelText("参考组输入类型"), { target: { value: "video" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "创建参考组" })[1]);
+
+    const nextMappings = onInputMappingsChange.mock.calls[0][0];
+    expect(nextMappings).toEqual([
+      expect.objectContaining({ nodeId: "10", field: "inputs.file", type: "video", activation: { when: "provided", nodeIds: ["10", "11"] } }),
+      expect.objectContaining({ nodeId: "20", field: "inputs.file", type: "video", activation: { when: "provided", nodeIds: ["20", "21"] } }),
+    ]);
+    expect(onInputGroupsChange).toHaveBeenCalledWith([expect.objectContaining({ label: "参考视频", type: "video", mappingIds: nextMappings.map((mapping: { id: string }) => mapping.id) })]);
+  });
   it("搜索和浏览节点后需明确选为映射目标", () => {
     const onInputMappingsChange = vi.fn();
     render(
