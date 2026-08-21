@@ -100,6 +100,14 @@ export interface ComfyUiFieldMetadata {
   placeholder?: string;
 }
 
+/** UI 工作流控件值转换为 API 输入时使用的有序字段描述。 */
+export interface ComfyUiWidgetInputMetadata {
+  /** API Prompt 中的输入字段名。 */
+  name: string;
+  /** 动态控件按当前选项展开的子字段名。 */
+  dynamicOptions?: Record<string, string[]>;
+}
+
 /** 节点实例字段的最终元数据来源。 */
 export type ComfyUiResolvedFieldMetadataSource = "direct" | "inferred" | "workflow";
 
@@ -125,6 +133,8 @@ export interface ComfyUiNodeTypeMetadata {
   description?: string;
   category?: string;
   fields: Record<string, ComfyUiFieldMetadata>;
+  /** ComfyUI 前端序列化 widgets_values 时使用的字段顺序。 */
+  widgetInputs?: ComfyUiWidgetInputMetadata[];
 }
 
 /** 按 ComfyUI class_type 索引的节点元数据。 */

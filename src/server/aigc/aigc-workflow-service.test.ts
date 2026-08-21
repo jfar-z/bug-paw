@@ -128,6 +128,10 @@ describe("AIGC 工作流服务", () => {
         fields: {
           "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["1:1", "16:9"] },
         },
+        widgetInputs: [{
+          name: "aspect_ratio",
+          dynamicOptions: { custom: ["width", "height"] },
+        }],
       },
     }, "2026-08-21T08:00:00.000Z", created.revision);
 
@@ -136,6 +140,11 @@ describe("AIGC 工作流服务", () => {
       enumOptions: ["1:1", "16:9"],
       source: "inferred",
     });
+    const reloaded = await service.get(created.workflow.id);
+    expect(reloaded.workflow.nodeMetadata?.ResolutionSelector.widgetInputs).toEqual([{
+      name: "aspect_ratio",
+      dynamicOptions: { custom: ["width", "height"] },
+    }]);
     const updated = await service.update(created.workflow.id, {
       name: "动态宽高比",
       inputMappings: [{
