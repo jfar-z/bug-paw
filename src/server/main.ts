@@ -71,6 +71,7 @@ import { AigcPublicFileService } from "./aigc/aigc-public-file-service";
 import { AigcComfyUiInputService } from "./aigc/aigc-comfyui-input-service";
 import { AigcTaskRepository } from "./aigc/aigc-task-repository";
 import { AigcTaskService } from "./aigc/aigc-task-service";
+import { AigcMediaProjectService } from "./aigc/aigc-media-project-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
 import { GrokAigcAdapter } from "./aigc/grok-adapter";
 import { ComfyUiAigcAdapter } from "./aigc/comfyui-adapter";
@@ -344,6 +345,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       grok: new GrokAigcAdapter(),
       comfyui: new ComfyUiAigcAdapter(),
     },
+  });
+  const aigcMediaProjects = new AigcMediaProjectService({
+    filePath: join(paths.appDir, "aigc-media-editor.json"),
+    outputRoot: join(paths.appDir, "aigc-media-renders"),
+    tasks: aigcTasks,
+    assets: aigcAssets,
   });
   await recoverPendingProviderRenames(paths, models, agentStore);
   const credentials = new CredentialService(resolve(paths.piDir, "auth.json"));
@@ -676,6 +683,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     assets: aigcAssets,
     publicFiles: aigcPublicFiles,
     comfyuiInputs: aigcComfyUiInputs,
+    mediaProjects: aigcMediaProjects,
   });
   registerBrowserPreviewRoutes(app, browserPreview);
   registerBrowserAutomationRoutes(app, {

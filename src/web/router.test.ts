@@ -27,6 +27,7 @@ describe("工作台路由", () => {
     expect(parseRoute("/aigc/interfaces")).toEqual({ page: "aigc-interfaces" });
     expect(parseRoute("/aigc/tasks")).toEqual({ page: "aigc-tasks" });
     expect(parseRoute("/aigc/outputs")).toEqual({ page: "aigc-outputs" });
+    expect(parseRoute("/aigc/editor")).toEqual({ page: "aigc-media-editor" });
     expect(parseRoute("/aigc/public-directory")).toEqual({ page: "aigc-public-directory" });
     expect(parseRoute("/aigc/workflows")).toEqual({ page: "aigc-workflows" });
     expect(parseRoute("/aigc/interfaces/flux")).toEqual({ page: "aigc-interface-detail", interfaceId: "flux" });
@@ -37,6 +38,7 @@ describe("工作台路由", () => {
     expect(routePath({ page: "aigc-run", interfaceId: "comfy main" })).toBe("/aigc/run?interface=comfy%20main");
     expect(routePath({ page: "aigc-interface-detail", interfaceId: "flux" })).toBe("/aigc/interfaces/flux");
     expect(routePath({ page: "aigc-outputs" })).toBe("/aigc/outputs");
+    expect(routePath({ page: "aigc-media-editor" })).toBe("/aigc/editor");
     expect(routePath({ page: "aigc-public-directory" })).toBe("/aigc/public-directory");
   });
 

@@ -26,6 +26,7 @@ const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ defa
 const AigcWorkbenchPage = lazy(() => import("./pages/aigc-workbench-page").then((module) => ({ default: module.AigcWorkbenchPage })));
 const AigcChannelsPage = lazy(() => import("./pages/aigc-channels-page").then((module) => ({ default: module.AigcChannelsPage })));
 const AigcOutputsPage = lazy(() => import("./pages/aigc-outputs-page").then((module) => ({ default: module.AigcOutputsPage })));
+const AigcMediaEditorPage = lazy(() => import("./pages/aigc-media-editor-page").then((module) => ({ default: module.AigcMediaEditorPage })));
 const AigcPublicDirectoryPage = lazy(() => import("./pages/aigc-public-directory-page").then((module) => ({ default: module.AigcPublicDirectoryPage })));
 const AgentDetailPage = lazy(() => import("./pages/agent-detail-page").then((module) => ({ default: module.AgentDetailPage })));
 const AgentsPage = lazy(() => import("./pages/agents-page").then((module) => ({ default: module.AgentsPage })));
@@ -147,6 +148,8 @@ export function App() {
         return <AigcWorkbenchPage route={activeRoute} />;
       case "aigc-outputs":
         return <AigcOutputsPage />;
+      case "aigc-media-editor":
+        return <AigcMediaEditorPage />;
       case "aigc-public-directory":
         return <AigcPublicDirectoryPage />;
       case "workspace-resources":

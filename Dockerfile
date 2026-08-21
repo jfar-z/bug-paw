@@ -33,7 +33,7 @@ RUN apt-get update \
   && apt-get install --yes --no-install-recommends \
     ca-certificates curl wget iproute2 iputils-ping dnsutils netcat-openbsd \
     git python3 python3-pip python3-venv build-essential pkg-config \
-    jq ripgrep fd-find less file patch zip unzip xz-utils bzip2 tree \
+    jq ripgrep fd-find less file patch zip unzip xz-utils bzip2 tree ffmpeg \
     procps psmisc lsof sqlite3 \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && ln -s /usr/bin/python3 /usr/local/bin/python \
