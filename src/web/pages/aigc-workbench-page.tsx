@@ -996,13 +996,13 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
   if (item.protocol === "comfyui") {
     return (workflow?.inputMappings ?? []).map((mapping) => {
       const node = workflow?.nodes.find((candidate) => candidate.id === mapping.nodeId);
-      const metadata = node ? workflow?.nodeMetadata?.[node.type]?.fields[mapping.field] : undefined;
+      const metadata = workflow ? resolvedWorkflowFieldMetadata(workflow, mapping.nodeId, mapping.field) : undefined;
       return {
         name: mapping.name,
         label: mapping.description || mapping.name,
         type: mapping.type,
         required: mapping.required,
-        options: mapping.enumOptions?.length ? mapping.enumOptions : metadata?.enumOptions,
+        options: metadata?.enumOptions?.length ? metadata.enumOptions : mapping.enumOptions,
         placeholder: metadata?.placeholder || mapping.description || `输入 ${mapping.name}`,
         min: metadata?.min,
         max: metadata?.max,
@@ -1073,8 +1073,7 @@ function initialGrokOrOpenAiValues(item: AigcInterfaceRecord): Record<string, Ai
 function initialComfyUiValues(workflow: AigcWorkflowDetail): Record<string, AigcRunInputValue> {
   const values: Record<string, AigcRunInputValue> = {};
   for (const mapping of workflow.inputMappings) {
-    const node = workflow.nodes.find((candidate) => candidate.id === mapping.nodeId);
-    const metadata = node ? workflow.nodeMetadata?.[node.type]?.fields[mapping.field] : undefined;
+    const metadata = resolvedWorkflowFieldMetadata(workflow, mapping.nodeId, mapping.field);
     const defaultValue = mapping.defaultValue ?? metadata?.defaultValue;
     if (mapping.type === "bool") values[mapping.name] = typeof defaultValue === "boolean" ? defaultValue : false;
     else if (mapping.type === "int" || mapping.type === "double") values[mapping.name] = typeof defaultValue === "number" ? defaultValue : "";
@@ -1082,6 +1081,14 @@ function initialComfyUiValues(workflow: AigcWorkflowDetail): Record<string, Aigc
     else if (mapping.type === "string") values[mapping.name] = typeof defaultValue === "string" ? defaultValue : "";
   }
   return values;
+}
+
+/** 优先读取服务端解析的实例级字段约束，并兼容旧详情的类级定义。 */
+function resolvedWorkflowFieldMetadata(workflow: AigcWorkflowDetail, nodeId: string, field: string): ComfyUiFieldMetadata | undefined {
+  const resolved = workflow.resolvedFieldMetadata?.[nodeId]?.[field];
+  if (resolved) return resolved;
+  const nodeType = workflow.nodes.find((node) => node.id === nodeId)?.type;
+  return nodeType ? workflow.nodeMetadata?.[nodeType]?.fields[field] : undefined;
 }
 
 /** 将表单值转换为提交给服务端的 AIGC 入参。 */

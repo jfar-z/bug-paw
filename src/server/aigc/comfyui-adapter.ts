@@ -10,6 +10,7 @@ import type {
   AigcWorkflowInputMapping,
   AigcWorkflowOutputMapping,
 } from "../../shared/aigc-contracts";
+import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
 import { validateMetadataValue } from "./aigc-workflow-service";
 
@@ -74,6 +75,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     input: AigcExecutionInput,
   ): Promise<Record<string, unknown>> {
     const apiWorkflow = isUiWorkflow(workflow.raw) ? convertUiToApi(workflow.raw) : toApiWorkflow(workflow.raw);
+    const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
     const removedNodeIds = new Set<string>();
     for (const mapping of workflow.inputMappings) {
       const value = input.inputs[mapping.name];
@@ -89,8 +91,16 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       }
       const normalized = coerceValue(mapping, value);
       const nodeClass = workflow.nodes.find((node) => node.id === mapping.nodeId)?.type;
-      const metadata = nodeClass ? workflow.nodeMetadata?.[nodeClass]?.fields[mapping.field] : undefined;
+      const metadata = resolvedFieldMetadata[mapping.nodeId]?.[mapping.field]
+        ?? (nodeClass ? workflow.nodeMetadata?.[nodeClass]?.fields[mapping.field] : undefined);
+      if (metadata && "conflict" in metadata && metadata.conflict) {
+        throw new TypeError(`工作流入参 ${mapping.name} 无法解析：${metadata.conflict}`);
+      }
       validateMetadataValue(mapping.name, mapping.type, normalized, metadata, mapping.enumOptions);
+      if (nodeClass === "PrimitiveNode" && mapping.field === "widgets_values.0") {
+        setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, normalized);
+        continue;
+      }
       setPath(apiWorkflow, mapping.nodeId, mapping.field, normalized);
     }
     pruneConditionalNodes(apiWorkflow, removedNodeIds);
@@ -264,6 +274,8 @@ function convertUiToApi(raw: Record<string, unknown> & { nodes: unknown[]; links
   const nodeById = new Map<string, Record<string, unknown>>();
   for (const value of raw.nodes) {
     if (!isRecord(value)) continue;
+    nodeById.set(String(value.id), value);
+    if (value.type === "PrimitiveNode") continue;
     const node: Record<string, unknown> = { class_type: value.type ?? "unknown", inputs: {} };
     if (Array.isArray(value.widgets_values)) {
       const widgetNames = widgetInputNames(String(value.type));
@@ -273,7 +285,6 @@ function convertUiToApi(raw: Record<string, unknown> & { nodes: unknown[]; links
       });
     }
     api[String(value.id)] = node;
-    nodeById.set(String(value.id), value);
   }
   if (Array.isArray(raw.links)) {
     for (const link of raw.links) {
@@ -284,12 +295,27 @@ function convertUiToApi(raw: Record<string, unknown> & { nodes: unknown[]; links
       const target = nodeById.get(String(targetId));
       const targetName = uiInputName(target, Number(targetSlot));
       if (isRecord(targetNode) && isRecord(targetNode.inputs)) {
-        (targetNode.inputs as Record<string, unknown>)[targetName] = [String(sourceId), Number(sourceSlot)];
+        if (sourceNode?.type === "PrimitiveNode") {
+          (targetNode.inputs as Record<string, unknown>)[targetName] = primitiveValue(sourceNode);
+        } else {
+          (targetNode.inputs as Record<string, unknown>)[targetName] = [String(sourceId), Number(sourceSlot)];
+        }
       }
-      void sourceNode;
     }
   }
   return api;
+}
+
+/** 读取 ComfyUI Primitive 的实际值，控制模式等附加 widget 不参与执行。 */
+function primitiveValue(node: Record<string, unknown>): unknown {
+  return Array.isArray(node.widgets_values) ? node.widgets_values[0] : undefined;
+}
+
+/** 将 Primitive 映射值写入全部下游，保持一处参数同时控制多个节点。 */
+function setPrimitiveTargets(workflow: Record<string, unknown>, edges: AigcWorkflowDetail["edges"], nodeId: string, value: unknown): void {
+  const targets = edges.filter((edge) => edge.sourceNodeId === nodeId);
+  if (targets.length === 0) throw new TypeError(`PrimitiveNode ${nodeId} 没有可写入的下游字段`);
+  for (const target of targets) setPath(workflow, target.targetNodeId, target.targetField, value);
 }
 
 /** 根据 UI 节点类型返回常见 widget 到 API 入参名的映射。 */

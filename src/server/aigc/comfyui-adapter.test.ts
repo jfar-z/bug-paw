@@ -213,6 +213,52 @@ describe("ComfyUiAigcAdapter", () => {
     await expect(adapter.execute(input(workflow, { cfg: 21 }))).rejects.toThrow("不能大于 20");
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("展开 UI 工作流 Primitive 并把映射值写入全部下游", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-primitive" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-primitive"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-primitive")) return json({ "prompt-primitive": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(primitiveWorkflow(), { aspect_ratio: "4:3" }));
+
+    expect(submittedPrompt).not.toHaveProperty("144");
+    expect(submittedPrompt).toHaveProperty("57.inputs.aspect_ratio", "4:3");
+    expect(submittedPrompt).toHaveProperty("120.inputs.aspect_ratio", "4:3");
+  });
+
+  it("未映射 Primitive 时仍把工作流默认值展开到下游", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-primitive-default" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-primitive-default"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-primitive-default")) return json({ "prompt-primitive-default": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const workflow = primitiveWorkflow();
+    workflow.inputMappings = [];
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(workflow, {}));
+
+    expect(submittedPrompt).not.toHaveProperty("144");
+    expect(submittedPrompt).toHaveProperty("57.inputs.aspect_ratio", "16:9");
+    expect(submittedPrompt).toHaveProperty("120.inputs.aspect_ratio", "16:9");
+  });
 });
 
 function input(
@@ -314,6 +360,40 @@ function conditionalWorkflow(): AigcWorkflowDetail & { raw: unknown } {
       activation: { when: "provided", nodeIds: ["34", "47"] },
     }],
     outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
+  };
+}
+
+function primitiveWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-primitive",
+    raw: {
+      nodes: [
+        { id: 144, type: "PrimitiveNode", inputs: [], outputs: [{ name: "COMBO", type: "COMBO", links: [273, 274] }], widgets_values: ["16:9", "fixed", ""] },
+        { id: 57, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 273 }], outputs: [], widgets_values: ["16:9", 1, 8] },
+        { id: 120, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 274 }], outputs: [], widgets_values: ["16:9", 1, 8] },
+        { id: 80, type: "SaveImage", inputs: [], outputs: [], widgets_values: ["result"] },
+      ],
+      links: [
+        [273, 144, 0, 57, 0, "COMBO"],
+        [274, 144, 0, 120, 0, "COMBO"],
+      ],
+    },
+    nodes: [
+      { id: "144", type: "PrimitiveNode", fields: [{ name: "widgets_values.0", kind: "widget", valueType: "string" }, { name: "outputs.COMBO", kind: "output" }] },
+      { id: "57", type: "ResolutionSelector", fields: [{ name: "inputs.aspect_ratio", kind: "input" }] },
+      { id: "120", type: "ResolutionSelector", fields: [{ name: "inputs.aspect_ratio", kind: "input" }] },
+      { id: "80", type: "SaveImage", fields: [{ name: "outputs.images", kind: "output" }] },
+    ],
+    edges: [
+      { id: "273", sourceNodeId: "144", sourceField: "outputs.COMBO", targetNodeId: "57", targetField: "inputs.aspect_ratio" },
+      { id: "274", sourceNodeId: "144", sourceField: "outputs.COMBO", targetNodeId: "120", targetField: "inputs.aspect_ratio" },
+    ],
+    inputMappings: [{ id: "ratio", name: "aspect_ratio", nodeId: "144", field: "widgets_values.0", type: "enum", required: true, enumOptions: ["1:1", "4:3", "16:9"] }],
+    outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
+    nodeMetadata: {
+      ResolutionSelector: { fields: { "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["1:1", "4:3", "16:9"] } } },
+    },
   };
 }
 

@@ -97,6 +97,25 @@ export interface ComfyUiFieldMetadata {
   placeholder?: string;
 }
 
+/** 节点实例字段的最终元数据来源。 */
+export type ComfyUiResolvedFieldMetadataSource = "direct" | "inferred" | "workflow";
+
+/** 参与动态字段推导的下游目标。 */
+export interface ComfyUiFieldMetadataReference {
+  nodeId: string;
+  field: string;
+}
+
+/** 合并节点定义、工作流结构与连接约束后的实例级字段元数据。 */
+export interface ComfyUiResolvedFieldMetadata extends ComfyUiFieldMetadata {
+  source: ComfyUiResolvedFieldMetadataSource;
+  inferredFrom?: ComfyUiFieldMetadataReference[];
+  conflict?: string;
+}
+
+/** 按节点 ID 和字段路径索引的实例级字段元数据。 */
+export type ComfyUiResolvedFieldMetadataMap = Record<string, Record<string, ComfyUiResolvedFieldMetadata>>;
+
 /** 单类 ComfyUI 节点的展示信息和输入字段约束。 */
 export interface ComfyUiNodeTypeMetadata {
   displayName?: string;
@@ -129,7 +148,7 @@ export interface AigcWorkflowInputMapping {
   /** 展示给调用方的稳定参数名。 */
   name: string;
   nodeId: string;
-  /** 目标节点的输入字段路径，例如 inputs.text。 */
+  /** 目标节点的输入或 UI widget 字段路径，例如 inputs.text。 */
   field: string;
   type: AigcWorkflowInputType;
   required: boolean;
@@ -204,6 +223,8 @@ export interface AigcWorkflowDetail {
   outputMappings: AigcWorkflowOutputMapping[];
   /** 最近成功同步并保存的 ComfyUI 节点定义。 */
   nodeMetadata?: ComfyUiNodeMetadata;
+  /** 按节点实例解析出的最终字段约束，不作为持久化真值。 */
+  resolvedFieldMetadata?: ComfyUiResolvedFieldMetadataMap;
   nodeMetadataSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
