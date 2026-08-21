@@ -88,7 +88,13 @@ describe("AigcWorkflowComposer", () => {
     render(<AigcWorkflowComposer workflow={videoWorkflow} name="视频" onNameChange={vi.fn()} inputMappings={[]} inputGroups={[]} outputMappings={[]} onInputMappingsChange={onInputMappingsChange} onInputGroupsChange={onInputGroupsChange} onOutputMappingsChange={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: "创建参考组" }));
+    fireEvent.change(screen.getByLabelText("搜索参考组汇总节点"), { target: { value: "ReferenceInputs" } });
+    expect(screen.getByRole("option", { name: "#30 参考汇总 · ReferenceInputs" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("搜索参考组汇总节点"), { target: { value: "不存在的节点" } });
+    expect(screen.getByRole("option", { name: "没有匹配的节点" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("搜索参考组汇总节点"), { target: { value: "30" } });
     fireEvent.change(screen.getByLabelText("参考组汇总节点"), { target: { value: "30" } });
+    expect(screen.getByLabelText("搜索参考组汇总节点")).toHaveValue("");
     fireEvent.change(screen.getByLabelText("参考组名称"), { target: { value: "参考视频" } });
     fireEvent.change(screen.getByLabelText("参考组参数前缀"), { target: { value: "reference_video" } });
     fireEvent.change(screen.getByLabelText("参考组输入类型"), { target: { value: "video" } });
