@@ -377,4 +377,59 @@ describe("AigcWorkflowComposer", () => {
       defaultValue: "16:9",
     })]);
   });
+
+  it("选择 Primitive 实例时自动使用下游推导的枚举值域", () => {
+    const onInputMappingsChange = vi.fn();
+    const primitiveWorkflow: AigcWorkflowDetail = {
+      ...workflow,
+      nodes: [{
+        id: "144",
+        type: "PrimitiveNode",
+        title: "宽高比",
+        fields: [
+          { name: "outputs.COMBO", kind: "output" },
+          { name: "widgets_values.0", kind: "widget", valueType: "string" },
+        ],
+      }],
+      edges: [],
+      resolvedFieldMetadata: {
+        "144": {
+          "widgets_values.0": {
+            comfyType: "COMBO",
+            valueType: "enum",
+            enumOptions: ["1:1", "16:9"],
+            source: "inferred",
+            inferredFrom: [{ nodeId: "57", field: "inputs.aspect_ratio" }],
+          },
+        },
+      },
+    };
+    render(
+      <AigcWorkflowComposer
+        workflow={primitiveWorkflow}
+        name="动态宽高比"
+        onNameChange={vi.fn()}
+        inputMappings={[]}
+        outputMappings={[]}
+        onInputMappingsChange={onInputMappingsChange}
+        onOutputMappingsChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "新增入参" }));
+    fireEvent.click(screen.getByRole("button", { name: "浏览节点 宽高比" }));
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+    expect(screen.getByLabelText("入参类型")).toHaveValue("enum");
+    fireEvent.change(screen.getByLabelText("入参名称"), { target: { value: "aspect_ratio" } });
+    fireEvent.change(screen.getByLabelText("入参默认值"), { target: { value: "string:16:9" } });
+    fireEvent.click(screen.getByRole("button", { name: "添加映射" }));
+
+    expect(onInputMappingsChange).toHaveBeenCalledWith([expect.objectContaining({
+      nodeId: "144",
+      field: "widgets_values.0",
+      type: "enum",
+      enumOptions: ["1:1", "16:9"],
+      defaultValue: "16:9",
+    })]);
+  });
 });

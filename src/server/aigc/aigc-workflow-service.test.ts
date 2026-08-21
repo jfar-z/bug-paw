@@ -114,6 +114,46 @@ describe("AIGC 工作流服务", () => {
     expect(updated.workflow.inputMappings[0]).toMatchObject({ enumOptions: [1, 2, 3], defaultValue: 2 });
   });
 
+  it("同步后按 Primitive 实例推导枚举并允许保存 widget 映射", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "动态宽高比",
+      fileName: "primitive.json",
+      workflowJson: primitiveUiWorkflow(),
+      inputMappings: [],
+      outputMappings: [],
+    });
+    const synced = await service.syncNodeMetadata(created.workflow.id, {
+      ResolutionSelector: {
+        fields: {
+          "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["1:1", "16:9"] },
+        },
+      },
+    }, "2026-08-21T08:00:00.000Z", created.revision);
+
+    expect(synced.workflow.resolvedFieldMetadata?.["144"]?.["widgets_values.0"]).toMatchObject({
+      valueType: "enum",
+      enumOptions: ["1:1", "16:9"],
+      source: "inferred",
+    });
+    const updated = await service.update(created.workflow.id, {
+      name: "动态宽高比",
+      inputMappings: [{
+        id: "ratio",
+        name: "aspect_ratio",
+        nodeId: "144",
+        field: "widgets_values.0",
+        type: "enum",
+        required: true,
+        enumOptions: ["1:1", "16:9"],
+        defaultValue: "16:9",
+      }],
+      outputMappings: [],
+    }, synced.revision);
+
+    expect(updated.workflow.inputMappings[0]).toMatchObject({ type: "enum", defaultValue: "16:9" });
+  });
+
   it("保存音频输入和输出映射", async () => {
     const service = await fixture();
     const created = await service.create({
@@ -181,6 +221,26 @@ describe("AIGC 工作流服务", () => {
     })).rejects.toThrow("不能包含重复节点");
   });
 });
+
+function primitiveUiWorkflow() {
+  return {
+    nodes: [
+      {
+        id: 144,
+        type: "PrimitiveNode",
+        inputs: [],
+        outputs: [{ name: "COMBO", type: "COMBO", links: [273, 274] }],
+        widgets_values: ["16:9", "fixed", ""],
+      },
+      { id: 57, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 273 }], outputs: [], widgets_values: ["16:9", 1, 8] },
+      { id: 120, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 274 }], outputs: [], widgets_values: ["16:9", 1, 8] },
+    ],
+    links: [
+      [273, 144, 0, 57, 0, "COMBO"],
+      [274, 144, 0, 120, 0, "COMBO"],
+    ],
+  };
+}
 
 /** 多参考条件分支测试工作流。 */
 function conditionalWorkflow() {

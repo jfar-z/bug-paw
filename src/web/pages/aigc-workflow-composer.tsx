@@ -172,6 +172,11 @@ function InputMappingBuilder(props: {
     if (!draft || !draft.name.trim() || !draft.nodeId || !draft.field) return;
     if (draft.activation && draft.activation.nodeIds.length === 0) return;
     const selectedMetadata = selectedNode ? fieldMetadata(workflow, selectedNode, draft.field) : undefined;
+    const conflict = metadataConflict(selectedMetadata);
+    if (conflict) {
+      setDefaultValueError(conflict);
+      return;
+    }
     const enumOptions = draft.type === "enum" ? effectiveEnumOptions(draft, selectedMetadata) : undefined;
     if (draft.type === "enum" && !enumOptions?.length) {
       setDefaultValueError("枚举参数必须至少包含一个候选值");
@@ -794,14 +799,21 @@ function defaultValueConstraintError(value: string | number | boolean | undefine
   return undefined;
 }
 
-/** 映射未显式覆盖候选值时继续使用节点定义，避免空数组遮蔽同步结果。 */
+/** 节点定义优先约束候选值，定义缺失时才使用映射的手动候选。 */
 function effectiveEnumOptions(mapping: AigcWorkflowInputMapping, metadata?: ComfyUiFieldMetadata): Array<string | number | boolean> | undefined {
-  return mapping.enumOptions?.length ? mapping.enumOptions : metadata?.enumOptions;
+  return metadata?.enumOptions?.length ? metadata.enumOptions : mapping.enumOptions;
 }
 
 /** 读取指定节点字段的权威元数据。 */
 function fieldMetadata(workflow: AigcWorkflowDetail, node: ComfyUiNode | undefined, field: string): ComfyUiFieldMetadata | undefined {
-  return node ? workflow.nodeMetadata?.[node.type]?.fields[field] : undefined;
+  return node
+    ? workflow.resolvedFieldMetadata?.[node.id]?.[field] ?? workflow.nodeMetadata?.[node.type]?.fields[field]
+    : undefined;
+}
+
+/** 从实例级元数据中读取动态推导冲突。 */
+function metadataConflict(metadata?: ComfyUiFieldMetadata): string | undefined {
+  return metadata && "conflict" in metadata && typeof metadata.conflict === "string" ? metadata.conflict : undefined;
 }
 
 /** 为字段卡片生成紧凑的类型与范围摘要。 */
