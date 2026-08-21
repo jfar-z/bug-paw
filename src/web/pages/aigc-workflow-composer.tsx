@@ -409,7 +409,16 @@ function ReferenceGroupEditor({ workflow, draft, error, onChange, onCancel, onCo
   onCancel: () => void;
   onCommit: () => void;
 }) {
+  const [boundaryQuery, setBoundaryQuery] = useState("");
   const boundaries = workflow.nodes.filter((node) => referenceInputFamilies(workflow, node.id).length > 0);
+  const normalizedBoundaryQuery = boundaryQuery.trim().toLocaleLowerCase();
+  const filteredBoundaries = boundaries.filter((node) => !normalizedBoundaryQuery || [node.id, node.title ?? "", node.type]
+    .some((value) => value.toLocaleLowerCase().includes(normalizedBoundaryQuery)));
+  const selectedBoundary = boundaries.find((node) => node.id === draft.boundaryNodeId);
+  // 搜索期间保留当前选择，避免原生 select 因选项暂时被过滤而显示空值。
+  const boundaryOptions = selectedBoundary && !filteredBoundaries.some((node) => node.id === selectedBoundary.id)
+    ? [selectedBoundary, ...filteredBoundaries]
+    : filteredBoundaries;
   const families = referenceInputFamilies(workflow, draft.boundaryNodeId);
   const result = referenceGroupPreview(workflow, draft.boundaryNodeId, draft.targetFieldPrefix);
   const field = draft.field || (result.fields.length === 1 ? result.fields[0] : "");
@@ -417,10 +426,17 @@ function ReferenceGroupEditor({ workflow, draft, error, onChange, onCancel, onCo
     <div className="aigc-mapping-editor aigc-reference-group-editor">
       <div className="configuration-section__heading"><strong>创建参考输入组</strong><button type="button" className="icon-button" aria-label="关闭参考组编辑" onClick={onCancel}><X size={15} /></button></div>
       <div className="aigc-form-grid">
-        <label><span>汇总节点</span><select aria-label="参考组汇总节点" value={draft.boundaryNodeId} onChange={(event) => { const boundaryNodeId = event.target.value; onChange({ boundaryNodeId, targetFieldPrefix: referenceInputFamilies(workflow, boundaryNodeId)[0]?.prefix ?? "", field: "" }); }}>
-          <option value="">请选择节点</option>
-          {boundaries.map((node) => <option key={node.id} value={node.id}>{nodeLabel(node, node.id)}</option>)}
-        </select></label>
+        <div className="aigc-config-field aigc-span-2 aigc-reference-boundary-picker"><span>汇总节点</span>
+          <div className="aigc-node-search aigc-reference-node-search">
+            <Search size={14} aria-hidden="true" />
+            <input type="search" aria-label="搜索参考组汇总节点" placeholder="搜索节点标题、类型或 ID" value={boundaryQuery} onChange={(event) => setBoundaryQuery(event.target.value)} />
+            <small>{filteredBoundaries.length}/{boundaries.length}</small>
+          </div>
+          <select aria-label="参考组汇总节点" value={draft.boundaryNodeId} onChange={(event) => { const boundaryNodeId = event.target.value; setBoundaryQuery(""); onChange({ boundaryNodeId, targetFieldPrefix: referenceInputFamilies(workflow, boundaryNodeId)[0]?.prefix ?? "", field: "" }); }}>
+            <option value="">{normalizedBoundaryQuery && !filteredBoundaries.length ? "没有匹配的节点" : "请选择节点"}</option>
+            {boundaryOptions.map((node) => <option key={node.id} value={node.id}>{referenceBoundaryLabel(node)}</option>)}
+          </select>
+        </div>
         <label><span>汇总接口</span><select aria-label="参考组汇总接口" value={draft.targetFieldPrefix} onChange={(event) => onChange({ targetFieldPrefix: event.target.value, field: "" })}>
           <option value="">请选择接口</option>
           {families.map((family) => <option key={family.prefix} value={family.prefix}>{family.prefix} ({family.targetFields.length})</option>)}
@@ -846,6 +862,12 @@ function nodeHasFields(node: ComfyUiNode, kind: "input" | "output"): boolean {
 
 function nodeLabel(node: ComfyUiNode | undefined, fallback: string): string {
   return node?.title || node?.type || fallback;
+}
+
+/** 汇总节点选项同时展示检索所依据的 ID、标题和类型。 */
+function referenceBoundaryLabel(node: ComfyUiNode): string {
+  const title = node.title?.trim();
+  return title && title !== node.type ? `#${node.id} ${title} · ${node.type}` : `#${node.id} ${node.type}`;
 }
 
 function edgeLabel(edge: ComfyUiEdge): string {

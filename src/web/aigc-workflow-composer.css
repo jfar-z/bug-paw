@@ -187,6 +187,19 @@
   white-space: nowrap;
 }
 
+.aigc-reference-boundary-picker {
+  min-width: 0;
+}
+
+.aigc-reference-node-search {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.aigc-reference-node-search input[type="search"]::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
 .aigc-node-list-return {
   display: inline-flex;
   min-height: 26px;
