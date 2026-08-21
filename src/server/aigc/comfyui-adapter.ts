@@ -9,6 +9,8 @@ import type {
   AigcWorkflowDetail,
   AigcWorkflowInputMapping,
   AigcWorkflowOutputMapping,
+  ComfyUiNodeMetadata,
+  ComfyUiWidgetInputMetadata,
 } from "../../shared/aigc-contracts";
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
@@ -74,7 +76,8 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     workflow: AigcWorkflowDetail & { raw: unknown },
     input: AigcExecutionInput,
   ): Promise<Record<string, unknown>> {
-    const apiWorkflow = isUiWorkflow(workflow.raw) ? convertUiToApi(workflow.raw) : toApiWorkflow(workflow.raw);
+    const uiWorkflow = isUiWorkflow(workflow.raw) ? workflow.raw : undefined;
+    const apiWorkflow = uiWorkflow ? convertUiToApi(uiWorkflow, workflow.nodeMetadata) : toApiWorkflow(workflow.raw);
     const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
     const removedNodeIds = new Set<string>();
     for (const mapping of workflow.inputMappings) {
@@ -101,7 +104,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, normalized);
         continue;
       }
-      setPath(apiWorkflow, mapping.nodeId, mapping.field, normalized);
+      setPath(apiWorkflow, mapping.nodeId, resolveMappedField(uiWorkflow, workflow.nodeMetadata, mapping), normalized);
     }
     pruneConditionalNodes(apiWorkflow, removedNodeIds);
     return apiWorkflow;
@@ -269,21 +272,20 @@ function toApiWorkflow(raw: unknown): Record<string, unknown> {
 }
 
 /** 将 UI 导出格式转换为 API 格式。 */
-function convertUiToApi(raw: Record<string, unknown> & { nodes: unknown[]; links?: unknown[] }): Record<string, unknown> {
+function convertUiToApi(
+  raw: Record<string, unknown> & { nodes: unknown[]; links?: unknown[] },
+  nodeMetadata?: ComfyUiNodeMetadata,
+): Record<string, unknown> {
   const api: Record<string, unknown> = {};
   const nodeById = new Map<string, Record<string, unknown>>();
   for (const value of raw.nodes) {
     if (!isRecord(value)) continue;
     nodeById.set(String(value.id), value);
     if (value.type === "PrimitiveNode") continue;
+    const metadata = typeof value.type === "string" ? nodeMetadata?.[value.type] : undefined;
+    if (!metadata && isUiOnlyNode(value)) continue;
     const node: Record<string, unknown> = { class_type: value.type ?? "unknown", inputs: {} };
-    if (Array.isArray(value.widgets_values)) {
-      const widgetNames = widgetInputNames(String(value.type));
-      value.widgets_values.forEach((widget, index) => {
-        const name = widgetNames[index] ?? `widgets_values_${index}`;
-        (node.inputs as Record<string, unknown>)[name] = widget;
-      });
-    }
+    applyUiWidgetValues(node.inputs as Record<string, unknown>, value, metadata?.widgetInputs, metadata?.fields);
     api[String(value.id)] = node;
   }
   if (Array.isArray(raw.links)) {
@@ -304,6 +306,91 @@ function convertUiToApi(raw: Record<string, unknown> & { nodes: unknown[]; links
     }
   }
   return api;
+}
+
+/** 无连接能力且未注册元数据的节点仅承载前端说明，不应进入 API Prompt。 */
+function isUiOnlyNode(node: Record<string, unknown>): boolean {
+  const inputs = Array.isArray(node.inputs) ? node.inputs : [];
+  const outputs = Array.isArray(node.outputs) ? node.outputs : [];
+  return inputs.length === 0
+    && outputs.length === 0
+    && typeof node.type === "string"
+    && /(?:markdown|note)$/iu.test(node.type);
+}
+
+/** 把 UI 节点控件值恢复为 ComfyUI API 输入字段。 */
+function applyUiWidgetValues(
+  inputs: Record<string, unknown>,
+  node: Record<string, unknown>,
+  widgetInputs?: ComfyUiWidgetInputMetadata[],
+  fields?: Record<string, { valueType?: unknown }>,
+): void {
+  const values = node.widgets_values;
+  if (isRecord(values)) {
+    for (const [name, value] of Object.entries(values)) {
+      // 视频预览状态等对象只供前端恢复界面，不属于 API 节点输入。
+      if (isWidgetScalar(value)) inputs[name] = value;
+    }
+    return;
+  }
+  if (!Array.isArray(values)) return;
+  const descriptors = widgetInputs?.length
+    ? widgetInputs
+    : fallbackWidgetInputs(String(node.type), fields);
+  const names = expandWidgetInputNames(descriptors, values);
+  for (let index = 0; index < Math.min(names.length, values.length); index += 1) {
+    if (isWidgetScalar(values[index])) inputs[names[index]] = values[index];
+  }
+}
+
+/** 动态控件根据当前选项在父字段后展开对应子字段。 */
+function expandWidgetInputNames(descriptors: ComfyUiWidgetInputMetadata[], values: unknown[]): string[] {
+  const names: string[] = [];
+  for (const descriptor of descriptors) {
+    const selectedValue = values[names.length];
+    names.push(descriptor.name);
+    if (descriptor.dynamicOptions && isWidgetScalar(selectedValue)) {
+      const nested = descriptor.dynamicOptions[String(selectedValue)] ?? [];
+      names.push(...nested.map((name) => `${descriptor.name}.${name}`));
+    }
+  }
+  return names;
+}
+
+/** 兼容尚未重新同步控件顺序的旧工作流元数据。 */
+function fallbackWidgetInputs(
+  nodeType: string,
+  fields?: Record<string, { valueType?: unknown }>,
+): ComfyUiWidgetInputMetadata[] {
+  const fromMetadata = Object.entries(fields ?? {})
+    .filter(([, metadata]) => metadata.valueType !== undefined)
+    .map(([field]) => ({ name: field.replace(/^inputs\./u, "") }));
+  return fromMetadata.length > 0
+    ? fromMetadata
+    : widgetInputNames(nodeType).map((name) => ({ name }));
+}
+
+/** 将已有 widgets_values.N 映射翻译到实际 API 输入字段。 */
+function resolveMappedField(
+  raw: (Record<string, unknown> & { nodes: unknown[] }) | undefined,
+  nodeMetadata: ComfyUiNodeMetadata | undefined,
+  mapping: AigcWorkflowInputMapping,
+): string {
+  if (!raw || !mapping.field.startsWith("widgets_values.")) return mapping.field;
+  const index = Number(mapping.field.slice("widgets_values.".length));
+  if (!Number.isInteger(index) || index < 0) return mapping.field;
+  const node = raw.nodes.find((value) => isRecord(value) && String(value.id) === mapping.nodeId);
+  if (!isRecord(node) || !Array.isArray(node.widgets_values)) return mapping.field;
+  const metadata = typeof node.type === "string" ? nodeMetadata?.[node.type] : undefined;
+  const descriptors = metadata?.widgetInputs?.length
+    ? metadata.widgetInputs
+    : fallbackWidgetInputs(String(node.type), metadata?.fields);
+  const field = expandWidgetInputNames(descriptors, node.widgets_values)[index];
+  return field ? `inputs.${field}` : mapping.field;
+}
+
+function isWidgetScalar(value: unknown): value is string | number | boolean | null {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
 }
 
 /** 读取 ComfyUI Primitive 的实际值，控制模式等附加 widget 不参与执行。 */

@@ -15,6 +15,7 @@ import type {
   ComfyUiFieldMetadata,
   ComfyUiNode,
   ComfyUiNodeMetadata,
+  ComfyUiWidgetInputMetadata,
 } from "../../shared/aigc-contracts";
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
@@ -453,6 +454,7 @@ function normalizeNodeMetadata(value: Record<string, unknown>): ComfyUiNodeMetad
     }
     result[nodeClass] = {
       fields,
+      ...(Array.isArray(nodeValue.widgetInputs) ? { widgetInputs: normalizeWidgetInputs(nodeValue.widgetInputs) } : {}),
       ...(typeof nodeValue.displayName === "string" ? { displayName: nodeValue.displayName } : {}),
       ...(typeof nodeValue.description === "string" ? { description: nodeValue.description } : {}),
       ...(typeof nodeValue.category === "string" ? { category: nodeValue.category } : {}),
@@ -465,11 +467,44 @@ function normalizeNodeMetadata(value: Record<string, unknown>): ComfyUiNodeMetad
 function cloneNodeMetadata(value: ComfyUiNodeMetadata): ComfyUiNodeMetadata {
   return Object.fromEntries(Object.entries(value).map(([nodeClass, node]) => [nodeClass, {
     ...node,
+    ...(node.widgetInputs ? { widgetInputs: node.widgetInputs.map(cloneWidgetInput) } : {}),
     fields: Object.fromEntries(Object.entries(node.fields).map(([field, metadata]) => [field, {
       ...metadata,
       ...(metadata.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
     }])),
   }]));
+}
+
+/** 宽容恢复控件字段顺序，并丢弃异常深度或非法字段名。 */
+function normalizeWidgetInputs(value: unknown[]): ComfyUiWidgetInputMetadata[] {
+  return value.flatMap((item) => {
+    if (!isRecord(item) || !safeWidgetFieldName(item.name)) return [];
+    const dynamicOptions = isRecord(item.dynamicOptions)
+      ? Object.fromEntries(Object.entries(item.dynamicOptions).flatMap(([option, fields]) => {
+        if (!option || option.length > 200 || !Array.isArray(fields)) return [];
+        const normalizedFields = fields.filter(safeWidgetFieldName);
+        return normalizedFields.length === fields.length ? [[option, normalizedFields]] : [];
+      }))
+      : undefined;
+    return [{
+      name: item.name,
+      ...(dynamicOptions && Object.keys(dynamicOptions).length > 0 ? { dynamicOptions } : {}),
+    }];
+  });
+}
+
+/** 深复制单个控件描述，隔离动态选项数组。 */
+function cloneWidgetInput(value: ComfyUiWidgetInputMetadata): ComfyUiWidgetInputMetadata {
+  return {
+    name: value.name,
+    ...(value.dynamicOptions ? {
+      dynamicOptions: Object.fromEntries(Object.entries(value.dynamicOptions).map(([option, fields]) => [option, [...fields]])),
+    } : {}),
+  };
+}
+
+function safeWidgetFieldName(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 240 && !/[\0\r\n]/u.test(value);
 }
 
 function isScalar(value: unknown): value is string | number | boolean {

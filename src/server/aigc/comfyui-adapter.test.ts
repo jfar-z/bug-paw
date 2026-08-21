@@ -259,6 +259,42 @@ describe("ComfyUiAigcAdapter", () => {
     expect(submittedPrompt).toHaveProperty("57.inputs.aspect_ratio", "16:9");
     expect(submittedPrompt).toHaveProperty("120.inputs.aspect_ratio", "16:9");
   });
+
+  it("按节点元数据转换数组、动态和对象控件并保留控件索引映射", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-ui-widgets" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-ui-widgets"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-ui-widgets")) return json({ "prompt-ui-widgets": { outputs: { "63": { images: [{ filename: "result.mp4" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("video"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const workflow = uiWidgetWorkflow();
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(workflow, { video_mp: 0.8, upscale_mp: 1.5 }));
+
+    expect(submittedPrompt).toHaveProperty("21.inputs", {
+      clip_name: "encoder.safetensors",
+      type: "minimax",
+      device: "default",
+    });
+    expect(submittedPrompt).toHaveProperty("57.inputs", { aspect_ratio: "16:9", megapixels: 0.8, multiple: 32 });
+    expect(submittedPrompt).toHaveProperty("114.inputs", {
+      images: ["57", 0],
+      resize_type: "scale by multiplier",
+      "resize_type.scale": 1.5,
+      quality: "ULTRA",
+    });
+    expect(submittedPrompt).toHaveProperty("63.inputs.frame_rate", 24);
+    expect(submittedPrompt).toHaveProperty("63.inputs.filename_prefix", "video/result");
+    expect(submittedPrompt).not.toHaveProperty("63.inputs.videopreview");
+    expect(submittedPrompt).not.toHaveProperty("20");
+  });
 });
 
 function input(
@@ -393,6 +429,74 @@ function primitiveWorkflow(): AigcWorkflowDetail & { raw: unknown } {
     outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
     nodeMetadata: {
       ResolutionSelector: { fields: { "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["1:1", "4:3", "16:9"] } } },
+    },
+  };
+}
+
+function uiWidgetWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...videoWorkflow(),
+    id: "workflow-ui-widgets",
+    raw: {
+      nodes: [
+        { id: 20, type: "MarkdownNote", inputs: [], outputs: [], widgets_values: ["说明"] },
+        { id: 21, type: "CLIPLoader", inputs: [], outputs: [{ name: "CLIP" }], widgets_values: ["encoder.safetensors", "minimax", "default"] },
+        { id: 57, type: "ResolutionSelector", inputs: [], outputs: [{ name: "IMAGE" }], widgets_values: ["16:9", 0.4, 32] },
+        { id: 114, type: "RTXVideoSuperResolution", inputs: [{ name: "images", link: 1 }], outputs: [{ name: "IMAGE" }], widgets_values: ["scale by multiplier", 2, "ULTRA"] },
+        {
+          id: 63,
+          type: "VHS_VideoCombine",
+          inputs: [{ name: "images", link: 2 }],
+          outputs: [],
+          widgets_values: {
+            frame_rate: 24,
+            loop_count: 0,
+            filename_prefix: "video/result",
+            format: "video/h264-mp4",
+            pingpong: false,
+            save_output: true,
+            videopreview: { paused: false },
+          },
+        },
+      ],
+      links: [
+        [1, 57, 0, 114, 0, "IMAGE"],
+        [2, 114, 0, 63, 0, "IMAGE"],
+      ],
+    },
+    nodes: [
+      { id: "20", type: "MarkdownNote", fields: [] },
+      { id: "21", type: "CLIPLoader", fields: [] },
+      { id: "57", type: "ResolutionSelector", fields: [] },
+      { id: "114", type: "RTXVideoSuperResolution", fields: [] },
+      { id: "63", type: "VHS_VideoCombine", fields: [] },
+    ],
+    edges: [
+      { id: "1", sourceNodeId: "57", sourceField: "outputs.IMAGE", targetNodeId: "114", targetField: "inputs.images" },
+      { id: "2", sourceNodeId: "114", sourceField: "outputs.IMAGE", targetNodeId: "63", targetField: "inputs.images" },
+    ],
+    inputMappings: [
+      { id: "video-mp", name: "video_mp", nodeId: "57", field: "widgets_values.1", type: "double", required: true },
+      { id: "upscale-mp", name: "upscale_mp", nodeId: "114", field: "widgets_values.1", type: "double", required: true },
+    ],
+    outputMappings: [{ id: "result", name: "result", nodeId: "63", field: "outputs.videos", mediaType: "video" }],
+    nodeMetadata: {
+      CLIPLoader: {
+        fields: {},
+        widgetInputs: [{ name: "clip_name" }, { name: "type" }, { name: "device" }],
+      },
+      ResolutionSelector: {
+        fields: { "inputs.megapixels": { comfyType: "FLOAT", valueType: "double" } },
+        widgetInputs: [{ name: "aspect_ratio" }, { name: "megapixels" }, { name: "multiple" }],
+      },
+      RTXVideoSuperResolution: {
+        fields: { "inputs.resize_type.scale": { comfyType: "FLOAT", valueType: "double" } },
+        widgetInputs: [
+          { name: "resize_type", dynamicOptions: { "scale by multiplier": ["scale"], "target dimensions": ["width", "height"] } },
+          { name: "quality" },
+        ],
+      },
+      VHS_VideoCombine: { fields: {} },
     },
   };
 }

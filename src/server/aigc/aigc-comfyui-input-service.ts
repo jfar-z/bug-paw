@@ -7,6 +7,7 @@ import type {
   ComfyUiFieldMetadata,
   ComfyUiNodeMetadataSyncResult,
   ComfyUiNodeTypeMetadata,
+  ComfyUiWidgetInputMetadata,
 } from "../../shared/aigc-contracts";
 import type { CredentialService } from "../configuration/credential-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
@@ -128,20 +129,58 @@ export function parseNodeMetadata(payload: unknown, nodeClass: string): ComfyUiN
   const nodeInfo = nodeInfoFromPayload(payload, nodeClass);
   if (!nodeInfo || !isRecord(nodeInfo.input)) return undefined;
   const fields: Record<string, ComfyUiFieldMetadata> = {};
+  const widgetInputs: ComfyUiWidgetInputMetadata[] = [];
   for (const [groupName, required] of [["required", true], ["optional", false]] as const) {
     const group = nodeInfo.input[groupName];
     if (!isRecord(group)) continue;
     for (const [name, definition] of Object.entries(group)) {
       const field = parseFieldMetadata(definition, required);
       if (field) fields[`inputs.${name.replace(/^inputs\./u, "")}`] = field;
+      const widgetInput = parseWidgetInputMetadata(name, definition);
+      if (widgetInput) widgetInputs.push(widgetInput);
     }
   }
   return {
     fields,
+    ...(widgetInputs.length > 0 ? { widgetInputs } : {}),
     ...(typeof nodeInfo.display_name === "string" ? { displayName: nodeInfo.display_name } : {}),
     ...(typeof nodeInfo.description === "string" ? { description: nodeInfo.description } : {}),
     ...(typeof nodeInfo.category === "string" ? { category: nodeInfo.category } : {}),
   };
+}
+
+/** 解析 UI 工作流中 widgets_values 的稳定字段顺序。 */
+function parseWidgetInputMetadata(name: string, definition: unknown): ComfyUiWidgetInputMetadata | undefined {
+  if (!Array.isArray(definition) || definition.length === 0) return undefined;
+  const normalizedName = name.replace(/^inputs\./u, "");
+  const typeDefinition = definition[0];
+  const options = isRecord(definition[1]) ? definition[1] : {};
+  if (typeDefinition === "COMFY_DYNAMICCOMBO_V3") {
+    const dynamicOptions = parseDynamicWidgetOptions(options.options);
+    return {
+      name: normalizedName,
+      ...(Object.keys(dynamicOptions).length > 0 ? { dynamicOptions } : {}),
+    };
+  }
+  const field = parseFieldMetadata(definition, true);
+  return field?.valueType ? { name: normalizedName } : undefined;
+}
+
+/** 提取动态控件每个选项对应的标量子控件顺序。 */
+function parseDynamicWidgetOptions(value: unknown): Record<string, string[]> {
+  if (!Array.isArray(value)) return {};
+  return Object.fromEntries(value.flatMap((option) => {
+    if (!isRecord(option) || typeof option.key !== "string" || !isRecord(option.inputs)) return [];
+    const names: string[] = [];
+    for (const groupName of ["required", "optional"] as const) {
+      const group = option.inputs[groupName];
+      if (!isRecord(group)) continue;
+      for (const [name, definition] of Object.entries(group)) {
+        if (parseFieldMetadata(definition, groupName === "required")?.valueType) names.push(name.replace(/^inputs\./u, ""));
+      }
+    }
+    return [[option.key, names]];
+  }));
 }
 
 /** 宽容提取 ComfyUI 字段类型、默认值与常见控件约束。 */

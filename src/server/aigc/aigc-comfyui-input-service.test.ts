@@ -148,6 +148,12 @@ describe("AigcComfyUiInputService", () => {
         "inputs.prompt": { comfyType: "STRING", valueType: "string", required: false, multiline: true, placeholder: "输入提示词" },
         "inputs.image": { comfyType: "IMAGE", valueType: "image", required: false },
       },
+      widgetInputs: [
+        { name: "cfg" },
+        { name: "sampler" },
+        { name: "prompt" },
+        { name: "image" },
+      ],
     });
   });
 
@@ -166,7 +172,36 @@ describe("AigcComfyUiInputService", () => {
         "inputs.sampler_name": { comfyType: "COMBO", valueType: "enum", required: true, defaultValue: "euler", enumOptions: ["euler", "dpmpp_2m"] },
         "inputs.scheduler": { comfyType: "COMBO", valueType: "enum", required: true, enumOptions: ["normal", "karras"] },
       },
+      widgetInputs: [{ name: "sampler_name" }, { name: "scheduler" }],
     });
+  });
+
+  it("解析动态控件选项的子字段顺序", () => {
+    expect(parseNodeMetadata({
+      RTXVideoSuperResolution: {
+        input: {
+          required: {
+            images: ["IMAGE"],
+            resize_type: ["COMFY_DYNAMICCOMBO_V3", {
+              options: [
+                { key: "scale by multiplier", inputs: { required: { scale: ["FLOAT", { default: 2 }] } } },
+                { key: "target dimensions", inputs: { required: { width: ["INT"], height: ["INT"] } } },
+              ],
+            }],
+            quality: ["COMBO", { options: ["LOW", "ULTRA"] }],
+          },
+        },
+      },
+    }, "RTXVideoSuperResolution")?.widgetInputs).toEqual([
+      {
+        name: "resize_type",
+        dynamicOptions: {
+          "scale by multiplier": ["scale"],
+          "target dimensions": ["width", "height"],
+        },
+      },
+      { name: "quality" },
+    ]);
   });
 
   it("去重节点类型并保留部分成功的同步结果", async () => {
