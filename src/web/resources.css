@@ -268,7 +268,10 @@
 
 .quick-workspace-drawer__header > .icon-button { flex: 0 0 auto; }
 
-.workspace-browser--quick { position: relative; min-height: 0; flex: 1; padding: 18px; overflow: auto; }
+.workspace-browser--quick { position: relative; display: flex; min-height: 0; flex: 1; flex-direction: column; padding: 18px; overflow: hidden; }
+
+/* 表格独立滚动，避免覆盖式预览跟随外层滚动内容偏移后露出固定列。 */
+.workspace-browser--quick .workspace-table-wrap { min-height: 0; flex: 1; }
 
 /* 覆盖式预览需高于表格固定列，避免“选择”和“操作”表头遮挡文件内容。 */
 .workspace-browser--quick .workspace-file-preview--overlay { position: absolute; z-index: 5; inset: 0; border: 0; }
