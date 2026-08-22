@@ -486,7 +486,9 @@
 
 .aigc-media-input-preview {
   display: block;
-  width: 100%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
   max-height: 150px;
   object-fit: contain;
   border: 1px solid var(--border);
@@ -495,6 +497,7 @@
 }
 
 audio.aigc-media-input-preview {
+  width: 100%;
   max-height: none;
   object-fit: initial;
 }
@@ -566,20 +569,27 @@ audio.aigc-media-input-preview {
 }
 
 .aigc-run-preview-image {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
   width: 100%;
   height: 100%;
   padding: 0;
+  overflow: hidden;
   border: 0;
   background: transparent;
   cursor: zoom-in;
+  place-items: center;
 }
 
+/* 产物预览以面板双轴为上限，保留完整画面和原始宽高比。 */
 .aigc-run-preview-stage img,
 .aigc-run-preview-stage video {
   display: block;
-  width: 100%;
-  height: 100%;
-  max-height: none;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
   object-fit: contain;
 }
 
@@ -731,17 +741,20 @@ audio.aigc-media-input-preview {
 }
 
 .aigc-asset-card__open {
-  display: block;
+  display: grid;
   width: 100%;
   padding: 0;
   border: 0;
   background: transparent;
   cursor: zoom-in;
+  place-items: center;
 }
 
 .aigc-asset-card__preview :is(img, video) {
   display: block;
-  width: 100%;
+  width: auto;
+  height: auto;
+  max-width: 100%;
   max-height: 320px;
   object-fit: contain;
 }
