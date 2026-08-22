@@ -77,7 +77,10 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     input: AigcExecutionInput,
   ): Promise<Record<string, unknown>> {
     const uiWorkflow = isUiWorkflow(workflow.raw) ? workflow.raw : undefined;
-    const apiWorkflow = uiWorkflow ? convertUiToApi(uiWorkflow, workflow.nodeMetadata) : toApiWorkflow(workflow.raw);
+    const activatedNodeIds = new Set(workflow.inputMappings.flatMap((mapping) => hasInputValue(input.inputs[mapping.name])
+      ? mapping.activation?.nodeIds ?? []
+      : []));
+    const apiWorkflow = uiWorkflow ? convertUiToApi(uiWorkflow, workflow.nodeMetadata, activatedNodeIds) : toApiWorkflow(workflow.raw);
     const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
     const removedNodeIds = new Set<string>();
     for (const mapping of workflow.inputMappings) {
@@ -275,13 +278,14 @@ function toApiWorkflow(raw: unknown): Record<string, unknown> {
 function convertUiToApi(
   raw: Record<string, unknown> & { nodes: unknown[]; links?: unknown[] },
   nodeMetadata?: ComfyUiNodeMetadata,
+  activatedNodeIds = new Set<string>(),
 ): Record<string, unknown> {
   const api: Record<string, unknown> = {};
   const nodeById = new Map<string, Record<string, unknown>>();
   for (const value of raw.nodes) {
     if (!isRecord(value)) continue;
     nodeById.set(String(value.id), value);
-    if (value.type === "PrimitiveNode") continue;
+    if (value.type === "PrimitiveNode" || isBypassedNode(value, activatedNodeIds)) continue;
     const metadata = typeof value.type === "string" ? nodeMetadata?.[value.type] : undefined;
     if (!metadata && isUiOnlyNode(value)) continue;
     const node: Record<string, unknown> = { class_type: value.type ?? "unknown", inputs: {} };
@@ -289,23 +293,82 @@ function convertUiToApi(
     api[String(value.id)] = node;
   }
   if (Array.isArray(raw.links)) {
+    const linkById = new Map(raw.links
+      .filter((link): link is unknown[] => Array.isArray(link) && link.length >= 5)
+      .map((link) => [String(link[0]), link]));
     for (const link of raw.links) {
       if (!Array.isArray(link) || link.length < 5) continue;
-      const [, sourceId, sourceSlot, targetId, targetSlot] = link;
+      const [, , , targetId, targetSlot] = link;
       const targetNode = api[String(targetId)];
-      const sourceNode = nodeById.get(String(sourceId));
       const target = nodeById.get(String(targetId));
       const targetName = uiInputName(target, Number(targetSlot));
       if (isRecord(targetNode) && isRecord(targetNode.inputs)) {
-        if (sourceNode?.type === "PrimitiveNode") {
-          (targetNode.inputs as Record<string, unknown>)[targetName] = primitiveValue(sourceNode);
-        } else {
-          (targetNode.inputs as Record<string, unknown>)[targetName] = [String(sourceId), Number(sourceSlot)];
+        const source = resolveUiLinkSource(link, nodeById, linkById, activatedNodeIds);
+        if (!source) continue;
+        if (source.node.type === "PrimitiveNode") {
+          (targetNode.inputs as Record<string, unknown>)[targetName] = primitiveValue(source.node);
+        } else if (api[source.nodeId]) {
+          (targetNode.inputs as Record<string, unknown>)[targetName] = [source.nodeId, source.slot];
         }
       }
     }
   }
   return api;
+}
+
+interface ResolvedUiLinkSource {
+  nodeId: string;
+  slot: number;
+  node: Record<string, unknown>;
+}
+
+/** 递归穿过 Bypass 节点，把兼容输出连接回实际执行上游。 */
+function resolveUiLinkSource(
+  link: unknown[],
+  nodeById: Map<string, Record<string, unknown>>,
+  linkById: Map<string, unknown[]>,
+  activatedNodeIds: Set<string>,
+  visited = new Set<string>(),
+): ResolvedUiLinkSource | undefined {
+  const sourceId = String(link[1]);
+  const sourceSlot = Number(link[2]);
+  const sourceNode = nodeById.get(sourceId);
+  if (!sourceNode || !Number.isInteger(sourceSlot) || sourceSlot < 0) return undefined;
+  if (!isBypassedNode(sourceNode, activatedNodeIds)) return { nodeId: sourceId, slot: sourceSlot, node: sourceNode };
+  if (visited.has(sourceId)) return undefined;
+  visited.add(sourceId);
+
+  const outputs = Array.isArray(sourceNode.outputs) ? sourceNode.outputs : [];
+  const inputs = Array.isArray(sourceNode.inputs) ? sourceNode.inputs : [];
+  const output = isRecord(outputs[sourceSlot]) ? outputs[sourceSlot] : undefined;
+  const candidates = inputs.flatMap((value, index) => {
+    if (!isRecord(value) || value.link === null || value.link === undefined) return [];
+    const inputLink = linkById.get(String(value.link));
+    if (!inputLink || !uiSlotTypesCompatible(value.type, output?.type)) return [];
+    return [{ value, index, link: inputLink }];
+  });
+  const selected = candidates.find(({ value }) => typeof output?.name === "string" && value.name === output.name)
+    ?? candidates.find(({ index }) => index === sourceSlot)
+    ?? (candidates.length === 1 ? candidates[0] : undefined);
+  return selected ? resolveUiLinkSource(selected.link, nodeById, linkById, activatedNodeIds, visited) : undefined;
+}
+
+/** ComfyUI 的复合槽位类型以逗号分隔，任一类型相交即可旁路。 */
+function uiSlotTypesCompatible(inputType: unknown, outputType: unknown): boolean {
+  if (typeof inputType !== "string" || typeof outputType !== "string") return false;
+  const inputs = new Set(inputType.split(",").map((value) => value.trim()).filter(Boolean));
+  const outputs = outputType.split(",").map((value) => value.trim()).filter(Boolean);
+  return inputs.has("*") || outputs.includes("*") || outputs.some((value) => inputs.has(value));
+}
+
+/** mode 4 是 ComfyUI UI 工作流中的 Bypass 状态。 */
+function isBypassedNode(node: Record<string, unknown>, activatedNodeIds: Set<string>): boolean {
+  return node.mode === 4 && !activatedNodeIds.has(String(node.id));
+}
+
+/** 统一判断运行入参是否会启用条件节点组。 */
+function hasInputValue(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== "";
 }
 
 /** 无连接能力且未注册元数据的节点仅承载前端说明，不应进入 API Prompt。 */
