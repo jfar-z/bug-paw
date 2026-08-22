@@ -22,6 +22,15 @@ interface AigcChannelRouteDependencies {
 
 /** 注册配置中心的能力扩展 AIGC 渠道接口。 */
 export function registerAigcChannelRoutes(app: FastifyInstance, dependencies: AigcChannelRouteDependencies): void {
+  app.get("/api/aigc/runtime-channels", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const document = await dependencies.management.document();
+    reply.header("Cache-Control", "no-store");
+    return reply.send({
+      channels: document.channels.map(({ id, name, type, enabled, hasApiKey }) => ({ id, name, type, enabled, hasApiKey })),
+    });
+  });
+
   app.get("/api/capabilities/aigc/channels", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     reply.header("Cache-Control", "no-store");

@@ -1,15 +1,54 @@
 // @vitest-environment node
 
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 import type { AigcTaskRecord } from "../../shared/aigc-contracts";
+import { registerAigcChannelRoutes } from "./aigc-channels";
 import { registerAigcRoutes } from "./aigc";
 
 const roots: string[] = [];
+
+describe("AIGC 运行态渠道路由", () => {
+  it("返回执行状态但不暴露渠道服务地址", async () => {
+    const app = Fastify();
+    registerAigcChannelRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      management: {
+        document: async () => ({
+          revision: "r1",
+          credentialRevision: "c1",
+          channelTemplates: [],
+          credentials: [],
+          channels: [{
+            id: "private-comfy",
+            name: "内网 ComfyUI",
+            type: "comfyui",
+            baseUrl: "http://192.168.1.20:8188",
+            enabled: true,
+            hasApiKey: false,
+          }],
+        }),
+      } as never,
+      validation: {} as never,
+      credentials: {} as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({ method: "GET", url: "/api/aigc/runtime-channels" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      channels: [{ id: "private-comfy", name: "内网 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }],
+    });
+    expect(response.body).not.toContain("192.168.1.20");
+    expect(response.headers["cache-control"]).toBe("no-store");
+    await app.close();
+  });
+});
 
 describe("AIGC 产物路由", () => {
   afterEach(async () => {
@@ -49,6 +88,16 @@ describe("AIGC 产物路由", () => {
     expect(inline.headers["content-type"]).toContain("image/png");
     expect(inline.headers["content-disposition"]).toBeUndefined();
     expect(inline.headers["x-content-type-options"]).toBe("nosniff");
+    expect(inline.headers["accept-ranges"]).toBe("bytes");
+
+    const range = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1", headers: { range: "bytes=2-6" } });
+    expect(range.statusCode).toBe(206);
+    expect(range.headers["content-range"]).toBe("bytes 2-6/13");
+    expect(range.body).toBe("age-c");
+
+    const invalidRange = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1", headers: { range: "bytes=99-100" } });
+    expect(invalidRange.statusCode).toBe(416);
+    expect(invalidRange.headers["content-range"]).toBe("bytes */13");
 
     const download = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1?download=1" });
     expect(download.statusCode, download.body).toBe(200);
@@ -127,6 +176,132 @@ describe("AIGC 工作流节点元数据路由", () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({ revision: "r2", syncedNodeClasses: ["KSampler"], workflow: { id: "workflow-1" } });
+    await app.close();
+  });
+});
+
+describe("ComfyUI input 媒体代理路由", () => {
+  it("仅返回同源媒体内容和安全响应头", async () => {
+    const app = Fastify();
+    const requested: Array<{ channelId: string; filename: string; range?: string }> = [];
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {} as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: {
+        content: async (channelId: string, file: { filename: string }, range?: string) => {
+          requested.push({ channelId, filename: file.filename, range });
+          return {
+            stream: Readable.from([Buffer.from("video")]),
+            status: 206,
+            mediaType: "video/mp4",
+            contentLength: "5",
+            acceptRanges: "bytes",
+            contentRange: "bytes 0-4/5",
+          };
+        },
+      } as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/aigc/comfyui-input-files/content?channelId=private&filename=clip.mp4&type=input",
+      headers: { range: "bytes=0-4" },
+    });
+    expect(response.statusCode).toBe(206);
+    expect(response.body).toBe("video");
+    expect(response.headers).toMatchObject({
+      "content-type": "video/mp4",
+      "content-length": "5",
+      "accept-ranges": "bytes",
+      "content-range": "bytes 0-4/5",
+      "cache-control": "private, no-store",
+      "x-content-type-options": "nosniff",
+    });
+    expect(JSON.stringify(response.headers)).not.toContain("192.168.");
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers.server).toBeUndefined();
+    expect(requested).toEqual([{ channelId: "private", filename: "clip.mp4", range: "bytes=0-4" }]);
+    await app.close();
+  });
+
+  it("代理失败时不返回上游内网错误详情", async () => {
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {} as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: { content: async () => { throw new Error("http://192.168.1.20:8188 failed"); } } as never,
+    });
+    await app.ready();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/aigc/comfyui-input-files/content?channelId=private&filename=clip.mp4",
+    });
+    expect(response.statusCode).toBe(502);
+    expect(response.body).not.toContain("192.168.1.20");
+    expect(response.body).toContain("预览暂时不可用");
+    await app.close();
+  });
+});
+
+describe("AIGC 轻剪辑路由", () => {
+  it("提供工程 CRUD、导出状态与取消接口", async () => {
+    const project = {
+      id: "project-1", revision: "revision-1", name: "视频工程", kind: "video" as const, clips: [],
+      createdAt: "2026-08-21T00:00:00.000Z", updatedAt: "2026-08-21T00:00:00.000Z",
+    };
+    const job = {
+      id: "render-1", projectId: project.id, projectName: project.name, kind: project.kind,
+      status: "queued" as const, progress: 0, queuePosition: 1, createdAt: "2026-08-21T00:00:00.000Z",
+    };
+    const remove = vi.fn(async () => undefined);
+    const mediaProjects = {
+      list: async () => ({ projects: [project] }),
+      create: async () => project,
+      get: async (id: string) => id === project.id ? project : undefined,
+      update: async () => ({ ...project, revision: "revision-2", name: "成片" }),
+      remove,
+      render: async () => job,
+      getRender: async (id: string) => id === job.id ? job : undefined,
+      cancelRender: async () => ({ ...job, status: "cancelled" as const }),
+      resolveRenderPath: async () => undefined,
+    };
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: {} as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: {} as never,
+      mediaProjects: mediaProjects as never,
+    });
+    await app.ready();
+
+    expect((await app.inject({ method: "GET", url: "/api/aigc/media-projects" })).json()).toMatchObject({ projects: [{ id: project.id }] });
+    expect((await app.inject({ method: "POST", url: "/api/aigc/media-projects", payload: { kind: "video" } })).statusCode).toBe(201);
+    expect((await app.inject({ method: "GET", url: `/api/aigc/media-projects/${project.id}` })).statusCode).toBe(200);
+    const update = await app.inject({
+      method: "PATCH", url: `/api/aigc/media-projects/${project.id}`,
+      payload: { revision: project.revision, name: "成片", clips: [] },
+    });
+    expect(update.statusCode).toBe(200);
+    expect(update.json()).toMatchObject({ revision: "revision-2", name: "成片" });
+    expect((await app.inject({ method: "POST", url: `/api/aigc/media-projects/${project.id}/render` })).statusCode).toBe(202);
+    expect((await app.inject({ method: "GET", url: `/api/aigc/media-renders/${job.id}` })).json()).toMatchObject({ status: "queued", queuePosition: 1 });
+    expect((await app.inject({ method: "POST", url: `/api/aigc/media-renders/${job.id}/cancel` })).json()).toMatchObject({ status: "cancelled" });
+    expect((await app.inject({ method: "DELETE", url: `/api/aigc/media-projects/${project.id}` })).statusCode).toBe(204);
+    expect(remove).toHaveBeenCalledWith(project.id);
     await app.close();
   });
 });

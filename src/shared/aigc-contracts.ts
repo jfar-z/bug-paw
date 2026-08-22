@@ -35,6 +35,9 @@ export interface AigcChannelSummary extends AigcChannelConfig {
   hasApiKey: boolean;
 }
 
+/** 工作流执行页可见的渠道状态，不包含可能指向内网的服务地址。 */
+export type AigcRuntimeChannelSummary = Pick<AigcChannelSummary, "id" | "name" | "type" | "enabled" | "hasApiKey">;
+
 /** 浏览器提交的渠道配置字段。 */
 export interface AigcChannelInput {
   name: string;
@@ -97,12 +100,41 @@ export interface ComfyUiFieldMetadata {
   placeholder?: string;
 }
 
+/** UI 工作流控件值转换为 API 输入时使用的有序字段描述。 */
+export interface ComfyUiWidgetInputMetadata {
+  /** API Prompt 中的输入字段名。 */
+  name: string;
+  /** 动态控件按当前选项展开的子字段名。 */
+  dynamicOptions?: Record<string, string[]>;
+}
+
+/** 节点实例字段的最终元数据来源。 */
+export type ComfyUiResolvedFieldMetadataSource = "direct" | "inferred" | "workflow";
+
+/** 参与动态字段推导的下游目标。 */
+export interface ComfyUiFieldMetadataReference {
+  nodeId: string;
+  field: string;
+}
+
+/** 合并节点定义、工作流结构与连接约束后的实例级字段元数据。 */
+export interface ComfyUiResolvedFieldMetadata extends ComfyUiFieldMetadata {
+  source: ComfyUiResolvedFieldMetadataSource;
+  inferredFrom?: ComfyUiFieldMetadataReference[];
+  conflict?: string;
+}
+
+/** 按节点 ID 和字段路径索引的实例级字段元数据。 */
+export type ComfyUiResolvedFieldMetadataMap = Record<string, Record<string, ComfyUiResolvedFieldMetadata>>;
+
 /** 单类 ComfyUI 节点的展示信息和输入字段约束。 */
 export interface ComfyUiNodeTypeMetadata {
   displayName?: string;
   description?: string;
   category?: string;
   fields: Record<string, ComfyUiFieldMetadata>;
+  /** ComfyUI 前端序列化 widgets_values 时使用的字段顺序。 */
+  widgetInputs?: ComfyUiWidgetInputMetadata[];
 }
 
 /** 按 ComfyUI class_type 索引的节点元数据。 */
@@ -129,7 +161,7 @@ export interface AigcWorkflowInputMapping {
   /** 展示给调用方的稳定参数名。 */
   name: string;
   nodeId: string;
-  /** 目标节点的输入字段路径，例如 inputs.text。 */
+  /** 目标节点的输入或 UI widget 字段路径，例如 inputs.text。 */
   field: string;
   type: AigcWorkflowInputType;
   required: boolean;
@@ -139,6 +171,19 @@ export interface AigcWorkflowInputMapping {
   description?: string;
   /** 可选参数未提供时，裁剪与该参数绑定的条件分支。 */
   activation?: AigcWorkflowInputActivation;
+}
+
+/** 由多个同类可选映射组成的参考素材输入组。 */
+export interface AigcWorkflowInputGroup {
+  id: string;
+  label: string;
+  type: "image" | "video" | "audio";
+  /** 成员顺序同时决定运行时素材槽位顺序。 */
+  mappingIds: string[];
+  /** 用户指定的共享汇总节点。 */
+  boundaryNodeId: string;
+  /** 用户选择的汇总接口系列，例如 inputs.references。 */
+  targetFieldPrefix: string;
 }
 
 /** ComfyUI 工作流输出字段映射。 */
@@ -201,9 +246,12 @@ export interface AigcWorkflowDetail {
   nodes: ComfyUiNode[];
   edges: ComfyUiEdge[];
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
   /** 最近成功同步并保存的 ComfyUI 节点定义。 */
   nodeMetadata?: ComfyUiNodeMetadata;
+  /** 按节点实例解析出的最终字段约束，不作为持久化真值。 */
+  resolvedFieldMetadata?: ComfyUiResolvedFieldMetadataMap;
   nodeMetadataSyncedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -222,6 +270,7 @@ export interface AigcWorkflowCreateInput {
   /** 完整的 ComfyUI 工作流 JSON，由服务端解析但不会执行脚本。 */
   workflowJson: unknown;
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
 }
 
@@ -229,6 +278,7 @@ export interface AigcWorkflowCreateInput {
 export interface AigcWorkflowUpdateInput {
   name: string;
   inputMappings: AigcWorkflowInputMapping[];
+  inputGroups?: AigcWorkflowInputGroup[];
   outputMappings: AigcWorkflowOutputMapping[];
 }
 

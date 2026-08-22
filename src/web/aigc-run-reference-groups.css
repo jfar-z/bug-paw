@@ -1,0 +1,99 @@
+/* 参考输入组仅由工作台运行入口使用，避免增加 AIGC 渠道页共享样式体积。 */
+.aigc-media-input__controls,
+.aigc-media-input__preview {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.aigc-media-input__controls > span,
+.aigc-media-input__controls > label > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.aigc-media-input__preview {
+  min-height: 94px;
+  place-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.aigc-media-input__preview .aigc-media-input-preview {
+  border: 0;
+  border-radius: 4px;
+}
+
+.aigc-media-input__preview audio.aigc-media-input-preview {
+  width: 100%;
+}
+
+.aigc-run-reference-group {
+  display: grid;
+  min-width: 0;
+  grid-column: 1 / -1;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.aigc-run-reference-group__heading,
+.aigc-run-reference-group__heading > div,
+.aigc-run-reference-slot__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aigc-run-reference-group__heading {
+  justify-content: space-between;
+}
+
+.aigc-run-reference-group__heading strong {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.aigc-run-reference-group__heading small,
+.aigc-run-reference-group__heading > span,
+.aigc-run-reference-slot__heading > span {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.aigc-run-reference-group__slots {
+  display: grid;
+  gap: 10px;
+}
+
+.aigc-run-reference-slot {
+  display: grid;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.aigc-run-reference-slot .aigc-media-input {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 1fr);
+  align-items: stretch;
+}
+
+.aigc-run-reference-slot .aigc-media-input__preview {
+  min-height: 150px;
+}
+
+.aigc-run-reference-slot__heading {
+  min-height: 28px;
+  justify-content: space-between;
+}
+
+@media (max-width: 760px) {
+  .aigc-run-reference-slot .aigc-media-input {
+    grid-template-columns: 1fr;
+  }
+}

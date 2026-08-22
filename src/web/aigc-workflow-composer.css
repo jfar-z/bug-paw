@@ -61,8 +61,55 @@
 }
 
 .aigc-mapping-card {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
+}
+
+.aigc-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.aigc-drag-handle {
+  display: inline-grid;
+  width: 28px;
+  height: 36px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  cursor: grab;
+}
+
+.aigc-drag-handle:active {
+  cursor: grabbing;
+}
+
+.aigc-mapping-card--group {
+  border-left: 3px solid var(--eye);
+}
+
+.aigc-reference-preview {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.aigc-reference-preview strong,
+.aigc-reference-preview span,
+.aigc-reference-preview small {
+  font-size: 11px;
+}
+
+.aigc-reference-preview span,
+.aigc-reference-preview small {
+  color: var(--text-tertiary);
 }
 
 .aigc-mapping-card__main {
@@ -138,6 +185,19 @@
 .aigc-node-search small {
   font-size: 10px;
   white-space: nowrap;
+}
+
+.aigc-reference-boundary-picker {
+  min-width: 0;
+}
+
+.aigc-reference-node-search {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.aigc-reference-node-search input[type="search"]::-webkit-search-cancel-button {
+  cursor: pointer;
 }
 
 .aigc-node-list-return {

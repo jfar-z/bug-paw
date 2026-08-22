@@ -4,6 +4,28 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.7 - 2026-08-22
+
+### 新增 / Added
+
+- 增加 ComfyUI 参考输入组，可按工作流拓扑汇总图片、视频与音频输入，支持搜索汇总节点、渐进式槽位展示，以及入参与出参的拖动排序。
+- 增加 AIGC 轻量媒体剪辑工作台，支持从产物库编排图片、视频与音频片段，调整片段顺序、裁剪区间、图片时长和原音状态，并连续预览和串行导出视频或音频。
+
+- Added ComfyUI reference-input groups that derive image, video, and audio inputs from workflow topology, with aggregate-node search, progressive slots, and drag-and-drop ordering for inputs and outputs.
+- Added a lightweight AIGC media editor for arranging image, video, and audio outputs, adjusting clip order, trim ranges, image duration, and source audio, with continuous previews and serialized video or audio exports.
+
+### 修复 / Fixed
+
+- 修复 ComfyUI 动态节点实例的参数元数据推导、枚举与数值约束合并、冲突标记、运行表单控件和服务端映射校验。
+- 修复 ComfyUI 输入预览与公开文件选择，并优化参考输入组在运行页的全宽布局。
+- 修复 ComfyUI 工作流控件、PrimitiveNode 与旁路节点转换，确保只提交实际启用的媒体分支并保留有效下游连接。
+- 修复快捷资源文件预览在滚动后被固定列表头遮挡的问题，预览期间隐藏资源表格并清理冗余层级。
+
+- Fixed parameter-metadata inference, enum and numeric constraint merging, conflict reporting, runtime controls, and server-side mapping validation for dynamic ComfyUI node instances.
+- Fixed ComfyUI input previews and public-file selection, and improved full-width reference-group layout on the run page.
+- Fixed ComfyUI widget, PrimitiveNode, and bypass-node conversion so only active media branches are submitted while valid downstream links are preserved.
+- Fixed quick-workspace file previews being obscured by sticky table headers after scrolling by hiding the resource table during previews and removing redundant stacking rules.
+
 ## 0.1.6 - 2026-08-20
 
 ### 新增 / Added

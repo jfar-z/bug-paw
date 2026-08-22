@@ -1,4 +1,4 @@
-import { Activity, Boxes, FolderOpen, GalleryHorizontalEnd, GitFork, LayoutDashboard, WandSparkles, X } from "lucide-react";
+import { Activity, Boxes, FolderOpen, GalleryHorizontalEnd, GitFork, LayoutDashboard, Scissors, WandSparkles, X } from "lucide-react";
 import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
 import type { AppRoute } from "../router";
 
@@ -82,6 +82,15 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
         >
           <GalleryHorizontalEnd size={17} aria-hidden="true" />
           <span>产物查看</span>
+        </button>
+        <button
+          type="button"
+          className={route.page === "aigc-media-editor" ? "is-active" : undefined}
+          aria-current={route.page === "aigc-media-editor" ? "page" : undefined}
+          onClick={() => go({ page: "aigc-media-editor" })}
+        >
+          <Scissors size={17} aria-hidden="true" />
+          <span>轻剪辑</span>
         </button>
         <button
           type="button"

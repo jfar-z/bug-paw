@@ -43,9 +43,10 @@ describe("AigcWorkbenchPage 创作台", () => {
   });
 
   it("由两个懒加载入口共享独立页面样式", async () => {
-    const [globalStyles, aigcStyles, workbenchSource, channelsSource] = await Promise.all([
+    const [globalStyles, aigcStyles, referenceGroupStyles, workbenchSource, channelsSource] = await Promise.all([
       readFile("src/web/styles.css", "utf8"),
       readFile("src/web/aigc.css", "utf8"),
+      readFile("src/web/aigc-run-reference-groups.css", "utf8"),
       readFile("src/web/pages/aigc-workbench-page.tsx", "utf8"),
       readFile("src/web/pages/aigc-channels-page.tsx", "utf8"),
     ]);
@@ -54,7 +55,9 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(aigcStyles).toContain(".aigc-workbench-page {");
     expect(aigcStyles).toContain(".aigc-run-preview-stage {");
     expect(aigcStyles).toContain(".aigc-asset-card__preview {");
+    expect(referenceGroupStyles).toMatch(/\.aigc-run-reference-group\s*\{[^}]*grid-column:\s*1\s*\/\s*-1;/s);
     expect(workbenchSource).toContain('import "../aigc.css";');
+    expect(workbenchSource).toContain('import "../aigc-run-reference-groups.css";');
     expect(workbenchSource).not.toContain('className="media-attachment');
     expect(channelsSource).toContain('import "../aigc.css";');
   });
@@ -79,7 +82,7 @@ describe("AigcWorkbenchPage 创作台", () => {
           }],
         }));
       }
-      if (String(input) === "/api/v1/capabilities/aigc/channels") {
+      if (String(input) === "/api/v1/aigc/runtime-channels") {
         return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "channel-1", name: "OpenAI", type: "openai", baseUrl: "https://api.openai.com/v1", enabled: true, timeoutMs: 30000, hasApiKey: true }], channelTemplates: [], credentials: [] }));
       }
       if (String(input) === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
@@ -130,7 +133,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "interface-1", name: "多媒体生成", description: "", protocol: "openai", capability: "text-to-image", channelId: "channel-1", enabled: true, toolPublishEnabled: false, config: { model: "gpt-image-1" }, createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z" }] }));
-      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "channel-1", name: "OpenAI", type: "openai", baseUrl: "https://api.openai.com/v1", enabled: true, timeoutMs: 30000, hasApiKey: true }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "channel-1", name: "OpenAI", type: "openai", enabled: true, hasApiKey: true }] }));
       if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
       if (url === "/api/v1/aigc/tasks" && init?.method === "POST") return new Response(JSON.stringify({ id: "task-media", interfaceId: "interface-1", interfaceName: "多媒体生成", channelId: "channel-1", status: "queued", inputs: { prompt: "海边日落" }, assets: [], createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z" }), { status: 202 });
       if (url === "/api/v1/aigc/tasks/task-media") return new Response(JSON.stringify({ id: "task-media", interfaceId: "interface-1", interfaceName: "多媒体生成", channelId: "channel-1", status: "succeeded", inputs: { prompt: "海边日落" }, assets: [{ id: "image-1", name: "poster.png", mediaType: "image/png", size: 2048, createdAt: "2026-08-17T00:00:01.000Z" }, { id: "video-1", name: "clip.mp4", mediaType: "video/mp4", size: 4096, createdAt: "2026-08-17T00:00:01.000Z" }, { id: "audio-1", name: "sound.wav", mediaType: "audio/wav", size: 1024, createdAt: "2026-08-17T00:00:01.000Z" }], createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:01.000Z", finishedAt: "2026-08-17T00:00:01.000Z" }));
@@ -154,7 +157,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "openai-1", name: "OpenAI 图片", description: "", protocol: "openai", capability: "text-to-image", channelId: "openai-channel", enabled: true, toolPublishEnabled: false, config: { model: "gpt-image-1" }, createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z" }, { id: "comfy-1", name: "ComfyUI 海报", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-1" }, createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z" }] }));
-      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://comfyui:8188", enabled: true, timeoutMs: 30000, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
       if (url === "/api/v1/aigc/workflows/workflow-1") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-1", name: "海报工作流", fileName: "poster.json", originalHash: "hash", nodes: [], edges: [], inputMappings: [{ id: "prompt", name: "prompt", nodeId: "1", field: "text", type: "string", required: true, description: "提示词" }], outputMappings: [], createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z" } }));
       if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
       if (url === "/api/v1/capabilities/aigc/channels/comfy-channel/test" && init?.method === "POST") return new Response(JSON.stringify({ ok: true, message: "ComfyUI 连接正常" }));
@@ -172,11 +175,37 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(await screen.findByText("ComfyUI 连接正常")).toBeInTheDocument();
   });
 
+  it("参考输入组只展示已填槽位和下一个空槽位", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-reference", name: "参考生视频", description: "", protocol: "comfyui", capability: "image-to-video", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-reference" }, createdAt: "2026-08-21T00:00:00.000Z", updatedAt: "2026-08-21T00:00:00.000Z" }] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
+      if (url === "/api/v1/aigc/workflows/workflow-reference") return new Response(JSON.stringify({ revision: "w1", workflow: {
+        id: "workflow-reference", name: "参考生视频", fileName: "reference.json", originalHash: "hash",
+        nodes: [{ id: "1", type: "LoadImage", fields: [{ name: "inputs.image", kind: "input" }] }, { id: "2", type: "LoadImage", fields: [{ name: "inputs.image", kind: "input" }] }], edges: [],
+        inputMappings: [{ id: "image-1", name: "reference_image_1", nodeId: "1", field: "inputs.image", type: "image", required: false, description: "参考图片 1", activation: { when: "provided", nodeIds: ["1"] } }, { id: "image-2", name: "reference_image_2", nodeId: "2", field: "inputs.image", type: "image", required: false, description: "参考图片 2", activation: { when: "provided", nodeIds: ["2"] } }],
+        inputGroups: [{ id: "images", label: "参考图片", type: "image", mappingIds: ["image-1", "image-2"], boundaryNodeId: "9", targetFieldPrefix: "inputs.ref_images" }], outputMappings: [], createdAt: "2026-08-21T00:00:00.000Z", updatedAt: "2026-08-21T00:00:00.000Z",
+      } }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      if (url === "/api/v1/aigc/inputs" && init?.method === "POST") return new Response(JSON.stringify({ asset: { id: "asset-1", name: "reference.png", mediaType: "image/png", size: 10 } }), { status: 201 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-reference" });
+
+    expect(await screen.findByText("0/2 已添加")).toBeInTheDocument();
+    expect(screen.getByLabelText("参考图片 1")).toBeInTheDocument();
+    expect(screen.queryByLabelText("参考图片 2")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("参考图片 1"), { target: { files: [new File(["image"], "reference.png", { type: "image/png" })] } });
+    expect(await screen.findByText("1/2 已添加")).toBeInTheDocument();
+    expect(screen.getByLabelText("参考图片 2")).toBeInTheDocument();
+  });
+
   it("创作台从同步元数据加载可筛选 COMBO 候选项", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-combo", name: "ComfyUI 采样", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-combo" }, createdAt: "2026-08-20T00:00:00.000Z", updatedAt: "2026-08-20T00:00:00.000Z" }] }));
-      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://comfyui:8188", enabled: true, timeoutMs: 30000, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
       if (url === "/api/v1/aigc/workflows/workflow-combo") return new Response(JSON.stringify({ revision: "w1", workflow: {
         id: "workflow-combo", name: "采样工作流", fileName: "sampler.json", originalHash: "hash",
         nodes: [{ id: "1", type: "KSamplerSelect", title: "采样器", fields: [{ name: "inputs.sampler_name", kind: "input", valueType: "string" }] }],
@@ -210,7 +239,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-audio", name: "ComfyUI 音频", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-audio" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }] }));
-      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://comfyui:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
       if (url === "/api/v1/aigc/workflows/workflow-audio") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-audio", name: "音频工作流", fileName: "audio.json", originalHash: "hash", nodes: [{ id: "9", type: "SaveAudio", title: "一个非常长的音频增强与保存节点名称", fields: [] }], edges: [], inputMappings: [{ id: "audio", name: "audio", nodeId: "1", field: "inputs.audio", type: "audio", required: true, description: "参考音频" }], outputMappings: [{ id: "result", name: "result", nodeId: "9", field: "outputs.audio", mediaType: "audio" }], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" } }));
       if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
       if (url === "/api/v1/aigc/inputs" && init?.method === "POST") return new Response(JSON.stringify({ asset: { id: "audio-input", name: "voice.wav", mediaType: "audio/wav", size: 1024 } }), { status: 201 });
@@ -241,7 +270,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-image", name: "ComfyUI 图片", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-image" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }] }));
-      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://127.0.0.1:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
       if (url === "/api/v1/aigc/workflows/workflow-image") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-image", name: "图片工作流", fileName: "image.json", originalHash: "hash", nodes: [{ id: "1", type: "LoadImage", title: "载入图片", fields: [] }], edges: [], inputMappings: [{ id: "image", name: "image", nodeId: "1", field: "inputs.image", type: "image", required: true, description: "参考图" }], outputMappings: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" } }));
       if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [{ id: "public-file", name: "poster.png", mediaType: "image/png", size: 10, createdAt: "2026-08-18T00:00:00.000Z", url: "/aigc-public/files/public-file" }] }));
       if (url === "/api/v1/aigc/tasks" && init?.method === "POST") return new Response(JSON.stringify({ id: "task-image", interfaceId: "comfy-image", interfaceName: "ComfyUI 图片", channelId: "comfy-channel", status: "queued", inputs: {}, assets: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }), { status: 202 });
@@ -251,7 +280,9 @@ describe("AigcWorkbenchPage 创作台", () => {
 
     renderAigcPage({ page: "aigc-run", interfaceId: "comfy-image" });
     fireEvent.click(await screen.findByRole("tab", { name: "公开目录" }));
-    fireEvent.change(await screen.findByLabelText("参考图公开目录"), { target: { value: "public-file" } });
+    fireEvent.click(await screen.findByRole("button", { name: "参考图公开目录" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选参考图公开目录" }), { target: { value: "poster" } });
+    fireEvent.click(screen.getByRole("option", { name: "poster.png" }));
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
     await waitFor(() => {
@@ -265,7 +296,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{ id: "comfy-image", name: "ComfyUI 图片", description: "", protocol: "comfyui", capability: "text-to-image", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false, config: { workflowId: "workflow-image" }, createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" }] }));
-      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", credentialRevision: "k1", channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", baseUrl: "http://127.0.0.1:8188", enabled: true, hasApiKey: false }], channelTemplates: [], credentials: [] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
       if (url === "/api/v1/aigc/workflows/workflow-image") return new Response(JSON.stringify({ revision: "w1", workflow: { id: "workflow-image", name: "图片工作流", fileName: "image.json", originalHash: "hash", nodes: [{ id: "1", type: "LoadImage", title: "载入图片", fields: [] }], edges: [], inputMappings: [{ id: "image", name: "image", nodeId: "1", field: "inputs.image", type: "image", required: true, description: "参考图" }], outputMappings: [], createdAt: "2026-08-18T00:00:00.000Z", updatedAt: "2026-08-18T00:00:00.000Z" } }));
       if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
       if (url.startsWith("/api/v1/aigc/comfyui-input-files")) return new Response(JSON.stringify({ files: [{ filename: "existing.png", name: "existing.png", mediaType: "image/png" }] }));
@@ -276,7 +307,13 @@ describe("AigcWorkbenchPage 创作台", () => {
 
     renderAigcPage({ page: "aigc-run", interfaceId: "comfy-image" });
     fireEvent.click(await screen.findByRole("tab", { name: "ComfyUI input" }));
-    fireEvent.change(await screen.findByLabelText("参考图ComfyUI input"), { target: { value: "existing.png" } });
+    fireEvent.click(await screen.findByRole("button", { name: "参考图ComfyUI input" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "筛选参考图ComfyUI input" }), { target: { value: "existing" } });
+    fireEvent.click(screen.getByRole("option", { name: "existing.png" }));
+    const preview = screen.getByRole("img", { name: "existing.png" });
+    expect(preview).toHaveAttribute("src", expect.stringContaining("/api/v1/aigc/comfyui-input-files/content?"));
+    expect(preview.getAttribute("src")).not.toContain("127.0.0.1");
+    expect(fetchMock.mock.calls.some(([requestUrl]) => String(requestUrl) === "/api/v1/capabilities/aigc/channels")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
     await waitFor(() => {

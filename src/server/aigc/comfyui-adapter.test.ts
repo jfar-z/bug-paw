@@ -213,6 +213,149 @@ describe("ComfyUiAigcAdapter", () => {
     await expect(adapter.execute(input(workflow, { cfg: 21 }))).rejects.toThrow("不能大于 20");
     expect(request).not.toHaveBeenCalled();
   });
+
+  it("展开 UI 工作流 Primitive 并把映射值写入全部下游", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-primitive" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-primitive"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-primitive")) return json({ "prompt-primitive": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(primitiveWorkflow(), { aspect_ratio: "4:3" }));
+
+    expect(submittedPrompt).not.toHaveProperty("144");
+    expect(submittedPrompt).toHaveProperty("57.inputs.aspect_ratio", "4:3");
+    expect(submittedPrompt).toHaveProperty("120.inputs.aspect_ratio", "4:3");
+  });
+
+  it("未映射 Primitive 时仍把工作流默认值展开到下游", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-primitive-default" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-primitive-default"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-primitive-default")) return json({ "prompt-primitive-default": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const workflow = primitiveWorkflow();
+    workflow.inputMappings = [];
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(workflow, {}));
+
+    expect(submittedPrompt).not.toHaveProperty("144");
+    expect(submittedPrompt).toHaveProperty("57.inputs.aspect_ratio", "16:9");
+    expect(submittedPrompt).toHaveProperty("120.inputs.aspect_ratio", "16:9");
+  });
+
+  it("转换 UI 工作流时跳过 Bypass 节点并转接兼容连线", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-bypass" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-bypass"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-bypass")) return json({ "prompt-bypass": { outputs: { "4": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const workflow = bypassWorkflow();
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(workflow, {}));
+
+    expect(submittedPrompt).not.toHaveProperty("2");
+    expect(submittedPrompt).not.toHaveProperty("5");
+    expect(submittedPrompt).not.toHaveProperty("6");
+    expect(submittedPrompt).toHaveProperty("4.inputs.images", ["1", 0]);
+    expect(submittedPrompt).not.toHaveProperty("7.inputs.reference_image");
+    expect(submittedPrompt).not.toHaveProperty("7.inputs.reference_audio");
+  });
+
+  it("提供可选入参时临时启用对应的 Bypass 条件分支", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-bypass-activated" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-bypass-activated"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-bypass-activated")) return json({ "prompt-bypass-activated": { outputs: { "4": { images: [{ filename: "result.png" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const workflow = bypassWorkflow();
+    workflow.inputMappings = [{
+      id: "reference-video",
+      name: "reference_video",
+      nodeId: "5",
+      field: "inputs.file",
+      type: "video",
+      required: false,
+      activation: { when: "provided", nodeIds: ["5", "6"] },
+    }];
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(workflow, {
+      reference_video: { source: "comfyui_input", filename: "reference.mp4" },
+    }));
+
+    expect(submittedPrompt).toHaveProperty("5.inputs.file", "reference.mp4");
+    expect(submittedPrompt).toHaveProperty("6.inputs.video", ["5", 0]);
+    expect(submittedPrompt).toHaveProperty("7.inputs.reference_image", ["6", 0]);
+    expect(submittedPrompt).toHaveProperty("7.inputs.reference_audio", ["6", 1]);
+  });
+
+  it("按节点元数据转换数组、动态和对象控件并保留控件索引映射", async () => {
+    let submittedPrompt: Record<string, unknown> | undefined;
+    const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+      const url = String(requestInput);
+      if (url.endsWith("/prompt")) {
+        submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+        return json({ prompt_id: "prompt-ui-widgets" });
+      }
+      if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-ui-widgets"]], queue_pending: [] });
+      if (url.endsWith("/history/prompt-ui-widgets")) return json({ "prompt-ui-widgets": { outputs: { "63": { images: [{ filename: "result.mp4" }] } } } });
+      if (url.includes("/view?")) return new Response(Buffer.from("video"), { status: 200 });
+      throw new Error(`未处理请求 ${url}`);
+    });
+    const workflow = uiWidgetWorkflow();
+    const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
+
+    await adapter.execute(input(workflow, { video_mp: 0.8, upscale_mp: 1.5 }));
+
+    expect(submittedPrompt).toHaveProperty("21.inputs", {
+      clip_name: "encoder.safetensors",
+      type: "minimax",
+      device: "default",
+    });
+    expect(submittedPrompt).toHaveProperty("57.inputs", { aspect_ratio: "16:9", megapixels: 0.8, multiple: 32 });
+    expect(submittedPrompt).toHaveProperty("114.inputs", {
+      images: ["57", 0],
+      resize_type: "scale by multiplier",
+      "resize_type.scale": 1.5,
+      quality: "ULTRA",
+    });
+    expect(submittedPrompt).toHaveProperty("63.inputs.frame_rate", 24);
+    expect(submittedPrompt).toHaveProperty("63.inputs.filename_prefix", "video/result");
+    expect(submittedPrompt).not.toHaveProperty("63.inputs.videopreview");
+    expect(submittedPrompt).not.toHaveProperty("20");
+  });
 });
 
 function input(
@@ -314,6 +457,148 @@ function conditionalWorkflow(): AigcWorkflowDetail & { raw: unknown } {
       activation: { when: "provided", nodeIds: ["34", "47"] },
     }],
     outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
+  };
+}
+
+function primitiveWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-primitive",
+    raw: {
+      nodes: [
+        { id: 144, type: "PrimitiveNode", inputs: [], outputs: [{ name: "COMBO", type: "COMBO", links: [273, 274] }], widgets_values: ["16:9", "fixed", ""] },
+        { id: 57, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 273 }], outputs: [], widgets_values: ["16:9", 1, 8] },
+        { id: 120, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 274 }], outputs: [], widgets_values: ["16:9", 1, 8] },
+        { id: 80, type: "SaveImage", inputs: [], outputs: [], widgets_values: ["result"] },
+      ],
+      links: [
+        [273, 144, 0, 57, 0, "COMBO"],
+        [274, 144, 0, 120, 0, "COMBO"],
+      ],
+    },
+    nodes: [
+      { id: "144", type: "PrimitiveNode", fields: [{ name: "widgets_values.0", kind: "widget", valueType: "string" }, { name: "outputs.COMBO", kind: "output" }] },
+      { id: "57", type: "ResolutionSelector", fields: [{ name: "inputs.aspect_ratio", kind: "input" }] },
+      { id: "120", type: "ResolutionSelector", fields: [{ name: "inputs.aspect_ratio", kind: "input" }] },
+      { id: "80", type: "SaveImage", fields: [{ name: "outputs.images", kind: "output" }] },
+    ],
+    edges: [
+      { id: "273", sourceNodeId: "144", sourceField: "outputs.COMBO", targetNodeId: "57", targetField: "inputs.aspect_ratio" },
+      { id: "274", sourceNodeId: "144", sourceField: "outputs.COMBO", targetNodeId: "120", targetField: "inputs.aspect_ratio" },
+    ],
+    inputMappings: [{ id: "ratio", name: "aspect_ratio", nodeId: "144", field: "widgets_values.0", type: "enum", required: true, enumOptions: ["1:1", "4:3", "16:9"] }],
+    outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
+    nodeMetadata: {
+      ResolutionSelector: { fields: { "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["1:1", "4:3", "16:9"] } } },
+    },
+  };
+}
+
+function uiWidgetWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...videoWorkflow(),
+    id: "workflow-ui-widgets",
+    raw: {
+      nodes: [
+        { id: 20, type: "MarkdownNote", inputs: [], outputs: [], widgets_values: ["说明"] },
+        { id: 21, type: "CLIPLoader", inputs: [], outputs: [{ name: "CLIP" }], widgets_values: ["encoder.safetensors", "minimax", "default"] },
+        { id: 57, type: "ResolutionSelector", inputs: [], outputs: [{ name: "IMAGE" }], widgets_values: ["16:9", 0.4, 32] },
+        { id: 114, type: "RTXVideoSuperResolution", inputs: [{ name: "images", link: 1 }], outputs: [{ name: "IMAGE" }], widgets_values: ["scale by multiplier", 2, "ULTRA"] },
+        {
+          id: 63,
+          type: "VHS_VideoCombine",
+          inputs: [{ name: "images", link: 2 }],
+          outputs: [],
+          widgets_values: {
+            frame_rate: 24,
+            loop_count: 0,
+            filename_prefix: "video/result",
+            format: "video/h264-mp4",
+            pingpong: false,
+            save_output: true,
+            videopreview: { paused: false },
+          },
+        },
+      ],
+      links: [
+        [1, 57, 0, 114, 0, "IMAGE"],
+        [2, 114, 0, 63, 0, "IMAGE"],
+      ],
+    },
+    nodes: [
+      { id: "20", type: "MarkdownNote", fields: [] },
+      { id: "21", type: "CLIPLoader", fields: [] },
+      { id: "57", type: "ResolutionSelector", fields: [] },
+      { id: "114", type: "RTXVideoSuperResolution", fields: [] },
+      { id: "63", type: "VHS_VideoCombine", fields: [] },
+    ],
+    edges: [
+      { id: "1", sourceNodeId: "57", sourceField: "outputs.IMAGE", targetNodeId: "114", targetField: "inputs.images" },
+      { id: "2", sourceNodeId: "114", sourceField: "outputs.IMAGE", targetNodeId: "63", targetField: "inputs.images" },
+    ],
+    inputMappings: [
+      { id: "video-mp", name: "video_mp", nodeId: "57", field: "widgets_values.1", type: "double", required: true },
+      { id: "upscale-mp", name: "upscale_mp", nodeId: "114", field: "widgets_values.1", type: "double", required: true },
+    ],
+    outputMappings: [{ id: "result", name: "result", nodeId: "63", field: "outputs.videos", mediaType: "video" }],
+    nodeMetadata: {
+      CLIPLoader: {
+        fields: {},
+        widgetInputs: [{ name: "clip_name" }, { name: "type" }, { name: "device" }],
+      },
+      ResolutionSelector: {
+        fields: { "inputs.megapixels": { comfyType: "FLOAT", valueType: "double" } },
+        widgetInputs: [{ name: "aspect_ratio" }, { name: "megapixels" }, { name: "multiple" }],
+      },
+      RTXVideoSuperResolution: {
+        fields: { "inputs.resize_type.scale": { comfyType: "FLOAT", valueType: "double" } },
+        widgetInputs: [
+          { name: "resize_type", dynamicOptions: { "scale by multiplier": ["scale"], "target dimensions": ["width", "height"] } },
+          { name: "quality" },
+        ],
+      },
+      VHS_VideoCombine: { fields: {} },
+    },
+  };
+}
+
+function bypassWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-bypass",
+    raw: {
+      nodes: [
+        { id: 1, type: "LoadImage", inputs: [], outputs: [{ name: "IMAGE", type: "IMAGE", links: [1] }], widgets_values: ["input.png"] },
+        { id: 2, type: "ImagePassThrough", mode: 4, inputs: [{ name: "image", type: "IMAGE", link: 1 }], outputs: [{ name: "IMAGE", type: "IMAGE", links: [2] }] },
+        { id: 4, type: "SaveImage", inputs: [{ name: "images", type: "IMAGE", link: 2 }], outputs: [], widgets_values: ["result"] },
+        { id: 5, type: "LoadVideo", mode: 4, inputs: [], outputs: [{ name: "VIDEO", type: "VIDEO", links: [3] }], widgets_values: ["sample.mp4"] },
+        { id: 6, type: "GetVideoComponents", mode: 4, inputs: [{ name: "video", type: "VIDEO", link: 3 }], outputs: [{ name: "images", type: "IMAGE", links: [4] }, { name: "audio", type: "AUDIO", links: [5] }] },
+        { id: 7, type: "ReferenceInputs", inputs: [{ name: "reference_image", type: "IMAGE", link: 4 }, { name: "reference_audio", type: "AUDIO", link: 5 }], outputs: [] },
+      ],
+      links: [
+        [1, 1, 0, 2, 0, "IMAGE"],
+        [2, 2, 0, 4, 0, "IMAGE"],
+        [3, 5, 0, 6, 0, "VIDEO"],
+        [4, 6, 0, 7, 0, "IMAGE"],
+        [5, 6, 1, 7, 1, "AUDIO"],
+      ],
+    },
+    nodes: [
+      { id: "1", type: "LoadImage", fields: [] },
+      { id: "2", type: "ImagePassThrough", fields: [] },
+      { id: "4", type: "SaveImage", fields: [] },
+      { id: "5", type: "LoadVideo", fields: [] },
+      { id: "6", type: "GetVideoComponents", fields: [] },
+      { id: "7", type: "ReferenceInputs", fields: [] },
+    ],
+    edges: [],
+    inputMappings: [],
+    outputMappings: [{ id: "result", name: "result", nodeId: "4", field: "outputs.images", mediaType: "image" }],
+    nodeMetadata: {
+      LoadImage: { fields: {}, widgetInputs: [{ name: "image" }] },
+      SaveImage: { fields: {}, widgetInputs: [{ name: "filename_prefix" }] },
+      LoadVideo: { fields: {}, widgetInputs: [{ name: "file" }] },
+    },
   };
 }
 

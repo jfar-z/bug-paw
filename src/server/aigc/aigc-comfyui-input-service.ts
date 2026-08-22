@@ -1,3 +1,5 @@
+import { Readable } from "node:stream";
+
 import type {
   AigcChannelConfig,
   AigcComfyUiInputFile,
@@ -5,11 +7,22 @@ import type {
   ComfyUiFieldMetadata,
   ComfyUiNodeMetadataSyncResult,
   ComfyUiNodeTypeMetadata,
+  ComfyUiWidgetInputMetadata,
 } from "../../shared/aigc-contracts";
 import type { CredentialService } from "../configuration/credential-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
 
 type RequestFunction = typeof fetch;
+
+/** 可安全转发给浏览器的 ComfyUI input 媒体响应。 */
+export interface AigcComfyUiInputContent {
+  stream: Readable;
+  status: 200 | 206;
+  mediaType: string;
+  contentLength?: string;
+  acceptRanges?: string;
+  contentRange?: string;
+}
 
 /** 从 ComfyUI 节点定义中获取 input 目录下的媒体候选文件。 */
 export class AigcComfyUiInputService {
@@ -31,6 +44,38 @@ export class AigcComfyUiInputService {
     if (!response.ok) throw new TypeError(`ComfyUI 节点定义读取失败，上游返回 ${response.status}`);
     const payload = await response.json();
     return inputFileOptions(payload, nodeClass, field);
+  }
+
+  /** 通过已配置渠道读取 input 文件，避免把 ComfyUI 内网地址暴露给浏览器。 */
+  async content(
+    channelId: string,
+    file: Pick<AigcComfyUiInputFile, "filename" | "subfolder" | "type">,
+    range?: string,
+  ): Promise<AigcComfyUiInputContent> {
+    validateInputFile(file);
+    if (range && !/^bytes=(?:\d+-\d*|-\d+)$/u.test(range)) throw new TypeError("ComfyUI input 分段参数无效");
+    const { channel, apiKey } = await this.resolveChannel(channelId);
+    const params = new URLSearchParams({ filename: file.filename, type: "input" });
+    if (file.subfolder) params.set("subfolder", file.subfolder);
+    const headers = requestHeaders(channel, apiKey, "*/*");
+    if (range) headers.Range = range;
+    const response = await this.request(`${channel.baseUrl}/view?${params.toString()}`, {
+      method: "GET",
+      headers,
+      redirect: "error",
+      signal: channel.timeoutMs === undefined ? undefined : AbortSignal.timeout(Math.max(1_000, channel.timeoutMs)),
+    });
+    if ((response.status !== 200 && response.status !== 206) || !response.body) {
+      throw new TypeError("ComfyUI input 预览读取失败");
+    }
+    return {
+      stream: Readable.fromWeb(response.body as never),
+      status: response.status,
+      mediaType: safeMediaType(response.headers.get("content-type")) ?? inferMediaType(file.filename),
+      ...(safeUnsignedInteger(response.headers.get("content-length")) ? { contentLength: response.headers.get("content-length")! } : {}),
+      ...(safeHeaderValue(response.headers.get("accept-ranges")) ? { acceptRanges: response.headers.get("accept-ranges")! } : {}),
+      ...(safeHeaderValue(response.headers.get("content-range")) ? { contentRange: response.headers.get("content-range")! } : {}),
+    };
   }
 
   /** 读取并宽容解析工作流引用的节点定义。 */
@@ -84,20 +129,58 @@ export function parseNodeMetadata(payload: unknown, nodeClass: string): ComfyUiN
   const nodeInfo = nodeInfoFromPayload(payload, nodeClass);
   if (!nodeInfo || !isRecord(nodeInfo.input)) return undefined;
   const fields: Record<string, ComfyUiFieldMetadata> = {};
+  const widgetInputs: ComfyUiWidgetInputMetadata[] = [];
   for (const [groupName, required] of [["required", true], ["optional", false]] as const) {
     const group = nodeInfo.input[groupName];
     if (!isRecord(group)) continue;
     for (const [name, definition] of Object.entries(group)) {
       const field = parseFieldMetadata(definition, required);
       if (field) fields[`inputs.${name.replace(/^inputs\./u, "")}`] = field;
+      const widgetInput = parseWidgetInputMetadata(name, definition);
+      if (widgetInput) widgetInputs.push(widgetInput);
     }
   }
   return {
     fields,
+    ...(widgetInputs.length > 0 ? { widgetInputs } : {}),
     ...(typeof nodeInfo.display_name === "string" ? { displayName: nodeInfo.display_name } : {}),
     ...(typeof nodeInfo.description === "string" ? { description: nodeInfo.description } : {}),
     ...(typeof nodeInfo.category === "string" ? { category: nodeInfo.category } : {}),
   };
+}
+
+/** 解析 UI 工作流中 widgets_values 的稳定字段顺序。 */
+function parseWidgetInputMetadata(name: string, definition: unknown): ComfyUiWidgetInputMetadata | undefined {
+  if (!Array.isArray(definition) || definition.length === 0) return undefined;
+  const normalizedName = name.replace(/^inputs\./u, "");
+  const typeDefinition = definition[0];
+  const options = isRecord(definition[1]) ? definition[1] : {};
+  if (typeDefinition === "COMFY_DYNAMICCOMBO_V3") {
+    const dynamicOptions = parseDynamicWidgetOptions(options.options);
+    return {
+      name: normalizedName,
+      ...(Object.keys(dynamicOptions).length > 0 ? { dynamicOptions } : {}),
+    };
+  }
+  const field = parseFieldMetadata(definition, true);
+  return field?.valueType ? { name: normalizedName } : undefined;
+}
+
+/** 提取动态控件每个选项对应的标量子控件顺序。 */
+function parseDynamicWidgetOptions(value: unknown): Record<string, string[]> {
+  if (!Array.isArray(value)) return {};
+  return Object.fromEntries(value.flatMap((option) => {
+    if (!isRecord(option) || typeof option.key !== "string" || !isRecord(option.inputs)) return [];
+    const names: string[] = [];
+    for (const groupName of ["required", "optional"] as const) {
+      const group = option.inputs[groupName];
+      if (!isRecord(group)) continue;
+      for (const [name, definition] of Object.entries(group)) {
+        if (parseFieldMetadata(definition, groupName === "required")?.valueType) names.push(name.replace(/^inputs\./u, ""));
+      }
+    }
+    return [[option.key, names]];
+  }));
 }
 
 /** 宽容提取 ComfyUI 字段类型、默认值与常见控件约束。 */
@@ -153,8 +236,8 @@ function isScalar(value: unknown): value is string | number | boolean {
 }
 
 /** 生成 ComfyUI 节点定义请求头。 */
-function requestHeaders(channel: AigcChannelConfig, apiKey?: string): Record<string, string> {
-  const headers: Record<string, string> = { Accept: "application/json" };
+function requestHeaders(channel: AigcChannelConfig, apiKey?: string, accept = "application/json"): Record<string, string> {
+  const headers: Record<string, string> = { Accept: accept };
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
   return headers;
 }
@@ -223,6 +306,31 @@ function inferMediaType(fileName: string): string {
   if (["wav", "mp3", "flac", "ogg", "m4a", "aac"].includes(extension)) return "audio/mpeg";
   if (["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"].includes(extension)) return "image/png";
   return "application/octet-stream";
+}
+
+/** 校验代理参数只描述一个 ComfyUI input 文件，禁止控制字符进入上游请求。 */
+function validateInputFile(file: Pick<AigcComfyUiInputFile, "filename" | "subfolder" | "type">): void {
+  if (!safeFilePart(file.filename) || (file.subfolder !== undefined && !safeFilePart(file.subfolder))) {
+    throw new TypeError("ComfyUI input 文件参数无效");
+  }
+  if (file.type !== undefined && file.type !== "input") throw new TypeError("仅支持预览 ComfyUI input 文件");
+}
+
+function safeFilePart(value: string): boolean {
+  return value.length > 0 && value.length <= 1_024 && !/[\0\r\n]/u.test(value);
+}
+
+function safeMediaType(value: string | null): string | undefined {
+  if (!value || !/^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:\s*;\s*[a-z0-9!#$&^_.+-]+=[a-z0-9!#$&^_.+"'():-]+)*$/iu.test(value)) return undefined;
+  return value;
+}
+
+function safeUnsignedInteger(value: string | null): boolean {
+  return value !== null && /^\d+$/u.test(value);
+}
+
+function safeHeaderValue(value: string | null): boolean {
+  return value !== null && value.length <= 256 && !/[\0\r\n]/u.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

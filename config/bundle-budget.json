@@ -21,6 +21,10 @@
         "label": "AIGC 产物查看",
         "gzipBytes": 4096
       },
+      "src/web/pages/aigc-media-editor-page.tsx": {
+        "label": "AIGC 轻剪辑",
+        "gzipBytes": 4096
+      },
       "src/web/pages/aigc-public-directory-page.tsx": {
         "label": "AIGC 公开目录",
         "gzipBytes": 7168

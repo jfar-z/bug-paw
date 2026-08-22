@@ -19,6 +19,13 @@ import type { PendingQuestionProjection, SubmitQuestionAnswers } from "../shared
 import type { QuestionAnswerSubmissionResult } from "../shared/question-response-protocol";
 import type { AvatarCropArea } from "../shared/avatar-contracts";
 import type {
+  AigcMediaProject,
+  AigcMediaProjectCreateInput,
+  AigcMediaProjectDocument,
+  AigcMediaProjectUpdateInput,
+  AigcMediaRenderJob,
+} from "../shared/aigc-media-editor-contracts";
+import type {
   AigcChannelInput,
   AigcComfyUiInputFile,
   AigcCreateChannelInput,
@@ -31,6 +38,7 @@ import type {
   AigcPublicFileDocument,
   AigcPublicFileSummary,
   AigcRunRequest,
+  AigcRuntimeChannelSummary,
   AigcSettingsDocument,
   AigcTaskDocument,
   AigcTaskRecord,
@@ -186,9 +194,22 @@ export function aigcInputAssetUrl(assetId: string): string {
   return apiV1Url(`/api/aigc/inputs/${encodeURIComponent(assetId)}`);
 }
 
+/** 生成不暴露 ComfyUI 渠道地址的同源 input 媒体预览地址。 */
+export function aigcComfyUiInputContentUrl(channelId: string, file: AigcComfyUiInputFile): string {
+  const query = new URLSearchParams({ channelId, filename: file.filename, type: file.type ?? "input" });
+  if (file.subfolder) query.set("subfolder", file.subfolder);
+  return apiV1Url(`/api/aigc/comfyui-input-files/content?${query.toString()}`);
+}
+
 /** 生成 AIGC 图片产物的服务端缩略图地址。 */
 export function aigcTaskThumbnailUrl(taskId: string, assetId: string): string {
   return apiV1Url(`/api/aigc/tasks/${encodeURIComponent(taskId)}/assets/${encodeURIComponent(assetId)}/thumbnail`);
+}
+
+/** 生成轻剪辑导出结果的预览或下载地址。 */
+export function aigcMediaRenderUrl(renderId: string, download = false): string {
+  const suffix = download ? "?download=1" : "";
+  return apiV1Url(`/api/aigc/media-renders/${encodeURIComponent(renderId)}/output${suffix}`);
 }
 
 /** 根据公开文件稳定地址生成预览或下载链接。 */
@@ -318,6 +339,7 @@ export const api = {
   updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getAigcChannels: () => request<AigcSettingsDocument>("/api/capabilities/aigc/channels"),
+  getAigcRuntimeChannels: () => request<{ channels: AigcRuntimeChannelSummary[] }>("/api/aigc/runtime-channels"),
   createAigcChannel: (input: AigcCreateChannelInput) => request<AigcSettingsDocument>("/api/capabilities/aigc/channels", { method: "POST", body: JSON.stringify(input) }),
   updateAigcChannel: (id: string, input: AigcUpdateChannelInput) => request<AigcSettingsDocument>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
   deleteAigcChannel: (id: string, configRevision: string, credentialRevision: string) => request<void>(`/api/capabilities/aigc/channels/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ configRevision, credentialRevision }) }),
@@ -336,6 +358,14 @@ export const api = {
   getAigcTasks: () => request<AigcTaskDocument>("/api/aigc/tasks"),
   getAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}`),
   getAigcOutputs: (kind: AigcOutputKind, sort: "asc" | "desc", page: number, pageSize = 24) => request<AigcOutputPage>(`/api/aigc/outputs?kind=${encodeURIComponent(kind)}&sort=${sort}&page=${page}&pageSize=${pageSize}`),
+  getAigcMediaProjects: () => request<AigcMediaProjectDocument>("/api/aigc/media-projects"),
+  getAigcMediaProject: (id: string) => request<AigcMediaProject>(`/api/aigc/media-projects/${encodeURIComponent(id)}`),
+  createAigcMediaProject: (input: AigcMediaProjectCreateInput) => request<AigcMediaProject>("/api/aigc/media-projects", { method: "POST", body: JSON.stringify(input) }),
+  updateAigcMediaProject: (id: string, input: AigcMediaProjectUpdateInput) => request<AigcMediaProject>(`/api/aigc/media-projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  deleteAigcMediaProject: (id: string) => request<void>(`/api/aigc/media-projects/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  renderAigcMediaProject: (id: string) => request<AigcMediaRenderJob>(`/api/aigc/media-projects/${encodeURIComponent(id)}/render`, { method: "POST" }),
+  getAigcMediaRender: (id: string) => request<AigcMediaRenderJob>(`/api/aigc/media-renders/${encodeURIComponent(id)}`),
+  cancelAigcMediaRender: (id: string) => request<AigcMediaRenderJob>(`/api/aigc/media-renders/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteAigcTask: (id: string) => request<void>(`/api/aigc/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
   runAigcInterface: (input: AigcRunRequest) => request<AigcTaskRecord>("/api/aigc/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),

@@ -65,7 +65,11 @@ describe("WorkspaceBrowser", () => {
 
     expect(await screen.findByLabelText("readme.md 预览")).toHaveClass("workspace-file-preview--overlay");
     expect(container.querySelector("tr.is-reference-target")).toHaveTextContent("readme.md");
+    expect(container.querySelector(".workspace-table-wrap")).toHaveAttribute("hidden");
     expect(screen.queryByText("搜索当前 Agent 的全部文件")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "返回文件列表" }));
+    expect(container.querySelector(".workspace-table-wrap")).not.toHaveAttribute("hidden");
   });
 
   it("快捷资源管理的滚动区保留横划关闭手势", async () => {

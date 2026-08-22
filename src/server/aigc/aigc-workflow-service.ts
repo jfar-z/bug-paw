@@ -5,6 +5,7 @@ import type {
   AigcWorkflowDetail,
   AigcWorkflowDetailDocument,
   AigcWorkflowDocument,
+  AigcWorkflowInputGroup,
   AigcWorkflowInputMapping,
   AigcWorkflowInputType,
   AigcWorkflowOutputMapping,
@@ -14,7 +15,9 @@ import type {
   ComfyUiFieldMetadata,
   ComfyUiNode,
   ComfyUiNodeMetadata,
+  ComfyUiWidgetInputMetadata,
 } from "../../shared/aigc-contracts";
+import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 
@@ -75,10 +78,14 @@ export class AigcWorkflowService {
     const index = settings.workflows.findIndex((workflow) => workflow.id === id);
     if (index < 0) throw new Error("AIGC 工作流不存在");
     const previous = settings.workflows[index];
+    const inputMappings = normalizeInputMappings(input.inputMappings, previous.nodes, previous.edges, previous.nodeMetadata);
     const next = {
       ...previous,
       name: normalizeName(input.name),
-      inputMappings: normalizeInputMappings(input.inputMappings, previous.nodes, previous.nodeMetadata),
+      inputMappings,
+      inputGroups: input.inputGroups === undefined
+        ? normalizeInputGroups(previous.inputGroups ?? [], inputMappings, previous.nodes)
+        : normalizeInputGroups(input.inputGroups, inputMappings, previous.nodes),
       outputMappings: normalizeOutputMappings(input.outputMappings, previous.nodes),
       updatedAt: new Date().toISOString(),
     };
@@ -142,6 +149,7 @@ export class AigcWorkflowService {
     if (bytes > MAX_WORKFLOW_JSON_BYTES) throw new TypeError("ComfyUI 工作流文件不能超过 4 MiB");
     const parsed = this.parser.parse(raw);
     const now = new Date().toISOString();
+    const inputMappings = normalizeInputMappings(input.inputMappings, parsed.nodes, parsed.edges);
     return {
       id,
       name,
@@ -150,7 +158,8 @@ export class AigcWorkflowService {
       raw,
       nodes: parsed.nodes,
       edges: parsed.edges,
-      inputMappings: normalizeInputMappings(input.inputMappings, parsed.nodes),
+      inputMappings,
+      inputGroups: normalizeInputGroups(input.inputGroups, inputMappings, parsed.nodes),
       outputMappings: normalizeOutputMappings(input.outputMappings, parsed.nodes),
       createdAt: now,
       updatedAt: now,
@@ -176,6 +185,7 @@ function toSummary(workflow: StoredAigcWorkflow): AigcWorkflowSummary {
 
 /** 复制详情对象，避免调用方修改持久化内容。 */
 function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
+  const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
   return {
     id: workflow.id,
     name: workflow.name,
@@ -184,8 +194,10 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
     nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
     edges: workflow.edges.map((edge) => ({ ...edge })),
     inputMappings: workflow.inputMappings.map(cloneInputMapping),
+    inputGroups: (workflow.inputGroups ?? []).map(cloneInputGroup),
     outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
     ...(workflow.nodeMetadata ? { nodeMetadata: cloneNodeMetadata(workflow.nodeMetadata) } : {}),
+    ...(Object.keys(resolvedFieldMetadata).length ? { resolvedFieldMetadata } : {}),
     ...(workflow.nodeMetadataSyncedAt ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
@@ -204,6 +216,7 @@ function normalizeSettings(value: unknown): StoredAigcWorkflows {
         nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
         edges: workflow.edges.map((edge) => ({ ...edge })),
         inputMappings: workflow.inputMappings.map(cloneInputMapping),
+        inputGroups: Array.isArray(workflow.inputGroups) ? workflow.inputGroups.map(cloneInputGroup) : [],
         outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
         ...(isRecord(workflow.nodeMetadata) ? { nodeMetadata: normalizeNodeMetadata(workflow.nodeMetadata) } : {}),
         ...(typeof workflow.nodeMetadataSyncedAt === "string" ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
@@ -223,28 +236,40 @@ function normalizeFileName(value: string): string {
   return name;
 }
 
-function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[], nodeMetadata?: ComfyUiNodeMetadata): AigcWorkflowInputMapping[] {
+function normalizeInputMappings(value: unknown, nodes: ComfyUiNode[], edges: ComfyUiEdge[], nodeMetadata?: ComfyUiNodeMetadata): AigcWorkflowInputMapping[] {
   if (!Array.isArray(value)) return [];
   const nodeIds = new Set(nodes.map((node) => node.id));
+  const resolvedFieldMetadata = resolveWorkflowFieldMetadata({ nodes, edges, nodeMetadata });
   const normalized = value.map((mapping) => {
     if (!isRecord(mapping)) throw new TypeError("工作流入参映射格式无效");
     const mappingNodeId = String(mapping.nodeId);
     if (!nodeIds.has(mappingNodeId)) throw new TypeError("工作流入参引用了不存在的节点");
     if (typeof mapping.name !== "string" || !mapping.name.trim() || mapping.name.length > 80) throw new TypeError("工作流入参名称长度无效");
-    if (typeof mapping.field !== "string" || !mapping.field.startsWith("inputs.") || mapping.field.includes("\0")) throw new TypeError("工作流入参字段路径无效");
+    if (typeof mapping.field !== "string") throw new TypeError("工作流入参字段路径无效");
+    const mappingField = mapping.field;
+    const mappingNode = nodes.find((node) => node.id === mappingNodeId);
+    const isInputField = mappingField.startsWith("inputs.");
+    const isWidgetField = mappingField.startsWith("widgets_values.")
+      && mappingNode?.fields.some((field) => field.kind === "widget" && field.name === mappingField);
+    if ((!isInputField && !isWidgetField) || mappingField.includes("\0")) throw new TypeError("工作流入参字段路径无效");
     const type = mapping.type as AigcWorkflowInputType;
     if (!INPUT_TYPES.has(type)) throw new TypeError("工作流入参类型无效");
     const enumOptions = type === "enum" ? normalizeEnumOptions(mapping.enumOptions) : undefined;
     const required = mapping.required !== false;
     const activation = normalizeInputActivation(mapping.activation, mappingNodeId, required, nodeIds);
     const defaultValue = mapping.defaultValue !== undefined ? normalizeDefaultValue(type, mapping.defaultValue, enumOptions) : undefined;
-    const fieldMetadata = nodeMetadata?.[nodes.find((node) => node.id === mappingNodeId)?.type ?? ""]?.fields[mapping.field];
+    const fieldMetadata = resolvedFieldMetadata[mappingNodeId]?.[mappingField]
+      ?? nodeMetadata?.[mappingNode?.type ?? ""]?.fields[mappingField];
+    const conflict = metadataConflict(fieldMetadata);
+    if (conflict) {
+      throw new TypeError(`工作流入参 ${mapping.name.trim()} 无法解析：${conflict}`);
+    }
     if (defaultValue !== undefined) validateMetadataValue(mapping.name.trim(), type, defaultValue, fieldMetadata, enumOptions);
     return {
       id: typeof mapping.id === "string" && mapping.id ? mapping.id : randomUUID(),
       name: mapping.name.trim(),
       nodeId: mappingNodeId,
-      field: mapping.field,
+      field: mappingField,
       type,
       required,
       ...(enumOptions ? { enumOptions } : {}),
@@ -293,6 +318,58 @@ function cloneInputMapping(mapping: AigcWorkflowInputMapping): AigcWorkflowInput
     ...(mapping.enumOptions ? { enumOptions: [...mapping.enumOptions] } : {}),
     ...(mapping.activation ? { activation: { ...mapping.activation, nodeIds: [...mapping.activation.nodeIds] } } : {}),
   };
+}
+
+/** 校验参考输入组与底层映射的对应关系和稳定顺序。 */
+function normalizeInputGroups(value: unknown, mappings: AigcWorkflowInputMapping[], nodes: ComfyUiNode[]): AigcWorkflowInputGroup[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new TypeError("工作流参考输入组格式无效");
+  const mappingById = new Map(mappings.map((mapping) => [mapping.id, mapping]));
+  const mappingIndex = new Map(mappings.map((mapping, index) => [mapping.id, index]));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const claimedMappingIds = new Set<string>();
+  const groupIds = new Set<string>();
+  return value.map((group) => {
+    if (!isRecord(group)) throw new TypeError("工作流参考输入组格式无效");
+    const id = typeof group.id === "string" && group.id ? group.id : randomUUID();
+    if (groupIds.has(id)) throw new TypeError("工作流参考输入组标识不能重复");
+    groupIds.add(id);
+    const label = typeof group.label === "string" ? group.label.trim() : "";
+    if (!label || label.length > 80) throw new TypeError("工作流参考输入组名称长度无效");
+    if (group.type !== "image" && group.type !== "video" && group.type !== "audio") {
+      throw new TypeError("工作流参考输入组类型无效");
+    }
+    if (typeof group.boundaryNodeId !== "string" || !nodeIds.has(group.boundaryNodeId)) {
+      throw new TypeError("工作流参考输入组引用了不存在的汇总节点");
+    }
+    if (typeof group.targetFieldPrefix !== "string" || !group.targetFieldPrefix.startsWith("inputs.") || group.targetFieldPrefix.includes("\0")) {
+      throw new TypeError("工作流参考输入组接口路径无效");
+    }
+    if (!Array.isArray(group.mappingIds) || group.mappingIds.length === 0) {
+      throw new TypeError("工作流参考输入组必须包含入参映射");
+    }
+    const mappingIds = group.mappingIds.map(String);
+    if (new Set(mappingIds).size !== mappingIds.length) throw new TypeError("工作流参考输入组包含重复入参");
+    for (const mappingId of mappingIds) {
+      const mapping = mappingById.get(mappingId);
+      if (!mapping) throw new TypeError("工作流参考输入组引用了不存在的入参");
+      if (claimedMappingIds.has(mappingId)) throw new TypeError("工作流入参不能同时属于多个参考输入组");
+      if (mapping.type !== group.type || mapping.required || !mapping.activation) {
+        throw new TypeError("参考输入组成员必须是同类型的可选条件入参");
+      }
+      claimedMappingIds.add(mappingId);
+    }
+    const indices = mappingIds.map((mappingId) => mappingIndex.get(mappingId) ?? -1);
+    if (indices.some((index, position) => position > 0 && index !== indices[position - 1] + 1)) {
+      throw new TypeError("参考输入组成员必须在入参列表中连续排列");
+    }
+    return { id, label, type: group.type, mappingIds, boundaryNodeId: group.boundaryNodeId, targetFieldPrefix: group.targetFieldPrefix };
+  });
+}
+
+/** 深复制参考输入组的成员顺序。 */
+function cloneInputGroup(group: AigcWorkflowInputGroup): AigcWorkflowInputGroup {
+  return { ...group, mappingIds: [...group.mappingIds] };
 }
 
 function normalizeOutputMappings(value: unknown, nodes: ComfyUiNode[]): AigcWorkflowOutputMapping[] {
@@ -353,10 +430,16 @@ export function validateMetadataValue(
     if (metadata?.min !== undefined && value < metadata.min) throw new TypeError(`参数 ${name} 不能小于 ${metadata.min}`);
     if (metadata?.max !== undefined && value > metadata.max) throw new TypeError(`参数 ${name} 不能大于 ${metadata.max}`);
   }
-  const allowed = enumOptions ?? metadata?.enumOptions;
+  // 节点定义是权威值域，映射候选仅用于定义缺失时的手动兜底。
+  const allowed = metadata?.enumOptions ?? enumOptions;
   if (type === "enum" && allowed && !allowed.some((option) => Object.is(option, value))) {
     throw new TypeError(`参数 ${name} 不在允许的枚举候选中`);
   }
+}
+
+/** 从兼容旧格式的字段元数据中安全读取动态推导冲突。 */
+function metadataConflict(metadata?: ComfyUiFieldMetadata): string | undefined {
+  return metadata && "conflict" in metadata && typeof metadata.conflict === "string" ? metadata.conflict : undefined;
 }
 
 /** 宽容恢复旧存储中的节点元数据，只保留已知安全字段。 */
@@ -371,6 +454,7 @@ function normalizeNodeMetadata(value: Record<string, unknown>): ComfyUiNodeMetad
     }
     result[nodeClass] = {
       fields,
+      ...(Array.isArray(nodeValue.widgetInputs) ? { widgetInputs: normalizeWidgetInputs(nodeValue.widgetInputs) } : {}),
       ...(typeof nodeValue.displayName === "string" ? { displayName: nodeValue.displayName } : {}),
       ...(typeof nodeValue.description === "string" ? { description: nodeValue.description } : {}),
       ...(typeof nodeValue.category === "string" ? { category: nodeValue.category } : {}),
@@ -383,11 +467,44 @@ function normalizeNodeMetadata(value: Record<string, unknown>): ComfyUiNodeMetad
 function cloneNodeMetadata(value: ComfyUiNodeMetadata): ComfyUiNodeMetadata {
   return Object.fromEntries(Object.entries(value).map(([nodeClass, node]) => [nodeClass, {
     ...node,
+    ...(node.widgetInputs ? { widgetInputs: node.widgetInputs.map(cloneWidgetInput) } : {}),
     fields: Object.fromEntries(Object.entries(node.fields).map(([field, metadata]) => [field, {
       ...metadata,
       ...(metadata.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
     }])),
   }]));
+}
+
+/** 宽容恢复控件字段顺序，并丢弃异常深度或非法字段名。 */
+function normalizeWidgetInputs(value: unknown[]): ComfyUiWidgetInputMetadata[] {
+  return value.flatMap((item) => {
+    if (!isRecord(item) || !safeWidgetFieldName(item.name)) return [];
+    const dynamicOptions = isRecord(item.dynamicOptions)
+      ? Object.fromEntries(Object.entries(item.dynamicOptions).flatMap(([option, fields]) => {
+        if (!option || option.length > 200 || !Array.isArray(fields)) return [];
+        const normalizedFields = fields.filter(safeWidgetFieldName);
+        return normalizedFields.length === fields.length ? [[option, normalizedFields]] : [];
+      }))
+      : undefined;
+    return [{
+      name: item.name,
+      ...(dynamicOptions && Object.keys(dynamicOptions).length > 0 ? { dynamicOptions } : {}),
+    }];
+  });
+}
+
+/** 深复制单个控件描述，隔离动态选项数组。 */
+function cloneWidgetInput(value: ComfyUiWidgetInputMetadata): ComfyUiWidgetInputMetadata {
+  return {
+    name: value.name,
+    ...(value.dynamicOptions ? {
+      dynamicOptions: Object.fromEntries(Object.entries(value.dynamicOptions).map(([option, fields]) => [option, [...fields]])),
+    } : {}),
+  };
+}
+
+function safeWidgetFieldName(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 240 && !/[\0\r\n]/u.test(value);
 }
 
 function isScalar(value: unknown): value is string | number | boolean {
