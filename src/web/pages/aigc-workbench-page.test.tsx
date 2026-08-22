@@ -62,6 +62,19 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(channelsSource).toContain('import "../aigc.css";');
   });
 
+  it("各类真实媒体预览均按容器双轴等比适配", async () => {
+    const [chatStyles, aigcStyles, editorStyles] = await Promise.all([
+      readFile("src/web/chat.css", "utf8"),
+      readFile("src/web/aigc.css", "utf8"),
+      readFile("src/web/aigc-media-editor.css", "utf8"),
+    ]);
+
+    expect(chatStyles).toMatch(/\.media-lightbox__stage video\s*\{[^}]*width:\s*auto;[^}]*height:\s*auto;[^}]*max-width:\s*100%;[^}]*max-height:\s*100%;[^}]*object-fit:\s*contain;/s);
+    expect(aigcStyles).toMatch(/\.aigc-run-preview-stage img,[^{]*\.aigc-run-preview-stage video\s*\{[^}]*width:\s*auto;[^}]*height:\s*auto;[^}]*max-width:\s*100%;[^}]*max-height:\s*100%;[^}]*object-fit:\s*contain;/s);
+    expect(aigcStyles).toMatch(/\.aigc-asset-card__preview :is\(img, video\)\s*\{[^}]*width:\s*auto;[^}]*height:\s*auto;[^}]*max-width:\s*100%;[^}]*max-height:\s*320px;[^}]*object-fit:\s*contain;/s);
+    expect(editorStyles).toMatch(/\.aigc-media-editor-preview__stage > img,[^{]*\.aigc-media-editor-rendered-preview video\s*\{[^}]*width:\s*auto;[^}]*height:\s*auto;[^}]*max-width:\s*100%;[^}]*max-height:\s*100%;[^}]*object-fit:\s*contain;/s);
+  });
+
   it("选择已启用接口后展示提示词表单并提交生成任务", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/v1/aigc/interfaces") {
