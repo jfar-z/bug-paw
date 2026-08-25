@@ -59,6 +59,9 @@ export class AigcTaskService {
     const item = await this.dependencies.interfaces.get(request.interfaceId);
     if (!item) throw new Error("AIGC 接口不存在");
     if (!item.enabled) throw new Error("AIGC 接口未启用");
+    if (item.protocol !== "comfyui" && hasComfyUiInput(request.inputs)) {
+      throw new TypeError("仅 ComfyUI 接口支持 ComfyUI input");
+    }
     const now = new Date().toISOString();
     const task = await this.dependencies.repository.create({
       id: randomUUID(),
@@ -215,6 +218,11 @@ export class AigcTaskService {
     const updated = await this.dependencies.repository.update(id, patch);
     return updated;
   }
+}
+
+/** 判断任务是否包含只能由 ComfyUI 直接引用的 input 目录文件。 */
+function hasComfyUiInput(inputs: Record<string, unknown>): boolean {
+  return Object.values(inputs).some((value) => typeof value === "object" && value !== null && "source" in value && value.source === "comfyui_input");
 }
 
 /** 将任务记录映射为列表摘要。 */

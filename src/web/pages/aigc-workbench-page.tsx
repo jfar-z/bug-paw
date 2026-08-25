@@ -402,6 +402,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   }
 
   function changeMediaSource(field: AigcRunFieldDefinition, source: AigcRunMediaSource) {
+    if (source === "comfyui_input" && selected?.protocol !== "comfyui") return;
     setMediaSources((current) => ({ ...current, [field.name]: source }));
     setValues((current) => {
       const next = { ...current };
@@ -441,6 +442,7 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
   }
 
   function selectComfyInputFile(field: AigcRunFieldDefinition, file: AigcComfyUiInputFile) {
+    if (selected?.protocol !== "comfyui") return;
     setValues((current) => ({
       ...current,
       [field.name]: {
@@ -498,9 +500,10 @@ function AigcRunPage({ preferredInterfaceId }: { preferredInterfaceId?: string }
         uploading={uploading === field.name}
         publicFiles={publicFiles}
         mediaSource={mediaSources[field.name] ?? "upload"}
+        allowComfyInput={selected?.protocol === "comfyui"}
         comfyInputFiles={comfyInputFiles[field.name] ?? []}
         comfyInputLoading={comfyInputLoading[field.name] === true}
-        comfyChannelId={selected?.channelId}
+        comfyChannelId={selected?.protocol === "comfyui" ? selected.channelId : undefined}
         onChange={(value) => setValues((current) => ({ ...current, [field.name]: value }))}
         onFile={(file) => void uploadFile(field, file)}
         onPublicFile={(file) => void uploadPublicFile(field, file)}
@@ -748,6 +751,7 @@ function AigcRunField(props: {
   uploading: boolean;
   publicFiles: AigcPublicFileSummary[];
   mediaSource: AigcRunMediaSource;
+  allowComfyInput: boolean;
   comfyInputFiles: AigcComfyUiInputFile[];
   comfyInputLoading: boolean;
   comfyChannelId?: string;
@@ -765,6 +769,7 @@ function AigcRunField(props: {
     uploading,
     publicFiles,
     mediaSource,
+    allowComfyInput,
     comfyInputFiles,
     comfyInputLoading,
     comfyChannelId,
@@ -835,7 +840,7 @@ function AigcRunField(props: {
         <div className="aigc-media-input__controls">
           <span>{field.label}{field.required ? " *" : ""}</span>
           <div className="aigc-media-source-tabs" role="tablist" aria-label={`${field.label}输入来源`}>
-            {mediaSourceOptions.map((option) => (
+            {mediaSourceOptions.filter((option) => option.value !== "comfyui_input" || allowComfyInput).map((option) => (
               <button
                 key={option.value}
                 type="button"
@@ -870,7 +875,7 @@ function AigcRunField(props: {
               />
             </label>
           ) : null}
-          {mediaSource === "comfyui_input" ? (
+          {allowComfyInput && mediaSource === "comfyui_input" ? (
             <label>
               <span>ComfyUI input</span>
               <ConfigurationSelect
