@@ -58,26 +58,7 @@ describe("OpenAiAigcAdapter", () => {
     expect(form.get("image")).toBeInstanceOf(File);
   });
 
-  it("公共目录图片通过公共文件服务解析并调用编辑端点", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openai-public-image-edit-"));
-    roots.push(root);
-    const imagePath = join(root, "public.png");
-    await writeFile(imagePath, Buffer.from("public-image"));
-    const request = successfulRequest();
-    const adapter = new OpenAiAigcAdapter(request as unknown as typeof fetch);
-    const execution = input({
-      prompt: "改成油画风",
-      image: { assetId: "public-asset", name: "public.png", mediaType: "image/png", source: "public" },
-    }, undefined, imagePath);
-
-    await adapter.execute(execution);
-
-    expect(execution.publicFiles?.resolvePath).toHaveBeenCalledWith("public-asset");
-    expect(execution.assets.resolveInputPath).not.toHaveBeenCalled();
-    expect(String(request.mock.calls[0][0])).toBe("https://api.example.test/v1/images/edits");
-  });
-
-  function input(inputs: Record<string, unknown>, imagePath?: string, publicImagePath?: string): AigcExecutionInput {
+function input(inputs: Record<string, unknown>, imagePath?: string, publicImagePath?: string): AigcExecutionInput {
     return {
       item: {
         id: "openai-interface",

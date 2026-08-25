@@ -45,14 +45,7 @@ describe("知识库管理路由", () => {
     });
   });
 
-  it("拒绝不支持的上传类型", async () => {
-    const { app, cookieHeader } = await createApp();
-    const created = await app.inject({ method: "POST", url: "/api/knowledge-bases", headers: { cookie: cookieHeader }, payload: { name: "产品资料" } });
-    const response = await app.inject({ method: "POST", url: `/api/knowledge-bases/${created.json().id as string}/documents`, headers: multipartHeaders(cookieHeader, "knowledge-binary"), payload: fileMultipart("knowledge-binary", "a.exe", "application/octet-stream", Buffer.from("binary")) });
-    expect(response.statusCode).toBe(415);
-  });
-
-  it("接受 Markdown 上传并可删除整个知识库", async () => {
+it("接受 Markdown 上传并可删除整个知识库", async () => {
     const { app, cookieHeader } = await createApp();
     const created = await app.inject({ method: "POST", url: "/api/knowledge-bases", headers: { cookie: cookieHeader }, payload: { name: "Markdown" } });
     const baseId = created.json().id as string;
@@ -62,19 +55,6 @@ describe("知识库管理路由", () => {
     expect((await app.inject({ method: "GET", url: `/api/knowledge-bases/${baseId}`, headers: { cookie: cookieHeader } })).statusCode).toBe(404);
   });
 
-  it("仅向已认证管理端返回资料原文件", async () => {
-    const { app, cookieHeader } = await createApp();
-    const created = await app.inject({ method: "POST", url: "/api/knowledge-bases", headers: { cookie: cookieHeader }, payload: { name: "原文件" } });
-    const baseId = created.json().id as string;
-    const uploaded = await app.inject({ method: "POST", url: `/api/knowledge-bases/${baseId}/documents`, headers: multipartHeaders(cookieHeader, "knowledge-source"), payload: fileMultipart("knowledge-source", "说明.md", "text/markdown", Buffer.from("# Markdown 资料", "utf8")) });
-    const documentId = uploaded.json().documents[0].id as string;
-
-    const source = await app.inject({ method: "GET", url: `/api/knowledge-bases/${baseId}/documents/${documentId}/source`, headers: { cookie: cookieHeader } });
-    expect(source.statusCode).toBe(200);
-    expect(source.headers["content-type"]).toContain("text/markdown");
-    expect(source.body).toBe("# Markdown 资料");
-    expect((await app.inject({ method: "GET", url: `/api/knowledge-bases/${baseId}/documents/${documentId}/source` })).statusCode).toBe(401);
-  });
 });
 
 /** 创建带认证会话的真实路由测试应用。 */

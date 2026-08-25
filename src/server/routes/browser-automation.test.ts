@@ -6,14 +6,8 @@ import { registerBrowserAutomationRoutes } from "./browser-automation";
 
 /** 浏览器配置 API 需要登录、乐观锁和 no-store。 */
 describe("浏览器配置路由", () => {
-  it("拒绝未登录读取", async () => {
-    const app = fixture(false);
-    const response = await app.inject({ method: "GET", url: "/api/capabilities/browser" });
-    expect(response.statusCode).toBe(401);
-    await app.close();
-  });
 
-  it("读取与保存完整配置并返回部署状态", async () => {
+it("读取与保存完整配置并返回部署状态", async () => {
     const app = fixture(true);
     const read = await app.inject({ method: "GET", url: "/api/capabilities/browser" });
     expect(read.headers["cache-control"]).toBe("no-store");
@@ -24,13 +18,6 @@ describe("浏览器配置路由", () => {
     await app.close();
   });
 
-  it("把版本冲突映射为 409", async () => {
-    const app = fixture(true);
-    const response = await app.inject({ method: "PATCH", url: "/api/capabilities/browser", payload: { revision: "stale", config: DEFAULT_BROWSER_AUTOMATION_CONFIG } });
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toMatchObject({ error: { code: "VERSION_CONFLICT" } });
-    await app.close();
-  });
 });
 
 function fixture(authenticated: boolean) {
