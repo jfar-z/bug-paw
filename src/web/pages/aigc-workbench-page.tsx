@@ -1,10 +1,14 @@
-import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Download, File, Film, GitFork, Image as ImageIcon, Play, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Download, File, Film, GitFork, Image as ImageIcon, Play, Plus, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type {
   AigcChannelSummary,
   AigcComfyUiInputFile,
   AigcInterfaceCapability,
   AigcInterfaceInput,
+  AigcOpenAiInterfaceConfig,
+  AigcOpenAiParameterDefinition,
+  AigcOpenAiParameterType,
+  AigcOpenAiParameterValue,
   AigcInterfaceRecord,
   AigcInterfaceProtocol,
   AigcPublicFileSummary,
@@ -27,6 +31,7 @@ import type {
   AigcWorkflowSummary,
   ComfyUiFieldMetadata,
 } from "../../shared/aigc-contracts";
+import { createDefaultOpenAiParameters, resolveOpenAiParameterDefinitions } from "../../shared/aigc-openai-parameters";
 import { aigcComfyUiInputContentUrl, aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
@@ -885,6 +890,7 @@ function AigcRunField(props: {
               />
             </label>
           ) : null}
+          {field.help ? <small className="configuration-help">{field.help}</small> : null}
         </div>
         <div className="aigc-media-input__preview">
           <MediaInputPreview
@@ -1042,9 +1048,25 @@ function runFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): Ai
   if (item.protocol === "grok") return grokRunFields(item);
   const fields: AigcRunFieldDefinition[] = [{ name: "prompt", label: "提示词", type: "string", required: true, placeholder: "描述要生成的画面或图片" }];
   if (item.capability === "image-edit") {
-    fields.push({ name: "image", label: "图片", type: "image", required: true });
+    fields.push({ name: "image", label: "参考图片（可选）", type: "image", required: false, help: "不提供图片时执行文生图，提供图片时执行图片编辑。" });
+  }
+  for (const parameter of resolveOpenAiParameterDefinitions(item.config as AigcOpenAiInterfaceConfig)) {
+    fields.push(openAiParameterRunField(parameter));
   }
   return fields;
+}
+
+/** 将 OpenAI 参数定义转换为创作台字段。 */
+function openAiParameterRunField(parameter: AigcOpenAiParameterDefinition): AigcRunFieldDefinition {
+  return {
+    name: parameter.name,
+    label: parameter.name,
+    type: parameter.enumValues?.length ? "enum" : parameter.type === "integer" ? "int" : parameter.type === "number" ? "double" : parameter.type === "boolean" ? "bool" : "string",
+    required: false,
+    ...(parameter.enumValues?.length ? { options: parameter.enumValues } : {}),
+    ...(parameter.defaultValue !== undefined ? { placeholder: String(parameter.defaultValue) } : {}),
+    ...(parameter.description ? { help: parameter.description } : {}),
+  };
 }
 
 type AigcRunDisplayItem =
@@ -1126,6 +1148,11 @@ function initialGrokOrOpenAiValues(item: AigcInterfaceRecord): Record<string, Ai
     if (config.size) values.size = config.size;
     if (config.duration !== undefined) values.duration = config.duration;
   }
+  if (item.protocol === "openai") {
+    for (const parameter of resolveOpenAiParameterDefinitions(item.config as AigcOpenAiInterfaceConfig)) {
+      if (parameter.defaultValue !== undefined) values[parameter.name] = parameter.defaultValue;
+    }
+  }
   return values;
 }
 
@@ -1201,6 +1228,103 @@ function interfaceInputFromRecord(item: AigcInterfaceRecord): AigcInterfaceInput
     toolPublishEnabled: item.toolPublishEnabled,
     config: item.config as AigcInterfaceInput["config"],
   };
+}
+
+/** 编辑 OpenAI 兼容渠道的参数名、类型、枚举、默认值与说明。 */
+function OpenAiParameterEditor({ config, onChange }: {
+  config: AigcOpenAiInterfaceConfig;
+  onChange: (config: AigcOpenAiInterfaceConfig) => void;
+}) {
+  const parameters = resolveOpenAiParameterDefinitions(config);
+
+  function replace(next: AigcOpenAiParameterDefinition[]) {
+    onChange({ model: config.model, parameters: next });
+  }
+
+  function update(index: number, next: AigcOpenAiParameterDefinition) {
+    replace(parameters.map((parameter, parameterIndex) => parameterIndex === index ? next : parameter));
+  }
+
+  function add() {
+    const names = new Set(parameters.map((parameter) => parameter.name));
+    let suffix = 1;
+    let name = "custom_parameter";
+    while (names.has(name)) name = `custom_parameter_${++suffix}`;
+    replace([...parameters, { name, type: "string", description: "" }]);
+  }
+
+  return (
+    <div className="aigc-fieldset">
+      <div className="aigc-fieldset__heading"><strong>请求参数</strong><small>参数名会原样发送给上游；默认值可在创作时覆盖，空值不发送。</small></div>
+      <div className="configuration-button-row">
+        <button type="button" className="configuration-secondary-action" onClick={add}><Plus size={15} />新增参数</button>
+      </div>
+      {parameters.map((parameter, index) => (
+        <div className="aigc-fieldset" key={index}>
+          <div className="configuration-field-row">
+            <label><span>参数名</span><input aria-label={`OpenAI 参数 ${index + 1} 名称`} value={parameter.name} onChange={(event) => update(index, { ...parameter, name: event.target.value })} /></label>
+            <label><span>数据类型</span><select aria-label={`OpenAI 参数 ${parameter.name} 类型`} value={parameter.type} onChange={(event) => update(index, { name: parameter.name, type: event.target.value as AigcOpenAiParameterType, description: parameter.description })}>{openAiParameterTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+          </div>
+          <div className="configuration-field-row">
+            <label><span>枚举值<small>每行一个；留空表示允许任意同类型值</small></span><textarea aria-label={`OpenAI 参数 ${parameter.name} 枚举值`} rows={3} value={formatOpenAiEnumValues(parameter.enumValues)} onChange={(event) => update(index, { ...parameter, enumValues: parseOpenAiEnumValues(event.target.value, parameter.type), defaultValue: undefined })} /></label>
+            <OpenAiParameterDefaultEditor parameter={parameter} onChange={(defaultValue) => update(index, { ...parameter, ...(defaultValue === undefined ? { defaultValue: undefined } : { defaultValue }) })} />
+          </div>
+          <label><span>参数说明</span><textarea aria-label={`OpenAI 参数 ${parameter.name} 说明`} rows={2} value={parameter.description} onChange={(event) => update(index, { ...parameter, description: event.target.value })} /></label>
+          <div className="configuration-button-row">
+            <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" aria-label={`删除 OpenAI 参数 ${parameter.name}`} onClick={() => replace(parameters.filter((_, parameterIndex) => parameterIndex !== index))}><Trash2 size={15} />删除参数</button>
+          </div>
+        </div>
+      ))}
+      {!parameters.length ? <p className="configuration-help">当前接口不发送额外请求参数。</p> : null}
+    </div>
+  );
+}
+
+/** 编辑参数默认值，并保留“不设置”状态。 */
+function OpenAiParameterDefaultEditor({ parameter, onChange }: {
+  parameter: AigcOpenAiParameterDefinition;
+  onChange: (value: AigcOpenAiParameterValue | undefined) => void;
+}) {
+  if (parameter.enumValues?.length) {
+    const selectedIndex = parameter.enumValues.findIndex((value) => Object.is(value, parameter.defaultValue));
+    return <label><span>默认值</span><select aria-label={`OpenAI 参数 ${parameter.name} 默认值`} value={selectedIndex < 0 ? "" : String(selectedIndex)} onChange={(event) => onChange(event.target.value === "" ? undefined : parameter.enumValues?.[Number(event.target.value)])}><option value="">不设置</option>{parameter.enumValues.map((value, index) => <option key={`${typeof value}:${String(value)}`} value={index}>{String(value)}</option>)}</select></label>;
+  }
+  if (parameter.type === "boolean") {
+    return <label><span>默认值</span><select aria-label={`OpenAI 参数 ${parameter.name} 默认值`} value={parameter.defaultValue === undefined ? "" : String(parameter.defaultValue)} onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.value === "true")}><option value="">不设置</option><option value="true">true</option><option value="false">false</option></select></label>;
+  }
+  const numberType = parameter.type === "integer" || parameter.type === "number";
+  return <label><span>默认值</span><input type={numberType ? "number" : "text"} step={parameter.type === "number" ? "any" : undefined} aria-label={`OpenAI 参数 ${parameter.name} 默认值`} value={parameter.defaultValue === undefined ? "" : String(parameter.defaultValue)} onChange={(event) => onChange(event.target.value === "" ? undefined : numberType ? Number(event.target.value) : event.target.value)} /></label>;
+}
+
+const openAiParameterTypeOptions: Array<{ value: AigcOpenAiParameterType; label: string }> = [
+  { value: "string", label: "字符串" },
+  { value: "integer", label: "整数" },
+  { value: "number", label: "数值" },
+  { value: "boolean", label: "布尔" },
+];
+
+/** 将枚举值转换为便于逐行编辑的文本。 */
+function formatOpenAiEnumValues(values?: AigcOpenAiParameterValue[]): string {
+  return values?.map(String).join("\n") ?? "";
+}
+
+/** 按参数类型解析逐行枚举值，输入中的空行会被忽略。 */
+function parseOpenAiEnumValues(text: string, type: AigcOpenAiParameterType): AigcOpenAiParameterValue[] | undefined {
+  const values: AigcOpenAiParameterValue[] = [];
+  for (const value of text.split(/\r?\n/u).map((candidate) => candidate.trim()).filter(Boolean)) {
+    if (type === "string") {
+      values.push(value);
+      continue;
+    }
+    if (type === "boolean") {
+      if (value === "true") values.push(true);
+      if (value === "false") values.push(false);
+      continue;
+    }
+    const number = Number(value);
+    if (Number.isFinite(number) && (type !== "integer" || Number.isInteger(number))) values.push(number);
+  }
+  return values.length ? values : undefined;
 }
 
 /** 接口列表与编辑。 */
@@ -1283,7 +1407,11 @@ function AigcInterfacesPage() {
       protocol,
       capability: defaultCapability(protocol),
       channelId: channels.find((channel) => channel.type === protocol && channel.enabled)?.id ?? "",
-      config: protocol === "comfyui" ? { workflowId: "" } : { model: "" },
+      config: protocol === "comfyui"
+        ? { workflowId: "" }
+        : protocol === "openai"
+          ? { model: "", parameters: createDefaultOpenAiParameters() }
+          : { model: "" },
     }));
   }
 
@@ -1391,12 +1519,19 @@ function AigcInterfacesPage() {
           </label>
         </div>
 
-        {draft.protocol === "grok" || draft.protocol === "openai" ? (
+        {draft.protocol === "openai" ? (
+          <OpenAiParameterEditor
+            config={draft.config as AigcOpenAiInterfaceConfig}
+            onChange={(config) => setDraft({ ...draft, config })}
+          />
+        ) : null}
+
+        {draft.protocol === "grok" ? (
           <div className="aigc-fieldset">
             <div className="aigc-fieldset__heading"><strong>协议参数</strong><small>按需补充生成默认值；留空时由调用方传入</small></div>
             <div className="configuration-field-row">
-              <label><span>默认尺寸</span><input aria-label={`${interfaceProtocolName(draft.protocol)} 默认尺寸`} placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
-              {draft.protocol === "grok" ? <label><span>默认时长（秒）</span><input type="number" min={1} max={300} aria-label="Grok 默认时长" value={(draft.config as { duration?: number }).duration ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, duration: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined } })} /></label> : <label><span>质量</span><input aria-label="OpenAI 质量" placeholder="standard" value={(draft.config as { quality?: string }).quality ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, quality: event.target.value } })} /></label>}
+              <label><span>默认尺寸</span><input aria-label="Grok 默认尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
+              <label><span>默认时长（秒）</span><input type="number" min={1} max={300} aria-label="Grok 默认时长" value={(draft.config as { duration?: number }).duration ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, duration: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined } })} /></label>
             </div>
           </div>
         ) : null}
@@ -1832,7 +1967,7 @@ const emptyInterface: AigcInterfaceInput = {
   channelId: "",
   enabled: true,
   toolPublishEnabled: false,
-  config: { model: "" },
+  config: { model: "", parameters: createDefaultOpenAiParameters() },
 };
 
 function defaultCapability(protocol: AigcInterfaceProtocol): AigcInterfaceCapability {
@@ -1842,7 +1977,7 @@ function defaultCapability(protocol: AigcInterfaceProtocol): AigcInterfaceCapabi
 }
 
 function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ value: AigcInterfaceCapability; label: string }> {
-  if (protocol === "openai") return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片编辑" }];
+  if (protocol === "openai") return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片生成与编辑" }];
   if (protocol === "grok") return [
     { value: "text-to-image", label: "文生图" },
     { value: "image-edit", label: "图片编辑" },
