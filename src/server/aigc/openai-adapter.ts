@@ -57,7 +57,9 @@ export class OpenAiAigcAdapter implements AigcProtocolAdapter {
     prompt: string,
   ): Promise<AigcExecutionResult> {
     const image = readAsset(input.inputs.image);
-    const imagePath = await input.assets.resolveInputPath(image.assetId);
+    const imagePath = image.source === "public"
+      ? await input.publicFiles?.resolvePath(image.assetId)
+      : await input.assets.resolveInputPath(image.assetId);
     if (!imagePath) throw new Error("图片入参文件不存在");
     const imageBuffer = await readFile(imagePath);
     const form = new FormData();
@@ -148,12 +150,13 @@ function readPrompt(value: unknown): string {
   return value.trim();
 }
 
-function readAsset(value: unknown): { assetId: string; name?: string; mediaType?: string } {
+function readAsset(value: unknown): { assetId: string; name?: string; mediaType?: string; source?: "public" } {
   if (!isRecord(value) || typeof value.assetId !== "string" || !value.assetId) throw new TypeError("缺少图片或视频入参");
   return {
     assetId: value.assetId,
     ...(typeof value.name === "string" ? { name: value.name } : {}),
     ...(typeof value.mediaType === "string" ? { mediaType: value.mediaType } : {}),
+    ...(value.source === "public" ? { source: value.source } : {}),
   };
 }
 
