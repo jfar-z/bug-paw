@@ -9,7 +9,14 @@ import type {
   AigcInterfaceProtocol,
   AigcInterfaceRecord,
   AigcOpenAiInterfaceConfig,
+  AigcOpenAiParameterDefinition,
+  AigcOpenAiParameterType,
+  AigcOpenAiParameterValue,
 } from "../../shared/aigc-contracts";
+import {
+  AIGC_OPENAI_RESERVED_PARAMETER_NAMES,
+  resolveOpenAiParameterDefinitions,
+} from "../../shared/aigc-openai-parameters";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
 
 interface StoredAigcInterfaces {
@@ -145,9 +152,7 @@ async function normalizeInterfaceConfig(
   if (protocol === "openai") {
     return {
       model: normalizeText(config.model, "OpenAI 模型", 160),
-      ...(typeof config.size === "string" && config.size ? { size: config.size.trim() } : {}),
-      ...(typeof config.quality === "string" && config.quality ? { quality: config.quality.trim() } : {}),
-      ...(typeof config.responseFormat === "string" && config.responseFormat ? { responseFormat: config.responseFormat.trim() } : {}),
+      parameters: normalizeOpenAiParameters(config),
     };
   }
   if (protocol === "grok") {
@@ -156,6 +161,73 @@ async function normalizeInterfaceConfig(
   const workflowId = normalizeText(config.workflowId, "工作流标识", 120);
   if (!await workflowExists(workflowId)) throw new TypeError("所选 ComfyUI 工作流不存在");
   return { workflowId };
+}
+
+/** 校验 OpenAI 自定义参数，并兼容旧版固定字段。 */
+function normalizeOpenAiParameters(config: Record<string, unknown>): AigcOpenAiParameterDefinition[] {
+  const legacyConfig = config as unknown as AigcOpenAiInterfaceConfig;
+  const source = Array.isArray(config.parameters) ? config.parameters : resolveOpenAiParameterDefinitions(legacyConfig);
+  if (source.length > 24) throw new TypeError("OpenAI 自定义参数最多支持 24 项");
+  const names = new Set<string>();
+  return source.map((value, index) => {
+    if (!isRecord(value)) throw new TypeError(`OpenAI 参数 ${index + 1} 格式无效`);
+    const name = normalizeOpenAiParameterName(value.name, index);
+    if (AIGC_OPENAI_RESERVED_PARAMETER_NAMES.has(name)) throw new TypeError(`OpenAI 参数 ${name} 为系统保留字段`);
+    if (names.has(name)) throw new TypeError(`OpenAI 参数 ${name} 重复`);
+    names.add(name);
+    const type = normalizeOpenAiParameterType(value.type, name);
+    const enumValues = normalizeOpenAiEnumValues(value.enumValues, type, name);
+    const defaultValue = value.defaultValue === undefined
+      ? undefined
+      : normalizeOpenAiParameterValue(value.defaultValue, type, `OpenAI 参数 ${name} 默认值`);
+    if (defaultValue !== undefined && enumValues?.length && !enumValues.some((candidate) => Object.is(candidate, defaultValue))) {
+      throw new TypeError(`OpenAI 参数 ${name} 默认值不在枚举范围内`);
+    }
+    return {
+      name,
+      type,
+      ...(enumValues?.length ? { enumValues } : {}),
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
+      description: typeof value.description === "string" ? value.description.trim().slice(0, 240) : "",
+    };
+  });
+}
+
+/** 校验第三方请求参数名，允许常见点号、连字符和下划线命名。 */
+function normalizeOpenAiParameterName(value: unknown, index: number): string {
+  if (typeof value !== "string" || !/^[A-Za-z_][A-Za-z0-9_.-]{0,79}$/u.test(value.trim())) {
+    throw new TypeError(`OpenAI 参数 ${index + 1} 名称无效`);
+  }
+  return value.trim();
+}
+
+/** 校验自定义参数类型。 */
+function normalizeOpenAiParameterType(value: unknown, name: string): AigcOpenAiParameterType {
+  if (value === "string" || value === "integer" || value === "number" || value === "boolean") return value;
+  throw new TypeError(`OpenAI 参数 ${name} 类型无效`);
+}
+
+/** 校验枚举列表，并按类型去重。 */
+function normalizeOpenAiEnumValues(value: unknown, type: AigcOpenAiParameterType, name: string): AigcOpenAiParameterValue[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 50) throw new TypeError(`OpenAI 参数 ${name} 枚举无效`);
+  const result: AigcOpenAiParameterValue[] = [];
+  for (const candidate of value) {
+    const normalized = normalizeOpenAiParameterValue(candidate, type, `OpenAI 参数 ${name} 枚举值`);
+    if (!result.some((existing) => Object.is(existing, normalized))) result.push(normalized);
+  }
+  return result;
+}
+
+/** 按声明类型校验一个标量参数值。 */
+function normalizeOpenAiParameterValue(value: unknown, type: AigcOpenAiParameterType, label: string): AigcOpenAiParameterValue {
+  if (type === "string" && typeof value === "string") return value;
+  if (type === "boolean" && typeof value === "boolean") return value;
+  if ((type === "number" || type === "integer") && typeof value === "number" && Number.isFinite(value)) {
+    if (type === "integer" && !Number.isInteger(value)) throw new TypeError(`${label}必须为整数`);
+    return value;
+  }
+  throw new TypeError(`${label}类型不匹配`);
 }
 
 /** 校验并归一化 Grok 接口配置。 */
@@ -196,9 +268,15 @@ function normalizeText(value: unknown, label: string, maximum: number): string {
 }
 
 function copyInterface(item: AigcInterfaceRecord): AigcInterfaceRecord {
+  const config = item.protocol === "openai"
+    ? {
+        model: (item.config as AigcOpenAiInterfaceConfig).model,
+        parameters: resolveOpenAiParameterDefinitions(item.config as AigcOpenAiInterfaceConfig),
+      }
+    : { ...item.config };
   return {
     ...item,
-    config: { ...item.config },
+    config,
   };
 }
 

@@ -294,11 +294,31 @@ export type AigcInterfaceProtocol = AigcChannelType;
 /** 接口可暴露给用户的能力类型。 */
 export type AigcInterfaceCapability = "text-to-image" | "image-edit" | "text-to-video" | "image-to-video" | "video-edit" | "video-extend";
 
+/** OpenAI 自定义参数支持的标量类型。 */
+export type AigcOpenAiParameterType = "string" | "integer" | "number" | "boolean";
+
+/** OpenAI 自定义参数支持的标量值。 */
+export type AigcOpenAiParameterValue = string | number | boolean;
+
+/** OpenAI 协议的一个可配置请求参数。 */
+export interface AigcOpenAiParameterDefinition {
+  /** 发送给上游接口的真实字段名。 */
+  name: string;
+  type: AigcOpenAiParameterType;
+  enumValues?: AigcOpenAiParameterValue[];
+  defaultValue?: AigcOpenAiParameterValue;
+  description: string;
+}
+
 /** OpenAI 协议接口参数。 */
 export interface AigcOpenAiInterfaceConfig {
   model: string;
+  parameters?: AigcOpenAiParameterDefinition[];
+  /** 兼容旧版固定尺寸配置，读取后会转换为 parameters。 */
   size?: string;
+  /** 兼容旧版固定质量配置，读取后会转换为 parameters。 */
   quality?: string;
+  /** 兼容旧版响应格式配置，读取后会转换为 parameters。 */
   responseFormat?: string;
 }
 

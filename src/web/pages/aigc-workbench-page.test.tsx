@@ -137,6 +137,37 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(window.location.pathname).toBe("/aigc/tasks/task-1");
   });
 
+  it("图片生成与编辑接口可不上传图片并提交动态参数", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{
+        id: "combined-image", name: "图片生成与编辑", description: "", protocol: "openai", capability: "image-edit", channelId: "channel-1", enabled: true, toolPublishEnabled: false,
+        config: { model: "image-model", parameters: [{ name: "image_size", type: "string", defaultValue: "1024x1024", description: "输出尺寸" }, { name: "quality", type: "string", enumValues: ["medium", "high"], defaultValue: "high", description: "输出质量" }] },
+        createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z",
+      }] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "channel-1", name: "OpenAI", type: "openai", enabled: true, hasApiKey: true }] }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      if (url === "/api/v1/aigc/tasks" && init?.method === "POST") return new Response(JSON.stringify({ id: "task-combined", interfaceId: "combined-image", interfaceName: "图片生成与编辑", channelId: "channel-1", status: "queued", inputs: {}, assets: [], createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z" }), { status: 202 });
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-run", interfaceId: "combined-image" });
+
+    fireEvent.change(await screen.findByLabelText("提示词"), { target: { value: "雨夜街道" } });
+    expect(screen.getByLabelText("参考图片（可选）")).not.toBeRequired();
+    expect(screen.getByText("不提供图片时执行文生图，提供图片时执行图片编辑。")).toBeInTheDocument();
+    expect(screen.getByLabelText("image_size")).toHaveValue("1024x1024");
+    expect(screen.getByRole("button", { name: "quality" })).toHaveTextContent("high");
+    fireEvent.change(screen.getByLabelText("image_size"), { target: { value: "1536x1024" } });
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    await waitFor(() => {
+      const post = fetchMock.mock.calls.find(([requestUrl, request]) => String(requestUrl) === "/api/v1/aigc/tasks" && request?.method === "POST");
+      expect(JSON.parse(String(post?.[1]?.body))).toEqual({ interfaceId: "combined-image", inputs: { prompt: "雨夜街道", image_size: "1536x1024", quality: "high" } });
+    });
+  });
+
   it("任务完成后在创作台切换预览图片视频和音频产物", async () => {
     vi.spyOn(window, "setInterval").mockImplementation((handler) => {
       window.queueMicrotask(() => handler());
@@ -366,6 +397,46 @@ describe("AigcWorkbenchPage 创作台", () => {
     expect(screen.getByRole("dialog", { name: "删除任务？" })).toHaveTextContent("3 个产物将被永久删除");
     fireEvent.click(screen.getByRole("button", { name: "删除任务和产物" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/v1/aigc/tasks/task-delete", expect.objectContaining({ method: "DELETE" })));
+  });
+
+  it("接口配置可增删改请求参数并定义类型、枚举、默认值和说明", async () => {
+    const interfaceRecord = {
+      id: "interface-1", name: "图片接口", description: "", protocol: "openai", capability: "image-edit", channelId: "channel-1", enabled: true, toolPublishEnabled: false,
+      config: { model: "image-model", parameters: [{ name: "size", type: "string", description: "尺寸" }, { name: "quality", type: "string", enumValues: ["low", "high"], defaultValue: "high", description: "质量" }] },
+      createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces/interface-1" && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...interfaceRecord, ...body, updatedAt: "2026-08-25T00:01:00.000Z" }));
+      }
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [interfaceRecord] }));
+      if (url === "/api/v1/capabilities/aigc/channels") return new Response(JSON.stringify({ revision: "c1", channels: [{ id: "channel-1", name: "OpenAI", type: "openai", enabled: true }] }));
+      if (url === "/api/v1/aigc/workflows") return new Response(JSON.stringify({ revision: "w1", workflows: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderAigcPage({ page: "aigc-interfaces" });
+
+    fireEvent.change(await screen.findByLabelText("OpenAI 参数 1 名称"), { target: { value: "image_size" } });
+    fireEvent.change(screen.getByLabelText("OpenAI 参数 quality 枚举值"), { target: { value: "draft\nfinal" } });
+    fireEvent.change(screen.getByLabelText("OpenAI 参数 quality 默认值"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("OpenAI 参数 quality 说明"), { target: { value: "渠道输出质量" } });
+    fireEvent.click(screen.getByRole("button", { name: "新增参数" }));
+    expect(screen.getByLabelText("OpenAI 参数 3 名称")).toHaveValue("custom_parameter");
+    fireEvent.click(screen.getByRole("button", { name: "删除 OpenAI 参数 custom_parameter" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存接口" }));
+
+    await waitFor(() => {
+      const patchRequest = fetchMock.mock.calls.find(([requestUrl, request]) => String(requestUrl) === "/api/v1/aigc/interfaces/interface-1" && request?.method === "PATCH");
+      const body = JSON.parse(String(patchRequest?.[1]?.body));
+      expect(body.config.parameters).toEqual([
+        { name: "image_size", type: "string", description: "尺寸" },
+        { name: "quality", type: "string", enumValues: ["draft", "final"], defaultValue: "final", description: "渠道输出质量" },
+      ]);
+    });
   });
 
   it("接口编辑切换与删除均提供应用内保护", async () => {
