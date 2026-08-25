@@ -23,7 +23,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     window.history.replaceState({}, "", "/");
   });
 
-it("选择已启用接口后展示提示词表单并提交生成任务", async () => {
+  it("选择已启用接口后展示提示词表单并提交生成任务", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input) === "/api/v1/aigc/interfaces") {
         return new Response(JSON.stringify({
@@ -83,6 +83,51 @@ it("选择已启用接口后展示提示词表单并提交生成任务", async (
     expect(detailLink).toHaveAttribute("href", "/aigc/tasks/task-1");
     fireEvent.click(detailLink);
     expect(window.location.pathname).toBe("/aigc/tasks/task-1");
+  });
+
+  it.each([
+    { protocol: "openai", name: "OpenAI 图片", inputName: "参考图片（可选）" },
+    { protocol: "grok", name: "Grok 图片", inputName: "图片公网地址公共文件" },
+  ] as const)("$protocol 接口不展示 ComfyUI input 来源", async ({ protocol, name, inputName }) => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{
+        id: `${protocol}-image`, name, description: "", protocol, capability: "image-edit", channelId: `${protocol}-channel`, enabled: true, toolPublishEnabled: false,
+        config: { model: "image-model" }, createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z",
+      }] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: `${protocol}-channel`, name, type: protocol, enabled: true, hasApiKey: true }] }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderAigcPage({ page: "aigc-run", interfaceId: `${protocol}-image` });
+
+    expect(await screen.findByLabelText(inputName)).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "ComfyUI input" })).not.toBeInTheDocument();
+    expect(screen.queryByText("ComfyUI input")).not.toBeInTheDocument();
+  });
+
+  it("仅 ComfyUI 接口展示 ComfyUI input 来源", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/interfaces") return new Response(JSON.stringify({ revision: "r1", interfaces: [{
+        id: "comfy-image", name: "ComfyUI 图片", description: "", protocol: "comfyui", capability: "image-edit", channelId: "comfy-channel", enabled: true, toolPublishEnabled: false,
+        config: { workflowId: "workflow-image" }, createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z",
+      }] }));
+      if (url === "/api/v1/aigc/runtime-channels") return new Response(JSON.stringify({ channels: [{ id: "comfy-channel", name: "本机 ComfyUI", type: "comfyui", enabled: true, hasApiKey: false }] }));
+      if (url === "/api/v1/aigc/public-files") return new Response(JSON.stringify({ files: [] }));
+      if (url === "/api/v1/aigc/workflows/workflow-image") return new Response(JSON.stringify({ revision: "w1", workflow: {
+        id: "workflow-image", name: "图片工作流", fileName: "image.json", originalHash: "hash",
+        nodes: [{ id: "1", type: "LoadImage", title: "载入图片", fields: [] }], edges: [],
+        inputMappings: [{ id: "image", name: "image", nodeId: "1", field: "inputs.image", type: "image", required: true, description: "参考图" }],
+        outputMappings: [], createdAt: "2026-08-25T00:00:00.000Z", updatedAt: "2026-08-25T00:00:00.000Z",
+      } }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    renderAigcPage({ page: "aigc-run", interfaceId: "comfy-image" });
+
+    expect(await screen.findByRole("tab", { name: "ComfyUI input" })).toBeInTheDocument();
   });
 
 });

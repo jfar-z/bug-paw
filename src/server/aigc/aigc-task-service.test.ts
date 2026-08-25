@@ -19,25 +19,25 @@ describe("AIGC 任务服务", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  async function fixture(adapterResult: AigcExecutionResult | Error | ((input: AigcExecutionInput) => Promise<AigcExecutionResult>)) {
+  async function fixture(adapterResult: AigcExecutionResult | Error | ((input: AigcExecutionInput) => Promise<AigcExecutionResult>), protocol: "openai" | "grok" = "openai") {
     const root = await mkdtemp(join(tmpdir(), "aigc-tasks-"));
     roots.push(root);
     const connections = new AigcConnectionService(join(root, "channels.json"));
     await connections.create({
-      name: "OpenAI",
-      type: "openai",
+      name: protocol === "openai" ? "OpenAI" : "Grok",
+      type: protocol,
       baseUrl: "https://api.openai.com/v1",
       enabled: true,
       timeoutMs: 30_000,
-    }, "openai", (await connections.read()).revision);
+    }, protocol, (await connections.read()).revision);
     const workflows = new AigcWorkflowService(join(root, "workflows.json"));
     const interfaces = new AigcInterfaceService(join(root, "interfaces.json"), (id) => workflows.exists(id));
     const created = await interfaces.create({
       name: "文生图",
       description: "",
-      protocol: "openai",
+      protocol,
       capability: "text-to-image",
-      channelId: "openai",
+      channelId: protocol,
       enabled: true,
       toolPublishEnabled: false,
       config: { model: "dall-e-3" },
@@ -58,7 +58,7 @@ describe("AIGC 任务服务", () => {
       credentials: new CredentialService(join(root, "auth.json")),
       assets,
       publicFiles: {} as never,
-      adapters: { openai: adapter },
+      adapters: { [protocol]: adapter },
     });
     return { service, item: created.item, adapter, assets };
   }
@@ -76,6 +76,19 @@ describe("AIGC 任务服务", () => {
     });
     const done = await service.get(task.id);
     expect(done?.assets).toEqual([expect.objectContaining({ name: "image.png", mediaType: "image/png" })]);
+  });
+
+  it.each(["openai", "grok"] as const)("%s 接口拒绝 ComfyUI input 来源", async (protocol) => {
+    const { service, item, adapter } = await fixture({ assets: [] }, protocol);
+
+    await expect(service.createRun({
+      interfaceId: item.id,
+      inputs: {
+        prompt: "测试",
+        image: { filename: "source.png", name: "source.png", mediaType: "image/png", source: "comfyui_input" },
+      },
+    })).rejects.toThrow("仅 ComfyUI 接口支持 ComfyUI input");
+    expect(adapter.execute).not.toHaveBeenCalled();
   });
 
 });
