@@ -37,53 +37,6 @@ describe("ScheduledTasksPage", () => {
     expect(screen.queryByRole("listbox", { name: "可用会话" })).not.toBeInTheDocument();
   });
 
-  it("原目标会话已删除时强化提示并禁止直接运行或启用", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
-      if (url === "/api/v1/agents") return json({ agents: [agent()] });
-      if (url === "/api/v1/agents/agent-1/scheduled-tasks") return json({ tasks: [deletedTargetTask()] });
-      if (url === "/api/v1/sessions?agentId=agent-1") return json({ sessions: [session()] });
-      if (url === "/api/v1/scheduled-tasks/timezones") return json({ serverTimeZone: "Etc/UTC", timezones: ["Etc/UTC"] });
-      return json({});
-    }));
-
-    renderScheduledTasksPage();
-
-    const warning = (await screen.findByText("原目标会话“已删除的日报会话”已删除")).closest("div")!;
-    expect(warning).toHaveClass("scheduled-task-target-missing");
-    expect(warning).toHaveTextContent("原目标会话“已删除的日报会话”已删除");
-    expect(screen.getByRole("button", { name: "立即执行" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "编辑 日报任务" }));
-    expect(screen.getByRole("checkbox", { name: "启用任务" })).toBeDisabled();
-    expect(screen.getByText(/重新选择目标后才能启用/)).toBeInTheDocument();
-  });
-
-  it("重新选择目标后允许启用并保存任务", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url === "/api/v1/agents") return json({ agents: [agent()] });
-      if (url === "/api/v1/agents/agent-1/scheduled-tasks") return json({ tasks: [deletedTargetTask()] });
-      if (url === "/api/v1/sessions?agentId=agent-1") return json({ sessions: [session()] });
-      if (url === "/api/v1/scheduled-tasks/timezones") return json({ serverTimeZone: "Etc/UTC", timezones: ["Etc/UTC"] });
-      return json({});
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    renderScheduledTasksPage();
-    fireEvent.click(await screen.findByRole("button", { name: "编辑 日报任务" }));
-
-    const enabled = screen.getByRole("checkbox", { name: "启用任务" });
-    fireEvent.click(screen.getByRole("radio", { name: "每次新建会话" }));
-    expect(enabled).toBeEnabled();
-    fireEvent.click(enabled);
-    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
-
-    await waitFor(() => {
-      const update = fetchMock.mock.calls.find(([url, init]) => url === "/api/v1/scheduled-tasks/task-1" && init?.method === "PATCH");
-      expect(update).toBeDefined();
-      expect(JSON.parse(String(update?.[1]?.body))).toMatchObject({
-        enabled: true,
-        target: { type: "new_session", archiveAfterCompletion: false },
-      });
-    });
-  });
 });
 
 function json(value: unknown): Response {

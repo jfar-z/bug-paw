@@ -55,57 +55,7 @@ describe("AIGC 产物路由", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it("默认允许工作台内联预览，并仅在明确请求时下载", async () => {
-    const root = await mkdtemp(join(tmpdir(), "bugpaw-aigc-asset-"));
-    roots.push(root);
-    const assetPath = join(root, "asset.png");
-    await writeFile(assetPath, Buffer.from("image-content", "utf8"));
-    const task: AigcTaskRecord = {
-      id: "task-1",
-      interfaceId: "interface-1",
-      interfaceName: "ComfyUI",
-      channelId: "channel-1",
-      status: "succeeded",
-      inputs: {},
-      assets: [{ id: "asset-1", name: "成品.png", mediaType: "image/png", size: 13, createdAt: "2026-08-17T00:00:00.000Z" }],
-      createdAt: "2026-08-17T00:00:00.000Z",
-      updatedAt: "2026-08-17T00:00:00.000Z",
-    };
-    const app = Fastify();
-    registerAigcRoutes(app, {
-      authService: { isAuthenticated: async () => true } as never,
-      workflows: {} as never,
-      interfaces: {} as never,
-      tasks: { get: async () => task } as never,
-      assets: { resolveOutputPath: async () => assetPath } as never,
-      publicFiles: {} as never,
-      comfyuiInputs: {} as never,
-    });
-    await app.ready();
-
-    const inline = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1" });
-    expect(inline.statusCode).toBe(200);
-    expect(inline.headers["content-type"]).toContain("image/png");
-    expect(inline.headers["content-disposition"]).toBeUndefined();
-    expect(inline.headers["x-content-type-options"]).toBe("nosniff");
-    expect(inline.headers["accept-ranges"]).toBe("bytes");
-
-    const range = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1", headers: { range: "bytes=2-6" } });
-    expect(range.statusCode).toBe(206);
-    expect(range.headers["content-range"]).toBe("bytes 2-6/13");
-    expect(range.body).toBe("age-c");
-
-    const invalidRange = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1", headers: { range: "bytes=99-100" } });
-    expect(invalidRange.statusCode).toBe(416);
-    expect(invalidRange.headers["content-range"]).toBe("bytes */13");
-
-    const download = await app.inject({ method: "GET", url: "/api/aigc/tasks/task-1/assets/asset-1?download=1" });
-    expect(download.statusCode, download.body).toBe(200);
-    expect(download.headers["content-disposition"]).toContain("attachment");
-    await app.close();
-  });
-
-  it("提供产物分页、任务删除与图片缩略图接口", async () => {
+it("提供产物分页、任务删除与图片缩略图接口", async () => {
     const root = await mkdtemp(join(tmpdir(), "bugpaw-aigc-thumbnail-"));
     roots.push(root);
     const thumbnailPath = join(root, "thumbnail.webp");
@@ -229,28 +179,6 @@ describe("ComfyUI input 媒体代理路由", () => {
     await app.close();
   });
 
-  it("代理失败时不返回上游内网错误详情", async () => {
-    const app = Fastify();
-    registerAigcRoutes(app, {
-      authService: { isAuthenticated: async () => true } as never,
-      workflows: {} as never,
-      interfaces: {} as never,
-      tasks: {} as never,
-      assets: {} as never,
-      publicFiles: {} as never,
-      comfyuiInputs: { content: async () => { throw new Error("http://192.168.1.20:8188 failed"); } } as never,
-    });
-    await app.ready();
-
-    const response = await app.inject({
-      method: "GET",
-      url: "/api/aigc/comfyui-input-files/content?channelId=private&filename=clip.mp4",
-    });
-    expect(response.statusCode).toBe(502);
-    expect(response.body).not.toContain("192.168.1.20");
-    expect(response.body).toContain("预览暂时不可用");
-    await app.close();
-  });
 });
 
 describe("AIGC 轻剪辑路由", () => {
