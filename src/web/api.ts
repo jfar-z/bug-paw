@@ -301,6 +301,17 @@ async function synthesizeAgentSpeech(agentId: string, input: string, signal?: Ab
   return response;
 }
 
+/** 上传浏览器录音并交给本机服务器 Whisper 转写。 */
+async function transcribeSpeech(audio: Blob): Promise<{ text: string; language: string; duration: number }> {
+  const extension = audio.type.includes("ogg") ? "ogg" : audio.type.includes("mp4") ? "m4a" : "webm";
+  const form = new FormData();
+  form.append("audio", audio, `speech.${extension}`);
+  return request<{ text: string; language: string; duration: number }>("/api/speech/transcriptions", {
+    method: "POST",
+    body: form,
+  });
+}
+
 function readApiError(payload: unknown): {
   code?: string;
   message?: string;
@@ -627,6 +638,7 @@ export const api = {
   deleteWorkspaceEntries: (agentId: string, paths: string[]) => request<void>(`/api/agents/${encodeURIComponent(agentId)}/workspace/entries`, { method: "DELETE", body: JSON.stringify({ paths }) }),
   getWorkspaceFile,
   synthesizeAgentSpeech,
+  transcribeSpeech,
   abort: (sessionId: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: "POST" }),
   setModel: (sessionId: string, provider: string, modelId: string) =>
