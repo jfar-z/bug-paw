@@ -87,6 +87,22 @@ if ($LASTEXITCODE -ne 0) { throw "Compose 配置校验失败。" }
 & docker @DeployArguments
 if ($LASTEXITCODE -ne 0) { throw "Compose 部署失败。" }
 
+$WhisperContainerId = (& docker @ComposeArguments ps -q bug-paw-whisper).Trim()
+if ([string]::IsNullOrWhiteSpace($WhisperContainerId)) { throw "未找到 bug-paw-whisper 容器。" }
+
+# Whisper 首次启动需要下载并加载模型，完成后 Web 才会启动。
+$WhisperReady = $false
+for ($HealthAttempt = 0; $HealthAttempt -lt 360; $HealthAttempt++) {
+  $WhisperHealth = (& docker inspect --format "{{.State.Health.Status}}" $WhisperContainerId 2>$null).Trim()
+  if ($WhisperHealth -eq "healthy") {
+    $WhisperReady = $true
+    break
+  }
+  if ($WhisperHealth -eq "unhealthy") { throw "bug-paw-whisper 健康检查失败。" }
+  Start-Sleep -Seconds 2
+}
+if (-not $WhisperReady) { throw "等待 bug-paw-whisper 下载并加载模型超时。" }
+
 $WebContainerId = (& docker @ComposeArguments ps -q bug-paw-web).Trim()
 if ([string]::IsNullOrWhiteSpace($WebContainerId)) { throw "未找到 bug-paw-web 容器。" }
 

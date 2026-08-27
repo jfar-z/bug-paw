@@ -2760,12 +2760,12 @@ img.message-avatar {
   transition-property: filter, transform;
 }
 
-.local-speech-input {
+.server-speech-input {
   position: relative;
   display: inline-flex;
 }
 
-.local-speech-input__button {
+.server-speech-input__button {
   width: 38px;
   height: 38px;
   border: 0;
@@ -2773,14 +2773,14 @@ img.message-avatar {
   transition-property: color, background, box-shadow, transform;
 }
 
-.local-speech-input__button.is-listening {
+.server-speech-input__button.is-listening {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--paw) 28%, var(--surface-hover));
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--paw) 18%, transparent);
   transform: scale(0.96);
 }
 
-.local-speech-input__status {
+.server-speech-input__status {
   position: absolute;
   right: -44px;
   bottom: calc(100% + 10px);
@@ -2799,7 +2799,7 @@ img.message-avatar {
   white-space: nowrap;
 }
 
-.local-speech-input__status::before {
+.server-speech-input__status::before {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
@@ -3140,13 +3140,13 @@ img.message-avatar {
     padding: 10px 12px 12px;
   }
 
-  .local-speech-input__button,
+  .server-speech-input__button,
   .send-button {
     width: 44px;
     height: 44px;
   }
 
-  .local-speech-input__status {
+  .server-speech-input__status {
     right: 0;
   }
 

@@ -15,8 +15,12 @@ services:
       PORT: "7080"
       TZ: ${BUG_PAW_TIMEZONE:-Asia/Shanghai}
       PI_AGENT_DATA_ROOT: /data
+      BUG_PAW_WHISPER_URL: http://bug-paw-whisper:7083
     volumes:
       - ${BUG_PAW_DATA_DIR:-./pi-agent-data}:/data
+    depends_on:
+      bug-paw-whisper:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -29,3 +33,34 @@ services:
       start_period: 15s
     # 停止宽限小于 60 秒锁陈旧判定；新实例另有 75 秒有限等待处理异常退出。
     stop_grace_period: 45s
+
+  bug-paw-whisper:
+    build:
+      context: .
+      dockerfile: Dockerfile.whisper
+    container_name: bug-paw-whisper
+    init: true
+    restart: unless-stopped
+    environment:
+      WHISPER_MODEL: ${BUG_PAW_WHISPER_MODEL:-base}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      HF_HOME: /models/huggingface
+    volumes:
+      - ${BUG_PAW_DATA_DIR:-./pi-agent-data}/models/whisper:/models
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    cpus: ${BUG_PAW_WHISPER_CPUS:-4.0}
+    mem_limit: ${BUG_PAW_WHISPER_MEMORY:-2g}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7083/healthz', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10m
