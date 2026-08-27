@@ -1,7 +1,7 @@
 import { Mic } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
-const LOCAL_SPEECH_LANGUAGE = "zh-CN";
+const LOCAL_SPEECH_LANGUAGES = ["cmn-Hans-CN", "zh-CN"] as const;
 
 type LocalSpeechAvailability = "available" | "downloadable" | "downloading" | "unavailable";
 type LocalSpeechPhase = "idle" | "preparing" | "ready" | "starting" | "listening" | "processing";
@@ -57,6 +57,11 @@ interface LocalSpeechOptions {
   processLocally: true;
 }
 
+interface AvailableLocalSpeechLanguage {
+  language: string;
+  availability: Exclude<LocalSpeechAvailability, "unavailable">;
+}
+
 interface LocalSpeechInputButtonProps {
   disabled?: boolean;
   onTranscript(transcript: string): void;
@@ -87,7 +92,7 @@ function speechErrorMessage(error: string): string | undefined {
   if (error === "audio-capture") return "未检测到可用麦克风，请检查设备连接后重试。";
   if (error === "no-speech") return "未识别到语音，请按住麦克风后再开始说话。";
   if (error === "language-not-supported" || error === "language-unavailable") {
-    return "Chrome 本地中文语音包不可用，请更新浏览器后重试。";
+    return "Chrome 无法使用本地中文语音包，请确认浏览器与操作系统支持端侧中文识别。";
   }
   return "本地语音识别未完成，请稍后重试。";
 }
@@ -104,10 +109,25 @@ function finalTranscript(event: LocalSpeechRecognitionResultEvent): string {
   return transcript.trim();
 }
 
-const LOCAL_SPEECH_OPTIONS: LocalSpeechOptions = {
-  langs: [LOCAL_SPEECH_LANGUAGE],
-  processLocally: true,
-};
+/**
+ * 生成单语言能力参数，避免安装和识别使用不同的中文语言标签。
+ */
+function localSpeechOptions(language: string): LocalSpeechOptions {
+  return { langs: [language], processLocally: true };
+}
+
+/**
+ * 优先使用 Chrome SODA 的普通话规范标签，并兼容仅识别 zh-CN 的旧实现。
+ */
+async function findAvailableLocalSpeechLanguage(
+  Recognition: LocalSpeechRecognitionConstructor,
+): Promise<AvailableLocalSpeechLanguage | undefined> {
+  for (const language of LOCAL_SPEECH_LANGUAGES) {
+    const availability = await Recognition.available(localSpeechOptions(language));
+    if (availability !== "unavailable") return { language, availability };
+  }
+  return undefined;
+}
 
 /**
  * 提供严格本地处理的按住说话入口；松开后仅回填草稿，不触发发送。
@@ -139,14 +159,14 @@ export function LocalSpeechInputButton({ disabled = false, onTranscript, onError
     onError(message);
   };
 
-  const startRecognition = () => {
+  const startRecognition = (language: string) => {
     if (!Recognition || !holdingRef.current) return;
     const recognition = new Recognition();
     if (!("processLocally" in recognition)) {
       fail("当前 Chrome 不支持本地语音识别，请更新浏览器后重试。");
       return;
     }
-    recognition.lang = LOCAL_SPEECH_LANGUAGE;
+    recognition.lang = language;
     recognition.continuous = true;
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
@@ -184,17 +204,17 @@ export function LocalSpeechInputButton({ disabled = false, onTranscript, onError
     setPhase("preparing");
     onError("");
     try {
-      const availability = await Recognition.available(LOCAL_SPEECH_OPTIONS);
+      const availableLanguage = await findAvailableLocalSpeechLanguage(Recognition);
       if (!mountedRef.current) return;
-      if (availability === "available") {
-        startRecognition();
+      if (!availableLanguage) {
+        fail("当前 Chrome 或操作系统未提供可安装的本地中文语音包。");
         return;
       }
-      if (availability === "unavailable") {
-        fail("Chrome 当前没有可用的本地中文语音包，请更新浏览器后重试。");
+      if (availableLanguage.availability === "available") {
+        startRecognition(availableLanguage.language);
         return;
       }
-      const installed = await Recognition.install(LOCAL_SPEECH_OPTIONS);
+      const installed = await Recognition.install(localSpeechOptions(availableLanguage.language));
       if (!mountedRef.current) return;
       if (!installed) {
         fail("Chrome 本地中文语音包安装失败，请检查网络与存储空间后重试。");
