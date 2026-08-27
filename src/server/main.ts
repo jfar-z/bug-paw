@@ -61,6 +61,8 @@ import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
 import { registerTtsRoutes } from "./routes/tts";
+import { WhisperClient } from "./asr/whisper-client";
+import { registerSpeechRoutes } from "./routes/speech";
 import { AigcConnectionService } from "./aigc/aigc-connection-service";
 import { AigcConnectionManagementService } from "./aigc/aigc-connection-management-service";
 import { AigcConnectionValidation } from "./aigc/aigc-connection-validation";
@@ -316,6 +318,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   }
   const ttsConfigs = new TtsConfigService(join(paths.appDir, "tts.json"));
   const ttsSynthesis = new TtsSynthesisService(ttsConfigs);
+  const whisper = new WhisperClient(process.env.BUG_PAW_WHISPER_URL ?? "http://bug-paw-whisper:7083");
   const aigcConnectionPath = join(paths.appDir, "aigc-connections.json");
   const aigcAuthPath = join(paths.appDir, "aigc-auth.json");
   const aigcConnections = new AigcConnectionService(aigcConnectionPath);
@@ -663,6 +666,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       } : undefined;
     },
   });
+  registerSpeechRoutes(app, { authService, whisper });
   registerKnowledgeRetrievalRoutes(app, {
     authService,
     configs: embeddingConfigs,

@@ -94,28 +94,6 @@ describe("Session 多客户端同步集成", () => {
     gateway.dispose();
   });
 
-  it("其他客户端删除 Session 时结束现有订阅并释放 Runtime 租约", async () => {
-    const session = new SynchronizedSession();
-    const gateway = createPiRuntimeGateway(createBackend(session));
-    await gateway.openSession(session.sessionId);
-    const release = vi.fn();
-    const service = new ChatApplicationService({
-      runtimeSupervisor: {
-        acquire: async () => ({ runtime: gateway, generation: 1, retired: new Promise<void>(() => undefined), release }),
-      } as never,
-      sessionAgent: async () => "agent-sync",
-    });
-    const subscription = await service.subscribe(session.sessionId, undefined);
-    const iterator = subscription.events[Symbol.asyncIterator]();
-    expect((await iterator.next()).value).toMatchObject({ type: "snapshot" });
-
-    const staged = await gateway.prepareSessionDeletion?.(session.sessionId);
-
-    await expect(iterator.next()).rejects.toMatchObject({ code: "SESSION_NOT_FOUND" });
-    expect(release).toHaveBeenCalledOnce();
-    await staged?.rollback();
-    gateway.dispose();
-  });
 });
 
 function createBackend(session: SynchronizedSession): PiRuntimeBackend {

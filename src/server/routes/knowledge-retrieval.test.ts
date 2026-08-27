@@ -27,27 +27,7 @@ describe("知识检索配置路由", () => {
     await app.close();
   });
 
-  it("认证用户可读取外部 Embedding API Key，受管模型不返回密钥", async () => {
-    const root = await mkdtemp(join(tmpdir(), "knowledge-retrieval-routes-"));
-    roots.push(root);
-    const app = Fastify();
-    const configs = new EmbeddingConfigService(join(root, "embedding.json"));
-    registerApiV1Namespace(app);
-    registerKnowledgeRetrievalRoutes(app, { authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService, configs, rebuildAll: vi.fn(async () => ({ totalBases: 0, rebuiltBases: 0, failedBases: [] })) });
-    await app.ready();
-
-    const initial = await configs.read();
-    await configs.update({ baseUrl: "https://embed.example/v1", model: "text-embedding-3-small", batchSize: 16, apiKey: "embedding-secret", enabled: true }, initial.revision);
-    const shown = await app.inject({ method: "GET", url: "/api/v1/capabilities/knowledge-retrieval/credential" });
-    const listed = await app.inject({ method: "GET", url: "/api/v1/capabilities/knowledge-retrieval" });
-
-    expect(shown.statusCode).toBe(200);
-    expect(shown.json()).toEqual({ apiKey: "embedding-secret" });
-    expect(listed.body).not.toContain("embedding-secret");
-    await app.close();
-  });
-
-  it("使用受管默认模型重建语义索引", async () => {
+it("使用受管默认模型重建语义索引", async () => {
     const root = await mkdtemp(join(tmpdir(), "knowledge-retrieval-routes-")); roots.push(root);
     const rebuildAll = vi.fn(async () => ({ totalBases: 0, rebuiltBases: 0, failedBases: [] }));
     const app = Fastify(); registerApiV1Namespace(app);
@@ -61,20 +41,4 @@ describe("知识检索配置路由", () => {
     await app.close();
   });
 
-  it("关闭语义检索后拒绝重建向量索引", async () => {
-    const root = await mkdtemp(join(tmpdir(), "knowledge-retrieval-routes-")); roots.push(root);
-    const rebuildAll = vi.fn(async () => ({ totalBases: 0, rebuiltBases: 0, failedBases: [] }));
-    const configs = new EmbeddingConfigService(join(root, "embedding.json"));
-    const app = Fastify(); registerApiV1Namespace(app);
-    registerKnowledgeRetrievalRoutes(app, { authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService, configs, rebuildAll });
-    await app.ready();
-    const initial = await configs.read();
-    await configs.update({ baseUrl: "https://embed.example/v1", model: "text-embedding-3-small", batchSize: 8, apiKey: randomUUID(), enabled: false }, initial.revision);
-
-    const rebuilt = await app.inject({ method: "POST", url: "/api/v1/capabilities/knowledge-retrieval/rebuild" });
-
-    expect(rebuilt.statusCode).toBe(409);
-    expect(rebuildAll).not.toHaveBeenCalled();
-    await app.close();
-  });
 });

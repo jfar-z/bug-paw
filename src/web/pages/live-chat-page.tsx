@@ -54,7 +54,7 @@ import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
 import { ComposerSessionControls } from "../components/composer-session-controls";
-import { LocalSpeechInputButton } from "../components/local-speech-input-button";
+import { ServerSpeechInputButton } from "../components/server-speech-input-button";
 import { QuestionComposer } from "../components/question-composer";
 import { AvatarCropDialog } from "../components/avatar/avatar-crop-dialog";
 import { validateAvatarFile } from "../components/avatar/avatar-file";
@@ -1685,7 +1685,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
               />}
               attachmentContent={<AttachmentPicker items={attachmentItems} disabled={streaming || isOpeningSession || !selectedAgentId} showButton={false} onFilesSelected={queueAttachmentFiles} onRemove={(localId) => setAttachmentItems((current) => current.filter((item) => item.localId !== localId))} onError={setError} />}
               bottomControls={<div className="composer-actions">
-                <LocalSpeechInputButton
+                <ServerSpeechInputButton
                   disabled={noAvailableAgent || isOpeningSession}
                   onTranscript={(transcript) => setDraft((current) => appendSpeechTranscript(current, transcript))}
                   onError={setError}

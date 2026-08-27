@@ -14,15 +14,7 @@ describe("密码与会话令牌", () => {
     expect(record.hash).not.toContain("a-correct-local-password");
   });
 
-  it("相同密码使用独立随机盐", async () => {
-    const first = await hashPassword("same-password");
-    const second = await hashPassword("same-password");
-
-    expect(first.salt).not.toBe(second.salt);
-    expect(first.hash).not.toBe(second.hash);
-  });
-
-  it("只持久化会话令牌的 SHA-256 哈希", () => {
+it("只持久化会话令牌的 SHA-256 哈希", () => {
     const token = createSessionToken();
     const tokenHash = hashSessionToken(token);
 

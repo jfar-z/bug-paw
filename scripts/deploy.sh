@@ -128,7 +128,27 @@ fi
 docker compose "${compose_args[@]}" config --quiet
 docker compose "${compose_args[@]}" up -d --build --remove-orphans
 
-# 等待容器健康状态，避免启动命令成功但应用尚不可用。
+# Whisper 首次启动需要下载并加载模型，先等待内部服务就绪再检查 Web。
+whisper_container_id=$(docker compose "${compose_args[@]}" ps -q bug-paw-whisper)
+if [ -z "$whisper_container_id" ]; then
+  printf '未找到 bug-paw-whisper 容器。\n' >&2
+  exit 1
+fi
+for health_attempt in $(seq 1 360); do
+  whisper_health=$(docker inspect --format '{{.State.Health.Status}}' "$whisper_container_id" 2>/dev/null || true)
+  if [ "$whisper_health" = "healthy" ]; then break; fi
+  if [ "$whisper_health" = "unhealthy" ]; then
+    printf 'bug-paw-whisper 健康检查失败。\n' >&2
+    exit 1
+  fi
+  if [ "$health_attempt" = "360" ]; then
+    printf '等待 bug-paw-whisper 下载并加载模型超时。\n' >&2
+    exit 1
+  fi
+  sleep 2
+done
+
+# 等待 Web 容器健康状态，避免启动命令成功但应用尚不可用。
 web_container_id=$(docker compose "${compose_args[@]}" ps -q bug-paw-web)
 if [ -z "$web_container_id" ]; then
   printf '未找到 bug-paw-web 容器。\n' >&2

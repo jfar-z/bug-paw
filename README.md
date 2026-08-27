@@ -37,30 +37,32 @@ BugPaw 是一个基于 [Pi coding agent](https://github.com/badlogic/pi-mono) SD
 - 可选多 Provider 联网搜索，支持 SearXNG、博查与 Tavily 的有序回退、只读边界、SSRF 防护和出口策略。
 - 可选自托管浏览器执行，支持只读游览、截图与文件下载，并提供独立出口代理、资源池和权限审计。
 - 可配置的文本转语音播放。
+- 本机服务器 Whisper 语音输入，浏览器录音仅上传到自托管部署。
 - 响应式界面和 PWA 安装能力。
 - Docker Compose 自托管，核心、搜索、向量和浏览器服务可独立组合。
 
 ### 部署架构
 
-默认只启动 `bug-paw-web`。搜索、向量和浏览器能力是可选部署层：
+默认启动 `bug-paw-web` 与 `bug-paw-whisper`。搜索、向量和浏览器能力是可选部署层：
 
 | 组件 | 用途 | 是否默认启动 |
 | --- | --- | --- |
 | `bug-paw-web` | Web UI、API、Pi Runtime 与持久化业务逻辑 | 是 |
+| `bug-paw-whisper` | CPU `int8` 本机语音转写，默认使用 Whisper `base` | 是 |
 | `bug-paw-search` | 私有 SearXNG 搜索 API | 否 |
 | `bug-paw-cache` | SearXNG 使用的 Valkey | 否 |
 | `bug-paw-embedding` | `BAAI/bge-small-zh-v1.5` 托管向量服务 | 否 |
 | `browser-worker` | 基于 Playwright 的隔离浏览器执行服务 | 否 |
 | `browser-egress-proxy` | 校验公网 HTTPS 目标的受控出口代理 | 否 |
 
-宿主机默认在所有网络接口监听 `7080` 端口（`0.0.0.0:7080`）。搜索、缓存和向量容器不发布宿主机端口，只在 Compose 内部网络通信。所有应用数据默认写入 `./pi-agent-data` 并挂载到容器 `/data`。
+宿主机默认在所有网络接口监听 `7080` 端口（`0.0.0.0:7080`）。Whisper、搜索、缓存和向量容器不发布宿主机端口，只在 Compose 内部网络通信。所有应用数据默认写入 `./pi-agent-data`，Whisper 模型持久化在 `models/whisper` 子目录。
 
 ### 系统要求
 
 - Docker Engine 或 Docker Desktop。
 - Docker Compose v2（使用 `docker compose` 命令）。
 - Linux、macOS，或带 Docker Desktop 与 PowerShell 5.1+ 的 Windows。
-- 核心模式建议至少预留 2 GiB 内存；向量模式需要额外磁盘和内存，首次启动会下载模型。
+- 核心模式建议至少预留 4 GiB 内存；Whisper 与向量服务首次启动会下载模型，并需要额外磁盘空间。
 - 使用托管搜索时，部署主机需要访问所启用的搜索引擎；使用托管向量时，需要访问 Hugging Face/GHCR 以拉取镜像和模型。
 
 ### 快速开始
@@ -96,10 +98,10 @@ Windows PowerShell 将最后一行替换为 `.\scripts\deploy.ps1 core`。部署
 
 | 模式 | Bash | PowerShell | 服务 |
 | --- | --- | --- | --- |
-| 核心 | `./scripts/deploy.sh core` | `.\scripts\deploy.ps1 core` | Web |
-| 核心 + 搜索 | `./scripts/deploy.sh search` | `.\scripts\deploy.ps1 search` | Web、SearXNG、Valkey |
-| 核心 + 向量 | `./scripts/deploy.sh vector` | `.\scripts\deploy.ps1 vector` | Web、Embedding |
-| 核心 + 浏览器 | `./scripts/deploy.sh browser` | `.\scripts\deploy.ps1 browser` | Web、Playwright Worker、出口代理 |
+| 核心 | `./scripts/deploy.sh core` | `.\scripts\deploy.ps1 core` | Web、Whisper |
+| 核心 + 搜索 | `./scripts/deploy.sh search` | `.\scripts\deploy.ps1 search` | Web、Whisper、SearXNG、Valkey |
+| 核心 + 向量 | `./scripts/deploy.sh vector` | `.\scripts\deploy.ps1 vector` | Web、Whisper、Embedding |
+| 核心 + 浏览器 | `./scripts/deploy.sh browser` | `.\scripts\deploy.ps1 browser` | Web、Whisper、Playwright Worker、出口代理 |
 | 全能力 | `./scripts/deploy.sh full` | `.\scripts\deploy.ps1 full` | 全部服务 |
 
 搜索或全能力模式发现 `SEARXNG_SECRET` 为空时，部署脚本会在本机生成强随机值并写入 `.env`，不会打印密钥。
@@ -142,6 +144,9 @@ chmod 600 .env
 | `BUG_PAW_PORT` | `7080` | 全部 | Web 的宿主机端口；容器内仍固定为 `7080`。 |
 | `BUG_PAW_TIMEZONE` | `Asia/Shanghai` | 全部 | 容器时区，使用 IANA 时区名称。 |
 | `BUG_PAW_DATA_DIR` | `./pi-agent-data` | 全部 | 宿主机持久化数据目录。 |
+| `BUG_PAW_WHISPER_MODEL` | `base` | 全部 | 本机语音识别使用的 faster-whisper 模型。 |
+| `BUG_PAW_WHISPER_CPUS` | `4.0` | 全部 | Whisper 容器的 CPU 上限。 |
+| `BUG_PAW_WHISPER_MEMORY` | `2g` | 全部 | Whisper 容器的内存上限。 |
 | `SEARXNG_SECRET` | 无 | 搜索、全能力 | SearXNG 服务密钥；必须为强随机值。 |
 | `WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS` | `198.18.0.0/15` | 搜索、全能力 | 允许代理解析的测试网段；大多数部署无需修改。 |
 | `WEB_RESEARCH_EGRESS_PROFILES_FILE` | `./config/web-research-egress-profiles.json` | 搜索、全能力 | 联网读取出口配置文件。 |
@@ -232,6 +237,7 @@ docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /w
 ├── compose.search.yaml          # 搜索与缓存叠加层
 ├── compose.vector.yaml          # 托管向量叠加层
 ├── Dockerfile
+├── Dockerfile.whisper
 ├── .env.example
 ├── config/                      # 非敏感应用部署配置
 ├── searxng/                     # 非敏感 SearXNG 配置
@@ -269,30 +275,32 @@ BugPaw is a self-hosted personal Web Agent built on the [Pi coding agent](https:
 - Optional multi-provider web research with ordered SearXNG, Bocha, and Tavily fallback, read-only boundaries, SSRF controls, and egress policies.
 - Optional self-hosted browser automation for read-only browsing, screenshots, and downloads, with an isolated egress proxy, resource pool, and permission audit.
 - Configurable text-to-speech playback.
+- Server-local Whisper speech input; browser recordings stay within the self-hosted deployment.
 - Responsive UI with PWA installation support.
 - Composable Docker deployments for core, search, vector, and browser services.
 
 ### Architecture
 
-The default deployment starts only `bug-paw-web`. Search, vector, and browser services are optional layers:
+The default deployment starts `bug-paw-web` and `bug-paw-whisper`. Search, vector, and browser services are optional layers:
 
 | Component | Purpose | Started by default |
 | --- | --- | --- |
 | `bug-paw-web` | Web UI, API, Pi runtime, and persistent application logic | Yes |
+| `bug-paw-whisper` | CPU `int8` transcription using Whisper `base` by default | Yes |
 | `bug-paw-search` | Private SearXNG search API | No |
 | `bug-paw-cache` | Valkey for SearXNG | No |
 | `bug-paw-embedding` | Managed `BAAI/bge-small-zh-v1.5` embeddings | No |
 | `browser-worker` | Isolated Playwright browser execution | No |
 | `browser-egress-proxy` | Controlled egress proxy that validates public HTTPS targets | No |
 
-The host listens on port `7080` on all network interfaces by default (`0.0.0.0:7080`). Search, cache, and embedding containers do not publish host ports. Application data is stored in `./pi-agent-data` and mounted at `/data` inside the Web container.
+The host listens on port `7080` on all network interfaces by default (`0.0.0.0:7080`). Whisper, search, cache, and embedding containers do not publish host ports. Application data is stored in `./pi-agent-data`; Whisper models persist under `models/whisper`.
 
 ### Requirements
 
 - Docker Engine or Docker Desktop.
 - Docker Compose v2 via the `docker compose` command.
 - Linux, macOS, or Windows with Docker Desktop and PowerShell 5.1+.
-- At least 2 GiB of available memory is recommended for core mode. Vector mode needs additional memory and disk, and downloads the model on first start.
+- At least 4 GiB of available memory is recommended for core mode. Whisper and vector services download models on first start and need additional disk space.
 - Managed search requires outbound access to enabled search engines. Managed vector deployment requires access to GHCR and Hugging Face for images and model files.
 
 ### Quick start
@@ -328,10 +336,10 @@ On Windows PowerShell, replace the last line with `.\scripts\deploy.ps1 core`. R
 
 | Mode | Bash | PowerShell | Services |
 | --- | --- | --- | --- |
-| Core | `./scripts/deploy.sh core` | `.\scripts\deploy.ps1 core` | Web |
-| Core + search | `./scripts/deploy.sh search` | `.\scripts\deploy.ps1 search` | Web, SearXNG, Valkey |
-| Core + vector | `./scripts/deploy.sh vector` | `.\scripts\deploy.ps1 vector` | Web, Embedding |
-| Core + browser | `./scripts/deploy.sh browser` | `.\scripts\deploy.ps1 browser` | Web, Playwright worker, egress proxy |
+| Core | `./scripts/deploy.sh core` | `.\scripts\deploy.ps1 core` | Web, Whisper |
+| Core + search | `./scripts/deploy.sh search` | `.\scripts\deploy.ps1 search` | Web, Whisper, SearXNG, Valkey |
+| Core + vector | `./scripts/deploy.sh vector` | `.\scripts\deploy.ps1 vector` | Web, Whisper, Embedding |
+| Core + browser | `./scripts/deploy.sh browser` | `.\scripts\deploy.ps1 browser` | Web, Whisper, Playwright worker, egress proxy |
 | Full | `./scripts/deploy.sh full` | `.\scripts\deploy.ps1 full` | All services |
 
 For search and full modes, the helper generates a strong local `SEARXNG_SECRET` when the value is empty. The secret is written to `.env` and never printed.
@@ -374,6 +382,9 @@ chmod 600 .env
 | `BUG_PAW_PORT` | `7080` | All | Published host port; the container port remains `7080`. |
 | `BUG_PAW_TIMEZONE` | `Asia/Shanghai` | All | Container time zone as an IANA identifier. |
 | `BUG_PAW_DATA_DIR` | `./pi-agent-data` | All | Persistent host data directory. |
+| `BUG_PAW_WHISPER_MODEL` | `base` | All | faster-whisper model used for local transcription. |
+| `BUG_PAW_WHISPER_CPUS` | `4.0` | All | CPU limit for the Whisper container. |
+| `BUG_PAW_WHISPER_MEMORY` | `2g` | All | Memory limit for the Whisper container. |
 | `SEARXNG_SECRET` | None | Search, full | Strong random SearXNG service secret. |
 | `WEB_RESEARCH_TRUSTED_FAKE_IP_CIDRS` | `198.18.0.0/15` | Search, full | Test-network ranges eligible for proxy resolution; usually unchanged. |
 | `WEB_RESEARCH_EGRESS_PROFILES_FILE` | `./config/web-research-egress-profiles.json` | Search, full | Web research egress profile file. |
@@ -464,6 +475,7 @@ See `docs/` for architecture and security boundaries. Read [CONTRIBUTING.md](CON
 ├── compose.search.yaml
 ├── compose.vector.yaml
 ├── Dockerfile
+├── Dockerfile.whisper
 ├── .env.example
 ├── config/
 ├── searxng/
