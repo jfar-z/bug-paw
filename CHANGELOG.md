@@ -4,6 +4,30 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.8 - 2026-08-27
+
+### 新增 / Added
+
+- 增加 OpenAI 兼容图片接口的可配置参数定义，支持字符串、整数、数值、布尔与枚举参数，并根据是否提供参考图片自动选择生成或编辑端点。
+- 将语音输入统一改为本机服务器 Whisper：浏览器按住录音、松开上传到自托管 BugPaw，由独立 `faster-whisper` CPU `int8` 服务转写；模型缓存持久化，服务不暴露宿主端口。
+- 精简全量测试集，保留初始化认证、Provider、Agent、会话、附件、知识库、联网搜索、浏览器自动化、定时任务和 AIGC 等核心业务回归，缩短持续验证时间。
+
+- Added configurable parameters for OpenAI-compatible image APIs, including string, integer, number, boolean, and enum fields, with automatic selection between generation and editing endpoints based on reference-image input.
+- Replaced browser-local speech recognition with server-local Whisper: the browser records while held and uploads to self-hosted BugPaw, where an isolated `faster-whisper` CPU `int8` service performs transcription; model caches persist and the service exposes no host port.
+- Streamlined the full test suite around critical initialization, authentication, provider, Agent, session, attachment, knowledge-base, web-research, browser-automation, scheduled-task, and AIGC workflows to reduce verification time.
+
+### 修复 / Fixed
+
+- 修复 AIGC 图片、视频与音频预览在不同容器和宽高比下的双轴等比适配。
+- 修复 OpenAI 图片编辑读取公共目录图片时误用普通上传附件解析器的问题。
+- 限制 ComfyUI 专属输入来源只在 ComfyUI 接口展示和提交，并在服务端拒绝其他协议伪造该输入。
+- 删除 Chrome `SpeechRecognition`、SODA 中文语言包检测、安装与回退逻辑，消除浏览器和操作系统语言包差异导致的语音不可用问题。
+
+- Fixed two-axis aspect-ratio fitting for AIGC image, video, and audio previews across containers and media dimensions.
+- Fixed OpenAI image editing incorrectly resolving public-directory images through the ordinary upload-attachment path.
+- Restricted ComfyUI-only input sources to ComfyUI interfaces in both UI and submission flows, with server-side rejection for forged use by other protocols.
+- Removed Chrome `SpeechRecognition`, SODA Chinese language-pack detection, installation, and fallback logic, eliminating speech failures caused by browser and operating-system language-pack differences.
+
 ## 0.1.7 - 2026-08-22
 
 ### 新增 / Added
