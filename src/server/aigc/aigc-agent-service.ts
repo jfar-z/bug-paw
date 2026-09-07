@@ -11,6 +11,7 @@ import type { AigcConnectionService } from "./aigc-connection-service";
 import type { AigcInterfaceService } from "./aigc-interface-service";
 import type { AigcTaskService } from "./aigc-task-service";
 import type { AigcWorkflowService } from "./aigc-workflow-service";
+import { DEFAULT_AIGC_AGENT_LIMITS, type AigcAgentLimits } from "./aigc-agent-limits";
 import { agentFields, validateAgentParameters, type AigcAgentParameter } from "./aigc-agent-parameters";
 
 /** 工具调用身份只由 Runtime 提供，不能从模型参数读取。 */
@@ -45,8 +46,11 @@ export class AigcAgentService {
   /** 查询限频只保留最近使用的有界条目。 */
   private readonly lastQueries = new Map<string, number>();
 
-  /** 注入领域服务和实时授权读取函数。 */
-  constructor(private readonly dependencies: AigcAgentDependencies) {}
+  /** 注入领域服务、实时授权读取函数和部署侧限流配置。 */
+  constructor(
+    private readonly dependencies: AigcAgentDependencies,
+    private readonly limits: Readonly<AigcAgentLimits> = DEFAULT_AIGC_AGENT_LIMITS,
+  ) {}
 
   /** 每次调用读取最新 Agent 权限，旧 Runtime 不能绕过撤销授权。 */
   async authorize(context: AigcAgentContext, tool: string): Promise<void> {
@@ -129,11 +133,17 @@ export class AigcAgentService {
         return this.summary(previous);
       }
       const active = records.filter((task) => task.agentOrigin && ["queued", "running"].includes(task.status));
-      if (active.length >= 8 || active.filter((task) => task.agentOrigin?.agentId === context.agentId).length >= 2) {
-        throw new AigcAgentError("AIGC_QUOTA_EXCEEDED", "最多同时运行 8 个 Agent 任务，每个 Agent 最多 2 个");
+      if (active.length >= this.limits.maxActiveTasks
+        || active.filter((task) => task.agentOrigin?.agentId === context.agentId).length >= this.limits.maxActiveTasksPerAgent) {
+        throw new AigcAgentError(
+          "AIGC_QUOTA_EXCEEDED",
+          `最多同时运行 ${this.limits.maxActiveTasks} 个 Agent 任务，每个 Agent 最多 ${this.limits.maxActiveTasksPerAgent} 个`,
+        );
       }
       const recent = records.filter((task) => task.agentOrigin?.agentId === context.agentId && Date.now() - Date.parse(task.createdAt) < 60 * 60_000);
-      if (recent.length >= 20) throw new AigcAgentError("AIGC_RATE_LIMIT", "每个 Agent 每小时最多提交 20 个任务");
+      if (recent.length >= this.limits.maxHourlyTasksPerAgent) {
+        throw new AigcAgentError("AIGC_RATE_LIMIT", `每个 Agent 每小时最多提交 ${this.limits.maxHourlyTasksPerAgent} 个任务`);
+      }
       const prepared: Record<string, AigcRunInputValue> = Object.create(null);
       const uploads: string[] = [];
       try {
@@ -196,7 +206,9 @@ export class AigcAgentService {
       const queryKey = `${context.agentId}:${taskId}`;
       const now = Date.now();
       if (rateLimit) {
-        if (now - (this.lastQueries.get(queryKey) ?? 0) < 2_000) throw new AigcAgentError("AIGC_QUERY_TOO_FREQUENT", "任务查询间隔至少 2 秒");
+        if (now - (this.lastQueries.get(queryKey) ?? 0) < this.limits.queryIntervalMs) {
+          throw new AigcAgentError("AIGC_QUERY_TOO_FREQUENT", `任务查询间隔至少 ${this.limits.queryIntervalMs / 1_000} 秒`);
+        }
         this.lastQueries.delete(queryKey);
         this.lastQueries.set(queryKey, now);
         if (this.lastQueries.size > 1_000) this.lastQueries.delete(this.lastQueries.keys().next().value!);
