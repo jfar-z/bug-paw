@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_TOOL_NAMES } from "../../shared/tool-catalog";
 import { AigcAssetService } from "./aigc-asset-service";
 import { AigcConnectionService } from "./aigc-connection-service";
 import { AigcInterfaceService } from "./aigc-interface-service";
+import { AigcPublicFileService } from "./aigc-public-file-service";
 import { AigcWorkflowService } from "./aigc-workflow-service";
 import { AigcTaskRepository } from "./aigc-task-repository";
 import { AigcTaskService } from "./aigc-task-service";
@@ -32,6 +33,7 @@ async function fixture(
     assets: [{ name: "result.png", mediaType: "image/png", content: Buffer.from("result") }],
   }),
   limits?: AigcAgentLimits,
+  publicOrigin: string | null = "https://bugpaw.example",
 ) {
   const root = await mkdtemp(join(tmpdir(), "aigc-agent-"));
   const workspaces = join(root, "workspaces");
@@ -42,6 +44,7 @@ async function fixture(
   const files = createWorkspaceFileService({} as never, agents);
   const connections = new AigcConnectionService(join(root, "connections.json"));
   await connections.create({ name: "Test", type: "openai", baseUrl: "https://private.invalid/v1", enabled: true }, "channel", (await connections.read()).revision);
+  await connections.create({ name: "Grok", type: "grok", baseUrl: "https://grok.invalid/v1", enabled: true }, "grok-channel", (await connections.read()).revision);
   const workflows = new AigcWorkflowService(join(root, "workflows.json"));
   const interfaces = new AigcInterfaceService(join(root, "interfaces.json"), (id) => workflows.exists(id));
   const { item } = await interfaces.create({
@@ -50,14 +53,18 @@ async function fixture(
     config: { model: "test", parameters: [{ name: "steps", type: "integer", defaultValue: 8, description: "步数" }] },
   });
   const assets = new AigcAssetService(join(root, "assets"));
+  const publicFiles = new AigcPublicFileService(join(root, "public-files"));
   const repository = new AigcTaskRepository(join(root, "tasks.json"));
   const adapter = { execute: vi.fn(execute) };
   const tasks = new AigcTaskService({
-    repository, interfaces, workflows, connections, assets, publicFiles: {} as never,
-    credentials: new CredentialService(join(root, "auth.json")), adapters: { openai: adapter },
+    repository, interfaces, workflows, connections, assets, publicFiles,
+    credentials: new CredentialService(join(root, "auth.json")), adapters: { openai: adapter, grok: adapter, comfyui: adapter },
   });
   let allowed = [...toolNames];
-  const dependencies = { interfaces, workflows, connections, assets, tasks, workspace, files, allowedTools: async () => allowed };
+  const dependencies = {
+    interfaces, workflows, connections, assets, publicFiles, publicOrigin: publicOrigin ?? undefined,
+    tasks, workspace, files, allowedTools: async () => allowed,
+  };
   const service = limits ? new AigcAgentService(dependencies, limits) : new AigcAgentService(dependencies);
   const tools = createAigcAgentTools(context, service);
   const submit = (requestKey = "one") => ({ interfaceId: item.id, requestKey, parameters: [{ name: "prompt", text: "test" }] });
@@ -66,7 +73,7 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   };
   cleanup.push(close);
-  return { root, workspaces, service, tools, tasks, repository, interfaces, connections, workflows, assets, adapter, item, submit,
+  return { root, workspaces, service, tools, tasks, repository, interfaces, connections, workflows, assets, publicFiles, adapter, item, submit,
     revoke: () => { allowed = []; },
     setAllowed: (names: string[]) => { allowed = names; },
     unpublish: async () => interfaces.update(item.id, { ...item, toolPublishEnabled: false }, (await interfaces.list()).revision),
@@ -156,6 +163,7 @@ describe("AIGC Agent 工具", () => {
       for (const key of ["anyOf", "oneOf", "allOf"]) expect(tool.parameters).not.toHaveProperty(key);
       expect(DEFAULT_AGENT_TOOL_NAMES).not.toContain(tool.name);
     }
+    expect(JSON.stringify(f.tools.find((tool) => tool.name === "aigc_run")?.parameters)).not.toContain('"url"');
     const list = await f.service.list(context, {});
     expect(JSON.stringify(list)).not.toContain("private.invalid");
     expect(list.interfaces).toHaveLength(1);
@@ -261,6 +269,50 @@ describe("AIGC Agent 工具", () => {
     const asset = f.adapter.execute.mock.calls[0][0].inputs.image as { assetId: string };
     expect(asset.assetId).toBeTruthy();
     expect(await f.assets.resolveInputPath(asset.assetId)).toBeTruthy();
+    expect(await f.publicFiles.list()).toHaveLength(0);
+  });
+
+  it("Grok 媒体字段统一接收本地路径并自动发布为稳定 URL", async () => {
+    const f = await fixture();
+    await f.interfaces.update(f.item.id, {
+      ...f.item,
+      protocol: "grok",
+      capability: "image-edit",
+      channelId: "grok-channel",
+      config: { model: "grok-imagine" },
+    }, (await f.interfaces.list()).revision);
+    await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
+    const detail = await f.service.list(context, { interfaceId: f.item.id });
+    expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
+      expect.objectContaining({ name: "image", source: "workspace" }),
+    ]));
+    const task = await f.service.run(context, {
+      ...f.submit(),
+      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: "source.png" }],
+    });
+    await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
+    const publicFiles = await f.publicFiles.list();
+    expect(publicFiles).toHaveLength(1);
+    expect(f.adapter.execute.mock.calls[0][0].inputs.image).toBe(`https://bugpaw.example/aigc-public/files/${publicFiles[0].id}`);
+    expect(await f.publicFiles.resolvePath(publicFiles[0].id)).toBeTruthy();
+  });
+
+  it("Grok 缺少公开 Origin 时拒绝提交且不残留公开文件", async () => {
+    const f = await fixture(undefined, undefined, null);
+    await f.interfaces.update(f.item.id, {
+      ...f.item,
+      protocol: "grok",
+      capability: "image-edit",
+      channelId: "grok-channel",
+      config: { model: "grok-imagine" },
+    }, (await f.interfaces.list()).revision);
+    await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
+    await expect(f.service.run(context, {
+      ...f.submit(),
+      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: "source.png" }],
+    })).rejects.toMatchObject({ code: "AIGC_PUBLIC_ORIGIN_UNAVAILABLE" });
+    expect(await f.tasks.listRecords()).toHaveLength(0);
+    expect(await f.publicFiles.list()).toHaveLength(0);
   });
 
   it("工具错误不泄露底层绝对路径或凭据", async () => {

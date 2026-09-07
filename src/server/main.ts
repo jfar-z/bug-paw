@@ -337,6 +337,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const aigcInterfaces = new AigcInterfaceService(join(paths.appDir, "aigc-interfaces.json"), (id) => aigcWorkflows.exists(id));
   const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
   const aigcPublicFiles = new AigcPublicFileService(join(paths.appDir, "aigc-public-files"));
+  const aigcPublicOrigin = resolveAigcPublicOrigin(process.env);
   const aigcComfyUiInputs = new AigcComfyUiInputService(aigcConnections, aigcCredentials);
   const aigcTasks = new AigcTaskService({
     repository: new AigcTaskRepository(join(paths.appDir, "aigc-tasks.json")),
@@ -354,7 +355,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
   const aigcAgentService = new AigcAgentService({
     interfaces: aigcInterfaces, workflows: aigcWorkflows, connections: aigcConnections,
-    tasks: aigcTasks, assets: aigcAssets, workspace: workspaceFileManager, files: workspaceFiles,
+    tasks: aigcTasks, assets: aigcAssets, publicFiles: aigcPublicFiles, publicOrigin: aigcPublicOrigin,
+    workspace: workspaceFileManager, files: workspaceFiles,
     allowedTools: async (agentId) => (await agentStore.get(agentId))?.profile.allowedTools ?? [],
   }, readAigcAgentLimits(process.env));
   const aigcMediaProjects = new AigcMediaProjectService({
@@ -781,6 +783,15 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     await instanceLock.release();
     throw error;
   }
+}
+
+/** 解析 Agent 发布 Grok 媒体时使用的无认证公开 Origin。 */
+function resolveAigcPublicOrigin(env: NodeJS.ProcessEnv): string | undefined {
+  if (env.BUG_PAW_PUBLIC_ORIGIN?.trim()) return env.BUG_PAW_PUBLIC_ORIGIN.trim();
+  const address = env.BUG_PAW_BIND_ADDRESS?.trim();
+  if (!address || ["0.0.0.0", "::", "[::]"].includes(address)) return undefined;
+  const host = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+  return `http://${host}:${env.BUG_PAW_PORT?.trim() || "7080"}`;
 }
 
 interface GracefulShutdownOptions {

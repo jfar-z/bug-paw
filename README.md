@@ -142,6 +142,7 @@ chmod 600 .env
 | --- | --- | --- | --- |
 | `BUG_PAW_BIND_ADDRESS` | `0.0.0.0` | 全部 | Web 在宿主机的监听地址；只允许本机或反向代理访问时改为 `127.0.0.1`。 |
 | `BUG_PAW_PORT` | `7080` | 全部 | Web 的宿主机端口；容器内仍固定为 `7080`。 |
+| `BUG_PAW_PUBLIC_ORIGIN` | 无 | 全部 | Agent 调用 Grok 等 URL 型媒体接口时发布本地附件所用的无认证外部 Origin，例如 `https://bugpaw.example.com`。 |
 | `BUG_PAW_TIMEZONE` | `Asia/Shanghai` | 全部 | 容器时区，使用 IANA 时区名称。 |
 | `BUG_PAW_DATA_DIR` | `./pi-agent-data` | 全部 | 宿主机持久化数据目录。 |
 | `BUG_PAW_WHISPER_MODEL` | `base` | 全部 | 本机语音识别使用的 faster-whisper 模型。 |
@@ -380,6 +381,7 @@ chmod 600 .env
 | --- | --- | --- | --- |
 | `BUG_PAW_BIND_ADDRESS` | `0.0.0.0` | All | Host bind address. Set it to `127.0.0.1` when access should be limited to the local host or a reverse proxy. |
 | `BUG_PAW_PORT` | `7080` | All | Published host port; the container port remains `7080`. |
+| `BUG_PAW_PUBLIC_ORIGIN` | None | All | Unauthenticated external origin used when Agents publish local media for URL-based providers such as Grok, for example `https://bugpaw.example.com`. |
 | `BUG_PAW_TIMEZONE` | `Asia/Shanghai` | All | Container time zone as an IANA identifier. |
 | `BUG_PAW_DATA_DIR` | `./pi-agent-data` | All | Persistent host data directory. |
 | `BUG_PAW_WHISPER_MODEL` | `base` | All | faster-whisper model used for local transcription. |

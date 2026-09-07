@@ -12,7 +12,7 @@ export interface AigcAgentField {
   enumValues?: (string | number | boolean)[];
   min?: number;
   max?: number;
-  source?: "workspace" | "url";
+  source?: "workspace";
 }
 
 /** 固定形状的参数项，避免向 Provider 发送动态 Record Schema。 */
@@ -22,7 +22,6 @@ export interface AigcAgentParameter {
   number?: number;
   boolean?: boolean;
   path?: string;
-  url?: string;
 }
 
 /** 从既有接口定义提取稳定字段，并保留真实默认值及数值约束。 */
@@ -48,10 +47,10 @@ export function agentFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDe
   }
   const fields: AigcAgentField[] = [{ name: "prompt", type: "string", required: item.capability !== "video-extend" }];
   if (["image-edit", "image-to-video"].includes(item.capability)) {
-    fields.push({ name: "image", type: "image", required: true, source: item.protocol === "grok" ? "url" : "workspace" });
+    fields.push({ name: "image", type: "image", required: true, source: "workspace" });
   }
   if (["video-edit", "video-extend"].includes(item.capability)) {
-    fields.push({ name: "video", type: "video", required: true, source: "url" });
+    fields.push({ name: "video", type: "video", required: true, source: "workspace" });
   }
   if (item.protocol === "openai") {
     return [...fields, ...resolveOpenAiParameterDefinitions(item.config as AigcOpenAiInterfaceConfig).map((parameter) => ({
@@ -79,7 +78,7 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
     const field = fieldsByName.get(parameter.name);
     if (!field || Object.hasOwn(values, parameter.name)) throw new TypeError("参数名称无效或重复");
     const keys = Object.keys(parameter).filter((key) => key !== "name" && parameter[key as keyof AigcAgentParameter] !== undefined);
-    const expected = field.source === "workspace" ? "path" : field.source === "url" ? "url"
+    const expected = field.source === "workspace" ? "path"
       : field.type === "enum" ? (typeof parameter.text === "string" ? "text" : typeof parameter.boolean === "boolean" ? "boolean" : "number")
       : field.type === "string" ? "text" : field.type === "boolean" ? "boolean" : "number";
     if (keys.length !== 1 || keys[0] !== expected) throw new TypeError(`参数 ${field.name} 必须且只能提供 ${expected}`);
@@ -106,10 +105,6 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
       throw new TypeError(`参数 ${field.name} 数值或范围无效`);
     }
     if (field.enumValues?.length && !field.enumValues.includes(value)) throw new TypeError(`参数 ${field.name} 不在枚举范围内`);
-    if (field.source === "url") {
-      const url = new URL(String(value));
-      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new TypeError("媒体 URL 必须为不含凭证或片段的 HTTP(S) 地址");
-    }
   }
   return values;
 }
