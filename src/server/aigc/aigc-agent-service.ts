@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import mime from "mime";
@@ -9,6 +9,7 @@ import { KeyedMutex } from "../core/keyed-mutex";
 import type { AigcAssetService } from "./aigc-asset-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
 import type { AigcInterfaceService } from "./aigc-interface-service";
+import type { AigcPublicFileService } from "./aigc-public-file-service";
 import type { AigcTaskService } from "./aigc-task-service";
 import type { AigcWorkflowService } from "./aigc-workflow-service";
 import { DEFAULT_AIGC_AGENT_LIMITS, type AigcAgentLimits } from "./aigc-agent-limits";
@@ -27,6 +28,8 @@ export interface AigcAgentDependencies {
   workflows: AigcWorkflowService;
   tasks: AigcTaskService;
   assets: AigcAssetService;
+  publicFiles: AigcPublicFileService;
+  publicOrigin?: string;
   workspace: WorkspaceFileManager;
   files: WorkspaceFileService;
   allowedTools(agentId: string): Promise<string[]>;
@@ -146,6 +149,7 @@ export class AigcAgentService {
       }
       const prepared: Record<string, AigcRunInputValue> = Object.create(null);
       const uploads: string[] = [];
+      const publicUploads: string[] = [];
       try {
         // 先读取并校验全部媒体，再保存临时输入，避免错误参数启动上游计算。
         const media = new Map<string, Awaited<ReturnType<WorkspaceFileManager["readFile"]>>>();
@@ -158,15 +162,27 @@ export class AigcAgentService {
             totalBytes += file.content.length;
             if (totalBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参总量不能超过 200 MiB");
             media.set(field.name, file);
-          } else {
-            prepared[field.name] = values[field.name];
-          }
+          } else prepared[field.name] = values[field.name];
         }
         for (const [name, file] of media) {
           signal?.throwIfAborted();
-          const saved = await this.dependencies.assets.saveInput(Readable.from(file.content), file.name, file.mediaType);
-          uploads.push(saved.id);
-          prepared[name] = { assetId: saved.id, name: saved.name, mediaType: saved.mediaType };
+          if (item.protocol === "grok") {
+            const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
+            if (!publicOrigin) {
+              throw new AigcAgentError("AIGC_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 本地媒体需要配置 BUG_PAW_PUBLIC_ORIGIN，或使用明确的 BUG_PAW_BIND_ADDRESS");
+            }
+            const saved = await this.dependencies.publicFiles.save(
+              Readable.from(file.content),
+              `agent-${randomUUID()}-${file.name}`,
+              file.mediaType,
+            );
+            publicUploads.push(saved.id);
+            prepared[name] = `${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`;
+          } else {
+            const saved = await this.dependencies.assets.saveInput(Readable.from(file.content), file.name, file.mediaType);
+            uploads.push(saved.id);
+            prepared[name] = { assetId: saved.id, name: saved.name, mediaType: saved.mediaType };
+          }
         }
         // 文件准备可能耗时，提交前再次核对授权与发布状态。
         await this.authorize(context, tool);
@@ -178,7 +194,10 @@ export class AigcAgentService {
         });
         return this.summary(task);
       } catch (error) {
-        await Promise.all(uploads.map((id) => this.dependencies.assets.removeInput(id)));
+        await Promise.all([
+          ...uploads.map((id) => this.dependencies.assets.removeInput(id)),
+          ...publicUploads.map((id) => this.dependencies.publicFiles.remove(id)),
+        ]);
         throw error;
       }
     });
@@ -285,4 +304,14 @@ export class AigcAgentService {
       pollAfterMs: 5_000,
     };
   }
+}
+
+/** 归一化部署侧公开地址，避免把路径、凭据或查询参数带入媒体 URL。 */
+function normalizePublicOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const url = new URL(value);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || !["", "/"].includes(url.pathname)) {
+    throw new TypeError("BUG_PAW_PUBLIC_ORIGIN 必须是不含路径、凭据、查询参数或片段的 HTTP(S) Origin");
+  }
+  return url.origin;
 }

@@ -10,9 +10,8 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
     text: Type.Optional(Type.String({ maxLength: 20_000 })),
     number: Type.Optional(Type.Number()),
     boolean: Type.Optional(Type.Boolean()),
-    path: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024, description: "当前 Agent 工作区相对路径，仅用于 source=workspace 的媒体字段" })),
-    url: Type.Optional(Type.String({ minLength: 1, maxLength: 2_048, description: "仅用于 source=url 的媒体字段；不会自动公开本地文件" })),
-  }, { additionalProperties: false }), { maxItems: 100, description: "每项按字段类型只提供 text、number、boolean、path、url 中的一种值" });
+    path: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024, description: "当前 Agent 工作区相对路径；媒体字段统一使用此值，服务端按渠道协议上传或发布" })),
+  }, { additionalProperties: false }), { maxItems: 100, description: "每项按字段类型只提供 text、number、boolean、path 中的一种值" });
   return [
     defineTool({
       name: "aigc_list_interfaces", label: "查询 AIGC 接口",
