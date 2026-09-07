@@ -49,6 +49,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     const prompt = await this.buildPrompt(workflow, input);
     const clientId = randomUUID();
     const tracker = this.openStatusSocket(input.channel.baseUrl, clientId, progress);
+    let promptId: string | undefined;
     try {
       progress.phase("submitting");
       const submitResponse = await this.request(`${input.channel.baseUrl}/prompt`, {
@@ -58,7 +59,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         body: JSON.stringify({ prompt, client_id: clientId }),
       });
       const submitted = await readJson(submitResponse);
-      const promptId = readPromptId(submitted);
+      promptId = readPromptId(submitted);
       tracker?.setPromptId(promptId);
       progress.queue(0);
       const outputs = await this.pollHistory(input, promptId, progress);
@@ -66,8 +67,39 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       const assets = await this.collectOutputs(input, workflow.outputMappings, outputs);
       if (assets.length === 0) throw new Error("ComfyUI 工作流执行完成但没有可用产物");
       return { assets };
+    } catch (error) {
+      if (input.signal.aborted) {
+        input.onCancellation?.(promptId ? await this.cancelQueuedPrompt(input.channel.baseUrl, promptId) : "unknown");
+      }
+      throw error;
     } finally {
       tracker?.close();
+    }
+  }
+
+  /** 只删除精确排队任务；正在运行或状态不明确时不调用全局 interrupt。 */
+  private async cancelQueuedPrompt(baseUrl: string, promptId: string): Promise<"confirmed" | "unknown"> {
+    try {
+      const signal = AbortSignal.timeout(5_000);
+      const queue = await readJson(await this.request(`${baseUrl}/queue`, { signal }));
+      const pending = Array.isArray(queue.queue_pending) ? queue.queue_pending : [];
+      if (!pending.some((entry) => Array.isArray(entry) && String(entry[1]) === promptId)) return "unknown";
+      const deletion = await this.request(`${baseUrl}/queue`, {
+        method: "POST", signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete: [promptId] }),
+      });
+      // ComfyUI 的队列修改接口允许成功时返回空响应体。
+      if (!deletion.ok) return "unknown";
+      await deletion.body?.cancel();
+      const after = await readJson(await this.request(`${baseUrl}/queue`, { signal }));
+      if (!Array.isArray(after.queue_pending) || !Array.isArray(after.queue_running)) return "unknown";
+      const present = [...after.queue_pending, ...after.queue_running]
+        .some((entry) => Array.isArray(entry) && String(entry[1]) === promptId);
+      // 任务可能在删除前已开始并完成，存在 history 时不能声称已停止。
+      const history = await readJson(await this.request(`${baseUrl}/history/${encodeURIComponent(promptId)}`, { signal }));
+      return present || history[promptId] ? "unknown" : "confirmed";
+    } catch {
+      return "unknown";
     }
   }
 

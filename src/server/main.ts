@@ -73,6 +73,8 @@ import { AigcPublicFileService } from "./aigc/aigc-public-file-service";
 import { AigcComfyUiInputService } from "./aigc/aigc-comfyui-input-service";
 import { AigcTaskRepository } from "./aigc/aigc-task-repository";
 import { AigcTaskService } from "./aigc/aigc-task-service";
+import { AigcAgentService } from "./aigc/aigc-agent-service";
+import { createAigcAgentTools } from "./aigc/aigc-agent-tools";
 import { AigcMediaProjectService } from "./aigc/aigc-media-project-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
 import { GrokAigcAdapter } from "./aigc/grok-adapter";
@@ -349,6 +351,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       comfyui: new ComfyUiAigcAdapter(),
     },
   });
+  const aigcAgentService = new AigcAgentService({
+    interfaces: aigcInterfaces, workflows: aigcWorkflows, connections: aigcConnections,
+    tasks: aigcTasks, assets: aigcAssets, workspace: workspaceFileManager, files: workspaceFiles,
+    allowedTools: async (agentId) => (await agentStore.get(agentId))?.profile.allowedTools ?? [],
+  });
   const aigcMediaProjects = new AigcMediaProjectService({
     filePath: join(paths.appDir, "aigc-media-editor.json"),
     outputRoot: join(paths.appDir, "aigc-media-renders"),
@@ -411,6 +418,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
           createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...createAigcAgentTools({ agentId, sessionId }, aigcAgentService)
+              .filter((tool) => profile.profile.allowedTools.includes(tool.name)),
             ...(profile.profile.allowedTools.includes("ask_user")
               ? [createAskUserTool({ agentId, sessionId, branchAnchorId, repository: sessionQuestions })]
               : []),
@@ -421,9 +430,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
               ? createBrowserTools({ sessionId }, browserAutomation).filter((tool) => browserCapabilities.toolNames.includes(tool.name as never))
               : []),
           ],
-          appendSystemPrompt: browserCapabilities.toolNames.length > 0
-            ? [AgentSystemPromptConfiguration.browserAutomationPolicy]
-            : [],
+          appendSystemPrompt: [
+            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
+            ...(profile.profile.allowedTools.some((name) => name.startsWith("aigc_")) ? [AgentSystemPromptConfiguration.aigcPolicy] : []),
+          ],
           resolveAgentPromptContext: () => agentPrompts.readContext(agentId),
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
@@ -749,6 +759,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   app.addHook("onClose", async () => {
+    await aigcTasks.close();
     await browserPool?.close();
     const schedulerDrained = await scheduledTasks.stopAndDrain(5_000);
     const resourcesDrained = await resourceTasks.stopAndDrain(5_000);

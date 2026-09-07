@@ -1649,8 +1649,7 @@ p {
     gap: 10px;
   }
 
-  .inherited-field,
-  .tool-permission-grid {
+  .inherited-field {
     grid-template-columns: 1fr;
   }
 

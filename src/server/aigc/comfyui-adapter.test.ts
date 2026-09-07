@@ -20,6 +20,33 @@ class FakeSocket {
 
 describe("ComfyUiAigcAdapter", () => {
 
+it.each([true, false])("取消仅移除自己的排队任务，排队状态=%s", async (queued) => {
+    const controller = new AbortController();
+    let removed = false;
+    const requests: { url: string; body?: string }[] = [];
+    const request = vi.fn(async (value: string | URL | Request, init?: RequestInit) => {
+      const url = String(value);
+      requests.push({ url, body: init?.body as string | undefined });
+      if (url.endsWith("/prompt")) return json({ prompt_id: "owned-prompt" });
+      if (url.endsWith("/queue")) {
+        if (init?.method === "POST") { removed = true; return new Response(null, { status: 200 }); }
+        return json({
+          queue_pending: queued && !removed ? [[0, "owned-prompt"], [1, "other-prompt"]] : [[1, "other-prompt"]],
+          queue_running: queued ? [] : [[0, "owned-prompt"]],
+        });
+      }
+      if (url.endsWith("/history/owned-prompt")) { controller.abort(); return json({}); }
+      throw new Error("unexpected request");
+    });
+    const execution = input(imageWorkflow(), {}, undefined, controller);
+    execution.onCancellation = vi.fn();
+    await expect(new ComfyUiAigcAdapter(request as typeof fetch, () => undefined, 0).execute(execution)).rejects.toThrow();
+    expect(execution.onCancellation).toHaveBeenCalledWith(queued ? "confirmed" : "unknown");
+    expect(requests.some((entry) => entry.url.endsWith("/interrupt"))).toBe(false);
+    expect(requests.filter((entry) => entry.body?.includes("delete")).map((entry) => JSON.parse(entry.body!)))
+      .toEqual(queued ? [{ delete: ["owned-prompt"] }] : []);
+  });
+
 it("条件参数有值时保留节点组并上传媒体", async () => {
     let submittedPrompt: Record<string, unknown> | undefined;
     const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {

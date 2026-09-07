@@ -17,6 +17,35 @@ function renderAigcPage(route: Parameters<typeof AigcWorkbenchPage>[0]["route"] 
 }
 
 describe("AigcWorkbenchPage 创作台", () => {
+  it("接口详情保存正式发布开关，并保持其他配置不变", async () => {
+    const item = {
+      id: "interface-1", name: "测试接口", description: "", protocol: "openai", capability: "text-to-image",
+      channelId: "channel-1", enabled: true, toolPublishEnabled: false, config: { model: "test" },
+      createdAt: "2026-09-07T00:00:00.000Z", updatedAt: "2026-09-07T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/aigc/interfaces/interface-1") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...item, ...body }));
+      }
+      if (url.endsWith("/aigc/interfaces")) return new Response(JSON.stringify({ revision: "r1", interfaces: [item] }));
+      if (url.endsWith("/aigc/channels")) return new Response(JSON.stringify({ channels: [] }));
+      if (url.endsWith("/aigc/workflows")) return new Response(JSON.stringify({ workflows: [] }));
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-interface-detail", interfaceId: item.id });
+    await waitFor(() => expect(screen.getByLabelText("AIGC 接口名称")).toHaveValue("测试接口"));
+    const publish = screen.getByRole("checkbox", { name: "发布为 Agent 工具" });
+    expect(publish).not.toBeChecked();
+    fireEvent.click(publish);
+    fireEvent.click(screen.getByRole("button", { name: "保存接口" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true));
+    const body = JSON.parse(String(fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH")?.[1]?.body));
+    expect(body).toMatchObject({ toolPublishEnabled: true, channelId: item.channelId, config: item.config });
+    expect(await screen.findByText("已保存 AIGC 接口")).toBeInTheDocument();
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

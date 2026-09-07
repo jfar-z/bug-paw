@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -77,6 +77,21 @@ export class AigcAssetService {
   /** 解析任务产物文件路径，禁止越界。 */
   async resolveOutputPath(taskId: string, id: string): Promise<string | undefined> {
     return resolveAssetPath(join(this.outputRoot, safeSegment(taskId)), id);
+  }
+
+  /** 有界读取内部产物，不把持久化绝对路径暴露给工具层。 */
+  async readOutput(taskId: string, id: string, maxBytes: number): Promise<Buffer> {
+    const path = await this.resolveOutputPath(taskId, id);
+    if (!path || (await stat(path)).size > maxBytes) throw new TypeError("AIGC 产物不存在或超过交付大小限制");
+    const content = await readFile(path);
+    if (content.byteLength > maxBytes) throw new TypeError("AIGC 产物超过交付大小限制");
+    return content;
+  }
+
+  /** 清理工具准备阶段失败而未被任务引用的临时输入。 */
+  async removeInput(id: string): Promise<void> {
+    const path = await this.resolveInputPath(id);
+    if (path) await rm(path, { force: true });
   }
 
   /** 按需生成并复用任务图片产物的 WebP 缩略图。 */

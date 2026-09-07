@@ -72,6 +72,10 @@ const tool = defineTool({
 - 含条件参数时，必须覆盖缺少条件必填字段且没有产生副作用的场景。
 - 新增 Provider 专用 Schema 关键字时，必须增加对应 Provider 的最小请求回归测试或记录可重复的人工验收步骤。
 
+## AIGC 工具
+
+`aigc_list_interfaces`、`aigc_run`、`aigc_get_task`、`aigc_cancel_task` 通过会话工具工厂注册，必须分别授权。接口发布开关不能替代 Agent 工具权限，历史手动任务不自动授权给任何 Agent。完整调用约定、限额及取消语义见 [AIGC 接口发布规范](11-aigc-agent-tools.md)。
+
 ## 定时任务示例
 
 `scheduled_tasks` 由 `createScheduledTasksTool(agentId, service)` 创建，运行时只注入当前 Agent 的服务作用域。它的全局 Skill 说明 Cron、时区、目标会话及执行行为；真实字段校验仍在 TypeBox Schema 与服务层完成。

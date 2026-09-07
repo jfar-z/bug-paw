@@ -38,6 +38,10 @@ export const RETIRED_AGENT_TOOL_NAMES = ["edit_own_prompts"] as const;
 
 /** 由能力扩展模块提供、可按全局开关停用的工具。 */
 export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
+  { name: "aigc_list_interfaces", description: "查询已发布的 AIGC 接口及参数", source: "capability", highRisk: false },
+  { name: "aigc_run", description: "提交可能计费的 AIGC 生成任务", source: "capability", highRisk: true },
+  { name: "aigc_get_task", description: "查询所属 AIGC 任务并交付产物", source: "capability", highRisk: false },
+  { name: "aigc_cancel_task", description: "取消所属 AIGC 任务", source: "capability", highRisk: true },
   { name: "web_search", description: "搜索互联网并返回可引用来源", source: "capability", highRisk: false },
   { name: "web_read", description: "读取公开网页正文", source: "capability", highRisk: false },
   { name: "browser_open", description: "打开公网 HTTPS 或工作区静态 HTML", source: "capability", highRisk: false },
@@ -54,6 +58,7 @@ export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
 /** 新建 Agent 的默认权限，保持现有开箱即用的能力。 */
 export const DEFAULT_AGENT_TOOL_NAMES = [...BUILTIN_TOOL_CATALOG, ...SYSTEM_TOOL_CATALOG, ...CAPABILITY_TOOL_CATALOG]
   .filter(({ name }) => !["browser_input", "browser_submit", "browser_upload"].includes(name))
+  .filter(({ name }) => !name.startsWith("aigc_"))
   .map(({ name }) => name);
 
 /** 历史 Agent 升级时需要补齐的系统工具权限。 */
