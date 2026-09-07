@@ -74,6 +74,7 @@ import { AigcComfyUiInputService } from "./aigc/aigc-comfyui-input-service";
 import { AigcTaskRepository } from "./aigc/aigc-task-repository";
 import { AigcTaskService } from "./aigc/aigc-task-service";
 import { AigcAgentService } from "./aigc/aigc-agent-service";
+import { readAigcAgentLimits } from "./aigc/aigc-agent-limits";
 import { createAigcAgentTools } from "./aigc/aigc-agent-tools";
 import { AigcMediaProjectService } from "./aigc/aigc-media-project-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
@@ -355,7 +356,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     interfaces: aigcInterfaces, workflows: aigcWorkflows, connections: aigcConnections,
     tasks: aigcTasks, assets: aigcAssets, workspace: workspaceFileManager, files: workspaceFiles,
     allowedTools: async (agentId) => (await agentStore.get(agentId))?.profile.allowedTools ?? [],
-  });
+  }, readAigcAgentLimits(process.env));
   const aigcMediaProjects = new AigcMediaProjectService({
     filePath: join(paths.appDir, "aigc-media-editor.json"),
     outputRoot: join(paths.appDir, "aigc-media-renders"),

@@ -14,6 +14,7 @@ import { AigcWorkflowService } from "./aigc-workflow-service";
 import { AigcTaskRepository } from "./aigc-task-repository";
 import { AigcTaskService } from "./aigc-task-service";
 import { AigcAgentService } from "./aigc-agent-service";
+import type { AigcAgentLimits } from "./aigc-agent-limits";
 import { createAigcAgentTools } from "./aigc-agent-tools";
 import { agentFields, validateAgentParameters } from "./aigc-agent-parameters";
 import type { AigcExecutionInput, AigcExecutionResult } from "./aigc-protocol-adapter";
@@ -26,9 +27,12 @@ const pending = (input: AigcExecutionInput): Promise<AigcExecutionResult> => new
 });
 
 /** 使用真实任务存储、文件边界和发布配置，仅替换上游生成服务。 */
-async function fixture(execute: (input: AigcExecutionInput) => Promise<AigcExecutionResult> = async () => ({
-  assets: [{ name: "result.png", mediaType: "image/png", content: Buffer.from("result") }],
-})) {
+async function fixture(
+  execute: (input: AigcExecutionInput) => Promise<AigcExecutionResult> = async () => ({
+    assets: [{ name: "result.png", mediaType: "image/png", content: Buffer.from("result") }],
+  }),
+  limits?: AigcAgentLimits,
+) {
   const root = await mkdtemp(join(tmpdir(), "aigc-agent-"));
   const workspaces = join(root, "workspaces");
   await mkdir(join(workspaces, "agent-a"), { recursive: true });
@@ -53,7 +57,8 @@ async function fixture(execute: (input: AigcExecutionInput) => Promise<AigcExecu
     credentials: new CredentialService(join(root, "auth.json")), adapters: { openai: adapter },
   });
   let allowed = [...toolNames];
-  const service = new AigcAgentService({ interfaces, workflows, connections, assets, tasks, workspace, files, allowedTools: async () => allowed });
+  const dependencies = { interfaces, workflows, connections, assets, tasks, workspace, files, allowedTools: async () => allowed };
+  const service = limits ? new AigcAgentService(dependencies, limits) : new AigcAgentService(dependencies);
   const tools = createAigcAgentTools(context, service);
   const submit = (requestKey = "one") => ({ interfaceId: item.id, requestKey, parameters: [{ name: "prompt", text: "test" }] });
   const close = async () => {
@@ -212,7 +217,12 @@ describe("AIGC Agent 工具", () => {
   });
 
   it("限制每个 Agent 两个并发任务，并拒绝过频查询", async () => {
-    const f = await fixture(pending);
+    const f = await fixture(pending, {
+      maxActiveTasks: 8,
+      maxActiveTasksPerAgent: 2,
+      maxHourlyTasksPerAgent: 20,
+      queryIntervalMs: 2_000,
+    });
     const task = await f.service.run(context, f.submit());
     await f.service.run(context, f.submit("two"));
     await expect(f.service.run(context, f.submit("three"))).rejects.toMatchObject({ code: "AIGC_QUOTA_EXCEEDED" });
