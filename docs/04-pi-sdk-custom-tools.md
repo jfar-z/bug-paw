@@ -74,7 +74,7 @@ const tool = defineTool({
 
 ## AIGC 工具
 
-`aigc_list_interfaces`、`aigc_run`、`aigc_get_task`、`aigc_cancel_task` 通过会话工具工厂注册，必须分别授权。接口发布开关不能替代 Agent 工具权限，历史手动任务不自动授权给任何 Agent。完整调用约定、限额及取消语义见 [AIGC 接口发布规范](11-aigc-agent-tools.md)。
+`aigc_list_interfaces`、`aigc_run`、`aigc_run_and_wait`、`aigc_get_task`、`aigc_cancel_task` 通过会话工具工厂注册，必须分别授权。阻塞工具使用自身授权复用提交及交付逻辑，不隐式授予异步工具权限。接口发布开关不能替代 Agent 工具权限，历史手动任务不自动授权给任何 Agent。完整调用约定、限额及取消语义见 [AIGC 接口发布规范](11-aigc-agent-tools.md)。
 
 ## 定时任务示例
 

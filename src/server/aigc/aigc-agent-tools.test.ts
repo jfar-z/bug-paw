@@ -20,7 +20,7 @@ import type { AigcExecutionInput, AigcExecutionResult } from "./aigc-protocol-ad
 import type { AigcWorkflowDetail } from "../../shared/aigc-contracts";
 
 const context = { agentId: "agent-a", sessionId: "session-a" };
-const toolNames = ["aigc_list_interfaces", "aigc_run", "aigc_get_task", "aigc_cancel_task"];
+const toolNames = ["aigc_list_interfaces", "aigc_run", "aigc_get_task", "aigc_cancel_task", "aigc_run_and_wait"];
 const pending = (input: AigcExecutionInput): Promise<AigcExecutionResult> => new Promise((_resolve, reject) => {
   input.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
 });
@@ -63,6 +63,7 @@ async function fixture(execute: (input: AigcExecutionInput) => Promise<AigcExecu
   cleanup.push(close);
   return { root, workspaces, service, tools, tasks, repository, interfaces, connections, workflows, assets, adapter, item, submit,
     revoke: () => { allowed = []; },
+    setAllowed: (names: string[]) => { allowed = names; },
     unpublish: async () => interfaces.update(item.id, { ...item, toolPublishEnabled: false }, (await interfaces.list()).revision),
   };
 }
@@ -74,6 +75,74 @@ afterEach(async () => {
 });
 
 describe("AIGC Agent 工具", () => {
+  it("阻塞工具仅需自身授权，等待真实完成并通过回调报告进度与交付产物", async () => {
+    const f = await fixture(async (input) => {
+      input.onProgress?.({ phase: "running", progressValue: 1, progressMax: 2, updatedAt: new Date().toISOString() });
+      return { assets: [{ name: "result.png", mediaType: "image/png", content: Buffer.from("result") }] };
+    });
+    f.setAllowed(["aigc_run_and_wait"]);
+    const updates = vi.fn();
+    const tool = f.tools.find((entry) => entry.name === "aigc_run_and_wait")!;
+    const output = await tool.execute("wait-call", f.submit(), undefined, updates, {} as never);
+    const block = output.content[0];
+    if (block.type !== "text") throw new Error("工具必须返回文本结果");
+    const payload = JSON.parse(block.text);
+    expect(payload.data).toMatchObject({ status: "succeeded", waitStatus: "completed" });
+    expect(payload.data.files).toHaveLength(1);
+    expect(updates).toHaveBeenCalled();
+    expect(JSON.parse(updates.mock.calls[0][0].content[0].text).data.taskId).toBe(payload.data.taskId);
+    expect(f.adapter.execute).toHaveBeenCalledOnce();
+    await expect(f.service.run(context, f.submit("denied"))).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+    await expect(f.service.get(context, payload.data.taskId)).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+  }, 15_000);
+
+  it("中止阻塞等待保留后台任务，未取消上游且同键再次等待不重复提交", async () => {
+    const f = await fixture(pending);
+    const controller = new AbortController();
+    const state = await f.service.runAndWait(context, f.submit(), controller.signal, () => controller.abort());
+    expect(state.waitStatus).toBe("interrupted");
+    await vi.waitFor(() => expect(f.adapter.execute).toHaveBeenCalledOnce());
+    expect(f.adapter.execute.mock.calls[0][0].signal.aborted).toBe(false);
+    const again = new AbortController();
+    const resumed = await f.service.runAndWait(context, f.submit(), again.signal, () => again.abort());
+    expect(resumed.taskId).toBe(state.taskId);
+    expect(f.adapter.execute).toHaveBeenCalledOnce();
+    expect((await f.tasks.get(state.taskId))?.status).toBe("running");
+  });
+
+  it("等待上限到达返回当前任务而不取消或重提", async () => {
+    const f = await fixture(pending);
+    const now = Date.now();
+    const state = await f.service.runAndWait(context, f.submit(), undefined, () => {
+      vi.spyOn(Date, "now").mockReturnValue(now + 30 * 60_000 + 1);
+    });
+    expect(state).toMatchObject({ waitStatus: "timed_out" });
+    expect(["queued", "running"]).toContain(state.status);
+    await vi.waitFor(() => expect(f.adapter.execute).toHaveBeenCalledOnce());
+    expect(f.adapter.execute.mock.calls[0][0].signal.aborted).toBe(false);
+  });
+
+  it("两种工具共享幂等，已失败或取消的任务直接返回终态", async () => {
+    const f = await fixture(async () => { throw new Error("upstream failure"); });
+    const submitted = await f.service.run(context, f.submit());
+    await vi.waitFor(async () => expect((await f.tasks.get(submitted.taskId))?.status).toBe("failed"));
+    const state = await f.service.runAndWait(context, f.submit());
+    expect(state).toMatchObject({ taskId: submitted.taskId, status: "failed", waitStatus: "completed", files: [] });
+    expect(f.adapter.execute).toHaveBeenCalledOnce();
+    await f.repository.update(submitted.taskId, { status: "cancelled" });
+    expect(await f.service.runAndWait(context, f.submit())).toMatchObject({ status: "cancelled", waitStatus: "completed" });
+  });
+
+  it("等待期间撤销授权或发布会阻止继续读取，参数错误不产生任务", async () => {
+    const f = await fixture(pending);
+    await expect(f.service.runAndWait(context, { ...f.submit(), parameters: [] })).rejects.toBeInstanceOf(TypeError);
+    expect(await f.tasks.listRecords()).toHaveLength(0);
+    await expect(f.service.runAndWait(context, f.submit(), undefined, () => f.revoke())).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+    f.setAllowed(toolNames);
+    await f.unpublish();
+    await expect(f.service.runAndWait(context, f.submit())).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
+  });
+
   it("工具根 Schema 为对象且默认不授权，列表不泄露渠道地址", async () => {
     const f = await fixture();
     expect(f.tools.map((tool) => tool.name)).toEqual(toolNames);

@@ -2,7 +2,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { AigcAgentError, type AigcAgentContext, type AigcAgentService } from "./aigc-agent-service";
 
-/** 为当前会话创建四个固定名称工具，授权仍由 SDK 和应用服务分别校验。 */
+/** 为当前会话创建固定名称工具，授权仍由 SDK 和应用服务分别校验。 */
 export function createAigcAgentTools(context: AigcAgentContext, service: AigcAgentService) {
   // 字段列表属于工具对象内部的属性，不是工具 parameters 根 Schema。
   const parameterEntries = Type.Array(Type.Object({
@@ -45,6 +45,19 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
       description: "取消当前 Agent 的任务。仅 upstreamCancellation=confirmed 表示上游已确认停止；unknown 时可能仍在计算或计费。",
       parameters: Type.Object({ taskId: Type.String({ minLength: 1, maxLength: 120 }) }, { additionalProperties: false }),
       execute: async (_id, params) => result(() => service.cancel(context, params.taskId)),
+    }),
+    defineTool({
+      name: "aigc_run_and_wait", label: "生成并等待 AIGC 产物",
+      description: "提交生成任务并阻塞等待结果，成功后直接交付文件。参数与 aigc_run 相同，同一次生成必须复用 requestKey。最多等待 30 分钟；超时或中止聊天只结束等待，不取消后台任务。",
+      promptSnippet: "需要本次对话直接获得产物时使用 aigc_run_and_wait；等待超时后保留任务 ID，不重复创建任务。",
+      parameters: Type.Object({
+        interfaceId: Type.String({ minLength: 1, maxLength: 120 }),
+        requestKey: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9_-]+$" }),
+        parameters: parameterEntries,
+      }, { additionalProperties: false }),
+      execute: async (_id, params, signal, onUpdate) => result(() => service.runAndWait(context, params, signal, (state) => {
+        onUpdate?.({ content: [{ type: "text", text: JSON.stringify({ status: "waiting", data: state }) }], details: {} });
+      })),
     }),
   ];
 }

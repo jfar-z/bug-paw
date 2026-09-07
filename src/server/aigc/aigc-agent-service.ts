@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import mime from "mime";
 import type { AigcRunInputValue, AigcTaskRecord } from "../../shared/aigc-contracts";
 import type { WorkspaceFileService } from "../attachments";
@@ -74,8 +75,46 @@ export class AigcAgentService {
 
   /** 在任何副作用之前校验字段、去重并检查配额，只允许受控媒体输入。 */
   async run(context: AigcAgentContext, input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] }, signal?: AbortSignal) {
+    return this.submit(context, input, "aigc_run", signal);
+  }
+
+  /** 提交并等待终态；等待中止或到期不会中止后台生成，也不会重新提交。 */
+  async runAndWait(
+    context: AigcAgentContext,
+    input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] },
+    signal?: AbortSignal,
+    onProgress?: (state: Awaited<ReturnType<AigcAgentService["get"]>>) => void,
+  ) {
+    const deadline = Date.now() + 30 * 60_000;
+    const submitted = await this.submit(context, input, "aigc_run_and_wait", signal);
+    let state: Awaited<ReturnType<AigcAgentService["get"]>> = { ...submitted, files: [] };
+    onProgress?.(state);
+    try {
+      while (true) {
+        signal?.throwIfAborted();
+        state = await this.readTask(context, submitted.taskId, "aigc_run_and_wait", false, signal);
+        if (!["queued", "running"].includes(state.status)) return { ...state, waitStatus: "completed" as const };
+        onProgress?.(state);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return { ...state, waitStatus: "timed_out" as const };
+        await delay(Math.min(5_000, remaining), undefined, { signal });
+      }
+    } catch (error) {
+      // 工具取消信号只控制等待生命周期，后台任务持有独立 AbortController。
+      if (signal?.aborted) return { ...state, waitStatus: "interrupted" as const };
+      throw error;
+    }
+  }
+
+  /** 两种提交工具共享幂等与配额，但只校验调用入口自身的权限。 */
+  private async submit(
+    context: AigcAgentContext,
+    input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] },
+    tool: "aigc_run" | "aigc_run_and_wait",
+    signal?: AbortSignal,
+  ) {
     return this.locks.run("submissions", async () => {
-      await this.authorize(context, "aigc_run");
+      await this.authorize(context, tool);
       signal?.throwIfAborted();
       if (!/^[A-Za-z0-9_-]{1,80}$/.test(input.requestKey)) throw new TypeError("requestKey 必须为 1 到 80 位字母、数字、下划线或连字符");
       const { item, fields } = await this.published(input.interfaceId);
@@ -120,7 +159,7 @@ export class AigcAgentService {
           prepared[name] = { assetId: saved.id, name: saved.name, mediaType: saved.mediaType };
         }
         // 文件准备可能耗时，提交前再次核对授权与发布状态。
-        await this.authorize(context, "aigc_run");
+        await this.authorize(context, tool);
         const latest = await this.published(item.id);
         if (JSON.stringify(latest.item) !== JSON.stringify(item)) throw new AigcAgentError("AIGC_INTERFACE_CHANGED", "准备文件期间接口配置发生变化，请重新读取参数定义");
         signal?.throwIfAborted();
@@ -137,16 +176,31 @@ export class AigcAgentService {
 
   /** 按归属查询任务，完成时把产物交付到所属 Agent 的附件目录。 */
   async get(context: AigcAgentContext, taskId: string) {
-    await this.authorize(context, "aigc_get_task");
+    return this.readTask(context, taskId, "aigc_get_task", true);
+  }
+
+  /** 阻塞等待自行限频，不占用外部查询限频窗口；交付仍按任务串行化。 */
+  private async readTask(
+    context: AigcAgentContext,
+    taskId: string,
+    tool: "aigc_get_task" | "aigc_run_and_wait",
+    rateLimit: boolean,
+    signal?: AbortSignal,
+  ) {
+    await this.authorize(context, tool);
     return this.locks.run(taskId, async () => {
+      signal?.throwIfAborted();
+      await this.authorize(context, tool);
       const task = await this.owned(context, taskId);
       await this.published(task.interfaceId);
       const queryKey = `${context.agentId}:${taskId}`;
       const now = Date.now();
-      if (now - (this.lastQueries.get(queryKey) ?? 0) < 2_000) throw new AigcAgentError("AIGC_QUERY_TOO_FREQUENT", "任务查询间隔至少 2 秒");
-      this.lastQueries.delete(queryKey);
-      this.lastQueries.set(queryKey, now);
-      if (this.lastQueries.size > 1_000) this.lastQueries.delete(this.lastQueries.keys().next().value!);
+      if (rateLimit) {
+        if (now - (this.lastQueries.get(queryKey) ?? 0) < 2_000) throw new AigcAgentError("AIGC_QUERY_TOO_FREQUENT", "任务查询间隔至少 2 秒");
+        this.lastQueries.delete(queryKey);
+        this.lastQueries.set(queryKey, now);
+        if (this.lastQueries.size > 1_000) this.lastQueries.delete(this.lastQueries.keys().next().value!);
+      }
       const files: { path: string; name: string; mediaType: string; size: number }[] = [];
       if (task.status === "succeeded") {
         const delivered = { ...task.deliveredFiles };
@@ -158,9 +212,11 @@ export class AigcAgentService {
           }
         }
         for (const asset of task.assets) {
+          signal?.throwIfAborted();
           let file = delivered[asset.id] ? await this.dependencies.files.resolve(context.agentId, delivered[asset.id]) : undefined;
           if (!file) {
             const content = await this.dependencies.assets.readOutput(task.id, asset.id, 200 * 1024 * 1024);
+            signal?.throwIfAborted();
             const extension = mime.getExtension(asset.mediaType) ?? "bin";
             file = await this.dependencies.files.saveUpload(context.agentId, `aigc-${task.id}-${asset.id}.${extension}`, asset.mediaType, Readable.from(content));
             delivered[asset.id] = file.path;
