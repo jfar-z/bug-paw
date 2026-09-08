@@ -165,11 +165,24 @@ describe("AIGC Agent 工具", () => {
       for (const key of ["anyOf", "oneOf", "allOf"]) expect(tool.parameters).not.toHaveProperty(key);
       expect(DEFAULT_AGENT_TOOL_NAMES).not.toContain(tool.name);
     }
+    const discoveryTool = f.tools.find((tool) => tool.name === "aigc_list_interfaces")!;
+    expect(discoveryTool.parameters.required).toEqual(["action", "interfaceId", "offset"]);
+    expect(JSON.stringify(discoveryTool.parameters)).not.toContain('"optional"');
     expect(JSON.stringify(f.tools.find((tool) => tool.name === "aigc_run")?.parameters)).not.toContain('"url"');
-    const list = await f.service.list(context, {});
+    const listOutput = await discoveryTool.execute("list-call", {
+      action: "list", interfaceId: null, offset: 0,
+    }, undefined, undefined, {} as never);
+    const listBlock = listOutput.content[0];
+    if (listBlock.type !== "text") throw new Error("工具必须返回文本结果");
+    const list = JSON.parse(listBlock.text).data;
     expect(JSON.stringify(list)).not.toContain("private.invalid");
     expect(list.interfaces).toHaveLength(1);
-    const detail = await f.service.list(context, { interfaceId: f.item.id });
+    const detailOutput = await discoveryTool.execute("detail-call", {
+      action: "get", interfaceId: f.item.id, offset: null,
+    }, undefined, undefined, {} as never);
+    const detailBlock = detailOutput.content[0];
+    if (detailBlock.type !== "text") throw new Error("工具必须返回文本结果");
+    const detail = JSON.parse(detailBlock.text).data;
     expect(detail.interfaces[0]).toMatchObject({
       description: "Generate an Agent test image with up to 10 steps.",
       instructions: "Generate an Agent test image with up to 10 steps.",
@@ -179,6 +192,22 @@ describe("AIGC Agent 工具", () => {
     await f.unpublish();
     expect((await f.service.list(context, {})).interfaces).toHaveLength(0);
     await expect(f.service.list(context, { interfaceId: f.item.id })).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
+  });
+
+  it("接口发现工具拒绝空对象、伪造列表 ID 和缺失详情 ID", async () => {
+    const f = await fixture();
+    const tool = f.tools.find((entry) => entry.name === "aigc_list_interfaces")!;
+    const list = vi.spyOn(f.service, "list");
+    for (const params of [
+      {},
+      { action: "list", interfaceId: "guessed", offset: 0 },
+      { action: "list", interfaceId: null, offset: null },
+      { action: "get", interfaceId: null, offset: null },
+      { action: "get", interfaceId: f.item.id, offset: 0 },
+    ]) {
+      await expect(tool.execute("invalid-call", params as never, undefined, undefined, {} as never)).rejects.toThrow("AIGC_INPUT_INVALID");
+    }
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("returns ComfyUI output definitions in interface details", async () => {
@@ -372,8 +401,9 @@ describe("AIGC Agent 工具", () => {
   it("工具错误不泄露底层绝对路径或凭据", async () => {
     const f = await fixture();
     vi.spyOn(f.service, "list").mockRejectedValue(new Error("Bearer secret /private/path"));
-    await expect(f.tools[0].execute("call", {}, undefined, undefined, {} as never)).rejects.toThrow("AIGC_OPERATION_FAILED");
-    try { await f.tools[0].execute("call", {}, undefined, undefined, {} as never); } catch (error) {
+    const params = { action: "list" as const, interfaceId: null, offset: 0 };
+    await expect(f.tools[0].execute("call", params, undefined, undefined, {} as never)).rejects.toThrow("AIGC_OPERATION_FAILED");
+    try { await f.tools[0].execute("call", params, undefined, undefined, {} as never); } catch (error) {
       expect(String(error)).not.toContain("secret");
       expect(String(error)).not.toContain("/private");
     }

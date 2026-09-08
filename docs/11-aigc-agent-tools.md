@@ -12,13 +12,15 @@
 
 | 工具 | 用途 | 权限 |
 | --- | --- | --- |
-| `aigc_list_interfaces` | 分页查询接口；指定 `interfaceId` 获取参数定义 | 单独授权 |
+| `aigc_list_interfaces` | 通过必填 `action` 分页查询接口或按真实 ID 获取参数定义 | 单独授权 |
 | `aigc_run` | 校验参数、异步提交并返回 `taskId` | 高风险，可能计费 |
 | `aigc_run_and_wait` | 提交并等待终态，成功后直接交付文件 | 高风险，单独授权 |
 | `aigc_get_task` | 查询所属任务，完成时交付工作区文件 | 单独授权 |
 | `aigc_cancel_task` | 取消所属任务，返回上游确认状态 | 高风险，单独授权 |
 
 接口列表每页 20 项，使用 `offset` / `nextOffset`；详情返回字段类型、必填性、默认值、枚举和数值范围。列表不返回渠道 URL、凭据或原始工作流。工具响应上限 64 KiB。
+
+发现接口时必须传完整参数 `{ "action": "list", "interfaceId": null, "offset": 0 }`，后续分页只把 `offset` 替换为上次返回的 `nextOffset`。读取详情时必须传 `{ "action": "get", "interfaceId": "<列表返回的接口 ID>", "offset": null }`。禁止猜测接口 ID，也不使用空 `{}` 触发默认操作。
 
 The interface editor stores an Agent-specific usage description. With `interfaceId`, the detail response includes `instructions`, `fields`, and `outputs`; each output defines `id`, `name`, `mediaType`, `description`, and `multiple`.
 

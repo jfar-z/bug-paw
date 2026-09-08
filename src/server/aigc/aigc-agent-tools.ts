@@ -2,6 +2,20 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { AigcAgentError, type AigcAgentContext, type AigcAgentService } from "./aigc-agent-service";
 
+const interfaceDiscoveryParameters = Type.Object({
+  action: Type.Union([Type.Literal("list"), Type.Literal("get")], {
+    description: "list 分页列出接口；get 按列表返回的真实 ID 读取详情",
+  }),
+  interfaceId: Type.Union([
+    Type.String({ minLength: 1, maxLength: 120 }),
+    Type.Null(),
+  ], { description: "list 必须传 JSON null；get 必须传列表返回的真实接口 ID" }),
+  offset: Type.Union([
+    Type.Integer({ minimum: 0 }),
+    Type.Null(),
+  ], { description: "list 首次传 0、后续传 nextOffset；get 必须传 JSON null" }),
+}, { additionalProperties: false });
+
 /** 为当前会话创建固定名称工具，授权仍由 SDK 和应用服务分别校验。 */
 export function createAigcAgentTools(context: AigcAgentContext, service: AigcAgentService) {
   // 字段列表属于工具对象内部的属性，不是工具 parameters 根 Schema。
@@ -15,12 +29,10 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
   return [
     defineTool({
       name: "aigc_list_interfaces", label: "查询 AIGC 接口",
-      description: "\u5206\u9875\u67e5\u8be2\u5df2\u53d1\u5e03\u63a5\u53e3\uff1b\u4f20 interfaceId \u83b7\u53d6 Agent \u4e13\u7528\u8bf4\u660e\u3001\u5165\u53c2\u548c\u51fa\u53c2\u5b9a\u4e49\u3002",
-      parameters: Type.Object({
-        interfaceId: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
-        offset: Type.Optional(Type.Integer({ minimum: 0 })),
-      }, { additionalProperties: false }),
-      execute: async (_id, params) => result(() => service.list(context, params)),
+      description: "列出已发布接口或按真实 ID 读取 Agent 专用说明、入参和出参定义。必须显式选择 action，禁止猜测 interfaceId。",
+      promptSnippet: '发现接口时传 {"action":"list","interfaceId":null,"offset":0}；读取详情时传 {"action":"get","interfaceId":"列表返回的 ID","offset":null}。',
+      parameters: interfaceDiscoveryParameters,
+      execute: async (_id, params) => result(() => service.list(context, normalizeInterfaceDiscoveryInput(params))),
     }),
     defineTool({
       name: "aigc_run", label: "提交 AIGC 任务",
@@ -59,6 +71,27 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
       })),
     }),
   ];
+}
+
+/** 将严格判别参数转换为服务层已有的列表或详情查询。 */
+function normalizeInterfaceDiscoveryInput(input: unknown): { interfaceId?: string; offset?: number } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("AIGC 接口查询参数必须是对象");
+  }
+  const params = input as Record<string, unknown>;
+  if (params.action === "list") {
+    if (params.interfaceId !== null || !Number.isInteger(params.offset) || (params.offset as number) < 0) {
+      throw new TypeError("list 必须传 interfaceId=null，并传入非负整数 offset；首次调用 offset=0");
+    }
+    return { offset: params.offset as number };
+  }
+  if (params.action === "get") {
+    if (typeof params.interfaceId !== "string" || !params.interfaceId || params.offset !== null) {
+      throw new TypeError("get 必须传列表返回的真实 interfaceId，并传 offset=null");
+    }
+    return { interfaceId: params.interfaceId };
+  }
+  throw new TypeError("action 必须是 list 或 get");
 }
 
 /** 工具输出限制大小，失败抛出脱敏错误以让 Pi 正确标记 isError。 */
