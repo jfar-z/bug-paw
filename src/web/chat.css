@@ -2374,7 +2374,7 @@ img.message-avatar {
   z-index: 4;
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1;
   align-items: center;
   gap: 4px;
 }
@@ -2412,11 +2412,13 @@ img.message-avatar {
   position: static;
 }
 
-/* 会话级选择器沿用输入区图标按钮语汇，避免模型信息形成额外视觉层级。 */
+/* 会话级选择器沿用输入区图标按钮语汇，并从零收缩以隔离长模型名的固有宽度。 */
 
 .composer-session-controls {
   display: flex;
   min-width: 0;
+  max-width: 100%;
+  flex: 0 1 216px;
   align-items: center;
   gap: 4px;
 }
@@ -2427,6 +2429,8 @@ img.message-avatar {
 
 .composer-model-control {
   min-width: 0;
+  max-width: 176px;
+  flex: 1;
 }
 
 .composer-thinking-trigger,
@@ -2449,7 +2453,7 @@ img.message-avatar {
 
 .composer-model-trigger {
   display: inline-flex;
-  max-width: 176px;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
   gap: 4px;
@@ -2459,9 +2463,15 @@ img.message-avatar {
 }
 
 .composer-model-trigger > span {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-model-trigger > svg {
+  flex: none;
 }
 
 .composer-thinking-trigger:hover:not(:disabled),
@@ -3151,15 +3161,10 @@ img.message-avatar {
   }
 
   .composer-session-controls {
-    flex: 1 1 auto;
+    flex: 1;
   }
 
   .composer-model-control {
-    flex: 1 1 156px;
-  }
-
-  .composer-model-trigger {
-    width: 100%;
     max-width: 156px;
   }
 
