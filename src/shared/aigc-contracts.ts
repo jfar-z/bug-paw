@@ -282,6 +282,13 @@ export interface AigcWorkflowUpdateInput {
   outputMappings: AigcWorkflowOutputMapping[];
 }
 
+/** 替换工作流原始内容时的浏览器输入。 */
+export interface AigcWorkflowReplaceInput {
+  fileName: string;
+  /** 新的完整 ComfyUI 工作流 JSON，现有映射必须与其保持兼容。 */
+  workflowJson: unknown;
+}
+
 /** 工作流详情文档。 */
 export interface AigcWorkflowDetailDocument {
   revision: string;
