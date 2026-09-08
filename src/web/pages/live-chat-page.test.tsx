@@ -252,7 +252,7 @@ beforeEach(() => {
     }
     if (url === "/api/v1/models") {
       return new Response(JSON.stringify({ models: [{
-        provider: "openai", id: "gpt-5", name: "GPT-5",
+        provider: "openai", id: "gpt-5", name: "GPT-5-超长模型名称用于移动端输入区回归验证",
         thinkingLevels: ["off", "minimal", "low", "medium", "high"],
       }] }));
     }
@@ -428,6 +428,7 @@ it("草稿首次发送只创建一个 session 并先建立其事件流", async (
 
     fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
 
+    await screen.findByRole("button", { name: "停止生成" });
     await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-new/messages"));
     expect(operationLog.filter((entry) => entry === "fetch:POST:/api/v1/sessions")).toHaveLength(1);
     expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events"))
