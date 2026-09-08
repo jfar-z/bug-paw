@@ -110,6 +110,35 @@ it("提供可选入参时临时启用对应的 Bypass 条件分支", async () =>
     expect(submittedPrompt).toHaveProperty("7.inputs.reference_audio", ["6", 1]);
   });
 
+it("具名控件值忽略随机种子前端控制项并保持后续字段类型", async () => {
+  let submittedPrompt: Record<string, unknown> | undefined;
+  const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+    const url = String(requestInput);
+    if (url.endsWith("/prompt")) {
+      submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+      return json({ prompt_id: "prompt-named-widgets" });
+    }
+    if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-named-widgets"]], queue_pending: [] });
+    if (url.endsWith("/history/prompt-named-widgets")) {
+      return json({ "prompt-named-widgets": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+    }
+    if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+    throw new Error(`未处理请求 ${url}`);
+  });
+
+  await new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0)
+    .execute(input(reservedVramWorkflow(), {}));
+
+  expect(submittedPrompt).toHaveProperty("168.inputs", {
+    reserved: 4,
+    mode: "auto",
+    seed: 492609232740577,
+    auto_max_reserved: 0,
+    clean_gpu_before: true,
+  });
+  expect(submittedPrompt).not.toHaveProperty("168.inputs.control_after_generate");
+});
+
 });
 
 function input(
@@ -312,6 +341,58 @@ function uiWidgetWorkflow(): AigcWorkflowDetail & { raw: unknown } {
         ],
       },
       VHS_VideoCombine: { fields: {} },
+    },
+  };
+}
+
+function reservedVramWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-reserved-vram",
+    raw: {
+      nodes: [
+        {
+          id: 168,
+          type: "ReservedVRAMSetter",
+          inputs: [],
+          outputs: [{ name: "output", type: "*", links: [1] }],
+          widgets_values: [4, "auto", 492609232740577, "randomize", 0, true],
+          widgets_values_named: {
+            reserved: 4,
+            mode: "auto",
+            seed: 492609232740577,
+            control_after_generate: "randomize",
+            auto_max_reserved: 0,
+            clean_gpu_before: true,
+          },
+        },
+        { id: 80, type: "SaveImage", inputs: [{ name: "images", type: "*", link: 1 }], outputs: [] },
+      ],
+      links: [[1, 168, 0, 80, 0, "*"]],
+    },
+    nodes: [
+      { id: "168", type: "ReservedVRAMSetter", fields: [] },
+      { id: "80", type: "SaveImage", fields: [] },
+    ],
+    edges: [{ id: "1", sourceNodeId: "168", sourceField: "outputs.output", targetNodeId: "80", targetField: "inputs.images" }],
+    outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
+    nodeMetadata: {
+      ReservedVRAMSetter: {
+        fields: {
+          "inputs.reserved": { comfyType: "FLOAT", valueType: "double" },
+          "inputs.mode": { comfyType: "COMBO", valueType: "enum" },
+          "inputs.seed": { comfyType: "INT", valueType: "int" },
+          "inputs.auto_max_reserved": { comfyType: "FLOAT", valueType: "double" },
+          "inputs.clean_gpu_before": { comfyType: "BOOLEAN", valueType: "bool" },
+        },
+        widgetInputs: [
+          { name: "reserved" },
+          { name: "mode" },
+          { name: "seed" },
+          { name: "auto_max_reserved" },
+          { name: "clean_gpu_before" },
+        ],
+      },
     },
   };
 }

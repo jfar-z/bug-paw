@@ -447,10 +447,41 @@ function applyUiWidgetValues(
   const descriptors = widgetInputs?.length
     ? widgetInputs
     : fallbackWidgetInputs(String(node.type), fields);
+  const namedValues = node.widgets_values_named;
+  if (isRecord(namedValues) && applyNamedWidgetValues(inputs, namedValues, descriptors, fields)) return;
   const names = expandWidgetInputNames(descriptors, values);
   for (let index = 0; index < Math.min(names.length, values.length); index += 1) {
     if (isWidgetScalar(values[index])) inputs[names[index]] = values[index];
   }
+}
+
+/** 优先使用具名控件值，避免随机种子控制项等前端附加值造成位置错位。 */
+function applyNamedWidgetValues(
+  inputs: Record<string, unknown>,
+  values: Record<string, unknown>,
+  descriptors: ComfyUiWidgetInputMetadata[],
+  fields?: Record<string, { valueType?: unknown }>,
+): boolean {
+  const allowedNames = new Set(Object.keys(fields ?? {})
+    .filter((field) => field.startsWith("inputs."))
+    .map((field) => field.replace(/^inputs\./u, "")));
+  for (const descriptor of descriptors) {
+    allowedNames.add(descriptor.name);
+    const selectedValue = values[descriptor.name];
+    if (!descriptor.dynamicOptions || !isWidgetScalar(selectedValue)) continue;
+    for (const name of descriptor.dynamicOptions[String(selectedValue)] ?? []) {
+      allowedNames.add(`${descriptor.name}.${name}`);
+    }
+  }
+
+  let applied = false;
+  for (const name of allowedNames) {
+    const value = values[name];
+    if (!isWidgetScalar(value)) continue;
+    inputs[name] = value;
+    applied = true;
+  }
+  return applied;
 }
 
 /** 动态控件根据当前选项在父字段后展开对应子字段。 */
