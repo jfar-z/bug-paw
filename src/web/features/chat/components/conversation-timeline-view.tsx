@@ -130,10 +130,7 @@ export function ConversationTimelineView(props: ConversationTimelineViewProps) {
               <AgentTurnContent
                 turn={entry}
                 streaming={props.streaming && entry.id === props.activeAgentEntryId}
-                activeAgentId={props.activeAgentId}
                 theme={props.theme}
-                onResolved={props.onResolved}
-                onPreview={props.onPreview}
                 onLinkActivate={props.onWorkspaceLink}
                 focusedEntryId={props.focusedEntryId}
                 actions={(entry.sourceUserEntryId || copyTextForEntry(entry) || (props.speechEnabled && agentTurnSpeechText(entry))) ? (

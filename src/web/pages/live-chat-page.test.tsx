@@ -414,6 +414,17 @@ beforeEach(() => {
         },
       });
     }
+    if (url === "/api/v1/agents/default/data-files?path=outputs%2Fresult.mp4" && init?.method === "HEAD") {
+      return new Response(null, {
+        headers: {
+          "Content-Type": "video/mp4",
+          "Content-Length": "128",
+          "Last-Modified": "Tue, 08 Sep 2026 08:00:00 GMT",
+          "X-BugPaw-File-Name": encodeURIComponent("result.mp4"),
+          "X-BugPaw-File-Path": encodeURIComponent("/data/workspace/outputs/result.mp4"),
+        },
+      });
+    }
     return new Response(JSON.stringify({}), { status: 200 });
   }));
 });
@@ -453,8 +464,42 @@ it("上传附件后携带相对路径发送并在用户消息中展示媒体", a
         filePaths: ["attachments/图片.png"],
       });
     });
-    expect(screen.getByRole("img", { name: "图片.png" })).toBeInTheDocument();
-  });
+  expect(screen.getByRole("img", { name: "图片.png" })).toBeInTheDocument();
+});
+
+it("Agent 的 Markdown 文件链接保持行内展示并按需打开预览", async () => {
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [{
+      role: "assistant",
+      content: [{
+        type: "text",
+        text: "[演示视频](outputs/result.mp4)\n\n[外部图片](https://example.com/image.png)\n\n<pi_agent_files version=\"1\">\n{\"files\":[{\"path\":\"legacy.png\"}]}\n</pi_agent_files>",
+      }],
+      __piEntryId: "assistant-file-links",
+    }],
+    history: { branchToken: "branch-file-links", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
+    thinkingLevel: "medium",
+    lastEventId: 1,
+  };
+
+  renderLiveChatPage(<LiveChatPage {...props} />);
+
+  const fileLink = await screen.findByRole("link", { name: "演示视频" });
+  expect(fileLink.querySelector(".markdown-file-link__icon")).not.toBeNull();
+  const externalLink = screen.getByRole("link", { name: "外部图片" });
+  expect(externalLink).toHaveAttribute("target", "_blank");
+  expect(document.querySelector(".media-attachment")).toBeNull();
+  expect(screen.getByText(/legacy\.png/)).toBeInTheDocument();
+
+  fireEvent.click(fileLink);
+
+  const dialog = await screen.findByRole("dialog", { name: "result.mp4" });
+  expect(within(dialog).getByText("128 B · video/mp4")).toBeInTheDocument();
+  expect(dialog.querySelector("video")).toHaveAttribute("src", "/api/v1/agents/default/data-files?path=%2Fdata%2Fworkspace%2Foutputs%2Fresult.mp4");
+  expect(operationLog).toContain("fetch:HEAD:/api/v1/agents/default/data-files?path=outputs%2Fresult.mp4");
+});
 
 });
 

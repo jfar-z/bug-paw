@@ -19,6 +19,8 @@ import { registerSetupRoutes } from "./routes/setup";
 import { registerStatusRoutes } from "./routes/status";
 import { createWorkspaceFileService, DEFAULT_UPLOAD_LIMITS } from "./attachments";
 import { registerAttachmentRoutes } from "./routes/attachments";
+import { createDataFileService } from "./data-files";
+import { registerDataFileRoutes } from "./routes/data-files";
 import { createWorkspaceFileManager } from "./workspace-files";
 import { registerWorkspaceFileRoutes } from "./routes/workspace-files";
 import { registerAgentRoutes } from "./routes/agents";
@@ -240,6 +242,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
   const workspaceFiles = createWorkspaceFileService(paths, agentStore);
   const workspaceFileManager = createWorkspaceFileManager(agentStore);
+  const dataFiles = createDataFileService(paths, agentStore);
   const referenceResolver = createAgentReferenceResolver(async (agentId) => {
     const agent = await agentStore.get(agentId);
     if (!agent) {
@@ -580,6 +583,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     files: workspaceFiles,
     runAgentMutation: (agentId, operation) => agentLifecycle.runMutation(agentId, operation),
   });
+  registerDataFileRoutes(app, { authService, files: dataFiles });
   registerKnowledgeBaseRoutes(app, { authService, service: knowledgeBases });
   registerWorkspaceFileRoutes(app, {
     authService,

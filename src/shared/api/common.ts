@@ -102,6 +102,7 @@ export const ApiErrorCodeSchema = Type.Union([
   Type.Literal("INVALID_FILE_PATH"),
   Type.Literal("FILE_NOT_FOUND"),
   Type.Literal("INVALID_PATH"),
+  Type.Literal("UNSUPPORTED_FILE"),
   Type.Literal("INVALID_KNOWLEDGE_BASE"),
   Type.Literal("INVALID_KNOWLEDGE_QUERY"),
   Type.Literal("INVALID_KNOWLEDGE_REQUEST"),

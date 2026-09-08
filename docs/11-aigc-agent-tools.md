@@ -79,7 +79,7 @@ Grok 本地媒体要求配置 `BUG_PAW_PUBLIC_ORIGIN`。该值必须是无需认
 - 一次交付最多 20 个产物、合计 200 MiB；超过时在 AIGC 工作台查看，不把大文件塞入模型上下文。
 - 产物先保存在 AIGC 资产区，查询成功任务时复制到所属 Agent 的 `attachments/`，记录已交付路径避免正常重复查询产生副本。
 - Delivered `files` include `outputId` and `outputName`. ComfyUI mappings retain distinct identifiers, and multiple files from one mapping share that mapping identity.
-- 对话使用已有 `pi_agent_files` 协议交付相对路径。不会返回内部绝对路径或未经授权的公共链接。
+- 对话使用普通 Markdown 链接交付工作区相对路径。Web 在用户点击后通过登录态 `/data` 文件接口解析和预览，不会返回凭证或未经授权的公共链接。
 
 ## 取消与后台行为
 
