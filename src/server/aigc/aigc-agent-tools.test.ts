@@ -45,10 +45,12 @@ async function fixture(
   const connections = new AigcConnectionService(join(root, "connections.json"));
   await connections.create({ name: "Test", type: "openai", baseUrl: "https://private.invalid/v1", enabled: true }, "channel", (await connections.read()).revision);
   await connections.create({ name: "Grok", type: "grok", baseUrl: "https://grok.invalid/v1", enabled: true }, "grok-channel", (await connections.read()).revision);
+  await connections.create({ name: "ComfyUI", type: "comfyui", baseUrl: "https://comfy.invalid", enabled: true }, "comfy-channel", (await connections.read()).revision);
   const workflows = new AigcWorkflowService(join(root, "workflows.json"));
   const interfaces = new AigcInterfaceService(join(root, "interfaces.json"), (id) => workflows.exists(id));
   const { item } = await interfaces.create({
     name: "测试接口", description: "生成测试", protocol: "openai", capability: "text-to-image",
+    toolDescription: "Generate an Agent test image with up to 10 steps.",
     channelId: "channel", enabled: true, toolPublishEnabled: true,
     config: { model: "test", parameters: [{ name: "steps", type: "integer", defaultValue: 8, description: "步数" }] },
   });
@@ -168,10 +170,45 @@ describe("AIGC Agent 工具", () => {
     expect(JSON.stringify(list)).not.toContain("private.invalid");
     expect(list.interfaces).toHaveLength(1);
     const detail = await f.service.list(context, { interfaceId: f.item.id });
+    expect(detail.interfaces[0]).toMatchObject({
+      description: "Generate an Agent test image with up to 10 steps.",
+      instructions: "Generate an Agent test image with up to 10 steps.",
+      outputs: [{ id: "result", name: "result", mediaType: "image", multiple: true }],
+    });
     expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([expect.objectContaining({ name: "steps", defaultValue: 8 })]));
     await f.unpublish();
     expect((await f.service.list(context, {})).interfaces).toHaveLength(0);
     await expect(f.service.list(context, { interfaceId: f.item.id })).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
+  });
+
+  it("returns ComfyUI output definitions in interface details", async () => {
+    const f = await fixture();
+    const created = await f.workflows.create({
+      name: "Output workflow",
+      fileName: "outputs.json",
+      workflowJson: {
+        "1": { class_type: "SaveImage", inputs: {} },
+        "2": { class_type: "SaveImage", inputs: {} },
+      },
+      inputMappings: [],
+      outputMappings: [
+        { id: "preview", name: "preview", nodeId: "1", field: "outputs.images", mediaType: "image", description: "Low-resolution preview" },
+        { id: "final", name: "final", nodeId: "2", field: "outputs.images", mediaType: "image", description: "Final image" },
+      ],
+    });
+    await f.interfaces.update(f.item.id, {
+      ...f.item,
+      protocol: "comfyui",
+      capability: "text-to-image",
+      channelId: "comfy-channel",
+      config: { workflowId: created.workflow.id },
+    }, (await f.interfaces.list()).revision);
+
+    const detail = await f.service.list(context, { interfaceId: f.item.id });
+    expect(detail.interfaces[0]).toHaveProperty("outputs", [
+      { id: "preview", name: "preview", mediaType: "image", description: "Low-resolution preview", multiple: true },
+      { id: "final", name: "final", mediaType: "image", description: "Final image", multiple: true },
+    ]);
   });
 
   it("并发重试只生成一次，记录身份且跨重启保持幂等凭据", async () => {
@@ -245,6 +282,7 @@ describe("AIGC Agent 工具", () => {
     const first = await f.service.get(context, task.taskId);
     expect(first.files).toHaveLength(1);
     expect(first.files[0].path).toMatch(/^attachments\//);
+    expect(first.files[0]).toMatchObject({ outputId: "result", outputName: "result" });
     expect(await readFile(join(f.workspaces, context.agentId, first.files[0].path), "utf8")).toBe("result");
     expect((await f.tasks.get(task.taskId))?.assets).toHaveLength(1);
     const now = Date.now();
@@ -252,6 +290,22 @@ describe("AIGC Agent 工具", () => {
     const second = await f.service.get(context, task.taskId);
     expect(second.files).toEqual(first.files);
     expect(JSON.stringify(second)).not.toContain(f.root);
+  });
+
+  it("preserves output mapping identities for multiple delivered files", async () => {
+    const f = await fixture(async () => ({
+      assets: [
+        { name: "preview.png", mediaType: "image/png", content: Buffer.from("preview"), outputId: "preview", outputName: "" },
+        { name: "final.png", mediaType: "image/png", content: Buffer.from("final"), outputId: "final", outputName: "" },
+      ],
+    }));
+    const task = await f.service.run(context, f.submit());
+    await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
+    const result = await f.service.get(context, task.taskId);
+    expect(result.files).toEqual([
+      expect.objectContaining({ name: "preview.png", outputId: "preview", outputName: "" }),
+      expect.objectContaining({ name: "final.png", outputId: "final", outputName: "" }),
+    ]);
   });
 
   it("工作区媒体拒绝越界、符号链接和错误类型，正确文件进入私有入参区", async () => {

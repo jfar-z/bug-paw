@@ -13,7 +13,7 @@ import type { AigcPublicFileService } from "./aigc-public-file-service";
 import type { AigcTaskService } from "./aigc-task-service";
 import type { AigcWorkflowService } from "./aigc-workflow-service";
 import { DEFAULT_AIGC_AGENT_LIMITS, type AigcAgentLimits } from "./aigc-agent-limits";
-import { agentFields, validateAgentParameters, type AigcAgentParameter } from "./aigc-agent-parameters";
+import { agentFields, agentOutputs, validateAgentParameters, type AigcAgentParameter } from "./aigc-agent-parameters";
 
 /** 工具调用身份只由 Runtime 提供，不能从模型参数读取。 */
 export interface AigcAgentContext {
@@ -66,8 +66,9 @@ export class AigcAgentService {
   async list(context: AigcAgentContext, input: { interfaceId?: string; offset?: number }) {
     await this.authorize(context, "aigc_list_interfaces");
     if (input.interfaceId) {
-      const { item, fields } = await this.published(input.interfaceId);
-      return { interfaces: [{ id: item.id, name: item.name, description: item.description, capability: item.capability, fields }] };
+      const { item, fields, outputs } = await this.published(input.interfaceId);
+      const description = agentDescription(item);
+      return { interfaces: [{ id: item.id, name: item.name, description, instructions: description, capability: item.capability, fields, outputs }] };
     }
     const offset = input.offset ?? 0;
     if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError("分页起点无效");
@@ -75,7 +76,7 @@ export class AigcAgentService {
     const items = (await this.dependencies.interfaces.list()).interfaces.filter((item) => item.enabled && item.toolPublishEnabled
       && channels.some((channel) => channel.id === item.channelId && channel.enabled && channel.type === item.protocol));
     return {
-      interfaces: items.slice(offset, offset + 20).map((item) => ({ id: item.id, name: item.name, description: item.description, capability: item.capability })),
+      interfaces: items.slice(offset, offset + 20).map((item) => ({ id: item.id, name: item.name, description: agentDescription(item), capability: item.capability })),
       total: items.length, ...(offset + 20 < items.length ? { nextOffset: offset + 20 } : {}),
     };
   }
@@ -232,7 +233,7 @@ export class AigcAgentService {
         this.lastQueries.set(queryKey, now);
         if (this.lastQueries.size > 1_000) this.lastQueries.delete(this.lastQueries.keys().next().value!);
       }
-      const files: { path: string; name: string; mediaType: string; size: number }[] = [];
+      const files: { path: string; name: string; mediaType: string; size: number; outputId: string; outputName: string }[] = [];
       if (task.status === "succeeded") {
         const delivered = { ...task.deliveredFiles };
         let totalBytes = 0;
@@ -253,7 +254,14 @@ export class AigcAgentService {
             delivered[asset.id] = file.path;
             await this.dependencies.tasks.recordDelivery(task.id, delivered);
           }
-          files.push({ path: file.path, name: asset.name, mediaType: asset.mediaType, size: file.size });
+          files.push({
+            path: file.path,
+            name: asset.name,
+            mediaType: asset.mediaType,
+            size: file.size,
+            outputId: asset.outputId ?? "result",
+            outputName: asset.outputName ?? "result",
+          });
         }
       }
       return { ...this.summary(task), files };
@@ -278,7 +286,7 @@ export class AigcAgentService {
       throw new AigcAgentError("AIGC_INTERFACE_UNAVAILABLE", "接口不存在、未发布或渠道已停用，请在 AIGC 工作台检查");
     }
     const workflow = item.protocol === "comfyui" ? (await this.dependencies.workflows.get((item.config as { workflowId: string }).workflowId)).workflow : undefined;
-    return { item, fields: agentFields(item, workflow) };
+    return { item, fields: agentFields(item, workflow), outputs: agentOutputs(item, workflow) };
   }
 
   /** 无归属的手动任务和其他 Agent 任务统一表现为不可访问。 */
@@ -304,6 +312,11 @@ export class AigcAgentService {
       pollAfterMs: 5_000,
     };
   }
+}
+
+/** 优先返回 Agent 专用说明，兼容尚未保存新字段的历史接口。 */
+function agentDescription(item: { description: string; toolDescription?: string }): string {
+  return item.toolDescription?.trim() || item.description;
 }
 
 /** 归一化部署侧公开地址，避免把路径、凭据或查询参数带入媒体 URL。 */

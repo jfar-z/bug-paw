@@ -238,7 +238,12 @@ export class AigcTaskService {
       const assets = [];
       for (const output of result.assets) {
         signal.throwIfAborted();
-        assets.push(await this.dependencies.assets.saveOutput(id, output.content, output.name, output.mediaType));
+        const saved = await this.dependencies.assets.saveOutput(id, output.content, output.name, output.mediaType);
+        assets.push({
+          ...saved,
+          outputId: output.outputId ?? "result",
+          outputName: output.outputName ?? "result",
+        });
       }
       signal.throwIfAborted();
       await this.updateTask(id, {

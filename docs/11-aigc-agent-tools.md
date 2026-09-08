@@ -20,6 +20,8 @@
 
 接口列表每页 20 项，使用 `offset` / `nextOffset`；详情返回字段类型、必填性、默认值、枚举和数值范围。列表不返回渠道 URL、凭据或原始工作流。工具响应上限 64 KiB。
 
+The interface editor stores an Agent-specific usage description. With `interfaceId`, the detail response includes `instructions`, `fields`, and `outputs`; each output defines `id`, `name`, `mediaType`, `description`, and `multiple`.
+
 `aigc_run` 示例：
 
 ```json
@@ -74,6 +76,7 @@ Grok 本地媒体要求配置 `BUG_PAW_PUBLIC_ORIGIN`。该值必须是无需认
 - Agent 任务本地执行上限 30 分钟。超时不表示上游已经停止。
 - 一次交付最多 20 个产物、合计 200 MiB；超过时在 AIGC 工作台查看，不把大文件塞入模型上下文。
 - 产物先保存在 AIGC 资产区，查询成功任务时复制到所属 Agent 的 `attachments/`，记录已交付路径避免正常重复查询产生副本。
+- Delivered `files` include `outputId` and `outputName`. ComfyUI mappings retain distinct identifiers, and multiple files from one mapping share that mapping identity.
 - 对话使用已有 `pi_agent_files` 协议交付相对路径。不会返回内部绝对路径或未经授权的公共链接。
 
 ## 取消与后台行为

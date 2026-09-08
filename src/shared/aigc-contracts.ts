@@ -341,6 +341,8 @@ export interface AigcInterfaceRecord {
   id: string;
   name: string;
   description: string;
+  /** 面向 Agent 的接口用途、调用约束与结果解释。 */
+  toolDescription?: string;
   protocol: AigcInterfaceProtocol;
   capability: AigcInterfaceCapability;
   channelId: string;
@@ -362,6 +364,8 @@ export interface AigcInterfaceDocument {
 export interface AigcInterfaceInput {
   name: string;
   description: string;
+  /** 面向 Agent 的接口用途、调用约束与结果解释。 */
+  toolDescription?: string;
   protocol: AigcInterfaceProtocol;
   capability: AigcInterfaceCapability;
   channelId: string;
@@ -378,6 +382,10 @@ export interface AigcTaskAsset {
   id: string;
   name: string;
   mediaType: string;
+  /** 产物所属的稳定出参定义标识。 */
+  outputId?: string;
+  /** 产物所属的出参展示名称。 */
+  outputName?: string;
   size: number;
   createdAt: string;
 }

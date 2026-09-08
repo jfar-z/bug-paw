@@ -20,6 +20,7 @@ describe("AigcWorkbenchPage 创作台", () => {
   it("接口详情保存正式发布开关，并保持其他配置不变", async () => {
     const item = {
       id: "interface-1", name: "测试接口", description: "", protocol: "openai", capability: "text-to-image",
+      toolDescription: "Agent-only interface instructions",
       channelId: "channel-1", enabled: true, toolPublishEnabled: false, config: { model: "test" },
       createdAt: "2026-09-07T00:00:00.000Z", updatedAt: "2026-09-07T00:00:00.000Z",
     };
@@ -36,6 +37,9 @@ describe("AigcWorkbenchPage 创作台", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     renderAigcPage({ page: "aigc-interface-detail", interfaceId: item.id });
+    const toolDescription = await screen.findByLabelText(/^AIGC Agent/);
+    expect(toolDescription).toHaveValue("Agent-only interface instructions");
+    fireEvent.change(toolDescription, { target: { value: "Updated agent instructions" } });
     await waitFor(() => expect(screen.getByLabelText("AIGC 接口名称")).toHaveValue("测试接口"));
     const publish = screen.getByRole("checkbox", { name: "发布为 Agent 工具" });
     expect(publish).not.toBeChecked();
@@ -43,7 +47,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存接口" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(true));
     const body = JSON.parse(String(fetchMock.mock.calls.find(([, init]) => init?.method === "PATCH")?.[1]?.body));
-    expect(body).toMatchObject({ toolPublishEnabled: true, channelId: item.channelId, config: item.config });
+    expect(body).toMatchObject({ toolPublishEnabled: true, toolDescription: "Updated agent instructions", channelId: item.channelId, config: item.config });
     expect(await screen.findByText("已保存 AIGC 接口")).toBeInTheDocument();
   });
   afterEach(() => {

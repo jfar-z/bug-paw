@@ -66,11 +66,12 @@ it("条件参数有值时保留节点组并上传媒体", async () => {
     });
     const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
 
-    await adapter.execute(execution);
+    const result = await adapter.execute(execution);
 
     expect(execution.assets.resolveInputPath).toHaveBeenCalledWith("asset-reference-2");
     expect(submittedPrompt).toHaveProperty("34.inputs.image", "reference-2.png");
     expect(submittedPrompt).toHaveProperty("47.inputs.image", ["34", 0]);
+    expect(result.assets[0]).toMatchObject({ outputId: "result", outputName: "result" });
   });
 
 it("提供可选入参时临时启用对应的 Bypass 条件分支", async () => {

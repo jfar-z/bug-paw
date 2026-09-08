@@ -15,7 +15,7 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
   return [
     defineTool({
       name: "aigc_list_interfaces", label: "查询 AIGC 接口",
-      description: "分页查询已发布接口；传 interfaceId 获取执行前必须读取的参数定义。",
+      description: "\u5206\u9875\u67e5\u8be2\u5df2\u53d1\u5e03\u63a5\u53e3\uff1b\u4f20 interfaceId \u83b7\u53d6 Agent \u4e13\u7528\u8bf4\u660e\u3001\u5165\u53c2\u548c\u51fa\u53c2\u5b9a\u4e49\u3002",
       parameters: Type.Object({
         interfaceId: Type.Optional(Type.String({ minLength: 1, maxLength: 120 })),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),

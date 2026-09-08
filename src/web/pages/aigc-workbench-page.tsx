@@ -1226,6 +1226,7 @@ function interfaceInputFromRecord(item: AigcInterfaceRecord): AigcInterfaceInput
   return {
     name: item.name,
     description: item.description,
+    toolDescription: item.toolDescription ?? item.description,
     protocol: item.protocol,
     capability: item.capability,
     channelId: item.channelId,
@@ -1379,6 +1380,7 @@ function AigcInterfacesPage() {
     const nextDraft: AigcInterfaceInput = {
       name: item.name,
       description: item.description,
+      toolDescription: item.toolDescription ?? item.description,
       protocol: item.protocol,
       capability: item.capability,
       channelId: item.channelId,
@@ -1477,6 +1479,7 @@ function AigcInterfacesPage() {
         <div className="aigc-form-stack">
           <label><span>接口名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
           <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+          <label><span>接口说明（Agent）</span><textarea aria-label="AIGC Agent 接口说明" rows={4} value={draft.toolDescription ?? ""} onChange={(event) => setDraft({ ...draft, toolDescription: event.target.value })} /><small>说明适用场景、调用约束和结果含义，Agent 查询接口明细时会读取此内容。</small></label>
         </div>
 
         <div className="aigc-fieldset">
@@ -1581,6 +1584,7 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
       setDraft({
         name: found.name,
         description: found.description,
+        toolDescription: found.toolDescription ?? found.description,
         protocol: found.protocol,
         capability: found.capability,
         channelId: found.channelId,
@@ -1611,6 +1615,7 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
       <section className="configuration-form-card">
         <label><span>名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
         <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
+        <label><span>接口说明（Agent）</span><textarea aria-label="AIGC Agent 接口说明" rows={4} value={draft.toolDescription ?? ""} onChange={(event) => setDraft({ ...draft, toolDescription: event.target.value })} /><small>Agent 查询接口明细时使用，建议写清适用场景、约束和出参含义。</small></label>
         <p className="configuration-help">协议、渠道与能力已在接口列表中创建；如需变更协议，请删除后重新创建。</p>
         {draft.protocol === "comfyui" ? <p className="configuration-help">工作流：{workflows.find((item) => item.id === (draft.config as { workflowId?: string }).workflowId)?.name ?? "未找到"}</p> : null}
         <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>发布为 Agent 工具</span></label>
@@ -1968,6 +1973,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
 const emptyInterface: AigcInterfaceInput = {
   name: "",
   description: "",
+  toolDescription: "",
   protocol: "openai",
   capability: "text-to-image",
   channelId: "",

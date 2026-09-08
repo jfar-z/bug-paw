@@ -25,6 +25,10 @@ export interface AigcExecutionInput {
 export interface AigcExecutionAsset {
   name: string;
   mediaType: string;
+  /** 对应 Agent 可见出参定义的稳定标识。 */
+  outputId?: string;
+  /** 对应 Agent 可见出参定义的展示名称。 */
+  outputName?: string;
   content: Buffer;
 }
 

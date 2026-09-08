@@ -15,6 +15,15 @@ export interface AigcAgentField {
   source?: "workspace";
 }
 
+/** Agent 可见出参定义，用稳定标识关联任务交付文件。 */
+export interface AigcAgentOutput {
+  id: string;
+  name: string;
+  mediaType: "image" | "video" | "audio" | "json" | "text";
+  description?: string;
+  multiple: boolean;
+}
+
 /** 固定形状的参数项，避免向 Provider 发送动态 Record Schema。 */
 export interface AigcAgentParameter {
   name: string;
@@ -64,6 +73,28 @@ export function agentFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDe
   }
   if (item.capability.includes("video")) fields.push({ name: "duration", type: "integer", required: false, defaultValue: config.duration, min: 1, max: 300 });
   return fields;
+}
+
+/** 从协议能力或 ComfyUI 映射提取 Agent 可见出参定义。 */
+export function agentOutputs(item: AigcInterfaceRecord, workflow?: AigcWorkflowDetail): AigcAgentOutput[] {
+  if (item.protocol === "comfyui") {
+    if (!workflow) throw new TypeError("ComfyUI 工作流不存在");
+    return workflow.outputMappings.map((mapping) => ({
+      id: mapping.id,
+      name: mapping.name,
+      mediaType: mapping.mediaType,
+      description: mapping.description,
+      multiple: ["image", "video", "audio"].includes(mapping.mediaType),
+    }));
+  }
+  const mediaType = item.capability.includes("video") ? "video" : "image";
+  return [{
+    id: "result",
+    name: "result",
+    mediaType,
+    description: mediaType === "video" ? "生成的视频产物" : "生成的图片产物",
+    multiple: true,
+  }];
 }
 
 /** 校验所有参数后才允许上传文件或创建计费任务。 */

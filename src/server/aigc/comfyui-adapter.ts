@@ -269,11 +269,23 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       const value = nodeOutput[fieldBaseName(mapping.field)] ?? nodeOutput[mapping.field.replace("outputs.", "")];
       if (mapping.mediaType === "text") {
         const text = Array.isArray(value) ? value.map(String).join("") : value;
-        if (text) assets.push({ name: `${mapping.name || "output"}.txt`, mediaType: "text/plain", content: Buffer.from(String(text), "utf8") });
+        if (text) assets.push({
+          name: `${mapping.name || "output"}.txt`,
+          mediaType: "text/plain",
+          content: Buffer.from(String(text), "utf8"),
+          outputId: mapping.id,
+          outputName: mapping.name,
+        });
         continue;
       }
       if (mapping.mediaType === "json") {
-        if (value !== undefined) assets.push({ name: `${mapping.name || "output"}.json`, mediaType: "application/json", content: Buffer.from(JSON.stringify(value), "utf8") });
+        if (value !== undefined) assets.push({
+          name: `${mapping.name || "output"}.json`,
+          mediaType: "application/json",
+          content: Buffer.from(JSON.stringify(value), "utf8"),
+          outputId: mapping.id,
+          outputName: mapping.name,
+        });
         continue;
       }
       const list = mediaArray(value, mapping.mediaType, nodeOutput);
@@ -288,6 +300,8 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
           name: file.filename,
           mediaType: outputMediaType(mapping.mediaType, file.filename),
           content: downloaded,
+          outputId: mapping.id,
+          outputName: mapping.name,
         });
       }
     }
