@@ -282,6 +282,13 @@ export interface AigcWorkflowUpdateInput {
   outputMappings: AigcWorkflowOutputMapping[];
 }
 
+/** 替换工作流原始内容时的浏览器输入。 */
+export interface AigcWorkflowReplaceInput {
+  fileName: string;
+  /** 新的完整 ComfyUI 工作流 JSON，现有映射必须与其保持兼容。 */
+  workflowJson: unknown;
+}
+
 /** 工作流详情文档。 */
 export interface AigcWorkflowDetailDocument {
   revision: string;
@@ -341,11 +348,13 @@ export interface AigcInterfaceRecord {
   id: string;
   name: string;
   description: string;
+  /** 面向 Agent 的接口用途、调用约束与结果解释。 */
+  toolDescription?: string;
   protocol: AigcInterfaceProtocol;
   capability: AigcInterfaceCapability;
   channelId: string;
   enabled: boolean;
-  /** 预留未来发布为 Agent 工具，本期不提供实际工具注册。 */
+  /** 允许已授权的 Agent 发现并调用此接口。 */
   toolPublishEnabled: boolean;
   config: AigcOpenAiInterfaceConfig | AigcGrokInterfaceConfig | AigcComfyUiInterfaceConfig;
   createdAt: string;
@@ -362,6 +371,8 @@ export interface AigcInterfaceDocument {
 export interface AigcInterfaceInput {
   name: string;
   description: string;
+  /** 面向 Agent 的接口用途、调用约束与结果解释。 */
+  toolDescription?: string;
   protocol: AigcInterfaceProtocol;
   capability: AigcInterfaceCapability;
   channelId: string;
@@ -378,6 +389,10 @@ export interface AigcTaskAsset {
   id: string;
   name: string;
   mediaType: string;
+  /** 产物所属的稳定出参定义标识。 */
+  outputId?: string;
+  /** 产物所属的出参展示名称。 */
+  outputName?: string;
   size: number;
   createdAt: string;
 }
@@ -407,6 +422,17 @@ export interface AigcTaskExecutionState {
 
 /** 任务详情。 */
 export interface AigcTaskRecord {
+  /** 仅服务端写入；缺失表示历史或手动任务，不对 Agent 开放。 */
+  agentOrigin?: {
+    agentId: string;
+    sessionId: string;
+    requestKey: string;
+    requestHash: string;
+  };
+  /** 本地取消不等于上游停止，只有明确确认时标记 confirmed。 */
+  upstreamCancellation?: "confirmed" | "unknown";
+  /** 已交付到所属 Agent 工作区的产物路径，以资产 ID 为键。 */
+  deliveredFiles?: Record<string, string>;
   id: string;
   interfaceId: string;
   interfaceName: string;
@@ -424,6 +450,8 @@ export interface AigcTaskRecord {
 
 /** 任务列表项。 */
 export interface AigcTaskSummary {
+  /** 上游是否确认取消。 */
+  upstreamCancellation?: "confirmed" | "unknown";
   id: string;
   interfaceId: string;
   interfaceName: string;

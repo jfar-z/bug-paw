@@ -1,10 +1,13 @@
 import type { AigcTaskRecord } from "../../shared/aigc-contracts";
 import { readJson, writeJsonAtomic } from "../storage";
+import { KeyedMutex } from "../core/keyed-mutex";
 
 /** 以单文件 JSON 保存 AIGC 任务历史。 */
 export class AigcTaskRepository {
   private readonly tasks = new Map<string, AigcTaskRecord>();
   private readonly ready: Promise<void>;
+  /** 串行保存，避免并发任务用旧快照覆盖新状态。 */
+  private readonly mutations = new KeyedMutex();
 
   /**
    * @param filePath 任务历史文件路径
@@ -16,7 +19,7 @@ export class AigcTaskRepository {
   /** 列出全部任务，按创建时间倒序。 */
   async list(): Promise<AigcTaskRecord[]> {
     await this.ready;
-    return [...this.tasks.values()].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return [...this.tasks.values()].map(copyTask).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   /** 读取单个任务。 */
@@ -29,36 +32,52 @@ export class AigcTaskRepository {
   /** 创建任务。 */
   async create(task: AigcTaskRecord): Promise<AigcTaskRecord> {
     await this.ready;
-    if (this.tasks.has(task.id)) throw new TypeError("AIGC 任务标识重复");
-    this.tasks.set(task.id, copyTask(task));
-    await this.persist();
-    return copyTask(task);
+    return this.mutations.run("tasks", async () => {
+      if (this.tasks.has(task.id)) throw new TypeError("AIGC 任务标识重复");
+      this.tasks.set(task.id, copyTask(task));
+      try {
+        await this.persist();
+      } catch (error) {
+        this.tasks.delete(task.id);
+        throw error;
+      }
+      return copyTask(task);
+    });
   }
 
   /** 更新任务字段。 */
   async update(id: string, patch: Partial<AigcTaskRecord>): Promise<AigcTaskRecord | undefined> {
     await this.ready;
-    const current = this.tasks.get(id);
-    if (!current) return undefined;
-    const next = copyTask({ ...current, ...patch, id: current.id });
-    this.tasks.set(id, next);
-    await this.persist();
-    return copyTask(next);
+    return this.mutations.run("tasks", async () => {
+      const current = this.tasks.get(id);
+      if (!current) return undefined;
+      const next = copyTask({ ...current, ...patch, id: current.id });
+      this.tasks.set(id, next);
+      try {
+        await this.persist();
+      } catch (error) {
+        this.tasks.set(id, current);
+        throw error;
+      }
+      return copyTask(next);
+    });
   }
 
   /** 删除任务并在持久化失败时恢复内存记录。 */
   async remove(id: string): Promise<AigcTaskRecord | undefined> {
     await this.ready;
-    const current = this.tasks.get(id);
-    if (!current) return undefined;
-    this.tasks.delete(id);
-    try {
-      await this.persist();
-      return copyTask(current);
-    } catch (error) {
-      this.tasks.set(id, current);
-      throw error;
-    }
+    return this.mutations.run("tasks", async () => {
+      const current = this.tasks.get(id);
+      if (!current) return undefined;
+      this.tasks.delete(id);
+      try {
+        await this.persist();
+        return copyTask(current);
+      } catch (error) {
+        this.tasks.set(id, current);
+        throw error;
+      }
+    });
   }
 
   /** 加载历史文件并容错缺失或损坏内容。 */
@@ -68,6 +87,17 @@ export class AigcTaskRepository {
     for (const task of value) {
       if (isTaskRecord(task)) this.tasks.set(task.id, copyTask(task));
     }
+    // 进程重启后不能假设上游没有执行，更不能自动重试计费任务。
+    let changed = false;
+    for (const task of this.tasks.values()) {
+      if (task.agentOrigin && ["queued", "running"].includes(task.status)) {
+        task.status = "failed";
+        task.error = { code: "AIGC_INTERRUPTED", message: "服务重启，无法确认上游结果；请人工核对后再提交新任务" };
+        task.updatedAt = task.finishedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) await this.persist();
   }
 
   /** 原子保存当前任务集合。 */
@@ -78,12 +108,7 @@ export class AigcTaskRepository {
 
 /** 复制任务记录，避免调用方修改内存状态。 */
 function copyTask(task: AigcTaskRecord): AigcTaskRecord {
-  return {
-    ...task,
-    inputs: { ...task.inputs },
-    assets: task.assets.map((asset) => ({ ...asset })),
-    ...(task.error ? { error: { ...task.error } } : {}),
-  };
+  return structuredClone(task);
 }
 
 function isTaskRecord(value: unknown): value is AigcTaskRecord {

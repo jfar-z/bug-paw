@@ -2361,11 +2361,9 @@ img.message-avatar {
 
 .reference-composer__footer {
   position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-end;
-  justify-content: space-between;
   gap: 8px;
 }
 
@@ -2374,7 +2372,6 @@ img.message-avatar {
   z-index: 4;
   display: flex;
   min-width: 0;
-  flex: 1 1 auto;
   align-items: center;
   gap: 4px;
 }
@@ -2412,7 +2409,7 @@ img.message-avatar {
   position: static;
 }
 
-/* 会话级选择器沿用输入区图标按钮语汇，避免模型信息形成额外视觉层级。 */
+/* 会话级选择器沿用输入区图标按钮语汇，长模型名由按钮自身裁剪。 */
 
 .composer-session-controls {
   display: flex;
@@ -2459,9 +2456,14 @@ img.message-avatar {
 }
 
 .composer-model-trigger > span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-model-trigger > svg {
+  flex: none;
 }
 
 .composer-thinking-trigger:hover:not(:disabled),

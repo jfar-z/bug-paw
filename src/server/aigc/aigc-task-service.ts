@@ -35,6 +35,8 @@ export class AigcTaskService {
   private readonly controllers = new Map<string, AbortController>();
   private readonly executionStates = new Map<string, AigcTaskExecutionState>();
   private readonly executions = new Map<string, Promise<void>>();
+  /** 停服开始后不再接受新任务或重试。 */
+  private closing = false;
 
   /**
    * @param dependencies AIGC 任务执行依赖
@@ -55,16 +57,20 @@ export class AigcTaskService {
   }
 
   /** 创建任务并异步开始执行。 */
-  async createRun(request: AigcRunRequest): Promise<AigcTaskRecord> {
+  async createRun(request: AigcRunRequest, agentOrigin?: AigcTaskRecord["agentOrigin"]): Promise<AigcTaskRecord> {
+    if (this.closing) throw new Error("AIGC 服务正在停止");
     const item = await this.dependencies.interfaces.get(request.interfaceId);
     if (!item) throw new Error("AIGC 接口不存在");
     if (!item.enabled) throw new Error("AIGC 接口未启用");
+    if (agentOrigin && !item.toolPublishEnabled) throw new Error("AIGC 接口未发布");
     if (item.protocol !== "comfyui" && hasComfyUiInput(request.inputs)) {
       throw new TypeError("仅 ComfyUI 接口支持 ComfyUI input");
     }
     const now = new Date().toISOString();
+    if (this.closing) throw new Error("AIGC 服务正在停止");
     const task = await this.dependencies.repository.create({
       id: randomUUID(),
+      ...(agentOrigin ? { agentOrigin } : {}),
       interfaceId: item.id,
       interfaceName: item.name,
       channelId: item.channelId,
@@ -84,12 +90,44 @@ export class AigcTaskService {
     if (!task) throw new Error("AIGC 任务不存在");
     if (task.status !== "queued" && task.status !== "running") throw new Error("仅排队中或执行中的任务可以取消");
     this.controllers.get(id)?.abort();
+    // 等待保存链收敛，避免取消后被迟到的成功响应覆盖。
+    await this.executions.get(id)?.catch(() => undefined);
     this.executionStates.delete(id);
-    return this.updateTask(id, { status: "cancelled", updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString() });
+    const latest = await this.get(id);
+    return this.updateTask(id, {
+      status: "cancelled",
+      upstreamCancellation: latest?.upstreamCancellation ?? "unknown",
+      updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    });
+  }
+
+  /** 保存工具交付记录，防止每次查询都重复复制产物。 */
+  async recordDelivery(id: string, deliveredFiles: Record<string, string>): Promise<void> {
+    await this.updateTask(id, { deliveredFiles });
+  }
+
+  /** 读取内部完整记录，仅供有归属校验的应用服务使用。 */
+  async listRecords(): Promise<AigcTaskRecord[]> {
+    return this.dependencies.repository.list();
+  }
+
+  /** 停服时先终止请求并等待所有写入，避免遗留后台任务持有数据文件。 */
+  async close(): Promise<void> {
+    this.closing = true;
+    const ids = [...this.controllers.keys()];
+    for (const controller of this.controllers.values()) controller.abort();
+    await Promise.allSettled([...this.executions.values()]);
+    for (const id of ids) {
+      const task = await this.get(id);
+      if (task && ["queued", "running"].includes(task.status)) {
+        await this.failTask(id, { code: "AIGC_INTERRUPTED", message: "服务停止，无法确认上游结果" });
+      }
+    }
   }
 
   /** 重新执行失败或已取消的任务。 */
   async retry(id: string): Promise<AigcTaskRecord | undefined> {
+    if (this.closing) throw new Error("AIGC 服务正在停止");
     const task = await this.dependencies.repository.get(id);
     if (!task) throw new Error("AIGC 任务不存在");
     if (task.status !== "failed" && task.status !== "cancelled") throw new Error("仅失败或已取消的任务可以重试");
@@ -97,6 +135,8 @@ export class AigcTaskService {
     const next = await this.updateTask(id, {
       status: "queued",
       assets: [],
+      deliveredFiles: undefined,
+      upstreamCancellation: undefined,
       error: undefined,
       startedAt: undefined,
       finishedAt: undefined,
@@ -141,29 +181,43 @@ export class AigcTaskService {
 
   /** 注册单个任务执行 Promise，删除任务时可等待最终写入停止。 */
   private startExecution(id: string): void {
-    const execution = this.executeTask(id);
+    if (this.closing) {
+      // 已经进入持久化的并发提交保留为中断任务，重启时不会自动再次计费。
+      return;
+    }
+    const controller = new AbortController();
+    this.controllers.set(id, controller);
+    const execution = this.executeTask(id, controller);
     this.executions.set(id, execution);
     void execution.catch(() => undefined).finally(() => {
       if (this.executions.get(id) === execution) this.executions.delete(id);
+      if (this.controllers.get(id) === controller) this.controllers.delete(id);
     });
   }
 
   /** 执行任务并写入最终状态。 */
-  private async executeTask(id: string): Promise<void> {
+  private async executeTask(id: string, controller: AbortController): Promise<void> {
     const task = await this.dependencies.repository.get(id);
     if (!task || task.status !== "queued") return;
+    if (controller.signal.aborted) return;
     const item = await this.dependencies.interfaces.get(task.interfaceId);
     if (!item) return this.failTask(id, { code: "AIGC_INTERFACE_MISSING", message: "AIGC 接口不存在" });
+    if (!item.enabled || (task.agentOrigin && !item.toolPublishEnabled)) {
+      return this.failTask(id, { code: "AIGC_INTERFACE_DISABLED", message: "AIGC 接口未启用或已撤销发布" });
+    }
     const channel = (await this.dependencies.connections.read()).channels.find((candidate) => candidate.id === item.channelId);
     if (!channel) return this.failTask(id, { code: "AIGC_CHANNEL_MISSING", message: "AIGC 渠道不存在" });
     if (!channel.enabled) return this.failTask(id, { code: "AIGC_CHANNEL_DISABLED", message: "AIGC 渠道未启用" });
     const adapter = this.dependencies.adapters[item.protocol];
     if (!adapter) return this.failTask(id, { code: "AIGC_PROTOCOL_UNSUPPORTED", message: "AIGC 协议暂不支持" });
-    const controller = new AbortController();
-    this.controllers.set(id, controller);
+    const signal = task.agentOrigin
+      ? AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60_000)])
+      : controller.signal;
+    let upstreamCancellation: "confirmed" | "unknown" = "unknown";
     await this.updateTask(id, { status: "running", startedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     try {
       const apiKey = await this.dependencies.credentials.getApiKey(channel.id);
+      signal.throwIfAborted();
       const result = await adapter.execute({
         item,
         channel,
@@ -172,7 +226,8 @@ export class AigcTaskService {
         assets: this.dependencies.assets,
         publicFiles: this.dependencies.publicFiles,
         workflows: this.dependencies.workflows,
-        signal: controller.signal,
+        signal,
+        onCancellation: (status) => { upstreamCancellation = status; },
         onProgress: (state) => {
           // 进度事件可能非常密集，只保留内存快照供轮询接口读取。
           if (!controller.signal.aborted && this.controllers.get(id) === controller) {
@@ -182,8 +237,15 @@ export class AigcTaskService {
       });
       const assets = [];
       for (const output of result.assets) {
-        assets.push(await this.dependencies.assets.saveOutput(id, output.content, output.name, output.mediaType));
+        signal.throwIfAborted();
+        const saved = await this.dependencies.assets.saveOutput(id, output.content, output.name, output.mediaType);
+        assets.push({
+          ...saved,
+          outputId: output.outputId ?? "result",
+          outputName: output.outputName ?? "result",
+        });
       }
+      signal.throwIfAborted();
       await this.updateTask(id, {
         status: "succeeded",
         assets,
@@ -192,14 +254,19 @@ export class AigcTaskService {
         updatedAt: new Date().toISOString(),
       });
     } catch (error) {
-      if (controller.signal.aborted) {
-        await this.updateTask(id, { status: "cancelled", finishedAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      if (signal.aborted) {
+        await this.updateTask(id, {
+          status: controller.signal.aborted ? "cancelled" : "failed",
+          upstreamCancellation,
+          ...(!controller.signal.aborted ? { error: { code: "AIGC_TIMEOUT", message: "任务超过 30 分钟，上游停止状态请人工核对" } } : {}),
+          finishedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
       } else {
         await this.failTask(id, sanitizeError(error));
       }
     } finally {
       this.executionStates.delete(id);
-      this.controllers.delete(id);
+      if (this.controllers.get(id) === controller) this.controllers.delete(id);
     }
   }
 
@@ -236,6 +303,7 @@ function toSummary(task: AigcTaskRecord, execution?: AigcTaskExecutionState): Ai
     assetCount: task.assets.length,
     ...(execution ? { execution: { ...execution } } : {}),
     ...(task.error ? { error: task.error } : {}),
+    ...(task.upstreamCancellation ? { upstreamCancellation: task.upstreamCancellation } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     ...(task.startedAt ? { startedAt: task.startedAt } : {}),

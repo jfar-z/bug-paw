@@ -4,6 +4,34 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.9 - 2026-09-08
+
+### 新增 / Added
+
+- 支持将启用的 AIGC 接口发布为 Agent 工具，提供接口发现、参数与产物说明、任务隔离、并发与频率限制，以及阻塞等待、进度回调和产物交付。
+- 增加 AIGC Agent 全局并发、单 Agent 并发和小时调用量环境配置，并完善系统提示词中的工具使用约束。
+- 统一 Agent 附件、AIGC 输入和生成产物的工作区本地路径处理，增加受保护的数据文件读取接口与 Markdown 文件链接预览。
+- 支持替换 ComfyUI 原始工作流，同时保留工作流标识、输入输出映射和已同步节点元数据，并在不兼容时拒绝覆盖现有配置。
+
+- Added publishing of enabled AIGC interfaces as Agent tools, including interface discovery, parameter and output descriptions, isolated tasks, concurrency and rate limits, blocking completion, progress callbacks, and artifact delivery.
+- Added environment configuration for global AIGC Agent concurrency, per-Agent concurrency, and hourly usage limits, with stronger tool-use constraints in system prompts.
+- Unified workspace-local paths for Agent attachments, AIGC inputs, and generated artifacts, and added protected data-file reads plus Markdown file-link previews.
+- Added replacement of raw ComfyUI workflows while preserving workflow identity, input/output mappings, and synchronized node metadata, with incompatible replacements rejected atomically.
+
+### 修复 / Fixed
+
+- 修复 ComfyUI 媒体参数从 `widgets_values.N` 转换到稳定 API 输入字段时的映射错误，并优先使用具名控件值，避免随机种子前端控制项错写到后续数值字段。
+- 修复 AIGC 接口发现工具的操作、接口 ID、空值与分页参数协议，防止模型生成无效工具调用。
+- 修复 OpenAI 图片工具省略可选参考图或显式传入空值时被误判为图片编辑的问题，保持其他协议的必填媒体校验。
+- 修复移动端超长模型名称撑开聊天页面、输入区操作列溢出，以及首次发送后停止生成按钮无法稳定显示的问题。
+- 修复 AIGC Agent 媒体在普通附件、公共目录与 ComfyUI 输入目录之间传递时的路径和来源解析。
+
+- Fixed ComfyUI media-parameter conversion from `widgets_values.N` to stable API input fields, and prioritized named widget values so frontend seed controls cannot shift into subsequent numeric fields.
+- Fixed the AIGC interface-discovery tool protocol for actions, interface IDs, explicit nulls, and pagination, preventing invalid model-generated calls.
+- Fixed OpenAI image tools treating omitted or explicitly null optional reference images as edit requests while preserving required-media validation for other protocols.
+- Fixed long model names expanding the mobile chat page, composer action-column overflow, and unreliable stop-generation controls after the first send.
+- Fixed path and source resolution when AIGC Agent media moves between ordinary attachments, the public directory, and the ComfyUI input directory.
+
 ## 0.1.8 - 2026-08-27
 
 ### 新增 / Added

@@ -21,7 +21,8 @@ Agent 自身的 `ROLE.md`、`BEHAVIOR.md`、`RULES.md`、`USER.md` 和 `BOOTSHAR
 - 禁止在根节点使用 `Type.Union`、`Type.Intersect` 或仅包含 `anyOf`、`oneOf`、`allOf` 的组合 Schema。部分 OpenAI-compatible Provider、模型工具模板和本地推理服务会把这类调用生成为缺失参数或空 `{}`。
 - 枚举可以在对象属性内使用 `Type.Union([Type.Literal(...)])`；项目后续直接依赖 `@earendil-works/pi-ai` 时，也可使用 Pi 推荐的 `StringEnum`。不得只为了枚举引入未经声明的传递依赖。
 - `Type.Record`、嵌套 `$ref`、条件 Schema 和复杂组合关键字仅在目标 Provider 已验证支持时使用。默认按多个 Provider 共同支持的 JSON Schema 子集设计。
-- `action` 对应的条件必填字段先声明为 `Type.Optional`，再由 `execute` 显式校验。例如 `action=replace` 时必须校验 `content` 是字符串；禁止用默认值猜测模型意图。
+- 新增或修改工具时，禁止定义所有属性均为 `Type.Optional`、并依赖模型生成空 `{}` 选择默认操作的参数对象。部分 GPT/Responses 模型会主动填写 Schema 中声明的可选属性，造成伪造 ID、名称或分页值；历史工具触及相关逻辑时必须同步迁移。
+- 单个工具承担多种操作时必须设置必填 `action`。某操作没有值的条件字段应优先定义为包含 `Type.Null()` 的必填联合类型，并要求模型显式传 JSON `null`；由 `execute` 校验 `action` 与字段组合。仅在已验证目标 Provider 能稳定省略属性时才使用 `Type.Optional`，禁止用默认值猜测模型意图。
 - 对象默认设置 `additionalProperties: false`，减少模型生成未声明字段；如果业务确实需要动态键，必须在设计和测试中说明目标 Provider 的兼容性。
 
 推荐的单工具多操作形式：
@@ -33,11 +34,15 @@ const tool = defineTool({
   description: "读取或替换示例内容。",
   parameters: Type.Object({
     action: Type.Union([Type.Literal("read"), Type.Literal("replace")]),
-    content: Type.Optional(Type.String({ description: "replace 操作写入的完整内容" })),
+    content: Type.Union([
+      Type.String({ description: "replace 操作写入的完整内容" }),
+      Type.Null(),
+    ], { description: "read 操作传 JSON null" }),
   }, { additionalProperties: false }),
   async execute(_toolCallId, params) {
-    if (params.action === "replace" && typeof params.content !== "string") {
-      return failure("replace 操作必须提供 content");
+    if ((params.action === "read" && params.content !== null)
+      || (params.action === "replace" && typeof params.content !== "string")) {
+      return failure("read 必须传 content=null；replace 必须提供字符串 content");
     }
     return success(await service.run(params));
   },
@@ -69,8 +74,13 @@ const tool = defineTool({
 - 每个工具至少覆盖成功、参数错误、越权/资源不存在三个场景；有全局 Skill 时测试其关键章节或约束已落盘。
 - 内置 Skill 安装器必须测试首次安装、幂等权限修复和同名用户内容保留；不得用自动更新覆盖无法确认归属的正文或额外资源。
 - 测试必须断言 `tool.parameters.type === "object"`，并断言根节点不存在 `anyOf`、`oneOf` 或 `allOf`。
+- 无参数业务操作必须测试其显式 `action`/`null` 协议，且工具根对象至少包含一个必填字段；不得把空 `{}` 作为主要成功调用示例。
 - 含条件参数时，必须覆盖缺少条件必填字段且没有产生副作用的场景。
 - 新增 Provider 专用 Schema 关键字时，必须增加对应 Provider 的最小请求回归测试或记录可重复的人工验收步骤。
+
+## AIGC 工具
+
+`aigc_list_interfaces`、`aigc_run`、`aigc_run_and_wait`、`aigc_get_task`、`aigc_cancel_task` 通过会话工具工厂注册，必须分别授权。阻塞工具使用自身授权复用提交及交付逻辑，不隐式授予异步工具权限。接口发布开关不能替代 Agent 工具权限，历史手动任务不自动授权给任何 Agent。完整调用约定、限额及取消语义见 [AIGC 接口发布规范](11-aigc-agent-tools.md)。
 
 ## 定时任务示例
 

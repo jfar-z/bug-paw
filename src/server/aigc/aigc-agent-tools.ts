@@ -1,0 +1,111 @@
+import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { AigcAgentError, type AigcAgentContext, type AigcAgentService } from "./aigc-agent-service";
+
+const interfaceDiscoveryParameters = Type.Object({
+  action: Type.Union([Type.Literal("list"), Type.Literal("get")], {
+    description: "list 分页列出接口；get 按列表返回的真实 ID 读取详情",
+  }),
+  interfaceId: Type.Union([
+    Type.String({ minLength: 1, maxLength: 120 }),
+    Type.Null(),
+  ], { description: "list 必须传 JSON null；get 必须传列表返回的真实接口 ID" }),
+  offset: Type.Union([
+    Type.Integer({ minimum: 0 }),
+    Type.Null(),
+  ], { description: "list 首次传 0、后续传 nextOffset；get 必须传 JSON null" }),
+}, { additionalProperties: false });
+
+/** 为当前会话创建固定名称工具，授权仍由 SDK 和应用服务分别校验。 */
+export function createAigcAgentTools(context: AigcAgentContext, service: AigcAgentService) {
+  // 字段列表属于工具对象内部的属性，不是工具 parameters 根 Schema。
+  const parameterEntries = Type.Array(Type.Object({
+    name: Type.String({ minLength: 1, maxLength: 80 }),
+    text: Type.Optional(Type.String({ maxLength: 20_000 })),
+    number: Type.Optional(Type.Number()),
+    boolean: Type.Optional(Type.Boolean()),
+    path: Type.Optional(Type.Union([
+      Type.String({ minLength: 1, maxLength: 1_024 }),
+      Type.Null(),
+    ], { description: "当前 Agent 工作区相对路径；可选媒体不提供时可传 JSON null，服务端按渠道协议上传或发布" })),
+  }, { additionalProperties: false }), { maxItems: 100, description: "每项按字段类型只提供 text、number、boolean、path 中的一种值" });
+  return [
+    defineTool({
+      name: "aigc_list_interfaces", label: "查询 AIGC 接口",
+      description: "列出已发布接口或按真实 ID 读取 Agent 专用说明、入参和出参定义。必须显式选择 action，禁止猜测 interfaceId。",
+      promptSnippet: '发现接口时传 {"action":"list","interfaceId":null,"offset":0}；读取详情时传 {"action":"get","interfaceId":"列表返回的 ID","offset":null}。',
+      parameters: interfaceDiscoveryParameters,
+      execute: async (_id, params) => result(() => service.list(context, normalizeInterfaceDiscoveryInput(params))),
+    }),
+    defineTool({
+      name: "aigc_run", label: "提交 AIGC 任务",
+      description: "调用已发布接口异步生成媒体。先查询接口字段；同一次生成的重试必须复用 requestKey，改变 key 表示明确创建新任务。",
+      promptSnippet: "提交后使用 aigc_get_task 查询进度，绝不通过重复提交查询状态；生成任务可能计费。",
+      parameters: Type.Object({
+        interfaceId: Type.String({ minLength: 1, maxLength: 120 }),
+        requestKey: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9_-]+$" }),
+        parameters: parameterEntries,
+      }, { additionalProperties: false }),
+      execute: async (_id, params, signal) => result(() => service.run(context, params, signal)),
+    }),
+    defineTool({
+      name: "aigc_get_task", label: "查询 AIGC 任务",
+      description: "读取当前 Agent 的任务进度和产物；查询间隔至少 2 秒。完成时返回可直接写入 Markdown 链接的工作区相对路径。",
+      parameters: Type.Object({ taskId: Type.String({ minLength: 1, maxLength: 120 }) }, { additionalProperties: false }),
+      execute: async (_id, params) => result(() => service.get(context, params.taskId)),
+    }),
+    defineTool({
+      name: "aigc_cancel_task", label: "取消 AIGC 任务",
+      description: "取消当前 Agent 的任务。仅 upstreamCancellation=confirmed 表示上游已确认停止；unknown 时可能仍在计算或计费。",
+      parameters: Type.Object({ taskId: Type.String({ minLength: 1, maxLength: 120 }) }, { additionalProperties: false }),
+      execute: async (_id, params) => result(() => service.cancel(context, params.taskId)),
+    }),
+    defineTool({
+      name: "aigc_run_and_wait", label: "生成并等待 AIGC 产物",
+      description: "提交生成任务并阻塞等待结果，成功后直接交付文件。参数与 aigc_run 相同，同一次生成必须复用 requestKey。最多等待 30 分钟；超时或中止聊天只结束等待，不取消后台任务。",
+      promptSnippet: "需要本次对话直接获得产物时使用 aigc_run_and_wait；等待超时后保留任务 ID，不重复创建任务。",
+      parameters: Type.Object({
+        interfaceId: Type.String({ minLength: 1, maxLength: 120 }),
+        requestKey: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9_-]+$" }),
+        parameters: parameterEntries,
+      }, { additionalProperties: false }),
+      execute: async (_id, params, signal, onUpdate) => result(() => service.runAndWait(context, params, signal, (state) => {
+        onUpdate?.({ content: [{ type: "text", text: JSON.stringify({ status: "waiting", data: state }) }], details: {} });
+      })),
+    }),
+  ];
+}
+
+/** 将严格判别参数转换为服务层已有的列表或详情查询。 */
+function normalizeInterfaceDiscoveryInput(input: unknown): { interfaceId?: string; offset?: number } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("AIGC 接口查询参数必须是对象");
+  }
+  const params = input as Record<string, unknown>;
+  if (params.action === "list") {
+    if (params.interfaceId !== null || !Number.isInteger(params.offset) || (params.offset as number) < 0) {
+      throw new TypeError("list 必须传 interfaceId=null，并传入非负整数 offset；首次调用 offset=0");
+    }
+    return { offset: params.offset as number };
+  }
+  if (params.action === "get") {
+    if (typeof params.interfaceId !== "string" || !params.interfaceId || params.offset !== null) {
+      throw new TypeError("get 必须传列表返回的真实 interfaceId，并传 offset=null");
+    }
+    return { interfaceId: params.interfaceId };
+  }
+  throw new TypeError("action 必须是 list 或 get");
+}
+
+/** 工具输出限制大小，失败抛出脱敏错误以让 Pi 正确标记 isError。 */
+async function result(operation: () => Promise<unknown>) {
+  try {
+    const text = JSON.stringify({ status: "ok", data: await operation() });
+    if (Buffer.byteLength(text, "utf8") > 64 * 1024) throw new AigcAgentError("AIGC_RESULT_TOO_LARGE", "接口字段过多，请在 AIGC 工作台精简发布参数");
+    return { content: [{ type: "text" as const, text }], details: {} };
+  } catch (error) {
+    const code = error instanceof AigcAgentError ? error.code : error instanceof TypeError ? "AIGC_INPUT_INVALID" : "AIGC_OPERATION_FAILED";
+    const message = error instanceof AigcAgentError || error instanceof TypeError ? error.message : "AIGC 操作失败，请检查工作区文件和 AIGC 工作台状态，不要自动重复提交";
+    throw new Error(JSON.stringify({ code, message }));
+  }
+}

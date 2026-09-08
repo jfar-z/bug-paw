@@ -1,6 +1,6 @@
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
 import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, ThinkingLevel, WebPiSettings } from "../shared/configuration-contracts";
-import type { ChatRunSummary, ComposerCatalog, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
+import type { ChatRunSummary, ComposerCatalog, DataFileSummary, DataFileTextPreview, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
 import type { AgentReference, AgentReferenceInput } from "../shared/agent-reference-contracts";
 import type { CreateScheduledTaskInput, ScheduledTask, ScheduledTaskRun, UpdateScheduledTaskInput } from "../shared/scheduled-task-contracts";
 import type {
@@ -49,6 +49,7 @@ import type {
   AigcWorkflowDetailDocument,
   ComfyUiNodeMetadataSyncResult,
   AigcWorkflowDocument,
+  AigcWorkflowReplaceInput,
   AigcWorkflowUpdateInput,
 } from "../shared/aigc-contracts";
 
@@ -268,6 +269,50 @@ export function workspaceFileUrl(agentId: string, path: string, download = false
   return download ? `${base}?download=1` : base;
 }
 
+/** 将 Markdown 文件路径转换为 `/data` 只读接口地址。 */
+export function dataFileUrl(agentId: string, path: string, download = false): string {
+  const query = new URLSearchParams({ path });
+  if (download) query.set("download", "1");
+  return apiV1Url(`/api/agents/${encodeURIComponent(agentId)}/data-files?${query.toString()}`);
+}
+
+/** 点击文件链接后按需读取真实文件元数据。 */
+async function getDataFile(agentId: string, path: string): Promise<DataFileSummary> {
+  const response = await fetch(dataFileUrl(agentId, path), { method: "HEAD", credentials: "same-origin" });
+  if (!response.ok) {
+    throw new ApiClientError("FILE_NOT_FOUND", "文件不存在、不可读取或不在 /data 目录内", response.status);
+  }
+  return {
+    path: decodeHeader(response.headers.get("X-BugPaw-File-Path")) ?? path,
+    name: decodeHeader(response.headers.get("X-BugPaw-File-Name")) ?? linkFileName(path),
+    mediaType: response.headers.get("Content-Type")?.split(";", 1)[0] || "application/octet-stream",
+    size: Number(response.headers.get("Content-Length") ?? 0),
+    modifiedAt: response.headers.get("Last-Modified") ?? "",
+  };
+}
+
+async function getDataFileText(agentId: string, path: string): Promise<DataFileTextPreview> {
+  return request<DataFileTextPreview>(`/api/agents/${encodeURIComponent(agentId)}/data-files/text?path=${encodeURIComponent(path)}`);
+}
+
+function decodeHeader(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function linkFileName(path: string): string {
+  const pathOnly = path.split(/[?#]/, 1)[0] ?? path;
+  try {
+    return decodeURIComponent(pathOnly).split("/").at(-1) || "file";
+  } catch {
+    return pathOnly.split("/").at(-1) || "file";
+  }
+}
+
 /**
  * 读取工作目录文件的实时元数据，避免在会话中持久化易过期的信息。
  */
@@ -360,6 +405,7 @@ export const api = {
   createAigcWorkflow: (input: AigcWorkflowCreateInput) => request<AigcWorkflowDetail>("/api/aigc/workflows", { method: "POST", body: JSON.stringify(input) }),
   getAigcWorkflow: (id: string) => request<AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}`),
   updateAigcWorkflow: (id: string, revision: string, input: AigcWorkflowUpdateInput) => request<AigcWorkflowDetail>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  replaceAigcWorkflow: (id: string, revision: string, input: AigcWorkflowReplaceInput) => request<AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}/replace`, { method: "POST", body: JSON.stringify({ revision, ...input }) }),
   syncAigcWorkflowNodeMetadata: (id: string, channelId: string, revision: string) => request<ComfyUiNodeMetadataSyncResult & AigcWorkflowDetailDocument>(`/api/aigc/workflows/${encodeURIComponent(id)}/sync-node-metadata`, { method: "POST", body: JSON.stringify({ channelId, revision }) }),
   deleteAigcWorkflow: (id: string, revision: string) => request<void>(`/api/aigc/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getAigcInterfaces: () => request<AigcInterfaceDocument>("/api/aigc/interfaces"),
@@ -637,6 +683,8 @@ export const api = {
   updateWorkspaceEntry: (agentId: string, body: { operation: "rename"; path: string; name: string } | { operation: "move"; path: string; targetDirectory: string; createTargetDirectory?: boolean }) => request<WorkspaceEntry>(`/api/agents/${encodeURIComponent(agentId)}/workspace/entries`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteWorkspaceEntries: (agentId: string, paths: string[]) => request<void>(`/api/agents/${encodeURIComponent(agentId)}/workspace/entries`, { method: "DELETE", body: JSON.stringify({ paths }) }),
   getWorkspaceFile,
+  getDataFile,
+  getDataFileText,
   synthesizeAgentSpeech,
   transcribeSpeech,
   abort: (sessionId: string) =>

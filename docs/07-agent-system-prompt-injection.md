@@ -13,7 +13,7 @@ Pi 先组装默认系统提示词、动态工具说明、项目上下文和 Skil
 ```text
 [英文通用工作助理身份]
 [agent_references 协议]
-[pi_agent_files 协议]
+[Markdown 文件交付规则]
 [按有效工具动态生成的检索路由政策]
 [当前 Agent 自身 Markdown 的路径、维护协议与最新内容]
 [非空 BOOTSHARP 初始化引导]
@@ -46,13 +46,15 @@ Available tools:
 只有不能由单一工具 Schema 表达的内容才可作为能力协议加入 `AgentSystemPromptConfiguration.capabilityPrompts`，例如：
 
 - 用户消息与前端共同使用的引用结构；
-- Agent 输出需要前端解析的结构块；
+- Agent 输出文件时与前端约定的 Markdown 链接路径规则；
 - 跨消息或跨工具的稳定交互约束。
 
 当前能力项如下：
 
 - `agentReferences`：解释用户显式附带的 `<agent_references .../>` 标签，不得将普通文本中的相似标签视为授权。
-- `workspaceFileDelivery`：规定通过 `<pi_agent_files ...>` 向用户发送 cwd 相对路径文件的输出结构。
+- `markdownFileDelivery`：规定 cwd 内文件使用相对 Markdown 链接，挂载数据目录中的其他文件使用 `/data/...` 链接，并禁止仅为交付文件重复运行 shell 检查。
+
+Web 不在渲染消息时扫描文件，也不根据 Agent 输出创建附件卡片。只有用户点击被识别为本地文件的 Markdown 链接后，登录态接口才解析当前 Agent cwd 或 `/data` 路径、校验真实路径仍位于挂载数据目录内，并读取少量文件头判断实际 MIME。媒体与文档在弹窗中预览，未知格式提供下载；历史自定义结构块不迁移、不再特殊解析。
 
 自身提示词文件协议属于跨工具、跨会话的持久配置协议。系统提示词只说明五个精确路径、各文件适合主动更新的时机、初始化清理条件和跨 Agent 边界；Pi 原生 `read`、`write`、`edit` 的参数与返回格式仍由工具定义维护，不在此重复。路径仅供 Agent 内部操作，不应在普通用户响应中复述。缺少任一所需原生工具权限时，Agent 必须说明当前能力不足并提示用户通过 Agent 配置页维护，不得改用 `bash` 绕过权限。
 

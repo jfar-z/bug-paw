@@ -15,6 +15,7 @@ import type {
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
 import { validateMetadataValue } from "./aigc-workflow-service";
+import { resolveComfyUiMappedField } from "./comfyui-mapped-field";
 
 const POLL_INTERVAL_MS = 1_000;
 const QUEUE_POLL_EVERY = 3;
@@ -49,6 +50,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     const prompt = await this.buildPrompt(workflow, input);
     const clientId = randomUUID();
     const tracker = this.openStatusSocket(input.channel.baseUrl, clientId, progress);
+    let promptId: string | undefined;
     try {
       progress.phase("submitting");
       const submitResponse = await this.request(`${input.channel.baseUrl}/prompt`, {
@@ -58,7 +60,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         body: JSON.stringify({ prompt, client_id: clientId }),
       });
       const submitted = await readJson(submitResponse);
-      const promptId = readPromptId(submitted);
+      promptId = readPromptId(submitted);
       tracker?.setPromptId(promptId);
       progress.queue(0);
       const outputs = await this.pollHistory(input, promptId, progress);
@@ -66,8 +68,39 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       const assets = await this.collectOutputs(input, workflow.outputMappings, outputs);
       if (assets.length === 0) throw new Error("ComfyUI 工作流执行完成但没有可用产物");
       return { assets };
+    } catch (error) {
+      if (input.signal.aborted) {
+        input.onCancellation?.(promptId ? await this.cancelQueuedPrompt(input.channel.baseUrl, promptId) : "unknown");
+      }
+      throw error;
     } finally {
       tracker?.close();
+    }
+  }
+
+  /** 只删除精确排队任务；正在运行或状态不明确时不调用全局 interrupt。 */
+  private async cancelQueuedPrompt(baseUrl: string, promptId: string): Promise<"confirmed" | "unknown"> {
+    try {
+      const signal = AbortSignal.timeout(5_000);
+      const queue = await readJson(await this.request(`${baseUrl}/queue`, { signal }));
+      const pending = Array.isArray(queue.queue_pending) ? queue.queue_pending : [];
+      if (!pending.some((entry) => Array.isArray(entry) && String(entry[1]) === promptId)) return "unknown";
+      const deletion = await this.request(`${baseUrl}/queue`, {
+        method: "POST", signal, headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete: [promptId] }),
+      });
+      // ComfyUI 的队列修改接口允许成功时返回空响应体。
+      if (!deletion.ok) return "unknown";
+      await deletion.body?.cancel();
+      const after = await readJson(await this.request(`${baseUrl}/queue`, { signal }));
+      if (!Array.isArray(after.queue_pending) || !Array.isArray(after.queue_running)) return "unknown";
+      const present = [...after.queue_pending, ...after.queue_running]
+        .some((entry) => Array.isArray(entry) && String(entry[1]) === promptId);
+      // 任务可能在删除前已开始并完成，存在 history 时不能声称已停止。
+      const history = await readJson(await this.request(`${baseUrl}/history/${encodeURIComponent(promptId)}`, { signal }));
+      return present || history[promptId] ? "unknown" : "confirmed";
+    } catch {
+      return "unknown";
     }
   }
 
@@ -92,7 +125,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       }
       if (mapping.type === "image" || mapping.type === "video" || mapping.type === "audio") {
         const uploaded = await this.uploadAsset(input, mapping, value);
-        setPath(apiWorkflow, mapping.nodeId, mapping.field, uploaded);
+        setPath(apiWorkflow, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), uploaded);
         continue;
       }
       const normalized = coerceValue(mapping, value);
@@ -107,7 +140,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, normalized);
         continue;
       }
-      setPath(apiWorkflow, mapping.nodeId, resolveMappedField(uiWorkflow, workflow.nodeMetadata, mapping), normalized);
+      setPath(apiWorkflow, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), normalized);
     }
     pruneConditionalNodes(apiWorkflow, removedNodeIds);
     return apiWorkflow;
@@ -237,11 +270,23 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       const value = nodeOutput[fieldBaseName(mapping.field)] ?? nodeOutput[mapping.field.replace("outputs.", "")];
       if (mapping.mediaType === "text") {
         const text = Array.isArray(value) ? value.map(String).join("") : value;
-        if (text) assets.push({ name: `${mapping.name || "output"}.txt`, mediaType: "text/plain", content: Buffer.from(String(text), "utf8") });
+        if (text) assets.push({
+          name: `${mapping.name || "output"}.txt`,
+          mediaType: "text/plain",
+          content: Buffer.from(String(text), "utf8"),
+          outputId: mapping.id,
+          outputName: mapping.name,
+        });
         continue;
       }
       if (mapping.mediaType === "json") {
-        if (value !== undefined) assets.push({ name: `${mapping.name || "output"}.json`, mediaType: "application/json", content: Buffer.from(JSON.stringify(value), "utf8") });
+        if (value !== undefined) assets.push({
+          name: `${mapping.name || "output"}.json`,
+          mediaType: "application/json",
+          content: Buffer.from(JSON.stringify(value), "utf8"),
+          outputId: mapping.id,
+          outputName: mapping.name,
+        });
         continue;
       }
       const list = mediaArray(value, mapping.mediaType, nodeOutput);
@@ -256,6 +301,8 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
           name: file.filename,
           mediaType: outputMediaType(mapping.mediaType, file.filename),
           content: downloaded,
+          outputId: mapping.id,
+          outputName: mapping.name,
         });
       }
     }
@@ -400,10 +447,41 @@ function applyUiWidgetValues(
   const descriptors = widgetInputs?.length
     ? widgetInputs
     : fallbackWidgetInputs(String(node.type), fields);
+  const namedValues = node.widgets_values_named;
+  if (isRecord(namedValues) && applyNamedWidgetValues(inputs, namedValues, descriptors, fields)) return;
   const names = expandWidgetInputNames(descriptors, values);
   for (let index = 0; index < Math.min(names.length, values.length); index += 1) {
     if (isWidgetScalar(values[index])) inputs[names[index]] = values[index];
   }
+}
+
+/** 优先使用具名控件值，避免随机种子控制项等前端附加值造成位置错位。 */
+function applyNamedWidgetValues(
+  inputs: Record<string, unknown>,
+  values: Record<string, unknown>,
+  descriptors: ComfyUiWidgetInputMetadata[],
+  fields?: Record<string, { valueType?: unknown }>,
+): boolean {
+  const allowedNames = new Set(Object.keys(fields ?? {})
+    .filter((field) => field.startsWith("inputs."))
+    .map((field) => field.replace(/^inputs\./u, "")));
+  for (const descriptor of descriptors) {
+    allowedNames.add(descriptor.name);
+    const selectedValue = values[descriptor.name];
+    if (!descriptor.dynamicOptions || !isWidgetScalar(selectedValue)) continue;
+    for (const name of descriptor.dynamicOptions[String(selectedValue)] ?? []) {
+      allowedNames.add(`${descriptor.name}.${name}`);
+    }
+  }
+
+  let applied = false;
+  for (const name of allowedNames) {
+    const value = values[name];
+    if (!isWidgetScalar(value)) continue;
+    inputs[name] = value;
+    applied = true;
+  }
+  return applied;
 }
 
 /** 动态控件根据当前选项在父字段后展开对应子字段。 */
@@ -431,25 +509,6 @@ function fallbackWidgetInputs(
   return fromMetadata.length > 0
     ? fromMetadata
     : widgetInputNames(nodeType).map((name) => ({ name }));
-}
-
-/** 将已有 widgets_values.N 映射翻译到实际 API 输入字段。 */
-function resolveMappedField(
-  raw: (Record<string, unknown> & { nodes: unknown[] }) | undefined,
-  nodeMetadata: ComfyUiNodeMetadata | undefined,
-  mapping: AigcWorkflowInputMapping,
-): string {
-  if (!raw || !mapping.field.startsWith("widgets_values.")) return mapping.field;
-  const index = Number(mapping.field.slice("widgets_values.".length));
-  if (!Number.isInteger(index) || index < 0) return mapping.field;
-  const node = raw.nodes.find((value) => isRecord(value) && String(value.id) === mapping.nodeId);
-  if (!isRecord(node) || !Array.isArray(node.widgets_values)) return mapping.field;
-  const metadata = typeof node.type === "string" ? nodeMetadata?.[node.type] : undefined;
-  const descriptors = metadata?.widgetInputs?.length
-    ? metadata.widgetInputs
-    : fallbackWidgetInputs(String(node.type), metadata?.fields);
-  const field = expandWidgetInputNames(descriptors, node.widgets_values)[index];
-  return field ? `inputs.${field}` : mapping.field;
 }
 
 function isWidgetScalar(value: unknown): value is string | number | boolean | null {

@@ -9,6 +9,7 @@ import type {
   AigcWorkflowInputMapping,
   AigcWorkflowInputType,
   AigcWorkflowOutputMapping,
+  AigcWorkflowReplaceInput,
   AigcWorkflowSummary,
   AigcWorkflowUpdateInput,
   ComfyUiEdge,
@@ -19,6 +20,7 @@ import type {
 } from "../../shared/aigc-contracts";
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
+import { resolveComfyUiMappedField } from "./comfyui-mapped-field";
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 
 const MAX_WORKFLOW_JSON_BYTES = 4 * 1024 * 1024;
@@ -95,6 +97,47 @@ export class AigcWorkflowService {
     return { revision: written.revision, workflow: toDetail(next) };
   }
 
+  /** 替换原始工作流，并在写入前确认现有映射仍然有效。 */
+  async replace(id: string, input: AigcWorkflowReplaceInput, revision: string): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
+    const loaded = await this.store.read();
+    const settings = normalizeSettings(loaded.value);
+    const index = settings.workflows.findIndex((workflow) => workflow.id === id);
+    if (index < 0) throw new Error("AIGC 工作流不存在");
+    const previous = settings.workflows[index];
+    const fileName = normalizeFileName(input.fileName);
+    const raw = input.workflowJson;
+    const parsed = this.parseRawWorkflow(raw);
+    const referencedTypes = new Set(parsed.nodes.map((node) => node.type));
+    const nodeMetadata = previous.nodeMetadata
+      ? Object.fromEntries(Object.entries(previous.nodeMetadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)))
+      : undefined;
+
+    assertInputMappingsCompatible(previous.inputMappings, raw, parsed.nodes, nodeMetadata);
+    const inputMappings = normalizeInputMappings(previous.inputMappings, parsed.nodes, parsed.edges, nodeMetadata);
+    const next: StoredAigcWorkflow = {
+      ...previous,
+      fileName,
+      originalHash: parsed.originalHash,
+      raw,
+      nodes: parsed.nodes,
+      edges: parsed.edges,
+      inputMappings,
+      inputGroups: normalizeInputGroups(previous.inputGroups ?? [], inputMappings, parsed.nodes),
+      outputMappings: normalizeOutputMappings(previous.outputMappings, parsed.nodes),
+      updatedAt: new Date().toISOString(),
+    };
+    if (nodeMetadata && Object.keys(nodeMetadata).length > 0) {
+      next.nodeMetadata = nodeMetadata;
+    } else {
+      delete next.nodeMetadata;
+      delete next.nodeMetadataSyncedAt;
+    }
+    const workflows = [...settings.workflows];
+    workflows[index] = next;
+    const written = await this.store.write({ workflows }, revision);
+    return { revision: written.revision, workflow: toDetail(next) };
+  }
+
   /** 原子合并当前工作流实际引用的节点元数据。 */
   async syncNodeMetadata(
     id: string,
@@ -109,9 +152,14 @@ export class AigcWorkflowService {
     const previous = settings.workflows[index];
     const referencedTypes = new Set(previous.nodes.map((node) => node.type));
     const accepted = Object.fromEntries(Object.entries(metadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)));
+    const nodeMetadata = { ...(previous.nodeMetadata ?? {}), ...accepted };
     const next: StoredAigcWorkflow = {
       ...previous,
-      nodeMetadata: { ...(previous.nodeMetadata ?? {}), ...accepted },
+      nodeMetadata,
+      inputMappings: previous.inputMappings.map((mapping) => ({
+        ...mapping,
+        field: resolveComfyUiMappedField(previous.raw, nodeMetadata, mapping.nodeId, mapping.field),
+      })),
       nodeMetadataSyncedAt: syncedAt,
       updatedAt: new Date().toISOString(),
     };
@@ -145,9 +193,7 @@ export class AigcWorkflowService {
     const name = normalizeName(input.name);
     const fileName = normalizeFileName(input.fileName);
     const raw = input.workflowJson;
-    const bytes = Buffer.byteLength(JSON.stringify(raw) ?? "", "utf8");
-    if (bytes > MAX_WORKFLOW_JSON_BYTES) throw new TypeError("ComfyUI 工作流文件不能超过 4 MiB");
-    const parsed = this.parser.parse(raw);
+    const parsed = this.parseRawWorkflow(raw);
     const now = new Date().toISOString();
     const inputMappings = normalizeInputMappings(input.inputMappings, parsed.nodes, parsed.edges);
     return {
@@ -164,6 +210,31 @@ export class AigcWorkflowService {
       createdAt: now,
       updatedAt: now,
     };
+  }
+
+  /** 统一限制工作流大小并解析节点拓扑。 */
+  private parseRawWorkflow(raw: unknown) {
+    const bytes = Buffer.byteLength(JSON.stringify(raw) ?? "", "utf8");
+    if (bytes > MAX_WORKFLOW_JSON_BYTES) throw new TypeError("ComfyUI 工作流文件不能超过 4 MiB");
+    return this.parser.parse(raw);
+  }
+}
+
+/** 确认每个已有入参仍能落到新工作流的同一节点字段。 */
+function assertInputMappingsCompatible(
+  mappings: AigcWorkflowInputMapping[],
+  raw: unknown,
+  nodes: ComfyUiNode[],
+  nodeMetadata?: ComfyUiNodeMetadata,
+): void {
+  for (const mapping of mappings) {
+    const node = nodes.find((candidate) => candidate.id === mapping.nodeId);
+    if (!node) throw new TypeError(`无法保留入参“${mapping.name}”：节点 ${mapping.nodeId} 不存在`);
+    const compatible = node.fields.some((field) => field.name === mapping.field
+      || resolveComfyUiMappedField(raw, nodeMetadata, mapping.nodeId, field.name) === mapping.field);
+    if (!compatible) {
+      throw new TypeError(`无法保留入参“${mapping.name}”：节点 ${mapping.nodeId} 缺少字段 ${mapping.field}`);
+    }
   }
 }
 
@@ -185,15 +256,19 @@ function toSummary(workflow: StoredAigcWorkflow): AigcWorkflowSummary {
 
 /** 复制详情对象，避免调用方修改持久化内容。 */
 function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
-  const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
+  const nodes = workflow.nodes.map((node) => detailNode(workflow, node));
+  const resolvedFieldMetadata = resolveWorkflowFieldMetadata({ ...workflow, nodes });
   return {
     id: workflow.id,
     name: workflow.name,
     fileName: workflow.fileName,
     originalHash: workflow.originalHash,
-    nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
+    nodes,
     edges: workflow.edges.map((edge) => ({ ...edge })),
-    inputMappings: workflow.inputMappings.map(cloneInputMapping),
+    inputMappings: workflow.inputMappings.map((mapping) => ({
+      ...cloneInputMapping(mapping),
+      field: resolveComfyUiMappedField(workflow.raw, workflow.nodeMetadata, mapping.nodeId, mapping.field),
+    })),
     inputGroups: (workflow.inputGroups ?? []).map(cloneInputGroup),
     outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
     ...(workflow.nodeMetadata ? { nodeMetadata: cloneNodeMetadata(workflow.nodeMetadata) } : {}),
@@ -201,6 +276,23 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
     ...(workflow.nodeMetadataSyncedAt ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
+  };
+}
+
+/** 同步后以 API 稳定字段替换控件索引，并隐藏无法解析的前端状态控件。 */
+function detailNode(workflow: StoredAigcWorkflow, node: ComfyUiNode): ComfyUiNode {
+  const metadata = workflow.nodeMetadata?.[node.type];
+  if (!metadata?.widgetInputs?.length) return { ...node, fields: node.fields.map((field) => ({ ...field })) };
+  const fields = node.fields.flatMap((field) => {
+    if (field.kind !== "widget") return [{ ...field }];
+    const name = resolveComfyUiMappedField(workflow.raw, workflow.nodeMetadata, node.id, field.name);
+    if (name === field.name) return [];
+    const valueType = metadata.fields[name]?.valueType ?? field.valueType;
+    return [{ name, kind: "input" as const, ...(valueType ? { valueType } : {}) }];
+  });
+  return {
+    ...node,
+    fields: fields.filter((field, index) => fields.findIndex((candidate) => candidate.name === field.name) === index),
   };
 }
 

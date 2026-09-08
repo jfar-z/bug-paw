@@ -20,6 +20,33 @@ class FakeSocket {
 
 describe("ComfyUiAigcAdapter", () => {
 
+it.each([true, false])("取消仅移除自己的排队任务，排队状态=%s", async (queued) => {
+    const controller = new AbortController();
+    let removed = false;
+    const requests: { url: string; body?: string }[] = [];
+    const request = vi.fn(async (value: string | URL | Request, init?: RequestInit) => {
+      const url = String(value);
+      requests.push({ url, body: init?.body as string | undefined });
+      if (url.endsWith("/prompt")) return json({ prompt_id: "owned-prompt" });
+      if (url.endsWith("/queue")) {
+        if (init?.method === "POST") { removed = true; return new Response(null, { status: 200 }); }
+        return json({
+          queue_pending: queued && !removed ? [[0, "owned-prompt"], [1, "other-prompt"]] : [[1, "other-prompt"]],
+          queue_running: queued ? [] : [[0, "owned-prompt"]],
+        });
+      }
+      if (url.endsWith("/history/owned-prompt")) { controller.abort(); return json({}); }
+      throw new Error("unexpected request");
+    });
+    const execution = input(imageWorkflow(), {}, undefined, controller);
+    execution.onCancellation = vi.fn();
+    await expect(new ComfyUiAigcAdapter(request as typeof fetch, () => undefined, 0).execute(execution)).rejects.toThrow();
+    expect(execution.onCancellation).toHaveBeenCalledWith(queued ? "confirmed" : "unknown");
+    expect(requests.some((entry) => entry.url.endsWith("/interrupt"))).toBe(false);
+    expect(requests.filter((entry) => entry.body?.includes("delete")).map((entry) => JSON.parse(entry.body!)))
+      .toEqual(queued ? [{ delete: ["owned-prompt"] }] : []);
+  });
+
 it("条件参数有值时保留节点组并上传媒体", async () => {
     let submittedPrompt: Record<string, unknown> | undefined;
     const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
@@ -39,11 +66,12 @@ it("条件参数有值时保留节点组并上传媒体", async () => {
     });
     const adapter = new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0);
 
-    await adapter.execute(execution);
+    const result = await adapter.execute(execution);
 
     expect(execution.assets.resolveInputPath).toHaveBeenCalledWith("asset-reference-2");
     expect(submittedPrompt).toHaveProperty("34.inputs.image", "reference-2.png");
     expect(submittedPrompt).toHaveProperty("47.inputs.image", ["34", 0]);
+    expect(result.assets[0]).toMatchObject({ outputId: "result", outputName: "result" });
   });
 
 it("提供可选入参时临时启用对应的 Bypass 条件分支", async () => {
@@ -64,7 +92,7 @@ it("提供可选入参时临时启用对应的 Bypass 条件分支", async () =>
       id: "reference-video",
       name: "reference_video",
       nodeId: "5",
-      field: "inputs.file",
+      field: "widgets_values.0",
       type: "video",
       required: false,
       activation: { when: "provided", nodeIds: ["5", "6"] },
@@ -76,10 +104,40 @@ it("提供可选入参时临时启用对应的 Bypass 条件分支", async () =>
     }));
 
     expect(submittedPrompt).toHaveProperty("5.inputs.file", "reference.mp4");
+    expect(submittedPrompt).not.toHaveProperty("5.inputs.0");
     expect(submittedPrompt).toHaveProperty("6.inputs.video", ["5", 0]);
     expect(submittedPrompt).toHaveProperty("7.inputs.reference_image", ["6", 0]);
     expect(submittedPrompt).toHaveProperty("7.inputs.reference_audio", ["6", 1]);
   });
+
+it("具名控件值忽略随机种子前端控制项并保持后续字段类型", async () => {
+  let submittedPrompt: Record<string, unknown> | undefined;
+  const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+    const url = String(requestInput);
+    if (url.endsWith("/prompt")) {
+      submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+      return json({ prompt_id: "prompt-named-widgets" });
+    }
+    if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-named-widgets"]], queue_pending: [] });
+    if (url.endsWith("/history/prompt-named-widgets")) {
+      return json({ "prompt-named-widgets": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+    }
+    if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+    throw new Error(`未处理请求 ${url}`);
+  });
+
+  await new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0)
+    .execute(input(reservedVramWorkflow(), {}));
+
+  expect(submittedPrompt).toHaveProperty("168.inputs", {
+    reserved: 4,
+    mode: "auto",
+    seed: 492609232740577,
+    auto_max_reserved: 0,
+    clean_gpu_before: true,
+  });
+  expect(submittedPrompt).not.toHaveProperty("168.inputs.control_after_generate");
+});
 
 });
 
@@ -283,6 +341,58 @@ function uiWidgetWorkflow(): AigcWorkflowDetail & { raw: unknown } {
         ],
       },
       VHS_VideoCombine: { fields: {} },
+    },
+  };
+}
+
+function reservedVramWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-reserved-vram",
+    raw: {
+      nodes: [
+        {
+          id: 168,
+          type: "ReservedVRAMSetter",
+          inputs: [],
+          outputs: [{ name: "output", type: "*", links: [1] }],
+          widgets_values: [4, "auto", 492609232740577, "randomize", 0, true],
+          widgets_values_named: {
+            reserved: 4,
+            mode: "auto",
+            seed: 492609232740577,
+            control_after_generate: "randomize",
+            auto_max_reserved: 0,
+            clean_gpu_before: true,
+          },
+        },
+        { id: 80, type: "SaveImage", inputs: [{ name: "images", type: "*", link: 1 }], outputs: [] },
+      ],
+      links: [[1, 168, 0, 80, 0, "*"]],
+    },
+    nodes: [
+      { id: "168", type: "ReservedVRAMSetter", fields: [] },
+      { id: "80", type: "SaveImage", fields: [] },
+    ],
+    edges: [{ id: "1", sourceNodeId: "168", sourceField: "outputs.output", targetNodeId: "80", targetField: "inputs.images" }],
+    outputMappings: [{ id: "result", name: "result", nodeId: "80", field: "outputs.images", mediaType: "image" }],
+    nodeMetadata: {
+      ReservedVRAMSetter: {
+        fields: {
+          "inputs.reserved": { comfyType: "FLOAT", valueType: "double" },
+          "inputs.mode": { comfyType: "COMBO", valueType: "enum" },
+          "inputs.seed": { comfyType: "INT", valueType: "int" },
+          "inputs.auto_max_reserved": { comfyType: "FLOAT", valueType: "double" },
+          "inputs.clean_gpu_before": { comfyType: "BOOLEAN", valueType: "bool" },
+        },
+        widgetInputs: [
+          { name: "reserved" },
+          { name: "mode" },
+          { name: "seed" },
+          { name: "auto_max_reserved" },
+          { name: "clean_gpu_before" },
+        ],
+      },
     },
   };
 }

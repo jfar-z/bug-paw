@@ -19,6 +19,8 @@ import { registerSetupRoutes } from "./routes/setup";
 import { registerStatusRoutes } from "./routes/status";
 import { createWorkspaceFileService, DEFAULT_UPLOAD_LIMITS } from "./attachments";
 import { registerAttachmentRoutes } from "./routes/attachments";
+import { createDataFileService } from "./data-files";
+import { registerDataFileRoutes } from "./routes/data-files";
 import { createWorkspaceFileManager } from "./workspace-files";
 import { registerWorkspaceFileRoutes } from "./routes/workspace-files";
 import { registerAgentRoutes } from "./routes/agents";
@@ -73,6 +75,9 @@ import { AigcPublicFileService } from "./aigc/aigc-public-file-service";
 import { AigcComfyUiInputService } from "./aigc/aigc-comfyui-input-service";
 import { AigcTaskRepository } from "./aigc/aigc-task-repository";
 import { AigcTaskService } from "./aigc/aigc-task-service";
+import { AigcAgentService } from "./aigc/aigc-agent-service";
+import { readAigcAgentLimits } from "./aigc/aigc-agent-limits";
+import { createAigcAgentTools } from "./aigc/aigc-agent-tools";
 import { AigcMediaProjectService } from "./aigc/aigc-media-project-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
 import { GrokAigcAdapter } from "./aigc/grok-adapter";
@@ -237,6 +242,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
   const workspaceFiles = createWorkspaceFileService(paths, agentStore);
   const workspaceFileManager = createWorkspaceFileManager(agentStore);
+  const dataFiles = createDataFileService(paths, agentStore);
   const referenceResolver = createAgentReferenceResolver(async (agentId) => {
     const agent = await agentStore.get(agentId);
     if (!agent) {
@@ -334,6 +340,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const aigcInterfaces = new AigcInterfaceService(join(paths.appDir, "aigc-interfaces.json"), (id) => aigcWorkflows.exists(id));
   const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
   const aigcPublicFiles = new AigcPublicFileService(join(paths.appDir, "aigc-public-files"));
+  const aigcPublicOrigin = resolveAigcPublicOrigin(process.env);
   const aigcComfyUiInputs = new AigcComfyUiInputService(aigcConnections, aigcCredentials);
   const aigcTasks = new AigcTaskService({
     repository: new AigcTaskRepository(join(paths.appDir, "aigc-tasks.json")),
@@ -349,6 +356,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       comfyui: new ComfyUiAigcAdapter(),
     },
   });
+  const aigcAgentService = new AigcAgentService({
+    interfaces: aigcInterfaces, workflows: aigcWorkflows, connections: aigcConnections,
+    tasks: aigcTasks, assets: aigcAssets, publicFiles: aigcPublicFiles, publicOrigin: aigcPublicOrigin,
+    workspace: workspaceFileManager, files: workspaceFiles,
+    allowedTools: async (agentId) => (await agentStore.get(agentId))?.profile.allowedTools ?? [],
+  }, readAigcAgentLimits(process.env));
   const aigcMediaProjects = new AigcMediaProjectService({
     filePath: join(paths.appDir, "aigc-media-editor.json"),
     outputRoot: join(paths.appDir, "aigc-media-renders"),
@@ -411,6 +424,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
           createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...createAigcAgentTools({ agentId, sessionId }, aigcAgentService)
+              .filter((tool) => profile.profile.allowedTools.includes(tool.name)),
             ...(profile.profile.allowedTools.includes("ask_user")
               ? [createAskUserTool({ agentId, sessionId, branchAnchorId, repository: sessionQuestions })]
               : []),
@@ -421,9 +436,10 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
               ? createBrowserTools({ sessionId }, browserAutomation).filter((tool) => browserCapabilities.toolNames.includes(tool.name as never))
               : []),
           ],
-          appendSystemPrompt: browserCapabilities.toolNames.length > 0
-            ? [AgentSystemPromptConfiguration.browserAutomationPolicy]
-            : [],
+          appendSystemPrompt: [
+            ...(browserCapabilities.toolNames.length > 0 ? [AgentSystemPromptConfiguration.browserAutomationPolicy] : []),
+            ...(profile.profile.allowedTools.some((name) => name.startsWith("aigc_")) ? [AgentSystemPromptConfiguration.aigcPolicy] : []),
+          ],
           resolveAgentPromptContext: () => agentPrompts.readContext(agentId),
           sessionDir: resolveAgentSessionDir(paths, agentId),
           checkpointStore: createRunCheckpointStore(paths.runDir),
@@ -567,6 +583,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     files: workspaceFiles,
     runAgentMutation: (agentId, operation) => agentLifecycle.runMutation(agentId, operation),
   });
+  registerDataFileRoutes(app, { authService, files: dataFiles });
   registerKnowledgeBaseRoutes(app, { authService, service: knowledgeBases });
   registerWorkspaceFileRoutes(app, {
     authService,
@@ -749,6 +766,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   app.addHook("onClose", async () => {
+    await aigcTasks.close();
     await browserPool?.close();
     const schedulerDrained = await scheduledTasks.stopAndDrain(5_000);
     const resourcesDrained = await resourceTasks.stopAndDrain(5_000);
@@ -769,6 +787,15 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     await instanceLock.release();
     throw error;
   }
+}
+
+/** 解析 Agent 发布 Grok 媒体时使用的无认证公开 Origin。 */
+function resolveAigcPublicOrigin(env: NodeJS.ProcessEnv): string | undefined {
+  if (env.BUG_PAW_PUBLIC_ORIGIN?.trim()) return env.BUG_PAW_PUBLIC_ORIGIN.trim();
+  const address = env.BUG_PAW_BIND_ADDRESS?.trim();
+  if (!address || ["0.0.0.0", "::", "[::]"].includes(address)) return undefined;
+  const host = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+  return `http://${host}:${env.BUG_PAW_PORT?.trim() || "7080"}`;
 }
 
 interface GracefulShutdownOptions {

@@ -1,6 +1,43 @@
 import type { WorkspaceEntry } from "../shared/contracts";
 import { ApiClientError } from "./api";
 
+export type DataFileLinkIntent =
+  | { kind: "data-file"; path: string }
+  | { kind: "passthrough" };
+
+export type DataFileLinkMediaKind = "image" | "video" | "audio" | "pdf" | "text";
+
+const LINK_MEDIA_EXTENSIONS: Readonly<Record<DataFileLinkMediaKind, ReadonlySet<string>>> = {
+  image: new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg"]),
+  video: new Set(["mp4", "webm", "mov", "m4v", "mkv", "avi"]),
+  audio: new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac"]),
+  pdf: new Set(["pdf"]),
+  text: new Set(["txt", "md", "mdx", "json", "yaml", "yml", "toml", "ini", "csv", "ts", "tsx", "js", "jsx", "css", "html", "xml", "py", "java", "go", "rs", "sh", "sql", "log"]),
+};
+
+/** 将 Markdown href 分类为 `/data` 文件引用或普通浏览器链接。 */
+export function classifyDataFileLink(href: string): DataFileLinkIntent {
+  const trimmed = href.trim();
+  if (!trimmed || trimmed.startsWith("#")) return { kind: "passthrough" };
+  if (/^file:/i.test(trimmed)) return { kind: "data-file", path: trimmed };
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed)) return { kind: "passthrough" };
+  if (trimmed.startsWith("/") && !trimmed.startsWith("/data/") && trimmed !== "/data") {
+    return { kind: "passthrough" };
+  }
+  return { kind: "data-file", path: trimmed };
+}
+
+/** 根据链接后缀选择轻量行内图标，不触发任何文件请求。 */
+export function dataFileLinkMediaKind(href: string): DataFileLinkMediaKind | undefined {
+  const intent = classifyDataFileLink(href);
+  if (intent.kind !== "data-file") return undefined;
+  const path = intent.path.split(/[?#]/, 1)[0]?.toLowerCase() ?? "";
+  const extension = path.match(/\.([a-z0-9]+)$/)?.[1];
+  if (!extension) return undefined;
+  return (Object.entries(LINK_MEDIA_EXTENSIONS) as Array<[DataFileLinkMediaKind, ReadonlySet<string>]>)
+    .find(([, extensions]) => extensions.has(extension))?.[0];
+}
+
 export type WorkspaceLinkIntent =
   | { kind: "workspace"; path: string }
   | { kind: "blocked"; href: string; message: string }

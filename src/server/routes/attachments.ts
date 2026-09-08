@@ -89,7 +89,7 @@ export function registerAttachmentRoutes(app: FastifyInstance, dependencies: Att
       if (!file) {
         return sendApiError(reply, 404, "FILE_NOT_FOUND", "工作目录文件不存在");
       }
-      return sendFile(request, reply, file, request.query.download === "1");
+      return sendResolvedFile(request, reply, file, request.query.download === "1");
     },
   });
 }
@@ -107,11 +107,17 @@ function isAgentNotFound(error: unknown): boolean {
   return error instanceof Error && error.message === "Agent 不存在";
 }
 
-async function sendFile(request: FastifyRequest, reply: FastifyReply, file: WorkspaceFileInfo, download: boolean) {
+/** 将已解析的普通文件以支持 Range 的方式发送给浏览器。 */
+export async function sendResolvedFile(request: FastifyRequest, reply: FastifyReply, file: WorkspaceFileInfo, download: boolean) {
   reply.header("Accept-Ranges", "bytes");
   reply.header("X-Content-Type-Options", "nosniff");
   reply.header("Last-Modified", new Date(file.modifiedAt).toUTCString());
+  reply.header("X-BugPaw-File-Name", encodeURIComponent(file.name));
+  reply.header("X-BugPaw-File-Path", encodeURIComponent(file.path));
   reply.type(file.mediaType);
+  if (file.mediaType === "text/html" || file.mediaType === "image/svg+xml") {
+    reply.header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:");
+  }
   if (download) {
     reply.header("Content-Disposition", attachmentDisposition(file.name));
   }

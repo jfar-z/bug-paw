@@ -112,6 +112,9 @@ export class AigcInterfaceService {
   ): Promise<AigcInterfaceRecord> {
     const name = normalizeText(input.name, "接口名称", 80);
     const description = typeof input.description === "string" ? input.description.trim().slice(0, 240) : "";
+    const toolDescription = typeof input.toolDescription === "string"
+      ? input.toolDescription.trim().slice(0, 2_000)
+      : description;
     const protocol = input.protocol;
     const capability = input.capability;
     if (!["openai", "grok", "comfyui"].includes(protocol)) throw new TypeError("AIGC 接口协议无效");
@@ -124,6 +127,7 @@ export class AigcInterfaceService {
       id,
       name,
       description,
+      toolDescription,
       protocol,
       capability,
       channelId: normalizeText(input.channelId, "渠道标识", 120),
@@ -276,6 +280,7 @@ function copyInterface(item: AigcInterfaceRecord): AigcInterfaceRecord {
     : { ...item.config };
   return {
     ...item,
+    toolDescription: typeof item.toolDescription === "string" ? item.toolDescription : item.description,
     config,
   };
 }
@@ -290,6 +295,7 @@ function isStoredInterface(value: unknown): value is AigcInterfaceRecord {
     && typeof value.id === "string"
     && typeof value.name === "string"
     && typeof value.description === "string"
+    && (value.toolDescription === undefined || typeof value.toolDescription === "string")
     && typeof value.protocol === "string"
     && typeof value.capability === "string"
     && typeof value.channelId === "string"
