@@ -42,6 +42,44 @@ describe("AIGC 工作流服务", () => {
     expect((await service.list()).workflows).toHaveLength(1);
   });
 
+  it("同步节点定义后将媒体控件索引迁移为稳定字段并隐藏预览状态", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "视频拼接",
+      fileName: "video.json",
+      workflowJson: {
+        nodes: [{
+          id: 19,
+          type: "LoadVideo",
+          inputs: [],
+          outputs: [{ name: "VIDEO", type: "VIDEO" }],
+          widgets_values: ["default.mp4", "image"],
+        }],
+        links: [],
+      },
+      inputMappings: [{ id: "video", name: "video", nodeId: "19", field: "widgets_values.0", type: "video", required: true }],
+      outputMappings: [],
+    });
+
+    expect(created.workflow.inputMappings[0].field).toBe("widgets_values.0");
+
+    const synced = await service.syncNodeMetadata(created.workflow.id, {
+      LoadVideo: {
+        fields: { "inputs.file": { comfyType: "VIDEO", valueType: "video", required: true } },
+        widgetInputs: [{ name: "file" }],
+      },
+    }, "2026-09-08T08:00:00.000Z", created.revision);
+
+    expect(synced.workflow.inputMappings).toEqual([expect.objectContaining({ field: "inputs.file", type: "video" })]);
+    expect(synced.workflow.nodes[0].fields).toEqual([
+      expect.objectContaining({ name: "outputs.VIDEO", kind: "output" }),
+      expect.objectContaining({ name: "inputs.file", kind: "input", valueType: "video" }),
+    ]);
+    expect(synced.workflow.nodes[0].fields).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "widgets_values.1" }),
+    ]));
+  });
+
 });
 
 function primitiveUiWorkflow() {

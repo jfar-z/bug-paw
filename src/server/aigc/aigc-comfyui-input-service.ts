@@ -193,10 +193,16 @@ function parseFieldMetadata(definition: unknown, required: boolean): ComfyUiFiel
     : typeDefinition === "COMBO" && Array.isArray(options.options)
       ? options.options.filter(isScalar)
       : undefined;
-  const isUploadField = Array.isArray(typeDefinition) && (options.image_upload === true || options.upload === true);
-  const comfyType = isUploadField ? "IMAGE" : enumOptions ? "COMBO" : typeof typeDefinition === "string" ? typeDefinition : "";
+  const uploadType = options.video_upload === true
+    ? "video"
+    : options.audio_upload === true
+      ? "audio"
+      : options.image_upload === true || options.upload === true
+        ? "image"
+        : undefined;
+  const comfyType = uploadType ? uploadType.toUpperCase() : enumOptions ? "COMBO" : typeof typeDefinition === "string" ? typeDefinition : "";
   if (!comfyType) return undefined;
-  const valueType = isUploadField ? "image" : comfyType === "COMBO" ? "enum" : comfyValueType(comfyType, options);
+  const valueType = uploadType ?? (comfyType === "COMBO" ? "enum" : comfyValueType(comfyType, options));
   const defaultValue = isScalar(options.default)
     && (!enumOptions?.length || enumOptions.some((option) => Object.is(option, options.default)))
     ? options.default
@@ -210,7 +216,7 @@ function parseFieldMetadata(definition: unknown, required: boolean): ComfyUiFiel
     ...(finiteNumber(options.max) !== undefined ? { max: finiteNumber(options.max) } : {}),
     ...(finiteNumber(options.step) !== undefined ? { step: finiteNumber(options.step) } : {}),
     ...(finiteNumber(options.round) !== undefined ? { round: finiteNumber(options.round) } : {}),
-    ...(!isUploadField && enumOptions?.length ? { enumOptions } : {}),
+    ...(!uploadType && enumOptions?.length ? { enumOptions } : {}),
     ...(typeof options.tooltip === "string" ? { tooltip: options.tooltip } : {}),
     ...(typeof options.multiline === "boolean" ? { multiline: options.multiline } : {}),
     ...(typeof options.placeholder === "string" ? { placeholder: options.placeholder } : {}),

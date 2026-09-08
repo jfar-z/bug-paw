@@ -15,6 +15,7 @@ import type {
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
 import { validateMetadataValue } from "./aigc-workflow-service";
+import { resolveComfyUiMappedField } from "./comfyui-mapped-field";
 
 const POLL_INTERVAL_MS = 1_000;
 const QUEUE_POLL_EVERY = 3;
@@ -124,7 +125,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       }
       if (mapping.type === "image" || mapping.type === "video" || mapping.type === "audio") {
         const uploaded = await this.uploadAsset(input, mapping, value);
-        setPath(apiWorkflow, mapping.nodeId, mapping.field, uploaded);
+        setPath(apiWorkflow, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), uploaded);
         continue;
       }
       const normalized = coerceValue(mapping, value);
@@ -139,7 +140,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, normalized);
         continue;
       }
-      setPath(apiWorkflow, mapping.nodeId, resolveMappedField(uiWorkflow, workflow.nodeMetadata, mapping), normalized);
+      setPath(apiWorkflow, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), normalized);
     }
     pruneConditionalNodes(apiWorkflow, removedNodeIds);
     return apiWorkflow;
@@ -477,25 +478,6 @@ function fallbackWidgetInputs(
   return fromMetadata.length > 0
     ? fromMetadata
     : widgetInputNames(nodeType).map((name) => ({ name }));
-}
-
-/** 将已有 widgets_values.N 映射翻译到实际 API 输入字段。 */
-function resolveMappedField(
-  raw: (Record<string, unknown> & { nodes: unknown[] }) | undefined,
-  nodeMetadata: ComfyUiNodeMetadata | undefined,
-  mapping: AigcWorkflowInputMapping,
-): string {
-  if (!raw || !mapping.field.startsWith("widgets_values.")) return mapping.field;
-  const index = Number(mapping.field.slice("widgets_values.".length));
-  if (!Number.isInteger(index) || index < 0) return mapping.field;
-  const node = raw.nodes.find((value) => isRecord(value) && String(value.id) === mapping.nodeId);
-  if (!isRecord(node) || !Array.isArray(node.widgets_values)) return mapping.field;
-  const metadata = typeof node.type === "string" ? nodeMetadata?.[node.type] : undefined;
-  const descriptors = metadata?.widgetInputs?.length
-    ? metadata.widgetInputs
-    : fallbackWidgetInputs(String(node.type), metadata?.fields);
-  const field = expandWidgetInputNames(descriptors, node.widgets_values)[index];
-  return field ? `inputs.${field}` : mapping.field;
 }
 
 function isWidgetScalar(value: unknown): value is string | number | boolean | null {

@@ -92,7 +92,7 @@ it("提供可选入参时临时启用对应的 Bypass 条件分支", async () =>
       id: "reference-video",
       name: "reference_video",
       nodeId: "5",
-      field: "inputs.file",
+      field: "widgets_values.0",
       type: "video",
       required: false,
       activation: { when: "provided", nodeIds: ["5", "6"] },
@@ -104,6 +104,7 @@ it("提供可选入参时临时启用对应的 Bypass 条件分支", async () =>
     }));
 
     expect(submittedPrompt).toHaveProperty("5.inputs.file", "reference.mp4");
+    expect(submittedPrompt).not.toHaveProperty("5.inputs.0");
     expect(submittedPrompt).toHaveProperty("6.inputs.video", ["5", 0]);
     expect(submittedPrompt).toHaveProperty("7.inputs.reference_image", ["6", 0]);
     expect(submittedPrompt).toHaveProperty("7.inputs.reference_audio", ["6", 1]);

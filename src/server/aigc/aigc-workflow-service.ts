@@ -19,6 +19,7 @@ import type {
 } from "../../shared/aigc-contracts";
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
+import { resolveComfyUiMappedField } from "./comfyui-mapped-field";
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 
 const MAX_WORKFLOW_JSON_BYTES = 4 * 1024 * 1024;
@@ -109,9 +110,14 @@ export class AigcWorkflowService {
     const previous = settings.workflows[index];
     const referencedTypes = new Set(previous.nodes.map((node) => node.type));
     const accepted = Object.fromEntries(Object.entries(metadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)));
+    const nodeMetadata = { ...(previous.nodeMetadata ?? {}), ...accepted };
     const next: StoredAigcWorkflow = {
       ...previous,
-      nodeMetadata: { ...(previous.nodeMetadata ?? {}), ...accepted },
+      nodeMetadata,
+      inputMappings: previous.inputMappings.map((mapping) => ({
+        ...mapping,
+        field: resolveComfyUiMappedField(previous.raw, nodeMetadata, mapping.nodeId, mapping.field),
+      })),
       nodeMetadataSyncedAt: syncedAt,
       updatedAt: new Date().toISOString(),
     };
@@ -185,15 +191,19 @@ function toSummary(workflow: StoredAigcWorkflow): AigcWorkflowSummary {
 
 /** 复制详情对象，避免调用方修改持久化内容。 */
 function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
-  const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
+  const nodes = workflow.nodes.map((node) => detailNode(workflow, node));
+  const resolvedFieldMetadata = resolveWorkflowFieldMetadata({ ...workflow, nodes });
   return {
     id: workflow.id,
     name: workflow.name,
     fileName: workflow.fileName,
     originalHash: workflow.originalHash,
-    nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
+    nodes,
     edges: workflow.edges.map((edge) => ({ ...edge })),
-    inputMappings: workflow.inputMappings.map(cloneInputMapping),
+    inputMappings: workflow.inputMappings.map((mapping) => ({
+      ...cloneInputMapping(mapping),
+      field: resolveComfyUiMappedField(workflow.raw, workflow.nodeMetadata, mapping.nodeId, mapping.field),
+    })),
     inputGroups: (workflow.inputGroups ?? []).map(cloneInputGroup),
     outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
     ...(workflow.nodeMetadata ? { nodeMetadata: cloneNodeMetadata(workflow.nodeMetadata) } : {}),
@@ -201,6 +211,23 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
     ...(workflow.nodeMetadataSyncedAt ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
     createdAt: workflow.createdAt,
     updatedAt: workflow.updatedAt,
+  };
+}
+
+/** 同步后以 API 稳定字段替换控件索引，并隐藏无法解析的前端状态控件。 */
+function detailNode(workflow: StoredAigcWorkflow, node: ComfyUiNode): ComfyUiNode {
+  const metadata = workflow.nodeMetadata?.[node.type];
+  if (!metadata?.widgetInputs?.length) return { ...node, fields: node.fields.map((field) => ({ ...field })) };
+  const fields = node.fields.flatMap((field) => {
+    if (field.kind !== "widget") return [{ ...field }];
+    const name = resolveComfyUiMappedField(workflow.raw, workflow.nodeMetadata, node.id, field.name);
+    if (name === field.name) return [];
+    const valueType = metadata.fields[name]?.valueType ?? field.valueType;
+    return [{ name, kind: "input" as const, ...(valueType ? { valueType } : {}) }];
+  });
+  return {
+    ...node,
+    fields: fields.filter((field, index) => fields.findIndex((candidate) => candidate.name === field.name) === index),
   };
 }
 
