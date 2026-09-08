@@ -17,6 +17,45 @@ function renderAigcPage(route: Parameters<typeof AigcWorkbenchPage>[0]["route"] 
 }
 
 describe("AigcWorkbenchPage 创作台", () => {
+  it("确认后替换原始工作流并保留当前映射", async () => {
+    const workflow = {
+      id: "workflow-1", name: "文生图", fileName: "old.json", originalHash: "old-hash",
+      nodes: [{ id: "1", type: "KSampler", fields: [{ name: "inputs.steps", kind: "input", valueType: "int" }] }], edges: [],
+      inputMappings: [{ id: "steps", name: "steps", nodeId: "1", field: "inputs.steps", type: "int", required: true }],
+      outputMappings: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/aigc/workflows/workflow-1/replace") && init?.method === "POST") {
+        return new Response(JSON.stringify({ revision: "r2", workflow: { ...workflow, fileName: "new.json", originalHash: "new-hash" } }));
+      }
+      if (url.endsWith("/aigc/workflows/workflow-1")) return new Response(JSON.stringify({ revision: "r1", workflow }));
+      if (url.endsWith("/capabilities/aigc/channels")) return new Response(JSON.stringify({ channels: [] }));
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-workflow-detail", workflowId: "workflow-1" });
+
+    const replaceButton = await screen.findByRole("button", { name: "替换原始工作流" });
+    expect(screen.getByText("old.json")).toBeInTheDocument();
+    const file = {
+      name: "new.json",
+      text: vi.fn(async () => JSON.stringify({ "1": { class_type: "KSampler", inputs: { steps: 30 } } })),
+    } as unknown as File;
+    fireEvent.change(screen.getByLabelText("替换原始工作流文件"), { target: { files: [file] } });
+
+    expect(await screen.findByRole("heading", { name: "替换为“new.json”？" })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/replace"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "确认替换" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/replace"))).toBe(true));
+    const request = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/replace"));
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: "r1", fileName: "new.json" });
+    expect(await screen.findByText("已替换原始工作流，现有映射和接口配置保持不变")).toBeInTheDocument();
+    expect(screen.getByText("new.json")).toBeInTheDocument();
+    expect(replaceButton).toBeInTheDocument();
+  });
+
   it("接口详情保存正式发布开关，并保持其他配置不变", async () => {
     const item = {
       id: "interface-1", name: "测试接口", description: "", protocol: "openai", capability: "text-to-image",

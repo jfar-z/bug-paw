@@ -1864,6 +1864,7 @@ function AigcWorkflowsPage() {
 /** 工作流详情页，提供节点与字段点选的可视化映射编排。 */
 function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   const { runApiTask } = useApiTask();
+  const replaceFileInputRef = useRef<HTMLInputElement>(null);
   const [detail, setDetail] = useState<AigcWorkflowDetail>();
   const [revision, setRevision] = useState("");
   const [name, setName] = useState("");
@@ -1874,6 +1875,8 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
   const [channelId, setChannelId] = useState("");
   const [syncingMetadata, setSyncingMetadata] = useState(false);
+  const [replacement, setReplacement] = useState<{ fileName: string; workflowJson: unknown }>();
+  const [replacing, setReplacing] = useState(false);
   const isDirty = Boolean(detail && (name !== detail.name || JSON.stringify(inputMappings) !== JSON.stringify(detail.inputMappings) || JSON.stringify(inputGroups) !== JSON.stringify(detail.inputGroups ?? []) || JSON.stringify(outputMappings) !== JSON.stringify(detail.outputMappings)));
   const navigationGuard = useAigcUnsavedNavigation(isDirty);
 
@@ -1931,6 +1934,41 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
     }
   }
 
+  async function prepareReplacement(file: File | undefined) {
+    if (!file) return;
+    setMessage("");
+    try {
+      setReplacement({ fileName: file.name, workflowJson: JSON.parse(await file.text()) });
+    } catch {
+      setMessage("ComfyUI 工作流 JSON 格式无效");
+    } finally {
+      if (replaceFileInputRef.current) replaceFileInputRef.current.value = "";
+    }
+  }
+
+  async function replaceWorkflow() {
+    if (!replacement) return;
+    const pending = replacement;
+    setReplacement(undefined);
+    setReplacing(true);
+    try {
+      const result = await runApiTask(() => api.replaceAigcWorkflow(workflowId, revision, pending), {
+        operation: "替换 ComfyUI 原始工作流",
+        expected: aigcExpected(setMessage),
+      });
+      if (result.status !== "success") return;
+      setDetail(result.data.workflow);
+      setRevision(result.data.revision);
+      setName(result.data.workflow.name);
+      setInputMappings(result.data.workflow.inputMappings);
+      setInputGroups(result.data.workflow.inputGroups ?? []);
+      setOutputMappings(result.data.workflow.outputMappings);
+      setMessage("已替换原始工作流，现有映射和接口配置保持不变");
+    } finally {
+      setReplacing(false);
+    }
+  }
+
   return (
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>工作流详情</h1><p>{detail?.fileName ?? workflowId}</p></header>
@@ -1944,6 +1982,8 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
           onChange={setChannelId}
         /></div>
         <button type="button" className="configuration-secondary-action" disabled={!detail || !channelId || isDirty || syncingMetadata} title={isDirty ? "请先保存映射后再同步" : undefined} onClick={() => void syncNodeMetadata()}><RefreshCw size={15} />{syncingMetadata ? "同步中…" : "同步节点定义"}</button>
+        <input ref={replaceFileInputRef} hidden type="file" accept=".json,application/json" aria-label="替换原始工作流文件" onChange={(event) => void prepareReplacement(event.target.files?.[0])} />
+        <button type="button" className="configuration-secondary-action" disabled={!detail || isDirty || replacing} title={isDirty ? "请先保存映射后再替换" : undefined} onClick={() => replaceFileInputRef.current?.click()}><Upload size={15} />{replacing ? "替换中…" : "替换原始工作流"}</button>
         <small>{detail?.nodeMetadataSyncedAt ? `最近同步 ${formatAigcTime(detail.nodeMetadataSyncedAt)}` : "尚未同步节点定义"}</small>
       </div>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
@@ -1965,6 +2005,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       <div className="configuration-save-bar">
         <button type="button" className="configuration-primary-action" disabled={!detail || !isDirty} onClick={() => void save()}><Save size={15} />{isDirty ? "保存映射" : "已保存"}</button>
       </div>
+      {replacement ? <ConfirmationDialog title={`替换为“${replacement.fileName}”？`} description="系统会保留当前工作流 ID、出入参节点映射和接口配置；如果新工作流缺少任何已映射节点或字段，本次替换将整体取消。" confirmLabel="确认替换" busy={replacing} onCancel={() => setReplacement(undefined)} onConfirm={() => void replaceWorkflow()} /> : null}
       {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="工作流映射仍有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
     </div>
   );

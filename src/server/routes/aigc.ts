@@ -14,6 +14,7 @@ import type {
   AigcPublicFileSummary,
   AigcRunRequest,
   AigcWorkflowCreateInput,
+  AigcWorkflowReplaceInput,
   AigcWorkflowUpdateInput,
 } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "../aigc/aigc-asset-service";
@@ -171,6 +172,20 @@ function registerWorkflowRoutes(app: FastifyInstance, dependencies: AigcRouteDep
     try {
       const updated = await dependencies.workflows.update(request.params.id, body as unknown as AigcWorkflowUpdateInput, body.revision);
       return reply.send(updated.workflow);
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/aigc/workflows/:id/replace", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body || typeof body.revision !== "string" || typeof body.fileName !== "string" || !("workflowJson" in body)) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "工作流替换格式无效");
+    }
+    try {
+      const input: AigcWorkflowReplaceInput = { fileName: body.fileName, workflowJson: body.workflowJson };
+      return reply.send(await dependencies.workflows.replace(request.params.id, input, body.revision));
     } catch (error) {
       return sendAigcError(reply, error);
     }

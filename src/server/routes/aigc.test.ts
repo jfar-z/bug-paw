@@ -128,6 +128,36 @@ describe("AIGC 工作流节点元数据路由", () => {
     expect(response.json()).toMatchObject({ revision: "r2", syncedNodeClasses: ["KSampler"], workflow: { id: "workflow-1" } });
     await app.close();
   });
+
+  it("替换原始工作流并返回新的配置版本", async () => {
+    const replace = vi.fn(async () => ({
+      revision: "r2",
+      workflow: { id: "workflow-1", fileName: "new.json", inputMappings: [], outputMappings: [] },
+    }));
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => true } as never,
+      workflows: { replace } as never,
+      interfaces: {} as never,
+      tasks: {} as never,
+      assets: {} as never,
+      publicFiles: {} as never,
+      comfyuiInputs: {} as never,
+    });
+    await app.ready();
+
+    const workflowJson = { "1": { class_type: "KSampler", inputs: { steps: 20 } } };
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/aigc/workflows/workflow-1/replace",
+      payload: { revision: "r1", fileName: "new.json", workflowJson },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ revision: "r2", workflow: { id: "workflow-1", fileName: "new.json" } });
+    expect(replace).toHaveBeenCalledWith("workflow-1", expect.objectContaining({ fileName: "new.json", workflowJson }), "r1");
+    await app.close();
+  });
 });
 
 describe("ComfyUI input 媒体代理路由", () => {
