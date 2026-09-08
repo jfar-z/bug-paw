@@ -1,10 +1,8 @@
-import type { WorkspaceFileSummary } from "../../../../shared/contracts";
-import type { AgentTurn, FileBlock, MarkdownBlock } from "../../../conversation-timeline";
+import type { AgentTurn, MarkdownBlock } from "../../../conversation-timeline";
 import type { ThemePreference } from "../../../theme";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { MarkdownContent } from "../../../components/markdown-content";
-import { MessageAttachments } from "../../../components/message-attachments";
 import { groupAgentBlocks } from "../activity-groups";
 import { ActivityGroup, activityGroupAutomaticExpanded } from "./activity-group";
 import { QuestionTimelineCard } from "../../../components/question-timeline-card";
@@ -12,10 +10,7 @@ import { QuestionTimelineCard } from "../../../components/question-timeline-card
 interface AgentTurnContentProps {
   turn: AgentTurn;
   streaming: boolean;
-  activeAgentId?: string;
   theme: ThemePreference;
-  onResolved(summary: WorkspaceFileSummary): void;
-  onPreview(summary: WorkspaceFileSummary): void;
   onLinkActivate?(href: string): boolean;
   focusedEntryId?: string;
   actions?: ReactNode;
@@ -25,10 +20,7 @@ interface AgentTurnContentProps {
 export function AgentTurnContent({
   turn,
   streaming,
-  activeAgentId,
   theme,
-  onResolved,
-  onPreview,
   onLinkActivate,
   focusedEntryId,
   actions,
@@ -60,14 +52,7 @@ export function AgentTurnContent({
       if (item.type === "question") {
         return <QuestionTimelineCard key={item.id} tool={item.tool} />;
       }
-      if (item.block.type === "markdown") return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={Boolean(focusedEntryId) && item.block.piEntryId === focusedEntryId} />;
-      return <FileBlockView
-        key={item.id}
-        block={item.block}
-        activeAgentId={activeAgentId}
-        onResolved={onResolved}
-        onPreview={onPreview}
-      />;
+      return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={Boolean(focusedEntryId) && item.block.piEntryId === focusedEntryId} />;
     })}
     {activityItems.length > 0 ? <div className="agent-turn-footer message-actions--separated">
       {actions}
@@ -91,20 +76,4 @@ function MarkdownBlockView({ block, theme, onLinkActivate, focused }: { block: M
     theme={theme}
     onLinkActivate={onLinkActivate}
   />;
-}
-
-function FileBlockView({
-  block,
-  activeAgentId,
-  onResolved,
-  onPreview,
-}: {
-  block: FileBlock;
-  activeAgentId?: string;
-  onResolved(summary: WorkspaceFileSummary): void;
-  onPreview(summary: WorkspaceFileSummary): void;
-}) {
-  return activeAgentId
-    ? <MessageAttachments files={block.files} agentId={activeAgentId} onResolved={onResolved} onPreview={onPreview} />
-    : null;
 }

@@ -50,7 +50,7 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
     }),
     defineTool({
       name: "aigc_get_task", label: "查询 AIGC 任务",
-      description: "读取当前 Agent 的任务进度和产物；查询间隔至少 2 秒。完成时返回可用于 pi_agent_files 的工作区相对路径。",
+      description: "读取当前 Agent 的任务进度和产物；查询间隔至少 2 秒。完成时返回可直接写入 Markdown 链接的工作区相对路径。",
       parameters: Type.Object({ taskId: Type.String({ minLength: 1, maxLength: 120 }) }, { additionalProperties: false }),
       execute: async (_id, params) => result(() => service.get(context, params.taskId)),
     }),

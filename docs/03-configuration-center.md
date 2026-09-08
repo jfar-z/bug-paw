@@ -26,7 +26,7 @@
 - 图片头像只接受 PNG、JPEG、WebP 魔数校验后的原图，原图最大 20 MiB。浏览器固定进行 1:1 裁剪，服务端统一输出最大 512×512、体积不超过 2 MiB 的静态 WebP；PNG 和 WebP 的透明通道会保留。
 - Agent 归档后不能创建新 Session；永久删除前会展示 Session 数和工作目录大小，工作目录删除进入可恢复垃圾目录流程。
 - 多 Agent Runtime 共享模型目录，但工作目录、Session 目录和稳定系统指令相互隔离。
-- 所有 Agent Runtime 都内置 cwd 相对路径文件交付协议；Agent 用 `<pi_agent_files version="1">` 结构块发送工作目录文件，Web 会展示文件卡片。
+- 所有 Agent Runtime 都要求使用普通 Markdown 链接交付文件。cwd 内文件使用相对路径，挂载数据目录中的其他文件可使用 `/data/...` 绝对路径；Web 保持链接行内样式，并在用户点击后按需读取文件头、打开预览或提供下载。
 
 ## 模型、凭证与 Pi 设置
 

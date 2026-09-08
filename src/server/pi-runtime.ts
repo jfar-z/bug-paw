@@ -1807,9 +1807,7 @@ function extractToolPath(args: Record<string, unknown>): string | undefined {
  * 从发送给 pi 的完整 Prompt 中提取用户可见的会话标题。
  */
 function summarizePendingPrompt(text: string): string {
-  const fileBlockStart = text.indexOf("<pi_agent_files");
-  const visibleText = (fileBlockStart >= 0 ? text.slice(0, fileBlockStart) : text).trim();
-  return visibleText || "附件";
+  return text.trim() || "附件";
 }
 
 /** 仅提取最终 Assistant 可见文本，避免把思考、工具调用和附件传给标题模型。 */

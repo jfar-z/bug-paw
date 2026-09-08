@@ -42,12 +42,6 @@ export interface ThinkingBlock {
   revealPhase?: number;
 }
 
-export interface FileBlock {
-  id: string;
-  type: "files";
-  files: WorkspaceFileRef[];
-}
-
 export interface ToolBlock {
   id: string;
   type: "tool";
@@ -62,7 +56,7 @@ export interface ToolBlock {
   status: "preparing" | "parameterizing" | "running" | "completed" | "cancelled" | "error";
 }
 
-export type AgentBlock = MarkdownBlock | ThinkingBlock | FileBlock | ToolBlock;
+export type AgentBlock = MarkdownBlock | ThinkingBlock | ToolBlock;
 
 export interface AgentTurn {
   id: string;
@@ -351,15 +345,7 @@ export function formatToolValue(value: unknown): string {
 }
 
 function splitAgentText(text: string, idPrefix: string, streaming: boolean): AgentBlock[] {
-  const segments = parseFileSegments(text);
-  return segments.map((segment, index): AgentBlock => segment.type === "files"
-    ? { id: `${idPrefix}-files-${index}`, type: "files", files: segment.files }
-    : {
-      id: `${idPrefix}-markdown-${index}`,
-      type: "markdown",
-      text: segment.text,
-      streaming: streaming && index === segments.length - 1,
-    });
+  return [{ id: `${idPrefix}-markdown`, type: "markdown", text, streaming }];
 }
 
 /**
@@ -393,11 +379,10 @@ function extractThinkingText(part: Record<string, unknown>): string | undefined 
 function parseUserContext(text: string): { text: string; files: WorkspaceFileRef[]; references: AgentReference[]; resolution?: QuestionResolution } {
   const response = parseQuestionResponseProtocol(text);
   const parsedReferences = parseAgentReferences(response.visibleText);
-  const parsedFiles = parseUserFiles(parsedReferences.text);
   const referenceFiles = parsedReferences.references.flatMap((reference) => reference.type === "file" ? [{ path: reference.path }] : []);
   return {
-    text: parsedFiles.text,
-    files: mergeFiles(parsedFiles.files, referenceFiles),
+    text: parsedReferences.text,
+    files: referenceFiles,
     references: parsedReferences.references,
     ...(response.resolution ? { resolution: response.resolution } : {}),
   };
@@ -469,96 +454,6 @@ function removeUnexecutedSiblingTools(entries: ConversationEntry[], askCallId: s
   return blocks.length === turn.blocks.length
     ? entries
     : replaceTurn(entries, turnIndex, { ...turn, blocks });
-}
-
-function parseUserFiles(text: string): { text: string; files: WorkspaceFileRef[] } {
-  const segments = parseFileSegments(text);
-  const files = segments.flatMap((segment) => segment.type === "files" ? segment.files : []);
-  if (files.length === 0) {
-    return { text, files: [] };
-  }
-  return {
-    text: segments.flatMap((segment) => segment.type === "markdown" ? [segment.text] : []).join("\n\n").trim(),
-    files,
-  };
-}
-
-/**
- * 新旧文件协议同时存在时按路径去重，避免消息气泡重复展示附件。
- */
-function mergeFiles(...groups: WorkspaceFileRef[][]): WorkspaceFileRef[] {
-  const paths = new Set<string>();
-  return groups.flatMap((files) => files.filter((file) => {
-    if (paths.has(file.path)) {
-      return false;
-    }
-    paths.add(file.path);
-    return true;
-  }));
-}
-
-type FileSegment = { type: "markdown"; text: string } | { type: "files"; files: WorkspaceFileRef[] };
-
-function parseFileSegments(text: string): FileSegment[] {
-  const pattern = /<pi_agent_files version="1">\n([\s\S]*?)\n<\/pi_agent_files>/g;
-  const matches: Array<{ index: number; end: number; files: WorkspaceFileRef[] }> = [];
-  for (const match of text.matchAll(pattern)) {
-    const files = parseFilePayload(match[1]);
-    if (files && match.index !== undefined) {
-      matches.push({ index: match.index, end: match.index + match[0].length, files });
-    }
-  }
-  if (matches.length === 0) {
-    return [{ type: "markdown", text }];
-  }
-
-  const segments: FileSegment[] = [];
-  let cursor = 0;
-  matches.forEach((match, index) => {
-    let markdown = text.slice(cursor, match.index);
-    if (index > 0) {
-      markdown = markdown.replace(/^\n+/, "");
-    }
-    markdown = markdown.replace(/\n+$/, "");
-    pushMarkdown(segments, markdown);
-    segments.push({ type: "files", files: match.files });
-    cursor = match.end;
-  });
-  // 只清理文件协议与后续 Markdown 之间的结构空行，保留文本末尾原始空白。
-  const trailing = text.slice(cursor).replace(/^\n+/, "");
-  if (trailing) {
-    pushMarkdown(segments, trailing);
-  }
-  return segments;
-}
-
-function parseFilePayload(value: string): WorkspaceFileRef[] | undefined {
-  try {
-    const payload = JSON.parse(value) as unknown;
-    if (!isRecord(payload) || !Array.isArray(payload.files) || payload.files.length === 0 || payload.files.length > 20) {
-      return undefined;
-    }
-    const files = payload.files.map((file) => isRecord(file) && typeof file.path === "string" && isSafeRelativePath(file.path)
-      ? { path: file.path }
-      : undefined);
-    return files.every((file): file is WorkspaceFileRef => file !== undefined) ? files : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function isSafeRelativePath(path: string): boolean {
-  return path.length > 0
-    && !path.startsWith("/")
-    && !path.includes("\\")
-    && !path.includes("\0")
-    && path.split("/").every((segment) => segment !== "..");
-}
-
-function pushMarkdown(segments: FileSegment[], value: string): void {
-  if (value) {
-    segments.push({ type: "markdown", text: value });
-  }
 }
 
 function ensureAgentTurn(entries: ConversationEntry[]): { next: ConversationEntry[]; turnIndex: number } {

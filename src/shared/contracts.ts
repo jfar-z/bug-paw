@@ -19,6 +19,22 @@ export interface WorkspaceFileSummary extends WorkspaceFileRef {
   modifiedAt: string;
 }
 
+/** Markdown 链接指向的 `/data` 文件信息。 */
+export interface DataFileSummary {
+  path: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  modifiedAt: string;
+}
+
+/** 受大小限制的 `/data` 文本文件预览。 */
+export interface DataFileTextPreview {
+  path: string;
+  content: string;
+  truncated: boolean;
+}
+
 /**
  * Agent 工作目录中可供浏览的文件或目录项，不包含容器绝对路径。
  */

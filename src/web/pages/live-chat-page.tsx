@@ -13,6 +13,7 @@ import { AgentModelMenu } from "../components/agent-model-menu";
 import { AttachmentPicker, AttachmentPickerButton, type AttachmentUploadItem, validateAttachmentSelection } from "../components/attachment-picker";
 import { ReferenceComposer } from "../components/reference-composer";
 import { MediaLightbox } from "../components/media-lightbox";
+import { DataFilePreviewDialog } from "../components/data-file-preview-dialog";
 import { ArchivedSessionsDialog } from "../components/archived-sessions-dialog";
 import { SessionBulkConfirmationDialog } from "../components/session-bulk-confirmation-dialog";
 import { SessionSearchDialog } from "../components/session-search-dialog";
@@ -49,7 +50,7 @@ import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
 import { useMobileWorkspaceSwipe, type MobileWorkspaceDrawer } from "../features/chat/mobile-workspace-swipe";
-import { classifyWorkspaceLink } from "../workspace-links";
+import { classifyDataFileLink } from "../workspace-links";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
 import { StreamingTtsController, type SpeechPlaybackState } from "../streaming-tts-controller";
 import { PcmStreamAudio } from "../pcm-stream-audio";
@@ -218,6 +219,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [focusedEntryId, setFocusedEntryId] = useState<string>();
   const [mediaSummaries, setMediaSummaries] = useState<Record<string, WorkspaceFileSummary>>({});
   const [previewImage, setPreviewImage] = useState<WorkspaceFileSummary>();
+  const [previewFilePath, setPreviewFilePath] = useState<string>();
   const [draft, setDraft] = useState("");
   /** 正在编辑的历史用户消息；仅在实际发送时用于创建 Pi 分支。 */
   const [editingEntryId, setEditingEntryId] = useState<string>();
@@ -1293,23 +1295,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   useEffect(() => {
     setWorkspaceLocationRequest(undefined);
     setWorkspaceMessage("");
+    setPreviewFilePath(undefined);
   }, [activeAgentId]);
-  const activateWorkspaceLink = useCallback((href: string): boolean => {
-    const intent = classifyWorkspaceLink(href);
+  const activateDataFileLink = useCallback((href: string): boolean => {
+    const intent = classifyDataFileLink(href);
     if (intent.kind === "passthrough") return false;
-    if (intent.kind === "blocked") {
-      workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-      setWorkspaceLocationRequest(undefined);
-      setWorkspaceMessage(intent.message);
-      closeSidebar();
-      setResourcesOpen(true);
-      return true;
-    }
-    workspaceTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    setWorkspaceMessage("");
-    setWorkspaceLocationRequest((current) => ({ id: (current?.id ?? 0) + 1, path: intent.path }));
     closeSidebar();
-    setResourcesOpen(true);
+    setResourcesOpen(false);
+    setPreviewFilePath(intent.path);
     return true;
   }, []);
 
@@ -1635,7 +1628,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           onReturnLatest={() => void returnToLatest()}
           onResolved={registerMediaSummary}
           onPreview={openImagePreview}
-          onWorkspaceLink={activateWorkspaceLink}
+          onWorkspaceLink={activateDataFileLink}
           onCreateAgent={() => navigateTo({ page: "agents", onboarding: "create" })}
           onToggleSpeech={toggleSpeech}
           editingEntryId={editingEntryId}
@@ -1731,6 +1724,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         onConfirm={() => void executeSessionBulk()}
       /> : null}
       {previewImage ? <MediaLightbox item={previewImage} images={collectTimelineImages(timeline, mediaSummaries)} agentId={activeAgentId} onClose={() => setPreviewImage(undefined)} /> : null}
+      {previewFilePath && activeAgentId ? <DataFilePreviewDialog agentId={activeAgentId} path={previewFilePath} onClose={() => setPreviewFilePath(undefined)} /> : null}
       <ProfileDialog
         open={profileOpen}
         displayName={profileDisplayName}
@@ -1774,11 +1768,7 @@ function collectTimelineImages(entries: ConversationEntry[], summaries: Record<s
   const images: WorkspaceFileSummary[] = [];
 
   for (const entry of entries) {
-    const files = entry.type === "user"
-      ? entry.files
-      : entry.type === "agent"
-        ? entry.blocks.flatMap((block) => block.type === "files" ? block.files : [])
-        : [];
+    const files = entry.type === "user" ? entry.files : [];
     for (const file of files) {
       if (paths.has(file.path)) continue;
       paths.add(file.path);

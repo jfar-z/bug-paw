@@ -1,4 +1,5 @@
 import { isValidElement, memo, useMemo, type ReactElement, type ReactNode } from "react";
+import { FileText, FileType2, Image, Music2, Video } from "lucide-react";
 import type { Element, Root, RootContent, Text } from "hast";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -11,6 +12,7 @@ import type { ThemePreference } from "../theme";
 import { useStreamingTextReveal } from "../use-streaming-text-reveal";
 import { HighlightedCodeBlock } from "./highlighted-code-block";
 import { MermaidDiagram } from "./mermaid-diagram";
+import { dataFileLinkMediaKind, type DataFileLinkMediaKind } from "../workspace-links";
 
 interface MarkdownContentProps {
   text: string;
@@ -44,11 +46,13 @@ export const MarkdownContent = memo(function MarkdownContent({
   const components = useMemo<Components>(() => ({
     a: ({ href, children }) => {
       const external = href?.startsWith("http://") || href?.startsWith("https://");
+      const mediaKind = href && onLinkActivate ? dataFileLinkMediaKind(href) : undefined;
       return (
-        <a href={href} {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})} onClick={(event) => {
+        <a className={mediaKind ? "markdown-file-link" : undefined} href={href} {...(external ? { target: "_blank", rel: "noreferrer noopener" } : {})} onClick={(event) => {
           if (href && onLinkActivate?.(href)) event.preventDefault();
         }}>
           {children}
+          {mediaKind ? <MarkdownFileIcon kind={mediaKind} /> : null}
         </a>
       );
     },
@@ -90,6 +94,16 @@ export const MarkdownContent = memo(function MarkdownContent({
     </div>
   );
 });
+
+/** 在链接文字后追加不改变行高的文件类型图标。 */
+function MarkdownFileIcon({ kind }: { kind: DataFileLinkMediaKind }) {
+  const Icon = kind === "image" ? Image
+    : kind === "video" ? Video
+    : kind === "audio" ? Music2
+    : kind === "pdf" ? FileType2
+    : FileText;
+  return <Icon className="markdown-file-link__icon" size={14} aria-hidden="true" style={{ display: "inline-block", marginLeft: 4, verticalAlign: -2 }} />;
+}
 
 interface CodeElementProps {
   className?: string;
