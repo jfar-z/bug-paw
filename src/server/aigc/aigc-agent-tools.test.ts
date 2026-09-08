@@ -168,7 +168,13 @@ describe("AIGC Agent 工具", () => {
     const discoveryTool = f.tools.find((tool) => tool.name === "aigc_list_interfaces")!;
     expect(discoveryTool.parameters.required).toEqual(["action", "interfaceId", "offset"]);
     expect(JSON.stringify(discoveryTool.parameters)).not.toContain('"optional"');
-    expect(JSON.stringify(f.tools.find((tool) => tool.name === "aigc_run")?.parameters)).not.toContain('"url"');
+    const runParameters = f.tools.find((tool) => tool.name === "aigc_run")?.parameters;
+    expect(JSON.stringify(runParameters)).not.toContain('"url"');
+    const pathSchema = (runParameters as {
+      properties: { parameters: { items: { properties: { path: { anyOf: unknown[]; description: string } } } } };
+    }).properties.parameters.items.properties.path;
+    expect(pathSchema.anyOf).toContainEqual({ type: "null" });
+    expect(pathSchema.description).toContain("可选媒体不提供时可传 JSON null");
     const listOutput = await discoveryTool.execute("list-call", {
       action: "list", interfaceId: null, offset: 0,
     }, undefined, undefined, {} as never);
@@ -355,6 +361,33 @@ describe("AIGC Agent 工具", () => {
     expect(await f.publicFiles.list()).toHaveLength(0);
   });
 
+  it("OpenAI 图片生成与编辑允许省略参考图或显式传 null", async () => {
+    const f = await fixture();
+    await f.interfaces.update(f.item.id, { ...f.item, capability: "image-edit" }, (await f.interfaces.list()).revision);
+    const detail = await f.service.list(context, { interfaceId: f.item.id });
+    expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
+      expect.objectContaining({ name: "image", required: false, source: "workspace" }),
+    ]));
+    const saveInput = vi.spyOn(f.assets, "saveInput");
+
+    const withoutImage = await f.service.run(context, {
+      ...f.submit("without-image"),
+      parameters: [{ name: "prompt", text: "x" }],
+    });
+    const nullImage = await f.service.run(context, {
+      ...f.submit("null-image"),
+      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: null }],
+    });
+    await vi.waitFor(async () => {
+      expect((await f.tasks.get(withoutImage.taskId))?.status).toBe("succeeded");
+      expect((await f.tasks.get(nullImage.taskId))?.status).toBe("succeeded");
+    });
+    expect(f.adapter.execute).toHaveBeenCalledTimes(2);
+    expect(f.adapter.execute.mock.calls[0][0].inputs).not.toHaveProperty("image");
+    expect(f.adapter.execute.mock.calls[1][0].inputs).not.toHaveProperty("image");
+    expect(saveInput).not.toHaveBeenCalled();
+  });
+
   it("Grok 媒体字段统一接收本地路径并自动发布为稳定 URL", async () => {
     const f = await fixture();
     await f.interfaces.update(f.item.id, {
@@ -365,6 +398,10 @@ describe("AIGC Agent 工具", () => {
       config: { model: "grok-imagine" },
     }, (await f.interfaces.list()).revision);
     await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
+    await expect(f.service.run(context, {
+      ...f.submit("grok-null-image"),
+      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: null }],
+    })).rejects.toThrow("缺少必填参数 image");
     const detail = await f.service.list(context, { interfaceId: f.item.id });
     expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
       expect.objectContaining({ name: "image", source: "workspace" }),

@@ -30,7 +30,7 @@ export interface AigcAgentParameter {
   text?: string;
   number?: number;
   boolean?: boolean;
-  path?: string;
+  path?: string | null;
 }
 
 /** 从既有接口定义提取稳定字段，并保留真实默认值及数值约束。 */
@@ -56,7 +56,8 @@ export function agentFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDe
   }
   const fields: AigcAgentField[] = [{ name: "prompt", type: "string", required: item.capability !== "video-extend" }];
   if (["image-edit", "image-to-video"].includes(item.capability)) {
-    fields.push({ name: "image", type: "image", required: true, source: "workspace" });
+    // OpenAI 图片编辑接口未提供参考图时会自动回退到文生图端点。
+    fields.push({ name: "image", type: "image", required: item.protocol !== "openai", source: "workspace" });
   }
   if (["video-edit", "video-extend"].includes(item.capability)) {
     fields.push({ name: "video", type: "video", required: true, source: "workspace" });
@@ -115,6 +116,11 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
     if (keys.length !== 1 || keys[0] !== expected) throw new TypeError(`参数 ${field.name} 必须且只能提供 ${expected}`);
     const value = parameter[expected];
     if (value === undefined) throw new TypeError("参数值缺失");
+    // 可选媒体允许 Agent 显式传 null，统一按未提供处理。
+    if (value === null) {
+      if (expected !== "path") throw new TypeError(`参数 ${field.name} 值无效`);
+      continue;
+    }
     values[field.name] = value;
   }
   for (const field of fields) {
