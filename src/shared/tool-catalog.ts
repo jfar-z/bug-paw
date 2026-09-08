@@ -38,7 +38,7 @@ export const RETIRED_AGENT_TOOL_NAMES = ["edit_own_prompts"] as const;
 
 /** 由能力扩展模块提供、可按全局开关停用的工具。 */
 export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
-  { name: "aigc_list_interfaces", description: "查询已发布的 AIGC 接口及参数", source: "capability", highRisk: false },
+  { name: "aigc_list_interfaces", description: "按明确操作查询已发布的 AIGC 接口及参数", source: "capability", highRisk: false },
   { name: "aigc_run", description: "提交可能计费的 AIGC 生成任务", source: "capability", highRisk: true },
   { name: "aigc_run_and_wait", description: "提交 AIGC 任务并等待产物，可能计费", source: "capability", highRisk: true },
   { name: "aigc_get_task", description: "查询所属 AIGC 任务并交付产物", source: "capability", highRisk: false },
