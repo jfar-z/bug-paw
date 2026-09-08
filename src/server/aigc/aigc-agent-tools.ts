@@ -24,7 +24,10 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
     text: Type.Optional(Type.String({ maxLength: 20_000 })),
     number: Type.Optional(Type.Number()),
     boolean: Type.Optional(Type.Boolean()),
-    path: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024, description: "当前 Agent 工作区相对路径；媒体字段统一使用此值，服务端按渠道协议上传或发布" })),
+    path: Type.Optional(Type.Union([
+      Type.String({ minLength: 1, maxLength: 1_024 }),
+      Type.Null(),
+    ], { description: "当前 Agent 工作区相对路径；可选媒体不提供时可传 JSON null，服务端按渠道协议上传或发布" })),
   }, { additionalProperties: false }), { maxItems: 100, description: "每项按字段类型只提供 text、number、boolean、path 中的一种值" });
   return [
     defineTool({
