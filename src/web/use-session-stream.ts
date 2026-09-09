@@ -482,6 +482,8 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     });
     (["completed", "aborted", "error"] as const).forEach((type) => {
       source.addEventListener(type, (rawEvent) => {
+        // EventSource 原生断线事件同样名为 error，但不携带 SSE MessageEvent.data。
+        if (type === "error" && !hasMessageEventData(rawEvent)) return;
         const payload = parse(type, rawEvent as MessageEvent);
         if (!payload) return;
         if (!isSessionEvent(payload) || payload.type !== type) {
@@ -607,4 +609,9 @@ function isActiveRun(run: ChatRunSummary | undefined): run is ChatRunSummary & {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 区分服务端 error 业务事件与 EventSource 原生连接错误。 */
+function hasMessageEventData(event: Event): event is MessageEvent<string> {
+  return "data" in event && typeof event.data === "string";
 }
