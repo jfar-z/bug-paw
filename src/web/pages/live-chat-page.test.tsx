@@ -19,7 +19,7 @@ vi.mock("../components/avatar/avatar-crop-dialog", () => ({
   ),
 }));
 
-type EventListener = (event: MessageEvent) => void;
+type EventListener = (event: Event) => void;
 const operationLog: string[] = [];
 let regenerateResponse: Promise<Response> | undefined;
 let historyResponse: Response | undefined;
@@ -78,6 +78,13 @@ class FakeEventSource {
   emitOpen() {
     const event = { data: "" } as MessageEvent;
     this.listeners.get("open")?.forEach((listener) => listener(event));
+  }
+
+  /** 模拟浏览器把原生连接错误同时分发给 error 监听器和 onerror。 */
+  emitTransportError() {
+    const event = new Event("error");
+    this.listeners.get("error")?.forEach((listener) => listener(event));
+    this.onerror?.();
   }
 
   emit(type: string, payload: unknown) {
@@ -494,6 +501,32 @@ it("Projection 恢复时同步服务端运行状态", async () => {
 
   await screen.findByRole("button", { name: "停止生成" });
   await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+});
+
+it("运行中会话的原生连接错误不会被当作 error 业务事件解析", async () => {
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    history: { branchToken: "branch-running", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-session-1",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-09T00:00:00.000Z",
+    },
+    lastEventId: 18,
+  };
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "停止生成" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+  act(() => FakeEventSource.instances[0]!.emitTransportError());
+
+  expect(await screen.findByText("会话实时连接中断，EventSource 未提供 HTTP 状态，浏览器正在自动重连")).toBeVisible();
+  expect(screen.queryByText(/会话实时事件“error”未通过JSON 解析/u)).not.toBeInTheDocument();
+  expect(FakeEventSource.instances).toHaveLength(1);
 });
 
 it("提交轮次事件用稳定节点替换本地待发送消息", async () => {
