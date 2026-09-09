@@ -71,7 +71,7 @@ export function createBrowserWorkerApp(options: BrowserWorkerAppOptions) {
       const code = typeof record?.code === "string" ? record.code : "BROWSER_WORKER_PROTOCOL_INVALID";
       sendJson(response, code === "BROWSER_WORKER_PROTOCOL_INVALID" ? 400 : 200, {
         status: "error",
-        error: { code, message: error instanceof Error ? error.message : "浏览器 Worker 请求失败", retryable: false },
+        error: { code, message: error instanceof Error ? error.message : "浏览器 Worker 捕获到非 Error 异常", retryable: false },
       });
     });
   });

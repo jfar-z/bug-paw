@@ -81,7 +81,7 @@ export class ResourceTaskManager {
     const execution = action((line) => emit({ type: "log", taskId, line: sanitizeLog(line) }))
       .then(async () => onCompleted?.())
       .then(() => emit({ type: "completed", taskId }))
-      .catch((error: unknown) => emit({ type: "failed", taskId, code: "RESOURCE_TASK_FAILED", message: sanitizeLog(error instanceof Error ? error.message : "资源任务失败") }));
+      .catch((error: unknown) => emit({ type: "failed", taskId, code: "RESOURCE_TASK_FAILED", message: sanitizeLog(error instanceof Error ? error.message : "资源任务执行器捕获到非 Error 异常") }));
     this.executions.add(execution);
     void execution.finally(() => this.executions.delete(execution));
     return taskId;

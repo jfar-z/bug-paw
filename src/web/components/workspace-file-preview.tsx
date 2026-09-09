@@ -72,8 +72,10 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose, fileUrl, g
     const operation = document.fullscreenElement === previewRef.current
       ? document.exitFullscreen?.()
       : previewRef.current.requestFullscreen?.();
-    // 浏览器可能因用户权限或运行环境拒绝全屏，普通预览仍需保持可用。
-    void operation?.catch(() => undefined);
+    if (operation) {
+      // 全屏失败不关闭普通预览，但必须向用户展示浏览器拒绝的具体原因。
+      void runApiTask(() => operation, { operation: isFullscreen ? "退出文件全屏预览" : "进入文件全屏预览" });
+    }
   };
 
   return <aside ref={previewRef} className={`workspace-file-preview workspace-file-preview--${mode}`} style={previewStyle} aria-label={`${entry.name} 预览`}>

@@ -367,6 +367,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     outputRoot: join(paths.appDir, "aigc-media-renders"),
     tasks: aigcTasks,
     assets: aigcAssets,
+    recordBackgroundError: (code, details) => backgroundErrors.record(code, details),
   });
   await recoverPendingProviderRenames(paths, models, agentStore);
   const credentials = new CredentialService(resolve(paths.piDir, "auth.json"));
@@ -446,7 +447,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           sessionMetadataStore,
           questionState: questionStateFor(agentId),
           onToolCallCircuitBreak: (event) => {
-            app.log.warn(event, "重复空参数工具调用已限制");
+            app.log.error(event, event.action === "terminated"
+              ? "模型重复生成无效工具参数，Run 已终止"
+              : "模型生成无效工具参数，断路器正在计数");
           },
           stageSessionDeletion: (sessionId, sessionFile) => durableDeletions.stage("session", sessionId, [
             sessionFile,

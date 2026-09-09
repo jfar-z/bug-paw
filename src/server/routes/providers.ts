@@ -252,7 +252,7 @@ function sendProviderError(reply: FastifyReply, error: unknown) {
   if (error instanceof ModelConfigurationValidationError) {
     return sendApiError(reply, 422, "MODEL_SCHEMA_INVALID", error.message, { diagnostics: error.diagnostics });
   }
-  return sendApiError(reply, 400, "PROVIDER_INVALID", error instanceof Error ? error.message : "Provider 操作失败");
+  return sendApiError(reply, 400, "PROVIDER_INVALID", error instanceof Error ? error.message : "Provider API 捕获到非 Error 异常");
 }
 
 class ModelReferenceInUseError extends Error {

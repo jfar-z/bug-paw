@@ -17,7 +17,7 @@ try {
 } catch (error) {
   stdout.write(JSON.stringify({
     ok: false,
-    error: error instanceof Error ? error.message : "资料解析失败",
+    error: error instanceof Error ? error.message : "资料解析子进程捕获到非 Error 异常",
   }));
 }
 

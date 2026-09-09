@@ -27,7 +27,10 @@ function microphoneErrorMessage(error: unknown): string {
   if (error instanceof DOMException && (error.name === "NotFoundError" || error.name === "DevicesNotFoundError")) {
     return "未检测到可用麦克风，请检查设备连接后重试。";
   }
-  return "无法启动麦克风录音，请稍后重试。";
+  if (error instanceof Error && error.message.trim()) {
+    return `浏览器启动麦克风录音失败：${error.name}：${error.message}`;
+  }
+  return "浏览器启动麦克风录音时抛出非 Error 异常。";
 }
 
 /** 提供按住录音、松开后交给本机服务器 Whisper 转写的语音入口。 */
@@ -82,7 +85,7 @@ export function ServerSpeechInputButton({ disabled = false, onTranscript, onErro
     } catch (error) {
       if (!mountedRef.current) return;
       setPhase("idle");
-      onError(error instanceof Error ? error.message : "本机语音识别暂时不可用，请稍后重试。");
+      onError(error instanceof Error ? error.message : "语音转写请求捕获到非 Error 异常。");
     }
   };
 
@@ -105,14 +108,17 @@ export function ServerSpeechInputButton({ disabled = false, onTranscript, onErro
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
       };
-      recorder.onerror = () => {
+      recorder.onerror = (event) => {
         clearRecordingTimeout();
         recorder.onstop = null;
         recorderRef.current = undefined;
         releaseStream();
         if (!mountedRef.current) return;
         setPhase("idle");
-        onError("麦克风录音中断，请稍后重试。");
+        const recorderError = "error" in event && event.error instanceof Error ? event.error : undefined;
+        onError(recorderError
+          ? `MediaRecorder 录音中断：${recorderError.name}：${recorderError.message}`
+          : "MediaRecorder 触发 error 事件，但浏览器未提供错误详情。");
       };
       recorder.onstop = () => {
         clearRecordingTimeout();

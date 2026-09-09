@@ -224,14 +224,30 @@ export function aigcPublicFileUrl(url: string, download = false): string {
  */
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const hasJsonBody = init?.body !== undefined && !(init.body instanceof FormData);
-  const response = await fetch(apiV1Url(url), {
-    credentials: "same-origin",
-    ...init,
-    headers: {
-      ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-  });
+  const method = init?.method ?? "GET";
+  let response: Response;
+  try {
+    response = await fetch(apiV1Url(url), {
+      credentials: "same-origin",
+      ...init,
+      headers: {
+        ...(hasJsonBody ? { "Content-Type": "application/json" } : {}),
+        ...init?.headers,
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    const browserMessage = error instanceof Error && error.message.trim()
+      ? `：${sanitizeClientErrorMessage(error.message)}`
+      : "";
+    throw new ApiClientError(
+      "API_NETWORK_ERROR",
+      `浏览器未收到 BugPaw API 响应（${method}）${browserMessage}`,
+      0,
+      undefined,
+      { stage: "network", method },
+    );
+  }
   if (response.status === 204) {
     return undefined as T;
   }
@@ -242,22 +258,34 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new ApiClientError(
       "API_RESPONSE_INVALID",
-      "服务响应格式无效",
+      `BugPaw API 返回了无法解析的 JSON 响应（HTTP ${response.status}）`,
       response.status,
       response.headers.get("X-Request-Id") ?? undefined,
+      { stage: "response-parse", method },
     );
   }
   if (!response.ok) {
     const error = readApiError(payload);
     throw new ApiClientError(
-      error?.code ?? "REQUEST_FAILED",
-      error?.message ?? "请求失败",
+      error?.code ?? "API_RESPONSE_INVALID",
+      error?.message ?? `BugPaw API 返回 HTTP ${response.status}，但响应缺少统一错误文档`,
       response.status,
       error?.requestId ?? response.headers.get("X-Request-Id") ?? undefined,
-      error?.details,
+      error?.details ?? { stage: "error-document", method },
     );
   }
   return payload as T;
+}
+
+/** 清理浏览器网络异常中的控制字符和疑似凭据，保留可诊断事实。 */
+function sanitizeClientErrorMessage(message: string): string {
+  return message
+    .replace(/[\u0000-\u001F\u007F-\u009F]/gu, " ")
+    .replace(/\b(Bearer|Token)\s+[^\s,;]+/giu, "$1 [已隐藏]")
+    .replace(/\b(authorization|api[_ -]?key|cookie|password|secret)\s*[:=]\s*[^\s,;]+/giu, "$1: [已隐藏]")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 300);
 }
 
 /**

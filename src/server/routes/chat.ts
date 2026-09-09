@@ -222,7 +222,7 @@ export function registerChatRoutes(app: FastifyInstance, dependencies: ChatRoute
           for await (const event of subscription.events) await connection.send(event);
         } catch (error) {
           if (!(error instanceof DomainError && ["CLIENT_TOO_SLOW", "RUNTIME_GENERATION_RETIRED"].includes(error.code))) {
-            request.log.warn({ err: error, sessionId: request.params.id }, "Session SSE 输出中断");
+            request.log.error({ err: error, sessionId: request.params.id }, "Session SSE 输出异常中断");
           }
         } finally {
           cleanup();

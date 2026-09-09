@@ -7,6 +7,7 @@ import {
   parseQuestionResponseProtocol,
   type QuestionResolution,
 } from "../../shared/question-response-protocol";
+import { toSafePublicMessage } from "../core/errors";
 
 const IMAGE_PLACEHOLDER = "<IMAGE_BASE64>";
 const TOOL_TEXT_PLACEHOLDER = "<TOOL_RESULT_TOO_LONG>";
@@ -31,7 +32,7 @@ export function projectSessionMessages(
     if (!isRecord(message)) return message;
     const projected = { ...message };
     if (message.role === "assistant" && message.stopReason === "error") {
-      projected.errorMessage = MODEL_REQUEST_FAILED_MESSAGE;
+      projected.errorMessage = toSafePublicMessage(message.errorMessage, MODEL_REQUEST_FAILED_MESSAGE);
     } else if (message.role === "assistant" && message.stopReason === "length") {
       projected.errorMessage = MODEL_RESPONSE_TRUNCATED_MESSAGE;
     }

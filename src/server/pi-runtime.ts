@@ -387,6 +387,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const recoveredCheckpoints = new Map<string, RunCheckpoint>();
   const pendingSessionSummaries = new Map<string, SessionSummary>();
   const abortRequested = new Set<string>();
+  const forcedRunErrors = new Map<string, string>();
   const idleListeners = new Set<() => void>();
   const deletingSessions = new Set<string>();
   const manuallyRenamedSessions = new Set<string>();
@@ -504,6 +505,10 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         });
         if (decision.terminate && runs.has(session.sessionId)) {
           // SDK 会等待该事件监听器；同步调用 abort 可在随后参数校验和业务执行前中止本 Run。
+          forcedRunErrors.set(
+            session.sessionId,
+            `模型连续 3 次调用工具“${event.toolName}”时生成${describeInvalidToolArguments(event.args)}，Run 已由断路器终止`,
+          );
           abortRequested.add(session.sessionId);
           void session.abort().catch(() => undefined);
         }
@@ -733,11 +738,16 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   async function executeRun(run: ManagedRun, session: PiSessionAdapter, text: string): Promise<void> {
     try {
       await session.prompt(text);
-      const outcome = abortRequested.has(run.sessionId)
-        ? { status: "aborted" as const }
+      const forcedError = forcedRunErrors.get(run.sessionId);
+      const outcome = forcedError
+        ? { status: "error" as const, message: forcedError }
+        : abortRequested.has(run.sessionId)
+          ? { status: "aborted" as const }
         : classifyAssistantRunOutcome(session.messages);
       run.status = outcome.status;
-      if (outcome.status === "error") run.error = outcome.message;
+      if (outcome.status === "error") {
+        run.error = toSafePublicMessage(outcome.message, "模型 Provider 返回错误，但未提供可公开的诊断消息");
+      }
       run.finishedAt = new Date().toISOString();
       if (run.status === "completed" || run.status === "error") {
         publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
@@ -746,7 +756,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         publishSequenced(run.sessionId, {
           type: "error",
           code: "AGENT_EXECUTION_FAILED",
-          message: outcome.message,
+          message: run.error!,
         });
       } else {
         publishSequenced(run.sessionId, { type: outcome.status });
@@ -755,6 +765,14 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         scheduleSessionTitle(run, session);
       }
     } catch (error) {
+      const forcedError = forcedRunErrors.get(run.sessionId);
+      if (forcedError) {
+        run.status = "error";
+        run.error = forcedError;
+        run.finishedAt = new Date().toISOString();
+        publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: forcedError });
+        return;
+      }
       if (abortRequested.has(run.sessionId)) {
         run.status = "aborted";
         run.finishedAt = new Date().toISOString();
@@ -762,12 +780,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         return;
       }
       run.status = "error";
-      run.error = toSafePublicMessage(error, "Agent 执行失败");
+      run.error = toSafePublicMessage(error, "Agent 执行阶段捕获到未提供消息的异常");
       run.finishedAt = new Date().toISOString();
       publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: run.error });
     } finally {
       sessionTextService?.invalidate(run.sessionId);
       abortRequested.delete(run.sessionId);
+      forcedRunErrors.delete(run.sessionId);
       session.askUserRunState?.reset();
       await options.onRunFinished?.({
         runId: run.runId,
@@ -1259,6 +1278,13 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       idleListeners.clear();
     },
   };
+}
+
+/** 描述断路器识别到的无效工具参数，不回显参数正文。 */
+function describeInvalidToolArguments(args: unknown): string {
+  if (args === undefined || args === null) return "缺失参数";
+  if (typeof args !== "object" || Array.isArray(args)) return "非对象参数";
+  return Object.keys(args).length === 0 ? "空对象参数" : "不符合 Schema 的参数";
 }
 
 interface SdkPiRuntimeOptions {

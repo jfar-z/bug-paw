@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatRunSummary } from "../shared/contracts";
 import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } from "../shared/api/chat-validation";
-import { api, type ModelSummary, type SessionSnapshot } from "./api";
+import { api, ApiClientError, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
 import { isSessionHistoryPage } from "../shared/session-history-contracts";
 import type { ThinkingLevel } from "../shared/configuration-contracts";
@@ -159,13 +159,15 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       const eventId = typeof payload?.id === "number" && Number.isSafeInteger(payload.id)
         ? payload.id
         : undefined;
-      // 诊断只记录协议元数据，禁止输出消息正文、工具参数或完整事件载荷。
-      console.warn("会话实时事件校验失败", {
-        eventType,
-        stage,
-        ...(eventId === undefined ? {} : { eventId }),
-      });
-      recoverProjection("实时事件格式无效，正在恢复会话状态。");
+      const stageLabel = stage === "parse" ? "JSON 解析" : stage === "schema" ? "Schema 校验" : "会话身份校验";
+      callbacksRef.current.onUnexpectedError?.(new ApiClientError(
+        "SESSION_EVENT_INVALID",
+        `会话实时事件“${eventType}”未通过${stageLabel}，正在从权威 Projection 恢复`,
+        0,
+        undefined,
+        { eventType, stage, ...(eventId === undefined ? {} : { eventId }) },
+      ));
+      recoverProjection(`会话实时事件“${eventType}”无效，正在恢复会话状态。`);
     };
     const parse = (eventType: string, event: MessageEvent): Record<string, unknown> | undefined => {
       if (!active || sourceRef.current !== source || projectionRecovering) return undefined;
@@ -225,7 +227,13 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
             : snapshot.run.status === "aborted"
               ? "aborted"
               : "error";
-          callbacks()?.onTimelineEvent({ type: "generation_finished", outcome });
+          callbacks()?.onTimelineEvent({
+            type: "generation_finished",
+            outcome,
+            ...(outcome === "error" && snapshot.run.error
+              ? { error: { code: "AGENT_EXECUTION_FAILED", message: snapshot.run.error } }
+              : {}),
+          });
         }
       }
     });
@@ -465,7 +473,13 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         }
         flushDeltas();
         callbacks()?.onRunChange(undefined);
-        callbacks()?.onTimelineEvent({ type: "generation_finished", outcome: type });
+        callbacks()?.onTimelineEvent({
+          type: "generation_finished",
+          outcome: type,
+          ...(type === "error" && payload.type === "error"
+            ? { error: { code: payload.code, message: payload.message } }
+            : {}),
+        });
         if (type === "error" && payload.type === "error") {
           callbacks()?.onError(payload.message);
         }
@@ -474,6 +488,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     source.onerror = () => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       setReconnecting(true);
+      const message = "会话实时连接中断，EventSource 未提供 HTTP 状态，浏览器正在自动重连";
+      callbacksRef.current.onError(message);
+      callbacksRef.current.onUnexpectedError?.(new ApiClientError("SESSION_STREAM_DISCONNECTED", message, 0));
     };
 
     return () => {

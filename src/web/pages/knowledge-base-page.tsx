@@ -262,7 +262,7 @@ function DeleteKnowledgeBaseDialog({ base, onCancel, onConfirm }: { base: Knowle
     try {
       await onConfirm();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除知识库失败");
+      setError(reason instanceof Error ? reason.message : "知识库删除确认流程捕获到非 Error 异常");
     } finally {
       setBusy(false);
     }

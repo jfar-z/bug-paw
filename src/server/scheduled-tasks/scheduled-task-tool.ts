@@ -80,7 +80,8 @@ export function createScheduledTasksTool(agentId: string, service: ScheduledTask
         }
         return success(await service.update(task.id, patch));
       } catch (error) {
-        return failure(error instanceof Error ? error.message : "定时任务操作失败");
+        // 服务异常必须抛出，确保 Pi 生成 isError 工具事件并在对话内可见。
+        throw error instanceof Error ? error : new Error("定时任务工具捕获到非 Error 异常");
       }
     },
   });

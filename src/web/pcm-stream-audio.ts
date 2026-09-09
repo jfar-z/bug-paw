@@ -1,4 +1,6 @@
 import type { SpeechAudio } from "./streaming-tts-controller";
+import { toUnexpectedErrorNotice } from "./api-error-policy";
+import { reportGlobalError } from "./global-error-events";
 
 const PCM_SAMPLE_RATE = 24_000;
 const PCM_STARTUP_BYTES = 4_800;
@@ -92,6 +94,9 @@ export class PcmStreamAudio implements SpeechAudio {
   /** 是否已经发出终止事件。 */
   private settled = false;
 
+  /** 最近一次导致播放器失败的底层异常。 */
+  private lastError?: unknown;
+
   /**
    * @param stream 原始 PCM 字节流
    * @param createContext Web Audio 上下文工厂
@@ -116,8 +121,8 @@ export class PcmStreamAudio implements SpeechAudio {
   pause(): void {
     if (this.cancelled) return;
     this.cancelled = true;
-    if (this.reader) void this.reader.cancel().catch(() => undefined);
-    else if (!this.stream.locked) void this.stream.cancel().catch(() => undefined);
+    if (this.reader) void this.reader.cancel().catch((error: unknown) => reportPcmCleanupFailure(error, "取消 PCM 响应读取"));
+    else if (!this.stream.locked) void this.stream.cancel().catch((error: unknown) => reportPcmCleanupFailure(error, "取消 PCM 响应流"));
     for (const source of this.sources) {
       source.onended = null;
       try {
@@ -127,12 +132,17 @@ export class PcmStreamAudio implements SpeechAudio {
       }
     }
     this.sources.clear();
-    void this.context?.close().catch(() => undefined);
+    void this.context?.close().catch((error: unknown) => reportPcmCleanupFailure(error, "关闭 PCM 音频上下文"));
   }
 
   /** 注册与 HTMLAudioElement 一致的结束和错误监听器。 */
   addEventListener(type: SpeechEvent, listener: () => void, options?: { once?: boolean }): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), { listener, once: options?.once === true }]);
+  }
+
+  /** 向播放控制器提供最近一次底层异常。 */
+  getError(): unknown {
+    return this.lastError;
   }
 
   /** 持续消费网络流，并按采样点边界转换 PCM。 */
@@ -156,7 +166,8 @@ export class PcmStreamAudio implements SpeechAudio {
         throw new Error("PCM 音频响应为空");
       }
       this.finishWhenReady();
-    } catch {
+    } catch (error) {
+      this.lastError = error;
       if (!this.cancelled) this.fail();
     }
   }
@@ -204,7 +215,7 @@ export class PcmStreamAudio implements SpeechAudio {
   private finishWhenReady(): void {
     if (!this.streamEnded || this.sources.size > 0 || this.settled || this.cancelled) return;
     this.settled = true;
-    void this.context?.close().catch(() => undefined);
+    void this.context?.close().catch((error: unknown) => reportPcmCleanupFailure(error, "完成 PCM 播放后关闭音频上下文"));
     this.emit("ended");
   }
 
@@ -212,7 +223,7 @@ export class PcmStreamAudio implements SpeechAudio {
   private fail(): void {
     if (this.settled) return;
     this.settled = true;
-    void this.context?.close().catch(() => undefined);
+    void this.context?.close().catch((error: unknown) => reportPcmCleanupFailure(error, "PCM 播放失败后关闭音频上下文"));
     this.emit("error");
   }
 
@@ -222,6 +233,11 @@ export class PcmStreamAudio implements SpeechAudio {
     this.listeners.set(type, registered.filter((entry) => !entry.once));
     registered.forEach((entry) => entry.listener());
   }
+}
+
+/** 播放主结果不受清理失败影响，但清理异常仍必须通过全局错误入口可见。 */
+function reportPcmCleanupFailure(error: unknown, operation: string): void {
+  reportGlobalError(toUnexpectedErrorNotice(error, operation));
 }
 
 /** 创建真实浏览器 AudioContext，并收窄到播放器所需能力。 */

@@ -456,7 +456,7 @@ function sendAgentError(reply: FastifyReply, error: unknown) {
     const conflicts = new Set(["WORKSPACE_IN_USE", "WORKSPACE_PI_CONFLICT"]);
     return sendApiError(reply, conflicts.has(error.code) ? 409 : 400, error.code, error.message);
   }
-  const message = error instanceof Error ? error.message : "Agent 操作失败";
+  const message = error instanceof Error ? error.message : "Agent API 捕获到非 Error 异常";
   return sendApiError(reply, 400, "AGENT_INVALID", message);
 }
 
