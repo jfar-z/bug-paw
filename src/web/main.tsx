@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app";
 import { ErrorToastProvider } from "./error-toast-provider";
 import { applyTheme, readThemePreference } from "./theme";
+import { toUnexpectedErrorNotice } from "./api-error-policy";
+import { reportGlobalError } from "./global-error-events";
 import "./styles.css";
 import "./bugpaw-theme.css";
 
@@ -23,7 +25,7 @@ createRoot(document.getElementById("root")!).render(
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch((error: unknown) => {
-      console.warn("PWA service worker 注册失败", error);
+      reportGlobalError(toUnexpectedErrorNotice(error, "注册 PWA 离线缓存"));
     });
   });
 }

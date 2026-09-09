@@ -1,4 +1,4 @@
-export const MODEL_REQUEST_FAILED_MESSAGE = "模型请求失败";
+export const MODEL_REQUEST_FAILED_MESSAGE = "模型 Provider 返回错误，但未提供可公开的诊断消息";
 export const MODEL_RESPONSE_TRUNCATED_MESSAGE = "回答因达到长度限制而被截断";
 
 export type AssistantRunOutcome =
@@ -16,7 +16,12 @@ export function classifyAssistantRunOutcome(messages: readonly unknown[]): Assis
       if (message.role === "user") return { status: "completed" };
       if (message.role !== "assistant") continue;
       if (message.stopReason === "error") {
-        return { status: "error", message: MODEL_REQUEST_FAILED_MESSAGE };
+        return {
+          status: "error",
+          message: typeof message.errorMessage === "string" && message.errorMessage.trim()
+            ? message.errorMessage.trim()
+            : MODEL_REQUEST_FAILED_MESSAGE,
+        };
       }
       if (message.stopReason === "aborted") return { status: "aborted" };
       if (message.stopReason === "length") {

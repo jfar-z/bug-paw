@@ -1255,9 +1255,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       // 浏览器和服务端都按 Session 串行化，确保快速连续选择时最后一次选择最终生效。
       const request = modelChangeQueueRef.current
-        .catch(() => undefined)
+        // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
+        .then(() => undefined, () => undefined)
         .then(() => api.setModel(targetSessionId, model.provider, model.id));
-      modelChangeQueueRef.current = request.catch(() => undefined);
+      modelChangeQueueRef.current = request.then(() => undefined, () => undefined);
       await request;
       if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
       setSession((current) => current?.id === targetSessionId ? { ...current, model } : current);
@@ -1275,9 +1276,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if (!targetSessionId) return;
     try {
       const request = thinkingLevelChangeQueueRef.current
-        .catch(() => undefined)
+        // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
+        .then(() => undefined, () => undefined)
         .then(() => api.setThinkingLevel(targetSessionId, thinkingLevel));
-      thinkingLevelChangeQueueRef.current = request.catch(() => undefined);
+      thinkingLevelChangeQueueRef.current = request.then(() => undefined, () => undefined);
       await request;
       if (generation !== thinkingLevelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
       confirmedThinkingLevelRef.current = thinkingLevel;

@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_BROWSER_AUTOMATION_CONFIG, type BrowserAutomationSettingsDocument } from "../../shared/browser-automation-contracts";
+import { ErrorToastProvider } from "../error-toast-provider";
 import { BrowserAutomationPage } from "./browser-automation-page";
+
+/** 使用应用实际错误 Toast 根节点渲染浏览器配置页。 */
+function renderPage() {
+  return render(<ErrorToastProvider><BrowserAutomationPage /></ErrorToastProvider>);
+}
 
 /** 浏览器能力页覆盖状态、权限、Origin、离线只读和保存。 */
 describe("浏览器执行配置页", () => {
@@ -17,7 +23,7 @@ describe("浏览器执行配置页", () => {
   });
 
 it("新增精确 Origin、修改开关并保存完整草稿", async () => {
-    render(<BrowserAutomationPage />);
+    renderPage();
     await screen.findByText("所有公网 HTTPS 站点");
     fireEvent.change(screen.getByLabelText("新增受信任 Origin"), { target: { value: "https://ui.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "添加 Origin" }));

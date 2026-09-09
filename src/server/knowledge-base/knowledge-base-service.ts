@@ -388,7 +388,7 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
             });
           }
         }
-        document = { id, knowledgeBaseId, name, mediaType: upload.mediaType, status: "failed", failureReason: toSafePublicMessage(error, "资料解析失败"), createdAt: new Date().toISOString() };
+        document = { id, knowledgeBaseId, name, mediaType: upload.mediaType, status: "failed", failureReason: toSafePublicMessage(error, "资料解析阶段未提供可公开错误消息"), createdAt: new Date().toISOString() };
       }
       try {
         await dependencies.store.insertDocuments([document]);

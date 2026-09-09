@@ -1642,7 +1642,9 @@ function AigcTasksPage() {
 
   useEffect(() => {
     void runApiTask(refresh, { operation: "加载 AIGC 任务" });
-    const timer = window.setInterval(() => void refresh().catch(() => undefined), 3_000);
+    const timer = window.setInterval(() => {
+      void runApiTask(refresh, { operation: "轮询 AIGC 任务" });
+    }, 3_000);
     return () => window.clearInterval(timer);
   }, [runApiTask]);
 
@@ -1710,7 +1712,12 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
 
   useEffect(() => {
     void runApiTask(() => api.getAigcTask(taskId).then((next) => { setTask(next); return next; }), { operation: "加载 AIGC 任务详情" });
-    const timer = window.setInterval(() => void api.getAigcTask(taskId).then(setTask).catch(() => undefined), 3_000);
+    const timer = window.setInterval(() => {
+      void runApiTask(
+        () => api.getAigcTask(taskId).then((next) => { setTask(next); return next; }),
+        { operation: "轮询 AIGC 任务详情" },
+      );
+    }, 3_000);
     return () => window.clearInterval(timer);
   }, [runApiTask, taskId]);
 

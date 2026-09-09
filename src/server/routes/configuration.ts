@@ -147,7 +147,7 @@ export function registerConfigurationRoutes(app: FastifyInstance, dependencies: 
       return reply.send({ applied: true, runtimeRefreshRequired });
     } catch (error) {
       if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
-      return sendApiError(reply, 400, "IMPORT_INVALID", error instanceof Error ? error.message : "导入失败");
+      return sendApiError(reply, 400, "IMPORT_INVALID", error instanceof Error ? error.message : "配置导入阶段捕获到非 Error 异常");
     }
   });
 
@@ -191,7 +191,7 @@ export function registerConfigurationRoutes(app: FastifyInstance, dependencies: 
         : await restore();
     } catch (error) {
       if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
-      return sendApiError(reply, 400, "HISTORY_RESTORE_INVALID", error instanceof Error ? error.message : "恢复失败");
+      return sendApiError(reply, 400, "HISTORY_RESTORE_INVALID", error instanceof Error ? error.message : "配置历史恢复阶段捕获到非 Error 异常");
     }
   });
 }
@@ -226,7 +226,7 @@ async function updateSettings(
     updated = await service.update(scope, { set: body.set, inherit: body.inherit as string[] }, body.revision);
   } catch (error) {
     if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
-    return sendApiError(reply, 400, "SETTINGS_INVALID", error instanceof Error ? error.message : "设置更新失败");
+    return sendApiError(reply, 400, "SETTINGS_INVALID", error instanceof Error ? error.message : "运行设置更新阶段捕获到非 Error 异常");
   }
   try {
     const historyId = randomUUID();

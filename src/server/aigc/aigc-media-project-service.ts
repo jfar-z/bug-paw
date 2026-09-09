@@ -14,6 +14,7 @@ import type {
   AigcMediaRenderJob,
 } from "../../shared/aigc-media-editor-contracts";
 import { readJson, writeJsonAtomic } from "../storage";
+import { toSafePublicMessage } from "../core/errors";
 import { sanitizeFileName, validAssetId, type AigcAssetService } from "./aigc-asset-service";
 import { AigcMediaRenderer, type AigcResolvedMediaClip } from "./aigc-media-renderer";
 import type { AigcTaskService } from "./aigc-task-service";
@@ -37,6 +38,7 @@ interface AigcMediaProjectDependencies {
   tasks: Pick<AigcTaskService, "get">;
   assets: Pick<AigcAssetService, "resolveOutputPath">;
   renderer?: Pick<AigcMediaRenderer, "probe" | "render">;
+  recordBackgroundError?: (code: string, details?: Record<string, unknown>) => void;
 }
 
 /** 可稳定映射为 HTTP 状态的轻剪辑领域错误。 */
@@ -267,7 +269,9 @@ export class AigcMediaProjectService {
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
     if (!next) return;
     this.activeRenderId = next.id;
-    void this.executeRender(next.id).catch(() => undefined).finally(() => {
+    void this.executeRender(next.id).catch(() => {
+      this.dependencies.recordBackgroundError?.("AIGC_MEDIA_RENDER_BACKGROUND_FAILED", { renderId: next.id });
+    }).finally(() => {
       if (this.activeRenderId === next.id) this.activeRenderId = undefined;
       this.drainQueue();
     });
@@ -282,7 +286,7 @@ export class AigcMediaProjectService {
       if (!job || !project || job.status !== "queued") return undefined;
       this.controllers.set(id, controller);
       this.renders.set(id, { ...job, status: "running", startedAt: new Date().toISOString(), progress: 0 });
-      await this.persist().catch(() => undefined);
+      await this.persist();
       return { project: copyProject(project) };
     });
     if (!context) return;
@@ -444,10 +448,10 @@ function exportFileName(name: string, extension: string): string {
 }
 
 function safeRenderError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "媒体导出失败";
+  const message = toSafePublicMessage(error, "媒体导出执行器捕获到非 Error 异常");
   if (message.includes("源产物已被删除")) return message;
   if (message.includes("超时")) return "媒体导出超过资源时限";
-  return "媒体导出失败，请检查源文件格式";
+  return `媒体导出执行阶段发生错误：${message}`;
 }
 
 function copyProject(project: AigcMediaProject): AigcMediaProject {

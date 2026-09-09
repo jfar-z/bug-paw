@@ -69,7 +69,7 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
         options.onBackgroundError?.({
           code: "SCHEDULED_TASK_BACKGROUND_FAILED",
           taskId: next.id,
-          message: toSafePublicMessage(error, "定时任务后台执行失败"),
+          message: toSafePublicMessage(error, "定时任务后台调度器捕获到未提供消息的异常"),
         });
       });
     }, Math.min(delay, MAX_TIMER_DELAY_MS));
@@ -155,7 +155,7 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
       return run;
     } catch (error) {
       if (!run) throw error;
-      const reason = toSafePublicMessage(error, "定时任务执行失败");
+      const reason = toSafePublicMessage(error, "定时任务执行器捕获到未提供消息的异常");
       options.onBackgroundError?.({ code: "SCHEDULED_TASK_BACKGROUND_FAILED", taskId: task.id, message: reason });
       return (await options.store.updateRun(run.id, { status: "failed", finishedAt: new Date().toISOString(), reason }))!;
     } finally {

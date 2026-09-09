@@ -11,6 +11,7 @@ import type {
   AigcTaskSummary,
 } from "../../shared/aigc-contracts";
 import type { CredentialService } from "../configuration/credential-service";
+import { toSafePublicMessage } from "../core/errors";
 import { AigcAssetService } from "./aigc-asset-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
 import type { AigcInterfaceService } from "./aigc-interface-service";
@@ -318,10 +319,9 @@ function withExecutionState(task: AigcTaskRecord, execution?: AigcTaskExecutionS
 
 /** 将异常转换为不包含认证信息的任务错误。 */
 function sanitizeError(error: unknown): AigcTaskError {
-  const message = error instanceof Error ? error.message : "AIGC 任务执行失败";
   return {
     code: error instanceof TypeError ? "AIGC_INPUT_INVALID" : "AIGC_UPSTREAM_FAILED",
-    message: message.includes("Bearer") || message.includes("apiKey") ? "AIGC 上游服务不可用" : message,
+    message: toSafePublicMessage(error, "AIGC 任务执行器捕获到非 Error 异常"),
   };
 }
 

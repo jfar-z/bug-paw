@@ -56,6 +56,6 @@ function toolResult(value: unknown) { return { content: [{ type: "text" as const
 function toolError(error: unknown) {
   const value = error instanceof BrowserAutomationError
     ? error.toResult()
-    : { status: "error", error: { code: "BROWSER_WORKER_UNAVAILABLE", message: "浏览器操作失败", retryable: true } };
+    : { status: "error", error: { code: "BROWSER_WORKER_UNAVAILABLE", message: error instanceof Error ? error.message : "浏览器工具捕获到非 Error 异常", retryable: true } };
   return toolResult(value);
 }
