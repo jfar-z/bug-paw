@@ -1,5 +1,6 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { toSafePublicMessage } from "../core/errors";
 import { AigcAgentError, type AigcAgentContext, type AigcAgentService } from "./aigc-agent-service";
 
 const interfaceDiscoveryParameters = Type.Object({
@@ -105,7 +106,7 @@ async function result(operation: () => Promise<unknown>) {
     return { content: [{ type: "text" as const, text }], details: {} };
   } catch (error) {
     const code = error instanceof AigcAgentError ? error.code : error instanceof TypeError ? "AIGC_INPUT_INVALID" : "AIGC_OPERATION_FAILED";
-    const message = error instanceof AigcAgentError || error instanceof TypeError ? error.message : "AIGC 操作失败，请检查工作区文件和 AIGC 工作台状态，不要自动重复提交";
+    const message = toSafePublicMessage(error, "AIGC Agent 工具捕获到非 Error 异常");
     throw new Error(JSON.stringify({ code, message }));
   }
 }

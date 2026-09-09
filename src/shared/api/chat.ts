@@ -91,6 +91,12 @@ export const SessionProjectionRequiredEventSchema = StrictObject({
 
 export const SessionEventSchema = Type.Union([
   StrictObject({
+    ...EventIdentity,
+    type: Type.Literal("turn_committed"),
+    messages: Type.Array(Type.Unknown()),
+    history: SessionHistoryPageSchema,
+  }),
+  StrictObject({
     id: Type.Integer({ minimum: 1 }),
     sessionId: Type.String({ minLength: 1 }),
     type: Type.Literal("question_pending"),

@@ -34,6 +34,11 @@ export function isSessionEvent(value: unknown): value is SessionEvent {
     || typeof value.type !== "string") return false;
   if (value.type === "model_changed") return isModel(value.model);
   if (value.type === "thinking_level_changed") return isThinkingLevel(value.thinkingLevel);
+  if (value.type === "turn_committed") {
+    return isNonEmptyString(value.runId)
+      && Array.isArray(value.messages)
+      && isSessionHistoryPage(value.history);
+  }
   if (value.type === "question_pending") {
     return hasOnlyKeys(value, ["id", "sessionId", "type", "pendingQuestion"])
       && isPendingQuestion(value.pendingQuestion);

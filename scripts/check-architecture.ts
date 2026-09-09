@@ -17,6 +17,16 @@ const LEGACY_STATE_FILES = [
   "knowledge-bases.json",
   "knowledge-bindings.json",
 ] as const;
+const FORBIDDEN_GENERIC_ERROR_MESSAGES = [
+  "网络开小差",
+  "请求模型失败",
+  "模型请求失败",
+  "请求失败",
+  "操作失败",
+  "系统异常",
+  "服务异常",
+  "未知错误",
+] as const;
 
 /** 扫描生产源码的依赖方向和数据所有权，返回可供测试断言的稳定违规清单。 */
 export function checkArchitecture(root: string): ArchitectureViolation[] {
@@ -60,6 +70,21 @@ function inspectFile(sourceRoot: string, absoluteFile: string): ArchitectureViol
       file,
       rule: "TOOL_PARAMETER_ROOT_SCHEMA",
       message: "自定义工具 parameters 根节点必须使用 Type.Object",
+    });
+  }
+  const genericMessage = FORBIDDEN_GENERIC_ERROR_MESSAGES.find((message) => source.includes(`"${message}"`) || source.includes(`'${message}'`));
+  if (genericMessage) {
+    violations.push({
+      file,
+      rule: "GENERIC_ERROR_FALLBACK",
+      message: `禁止使用无法定位故障环节的异常兜底文案：${genericMessage}`,
+    });
+  }
+  if (file.startsWith("web/pages/") && /\.catch\(\(\)\s*=>\s*undefined\)/u.test(source)) {
+    violations.push({
+      file,
+      rule: "WEB_SILENT_ERROR",
+      message: "页面 Promise 失败必须进入统一错误弹窗或明确的页面错误事件",
     });
   }
   return violations;

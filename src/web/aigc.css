@@ -679,10 +679,6 @@ audio.aigc-media-input-preview {
   color: var(--danger);
 }
 
-.aigc-task-filters {
-  margin-bottom: 16px;
-}
-
 .aigc-task-filters button {
   min-height: 40px;
 }

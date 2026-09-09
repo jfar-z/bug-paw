@@ -134,7 +134,8 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
         controller,
       );
       if (response.stopReason === "error" || response.stopReason === "aborted") {
-        return failedResult(model, startedAt, failureMessage(response.errorMessage));
+        const failure = classifyProviderFailure(response.errorMessage, response.stopReason === "aborted");
+        return failedResult(model, startedAt, failure.message, failure.code);
       }
       return {
         modelId: model.id,
@@ -147,7 +148,8 @@ export function createRuntimeCoordinator(options: RuntimeCoordinatorOptions): Ru
       if (error instanceof ModelTestTimeoutError) {
         return failedResult(model, startedAt, "模型请求超时", "MODEL_TEST_TIMEOUT");
       }
-      return failedResult(model, startedAt, failureMessage(error instanceof Error ? error.message : undefined));
+      const failure = classifyProviderFailure(error instanceof Error ? error.message : undefined, false);
+      return failedResult(model, startedAt, failure.message, failure.code);
     }
   }
 
@@ -257,9 +259,31 @@ function responsePreview(response: AssistantResponse): string | undefined {
 /**
  * 生成便于定位连接问题且不会泄露凭证的错误摘要。
  */
-function failureMessage(_value: string | undefined): string {
-  // 底层错误可能裸回显实际请求凭证，模式清洗无法给出绝对不泄露保证。
-  return "模型请求失败";
+function classifyProviderFailure(value: string | undefined, aborted: boolean): { code: string; message: string } {
+  // 底层错误可能裸回显实际请求凭证，只按稳定特征分类，不回显原始正文。
+  const normalized = value?.toLowerCase() ?? "";
+  if (aborted || /\babort(?:ed)?\b/u.test(normalized)) {
+    return { code: "MODEL_TEST_ABORTED", message: "Provider 模型连通性请求在完成前被中止" };
+  }
+  if (/\b(?:401|403)\b|unauthori[sz]ed|forbidden|authentication/u.test(normalized)) {
+    return { code: "MODEL_TEST_AUTHENTICATION_FAILED", message: "Provider 拒绝模型连通性请求（鉴权或权限错误）" };
+  }
+  if (/\b429\b|rate.?limit|too many requests/u.test(normalized)) {
+    return { code: "MODEL_TEST_RATE_LIMITED", message: "Provider 对模型连通性请求执行了限流" };
+  }
+  if (/timeout|timed out/u.test(normalized)) {
+    return { code: "MODEL_TEST_TIMEOUT", message: "Provider 模型连通性请求超时" };
+  }
+  if (/fetch|network|socket|connect|econn|dns|enotfound/u.test(normalized)) {
+    return { code: "MODEL_TEST_NETWORK_ERROR", message: "Provider 模型连通性请求在网络阶段中断" };
+  }
+  if (/\b5\d\d\b|bad gateway|service unavailable|gateway timeout/u.test(normalized)) {
+    return { code: "MODEL_TEST_UPSTREAM_ERROR", message: "Provider 模型接口返回上游服务错误" };
+  }
+  if (/json|parse|schema|invalid response|unexpected response/u.test(normalized)) {
+    return { code: "MODEL_TEST_RESPONSE_INVALID", message: "Provider 模型接口返回无法解析或不符合协议的响应" };
+  }
+  return { code: "MODEL_TEST_PROVIDER_ERROR", message: "Provider 模型连通性请求发生未分类异常" };
 }
 
 class ModelTestTimeoutError extends Error {

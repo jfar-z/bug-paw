@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatRunSummary } from "../shared/contracts";
 import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } from "../shared/api/chat-validation";
-import { api, type ModelSummary, type SessionSnapshot } from "./api";
+import { api, ApiClientError, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
-import { isSessionHistoryPage } from "../shared/session-history-contracts";
+import { isSessionHistoryPage, type SessionHistoryPage } from "../shared/session-history-contracts";
 import type { ThinkingLevel } from "../shared/configuration-contracts";
 import { PendingQuestionProjectionSchema, type PendingQuestionProjection } from "../shared/session-question-contracts";
 import { Check } from "typebox/value";
@@ -15,7 +15,9 @@ export interface QuestionResolvedNotice {
 
 interface SessionStreamOptions {
   sessionId?: string;
+  initialCursor?: number;
   onSnapshot: (snapshot: SessionSnapshot) => void;
+  onTurnCommitted?: (event: { id: number; messages: unknown[]; history: SessionHistoryPage }) => boolean;
   onTimelineEvent: (event: TimelineEvent) => void;
   onRunChange: (run: ChatRunSummary | undefined) => void;
   onModelChange?: (model: ModelSummary) => void;
@@ -34,8 +36,6 @@ export interface SessionStreamControl {
   reconnecting: boolean;
 }
 
-interface CallbackSet extends Omit<SessionStreamOptions, "sessionId"> {}
-
 const PROJECTION_RECOVERY_TIMEOUT_MS = 10_000;
 
 /**
@@ -44,16 +44,18 @@ const PROJECTION_RECOVERY_TIMEOUT_MS = 10_000;
 export function useSessionStream(options: SessionStreamOptions): SessionStreamControl {
   const sourceRef = useRef<EventSource | undefined>(undefined);
   const lastEventIdRef = useRef(0);
-  const callbacksRef = useRef<CallbackSet>(options);
-  const pendingDeltasRef = useRef<Array<Extract<TimelineEvent, { type: "text_delta" }>>>([]);
+  const callbacksRef = useRef<SessionStreamOptions>(options);
+  const pendingDeltasRef = useRef<Array<{
+    sessionId: string;
+    event: Extract<TimelineEvent, { type: "text_delta" }>;
+  }>>([]);
   const refreshProjectionRef = useRef<() => void>(() => undefined);
   const animationFrameRef = useRef<number | undefined>(undefined);
   const [reconnecting, setReconnecting] = useState(false);
   const [reconnectRequest, setReconnectRequest] = useState<{ sessionId: string; cursor: number; nonce: number }>();
 
-  useEffect(() => {
-    callbacksRef.current = options;
-  });
+  // 渲染阶段立即切换回调归属，阻止旧 Session 在 effect 清理前污染新会话。
+  callbacksRef.current = options;
 
   const flushDeltas = useCallback(() => {
     if (animationFrameRef.current !== undefined) {
@@ -62,16 +64,20 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     }
     const pending = pendingDeltasRef.current;
     pendingDeltasRef.current = [];
-    pending.forEach((event) => callbacksRef.current.onTimelineEvent(event));
+    pending.forEach(({ sessionId, event }) => {
+      if (callbacksRef.current.sessionId === sessionId) {
+        callbacksRef.current.onTimelineEvent(event);
+      }
+    });
   }, []);
 
-  const enqueueDelta = useCallback((event: Extract<TimelineEvent, { type: "text_delta" }>) => {
+  const enqueueDelta = useCallback((sessionId: string, event: Extract<TimelineEvent, { type: "text_delta" }>) => {
     const pending = pendingDeltasRef.current;
     const previous = pending.at(-1);
-    if (previous?.type === event.type) {
-      previous.delta += event.delta;
+    if (previous?.sessionId === sessionId && previous.event.type === event.type) {
+      previous.event.delta += event.delta;
     } else {
-      pending.push(event);
+      pending.push({ sessionId, event });
     }
     if (animationFrameRef.current === undefined) {
       animationFrameRef.current = requestAnimationFrame(() => flushDeltas());
@@ -99,7 +105,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       return;
     }
 
-    const cursor = reconnectRequest?.sessionId === options.sessionId ? reconnectRequest.cursor : undefined;
+    const cursor = reconnectRequest?.sessionId === options.sessionId
+      ? reconnectRequest.cursor
+      : options.initialCursor;
     if (cursor !== undefined) lastEventIdRef.current = cursor;
     const query = cursor === undefined ? "" : `?after=${encodeURIComponent(String(cursor))}`;
     const source = new EventSource(`/api/v1/sessions/${encodeURIComponent(options.sessionId)}/events${query}`);
@@ -107,19 +115,23 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     let active = true;
     let projectionRecovering = false;
     let recoveryController: AbortController | undefined;
+    const callbacks = () => callbacksRef.current.sessionId === options.sessionId
+      ? callbacksRef.current
+      : undefined;
     const recoverProjection = (notice?: string) => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       projectionRecovering = true;
       // 游标已接纳的正文必须先交付，避免恢复失败后按新游标重连时丢失动画帧缓冲。
       flushDeltas();
       source.close();
-      if (notice) callbacksRef.current.onError(notice);
+      if (notice) callbacks()?.onError(notice);
       recoveryController = new AbortController();
       const recoveryTimeout = window.setTimeout(() => recoveryController?.abort(), PROJECTION_RECOVERY_TIMEOUT_MS);
       void api.openSession(options.sessionId!, recoveryController.signal).then((snapshot) => {
         if (!active || sourceRef.current !== source) return;
         lastEventIdRef.current = snapshot.lastEventId;
-        callbacksRef.current.onSnapshot(snapshot);
+        callbacks()?.onSnapshot(snapshot);
+        callbacks()?.onRunChange(isActiveRun(snapshot.run) ? snapshot.run : undefined);
         setReconnectRequest((current) => ({
           sessionId: options.sessionId!,
           cursor: snapshot.lastEventId,
@@ -129,8 +141,8 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         if (!active || sourceRef.current !== source) return;
         const cancelled = error instanceof DOMException && error.name === "AbortError";
         if (!cancelled) {
-          callbacksRef.current.onUnexpectedError?.(error);
-          callbacksRef.current.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
+          callbacks()?.onUnexpectedError?.(error);
+          callbacks()?.onError("会话状态恢复失败，正在重新连接。临时中断期间的事件将按游标恢复。");
         }
         setReconnectRequest((current) => ({
           sessionId: options.sessionId!,
@@ -151,13 +163,15 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       const eventId = typeof payload?.id === "number" && Number.isSafeInteger(payload.id)
         ? payload.id
         : undefined;
-      // 诊断只记录协议元数据，禁止输出消息正文、工具参数或完整事件载荷。
-      console.warn("会话实时事件校验失败", {
-        eventType,
-        stage,
-        ...(eventId === undefined ? {} : { eventId }),
-      });
-      recoverProjection("实时事件格式无效，正在恢复会话状态。");
+      const stageLabel = stage === "parse" ? "JSON 解析" : stage === "schema" ? "Schema 校验" : "会话身份校验";
+      callbacksRef.current.onUnexpectedError?.(new ApiClientError(
+        "SESSION_EVENT_INVALID",
+        `会话实时事件“${eventType}”未通过${stageLabel}，正在从权威 Projection 恢复`,
+        0,
+        undefined,
+        { eventType, stage, ...(eventId === undefined ? {} : { eventId }) },
+      ));
+      recoverProjection(`会话实时事件“${eventType}”无效，正在恢复会话状态。`);
     };
     const parse = (eventType: string, event: MessageEvent): Record<string, unknown> | undefined => {
       if (!active || sourceRef.current !== source || projectionRecovering) return undefined;
@@ -187,7 +201,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       return true;
     };
 
-    source.addEventListener("open", () => setReconnecting(false));
+    source.addEventListener("open", () => {
+      if (active && sourceRef.current === source && callbacks()) setReconnecting(false);
+    });
     source.addEventListener("snapshot", (rawEvent) => {
       if (projectionRecovering) return;
       const payload = parse("snapshot", rawEvent as MessageEvent);
@@ -203,19 +219,25 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       flushDeltas();
       lastEventIdRef.current = snapshot.lastEventId;
-      callbacksRef.current.onSnapshot(snapshot);
+      callbacks()?.onSnapshot(snapshot);
       if (isActiveRun(snapshot.run)) {
-        callbacksRef.current.onRunChange(snapshot.run);
-        callbacksRef.current.onTimelineEvent({ type: "generation_started" });
+        callbacks()?.onRunChange(snapshot.run);
+        callbacks()?.onTimelineEvent({ type: "generation_started" });
       } else {
-        callbacksRef.current.onRunChange(undefined);
+        callbacks()?.onRunChange(undefined);
         if (snapshot.run) {
           const outcome = snapshot.run.status === "completed"
             ? "completed"
             : snapshot.run.status === "aborted"
               ? "aborted"
               : "error";
-          callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome });
+          callbacks()?.onTimelineEvent({
+            type: "generation_finished",
+            outcome,
+            ...(outcome === "error" && snapshot.run.error
+              ? { error: { code: "AGENT_EXECUTION_FAILED", message: snapshot.run.error } }
+              : {}),
+          });
         }
       }
     });
@@ -233,6 +255,22 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       // 恢复 Projection 期间暂停增量输入，避免迟到快照覆盖已经应用的更高序号事件。
       recoverProjection();
     });
+    source.addEventListener("turn_committed", (rawEvent) => {
+      const payload = parse("turn_committed", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "turn_committed") {
+        reportInvalidEvent("turn_committed", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      flushDeltas();
+      const applied = callbacks()?.onTurnCommitted?.({
+        id: payload.id,
+        messages: payload.messages,
+        history: payload.history,
+      });
+      if (applied === false) recoverProjection();
+    });
     source.addEventListener("run_started", (rawEvent) => {
       const payload = parse("run_started", rawEvent as MessageEvent);
       if (!payload) return;
@@ -246,9 +284,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       flushDeltas();
       const run = readRun(payload.run);
       if (run) {
-        callbacksRef.current.onRunChange(run);
+        callbacks()?.onRunChange(run);
       }
-      callbacksRef.current.onTimelineEvent({ type: "generation_started" });
+      callbacks()?.onTimelineEvent({ type: "generation_started" });
     });
     source.addEventListener("model_changed", (rawEvent) => {
       const payload = parse("model_changed", rawEvent as MessageEvent);
@@ -258,7 +296,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         return;
       }
       if (!accept(payload)) return;
-      callbacksRef.current.onModelChange?.(payload.model);
+      callbacks()?.onModelChange?.(payload.model);
     });
     source.addEventListener("thinking_level_changed", (rawEvent) => {
       const payload = parse("thinking_level_changed", rawEvent as MessageEvent);
@@ -268,7 +306,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         return;
       }
       if (!accept(payload)) return;
-      callbacksRef.current.onThinkingLevelChange?.(payload.thinkingLevel);
+      callbacks()?.onThinkingLevelChange?.(payload.thinkingLevel);
     });
     source.addEventListener("session_renamed", (rawEvent) => {
       const payload = parse("session_renamed", rawEvent as MessageEvent);
@@ -278,7 +316,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         return;
       }
       if (!accept(payload)) return;
-      callbacksRef.current.onSessionRenamed?.(payload.sessionId, payload.name);
+      callbacks()?.onSessionRenamed?.(payload.sessionId, payload.name);
     });
     source.addEventListener("question_pending", (rawEvent) => {
       const payload = parse("question_pending", rawEvent as MessageEvent);
@@ -289,7 +327,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (!accept(payload)) return;
       flushDeltas();
-      callbacksRef.current.onPendingQuestion?.(payload.pendingQuestion);
+      callbacks()?.onPendingQuestion?.(payload.pendingQuestion);
     });
     source.addEventListener("question_resolved", (rawEvent) => {
       const payload = parse("question_resolved", rawEvent as MessageEvent);
@@ -300,7 +338,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (!accept(payload)) return;
       flushDeltas();
-      callbacksRef.current.onQuestionResolved?.({
+      callbacks()?.onQuestionResolved?.({
         questionRecordId: payload.questionRecordId,
         state: payload.state,
       });
@@ -313,7 +351,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         return;
       }
       if (accept(payload) && typeof payload.delta === "string") {
-        enqueueDelta({ type: "text_delta", delta: payload.delta });
+        enqueueDelta(options.sessionId!, { type: "text_delta", delta: payload.delta });
       }
     });
     source.addEventListener("thinking_delta", (rawEvent) => {
@@ -324,7 +362,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         return;
       }
       if (accept(payload) && typeof payload.delta === "string") {
-        callbacksRef.current.onTimelineEvent({ type: "thinking_delta", delta: payload.delta });
+        callbacks()?.onTimelineEvent({ type: "thinking_delta", delta: payload.delta });
       }
     });
     source.addEventListener("thinking_finished", (rawEvent) => {
@@ -336,7 +374,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({ type: "thinking_finished" });
+        callbacks()?.onTimelineEvent({ type: "thinking_finished" });
       }
     });
     source.addEventListener("tool_preparing", (rawEvent) => {
@@ -348,7 +386,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({
+        callbacks()?.onTimelineEvent({
           type: "tool_preparing",
           callId: payload.callId,
           toolName: payload.toolName,
@@ -364,7 +402,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({
+        callbacks()?.onTimelineEvent({
           type: "tool_parameters_streaming",
           callId: payload.callId,
           toolName: payload.toolName,
@@ -382,7 +420,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({
+        callbacks()?.onTimelineEvent({
           type: "tool_prepared",
           callId: payload.callId,
           toolName: payload.toolName,
@@ -399,7 +437,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({
+        callbacks()?.onTimelineEvent({
           type: "tool_started",
           callId: String(payload.callId),
           toolName: String(payload.toolName),
@@ -416,7 +454,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({
+        callbacks()?.onTimelineEvent({
           type: "tool_updated",
           callId: String(payload.callId),
           toolName: String(payload.toolName),
@@ -433,7 +471,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       if (accept(payload)) {
         flushDeltas();
-        callbacksRef.current.onTimelineEvent({
+        callbacks()?.onTimelineEvent({
           type: "tool_finished",
           callId: String(payload.callId),
           toolName: String(payload.toolName),
@@ -454,16 +492,25 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
           return;
         }
         flushDeltas();
-        callbacksRef.current.onRunChange(undefined);
-        callbacksRef.current.onTimelineEvent({ type: "generation_finished", outcome: type });
+        callbacks()?.onRunChange(undefined);
+        callbacks()?.onTimelineEvent({
+          type: "generation_finished",
+          outcome: type,
+          ...(type === "error" && payload.type === "error"
+            ? { error: { code: payload.code, message: payload.message } }
+            : {}),
+        });
         if (type === "error" && payload.type === "error") {
-          callbacksRef.current.onError(payload.message);
+          callbacks()?.onError(payload.message);
         }
       });
     });
     source.onerror = () => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       setReconnecting(true);
+      const message = "会话实时连接中断，EventSource 未提供 HTTP 状态，浏览器正在自动重连";
+      callbacksRef.current.onError(message);
+      callbacksRef.current.onUnexpectedError?.(new ApiClientError("SESSION_STREAM_DISCONNECTED", message, 0));
     };
 
     return () => {

@@ -1,4 +1,4 @@
-import type { AgentTurn, MarkdownBlock } from "../../../conversation-timeline";
+import type { AgentTurn, ErrorBlock, MarkdownBlock } from "../../../conversation-timeline";
 import type { ThemePreference } from "../../../theme";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
@@ -52,6 +52,9 @@ export function AgentTurnContent({
       if (item.type === "question") {
         return <QuestionTimelineCard key={item.id} tool={item.tool} />;
       }
+      if (item.block.type === "error") {
+        return <AgentErrorBlock key={item.id} block={item.block} />;
+      }
       return <MarkdownBlockView key={item.id} block={item.block} theme={theme} onLinkActivate={onLinkActivate} focused={Boolean(focusedEntryId) && item.block.piEntryId === focusedEntryId} />;
     })}
     {activityItems.length > 0 ? <div className="agent-turn-footer message-actions--separated">
@@ -63,6 +66,14 @@ export function AgentTurnContent({
       </div>
     </div> : actions}
   </>;
+}
+
+/** 在对话原位置展示本轮错误，避免用户只能从全局弹窗判断生成状态。 */
+function AgentErrorBlock({ block }: { block: ErrorBlock }) {
+  return <div className="configuration-inline-error" role="alert">
+    <strong>{block.code}</strong>
+    <p>{block.message}</p>
+  </div>;
 }
 
 function MarkdownBlockView({ block, theme, onLinkActivate, focused }: { block: MarkdownBlock; theme: ThemePreference; onLinkActivate?: (href: string) => boolean; focused: boolean }) {

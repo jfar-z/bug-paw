@@ -161,7 +161,7 @@ function readBaseInput(value: unknown, partial = false): CreateKnowledgeBaseRequ
 
 /** 将领域服务错误映射为稳定的 HTTP 错误协议。 */
 function sendKnowledgeError(reply: Parameters<typeof sendApiError>[0], error: unknown) {
-  const message = toSafePublicMessage(error, "知识库操作失败");
+  const message = toSafePublicMessage(error, "知识库 API 捕获到未提供消息的异常");
   if (message === "知识库不存在") return sendApiError(reply, 404, "KNOWLEDGE_BASE_NOT_FOUND", message);
   if (message === "资料不存在") return sendApiError(reply, 404, "KNOWLEDGE_DOCUMENT_NOT_FOUND", message);
   return sendApiError(reply, 400, "INVALID_KNOWLEDGE_REQUEST", message);

@@ -56,7 +56,14 @@ export interface ToolBlock {
   status: "preparing" | "parameterizing" | "running" | "completed" | "cancelled" | "error";
 }
 
-export type AgentBlock = MarkdownBlock | ThinkingBlock | ToolBlock;
+export interface ErrorBlock {
+  id: string;
+  type: "error";
+  code: string;
+  message: string;
+}
+
+export type AgentBlock = MarkdownBlock | ThinkingBlock | ToolBlock | ErrorBlock;
 
 export interface AgentTurn {
   id: string;
@@ -87,7 +94,7 @@ export type TimelineEvent =
   | { type: "tool_started"; callId: string; toolName: string; args: unknown }
   | { type: "tool_updated"; callId: string; toolName: string; partialResult: unknown }
   | { type: "tool_finished"; callId: string; toolName: string; result: unknown; isError: boolean }
-  | { type: "generation_finished"; outcome: "completed" | "aborted" | "error" };
+  | { type: "generation_finished"; outcome: "completed" | "aborted" | "error"; error?: { code: string; message: string } };
 
 /**
  * 将实时事件归并到单一有序时间线，文件与工具更新保持原始位置。
@@ -181,15 +188,22 @@ export function reduceTimeline(entries: ConversationEntry[], event: TimelineEven
       return entries;
     }
     const turn = entries[turnIndex] as AgentTurn;
+    const errorAlreadyVisible = event.error
+      ? turn.blocks.some((block) => block.type === "error" && block.code === event.error?.code && block.message === event.error.message)
+      : false;
+    const errorBlock: ErrorBlock[] = event.error && !errorAlreadyVisible
+      ? [{ id: createId("error", entries), type: "error", code: event.error.code, message: event.error.message }]
+      : [];
+    const finalizedBlocks: AgentBlock[] = turn.blocks.map((block): AgentBlock => {
+      if (block.type === "markdown" || block.type === "thinking") return { ...block, streaming: false };
+      if (block.type === "tool" && (block.status === "preparing" || block.status === "parameterizing") && event.outcome !== "completed") {
+        return { ...block, status: "cancelled" };
+      }
+      return block;
+    });
     return replaceTurn(entries, turnIndex, {
       ...turn,
-      blocks: turn.blocks.map((block) => {
-        if (block.type === "markdown" || block.type === "thinking") return { ...block, streaming: false };
-        if (block.type === "tool" && (block.status === "preparing" || block.status === "parameterizing") && event.outcome !== "completed") {
-          return { ...block, status: "cancelled" };
-        }
-        return block;
-      }),
+      blocks: [...finalizedBlocks, ...errorBlock],
     });
   }
 
@@ -285,6 +299,14 @@ export function parsePiHistory(messages: unknown[], streaming = false): Conversa
           tools.set(part.id, { turnIndex: ensured.turnIndex, blockIndex });
         }
       });
+      if (message.stopReason === "error" && typeof message.errorMessage === "string" && message.errorMessage.trim()) {
+        blocks.push({
+          id: `history-${messageIndex}-error`,
+          type: "error",
+          code: "AGENT_EXECUTION_FAILED",
+          message: message.errorMessage.trim(),
+        });
+      }
       entries = replaceTurn(entries, ensured.turnIndex, { ...turn, blocks, ...(sourceUserEntryId ? { sourceUserEntryId } : {}) });
       return;
     }

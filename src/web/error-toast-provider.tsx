@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { unexpectedErrorDedupeKey } from "./api-error-policy";
 import { ErrorToastViewport } from "./components/error-toast-viewport";
 import type { ErrorToastController, ErrorToastInput, ErrorToastItem } from "./error-toast-types";
+import { subscribeGlobalErrors } from "./global-error-events";
 
 const DEFAULT_DURATION_MS = 8000;
 const MAX_VISIBLE_TOASTS = 3;
@@ -73,6 +74,8 @@ export function ErrorToastProvider({ children }: { children: ReactNode }) {
     setItems([]);
     setAnnouncement(undefined);
   }, []);
+
+  useEffect(() => subscribeGlobalErrors(push), [push]);
 
   const setExpanded = useCallback((id: string, expanded: boolean) => {
     setItems((current) => {

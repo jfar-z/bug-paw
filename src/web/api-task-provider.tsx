@@ -17,7 +17,7 @@ export interface ApiTaskPolicy {
 
 export type OptionalApiTaskResult<T> =
   | { status: "success"; data: T }
-  | { status: "fallback"; data: T; reason: string }
+  | { status: "fallback"; data: T; reason: string; toastId: string }
   | { status: "handled"; error: ApiClientError }
   | { status: "cancelled" }
   | { status: "unexpected"; toastId: string };
@@ -89,9 +89,10 @@ export function ApiTaskProvider({
         await onAuthenticationRequired();
         return { status: "handled", error };
       }
+      const toastId = toast.push(toUnexpectedErrorNotice(error, policy.operation));
       try {
-        // 仅允许可选读取使用显式降级，避免写操作失败后伪装成成功。
-        return { status: "fallback", data: await policy.fallback(error), reason: policy.fallbackReason };
+        // 可选读取允许继续显示旧数据，但原始错误必须保持可观测，不能把降级伪装成成功。
+        return { status: "fallback", data: await policy.fallback(error), reason: policy.fallbackReason, toastId };
       } catch (fallbackError) {
         return {
           status: "unexpected",

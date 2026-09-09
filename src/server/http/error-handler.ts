@@ -69,7 +69,7 @@ export function registerApiErrorHandler(app: FastifyInstance): void {
     return reply.code(500).send({
       error: {
         code: "INTERNAL_ERROR",
-        message: "服务暂时不可用",
+        message: "BugPaw 服务处理请求时发生未分类异常",
         requestId,
       },
     });

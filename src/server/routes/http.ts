@@ -18,7 +18,7 @@ export function sendApiError(
   return reply.code(statusCode).send({
     error: {
       code,
-      message: toSafePublicMessage(message, "请求失败"),
+      message: toSafePublicMessage(message, `API 错误 ${code} 未提供可公开消息`),
       requestId,
       ...(safeDetails && Object.keys(safeDetails).length > 0 ? { details: safeDetails } : {}),
     },

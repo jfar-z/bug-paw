@@ -25,13 +25,20 @@ let regenerateResponse: Promise<Response> | undefined;
 let historyResponse: Response | undefined;
 let historyWindowResponse: Response | undefined;
 let sessionOneSnapshot: Record<string, unknown> | undefined;
+let sessionTwoSnapshot: Record<string, unknown> | undefined;
 let questionAnswerResponse: Promise<Response> | undefined;
+let messageResponse: Promise<Response> | undefined;
+let abortResponse: Promise<Response> | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => { resolve = next; });
-  return { promise, resolve };
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 class HistoryObserverDouble {
@@ -79,7 +86,7 @@ class FakeEventSource {
     const suppliedId = typeof original.id === "number" ? original.id : undefined;
     const id = suppliedId ?? this.nextEventId;
     this.nextEventId = Math.max(this.nextEventId, id + 1);
-    const isRunScopedEvent = !["snapshot", "session_renamed", "question_pending", "question_resolved"].includes(type);
+    const isRunScopedEvent = !["snapshot", "projection_required", "session_renamed", "question_pending", "question_resolved"].includes(type);
     const normalized = {
       id,
       type,
@@ -209,7 +216,10 @@ beforeEach(() => {
   historyResponse = undefined;
   historyWindowResponse = undefined;
   sessionOneSnapshot = undefined;
+  sessionTwoSnapshot = undefined;
   questionAnswerResponse = undefined;
+  messageResponse = undefined;
+  abortResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -284,13 +294,19 @@ beforeEach(() => {
       return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
-      return new Response(JSON.stringify(sessionOneSnapshot ?? { id: "session-1", messages: [], thinkingLevel: "medium", lastEventId: 0 }));
+      return new Response(JSON.stringify(sessionOneSnapshot ?? {
+        id: "session-1",
+        messages: [],
+        history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+        thinkingLevel: "medium",
+        lastEventId: 0,
+      }));
     }
     if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
       return new Response(null, { status: 204 });
     }
     if (url === "/api/v1/sessions/session-2") {
-      return new Response(JSON.stringify({
+      return new Response(JSON.stringify(sessionTwoSnapshot ?? {
         id: "session-2",
         agentId: "default",
         messages: [{ role: "user", content: "第二会话问题", __piEntryId: "session-2-user" }],
@@ -385,9 +401,12 @@ beforeEach(() => {
         },
       }));
     }
+    if (url === "/api/v1/sessions/session-1/abort" && init?.method === "POST") {
+      return abortResponse ?? new Response(null, { status: 204 });
+    }
     if (url.endsWith("/messages")) {
       const sessionId = url.split("/")[3];
-      return new Response(JSON.stringify({
+      return messageResponse ?? new Response(JSON.stringify({
         runId: "run-1",
         sessionId,
         status: "running",
@@ -431,6 +450,171 @@ beforeEach(() => {
 
 describe("LiveChatPage 时间线", () => {
 
+it("打开会话时立即按权威快照同步发送按钮状态", async () => {
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-session-1",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-09T00:00:00.000Z",
+    },
+    lastEventId: 1,
+  };
+
+  renderLiveChatPage(<LiveChatPage {...props} />);
+
+  await screen.findByRole("button", { name: "停止生成" });
+  fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
+  await screen.findByRole("button", { name: "发送消息" });
+});
+
+it("Projection 恢复时同步服务端运行状态", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-recovered",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-09T00:01:00.000Z",
+    },
+    lastEventId: 8,
+  };
+
+  act(() => FakeEventSource.instances[0]!.emit("projection_required", { lastEventId: 8 }));
+
+  await screen.findByRole("button", { name: "停止生成" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+});
+
+it("提交轮次事件用稳定节点替换本地待发送消息", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "当前问题" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+  await screen.findByRole("button", { name: "停止生成" });
+
+  act(() => FakeEventSource.instances[0]!.emit("turn_committed", {
+    messages: [{ role: "user", content: "当前问题", __piEntryId: "user-current" }],
+    history: {
+      startEntryId: "user-current",
+      endEntryId: "user-current",
+      branchToken: "branch-a",
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+      turnCount: 1,
+    },
+  }));
+
+  expect(messageRowTexts().filter((text) => text.includes("当前问题"))).toHaveLength(1);
+});
+
+it("SSE 终态不会被迟到的发送响应覆盖", async () => {
+  const pendingMessage = deferred<Response>();
+  messageResponse = pendingMessage.promise;
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "测试迟到响应" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+  await screen.findByRole("button", { name: "停止生成" });
+
+  act(() => FakeEventSource.instances.at(-1)!.emit("completed", {}));
+  await screen.findByRole("button", { name: "发送消息" });
+  pendingMessage.resolve(new Response(JSON.stringify({
+    runId: "run-late",
+    sessionId: "session-1",
+    status: "running",
+    startedAt: "2026-09-09T00:02:00.000Z",
+  })));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible());
+});
+
+it("发送响应丢失后通过权威快照恢复真实运行状态", async () => {
+  const pendingMessage = deferred<Response>();
+  messageResponse = pendingMessage.promise;
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "测试失败恢复" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+  await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-1/messages"));
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-server-started",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-09T00:03:00.000Z",
+    },
+    lastEventId: 4,
+  };
+  pendingMessage.reject(new TypeError("连接已断开"));
+
+  await screen.findByRole("button", { name: "停止生成" });
+});
+
+it("停止接口返回 204 后用权威快照清除残留运行状态", async () => {
+  const pendingAbort = deferred<Response>();
+  abortResponse = pendingAbort.promise;
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-stale",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-09T00:04:00.000Z",
+    },
+    lastEventId: 5,
+  };
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  fireEvent.click(await screen.findByRole("button", { name: "停止生成" }));
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    thinkingLevel: "medium",
+    lastEventId: 5,
+  };
+  pendingAbort.resolve(new Response(null, { status: 204 }));
+
+  await screen.findByRole("button", { name: "发送消息" });
+});
+
+it("旧会话的迟到事件不能污染当前会话", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  const oldSource = FakeEventSource.instances.at(-1)!;
+  fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+  act(() => oldSource.emit("run_started", {
+    run: {
+      runId: "run-old-session",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-09T00:05:00.000Z",
+    },
+  }));
+
+  expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible();
+});
+
 it("草稿首次发送只创建一个 session 并先建立其事件流", async () => {
     renderLiveChatPage(<LiveChatPage {...props} />);
     await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
@@ -442,7 +626,7 @@ it("草稿首次发送只创建一个 session 并先建立其事件流", async (
     await screen.findByRole("button", { name: "停止生成" });
     await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-new/messages"));
     expect(operationLog.filter((entry) => entry === "fetch:POST:/api/v1/sessions")).toHaveLength(1);
-    expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events"))
+    expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events?after=0"))
       .toBeLessThan(operationLog.indexOf("fetch:POST:/api/v1/sessions/session-new/messages"));
   });
 

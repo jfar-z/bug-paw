@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { BrowserAutomationConfig, BrowserAutomationSettingsDocument, BrowserGrantedPermission, TrustedBrowserOrigin } from "../../shared/browser-automation-contracts";
 import { api, ApiClientError } from "../api";
+import { toUnexpectedErrorNotice } from "../api-error-policy";
+import { useErrorToast } from "../error-toast-provider";
 import { useOnlineStatus } from "../use-online-status";
 import "../configuration.css";
 
@@ -10,6 +12,7 @@ const OFFLINE_KEY = "bugpaw:browser-automation:offline:v1";
 
 /** 管理自托管 Playwright 的服务、边界、资源和浏览产物策略。 */
 export function BrowserAutomationPage() {
+  const toast = useErrorToast();
   const browserOnline = useOnlineStatus();
   const [document, setDocument] = useState<BrowserAutomationSettingsDocument>();
   const [draft, setDraft] = useState<BrowserAutomationConfig>();
@@ -27,14 +30,15 @@ export function BrowserAutomationPage() {
       if (!active) return;
       applyDocument(next);
       window.localStorage.setItem(OFFLINE_KEY, JSON.stringify({ revision: next.revision, config: next.config, savedAt: new Date().toISOString() }));
-    }).catch(() => {
+    }).catch((reason: unknown) => {
       if (!active) return;
+      toast.push(toUnexpectedErrorNotice(reason, "加载浏览器执行配置"));
       const cached = readOfflineSnapshot();
       if (cached) {
         setDocument({ ...cached, deployment: { available: false, workerAvailable: false, chromiumReady: false, activeContexts: 0, queuedRequests: 0 } });
         setDraft(structuredClone(cached.config));
         setOffline(true);
-      } else setError("无法读取浏览器执行配置");
+      } else setError(reason instanceof Error ? reason.message : "浏览器执行配置读取阶段捕获到非 Error 异常");
     });
     return () => { active = false; };
 
@@ -43,7 +47,7 @@ export function BrowserAutomationPage() {
       setDraft(structuredClone(next.config));
       setOffline(false);
     }
-  }, []);
+  }, [toast]);
 
   const dirty = useMemo(() => Boolean(document && draft && JSON.stringify(document.config) !== JSON.stringify(draft)), [document, draft]);
   if (!document || !draft) return <main className="configuration-page"><p className={error ? "configuration-inline-error" : "configuration-help"}>{error || "正在读取浏览器执行配置…"}</p></main>;
@@ -57,7 +61,12 @@ export function BrowserAutomationPage() {
       setDocument(next); setDraft(structuredClone(next.config)); setNotice("浏览器设置已保存");
       window.localStorage.setItem(OFFLINE_KEY, JSON.stringify({ revision: next.revision, config: next.config, savedAt: new Date().toISOString() }));
     } catch (reason) {
-      setError(reason instanceof ApiClientError && reason.code === "VERSION_CONFLICT" ? "配置已在其他页面更新，请刷新后重新应用更改。" : "保存浏览器设置失败");
+      if (reason instanceof ApiClientError && reason.code === "VERSION_CONFLICT") {
+        setError("配置已在其他页面更新，请刷新后重新应用更改。");
+      } else {
+        toast.push(toUnexpectedErrorNotice(reason, "保存浏览器设置"));
+        setError(reason instanceof Error ? reason.message : "浏览器设置保存阶段捕获到非 Error 异常");
+      }
     } finally { setSaving(false); }
   };
 
@@ -76,8 +85,9 @@ export function BrowserAutomationPage() {
     setTestResult(undefined);
     try {
       setTestResult(await api.testBrowserAutomation());
-    } catch {
-      setTestResult({ ok: false, message: "浏览器组件测试失败" });
+    } catch (reason) {
+      toast.push(toUnexpectedErrorNotice(reason, "测试浏览器组件"));
+      setTestResult({ ok: false, message: reason instanceof Error ? reason.message : "浏览器组件测试阶段捕获到非 Error 异常" });
     } finally {
       setTesting(false);
     }

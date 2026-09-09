@@ -107,7 +107,7 @@ export function AigcMediaEditorPage() {
     const sequence = ++saveSequenceRef.current;
     pendingSavesRef.current += 1;
     setSaving(true);
-    const operation = saveQueueRef.current.catch(() => undefined).then(async () => {
+    const operation = saveQueueRef.current.then(async () => {
       setError("");
       const persisted = persistedProjectsRef.current.get(next.id);
       const result = await runApiTask(() => api.updateAigcMediaProject(next.id, {

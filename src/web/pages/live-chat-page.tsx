@@ -31,7 +31,7 @@ import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
 import { useSessionHistory } from "../use-session-history";
-import { mergeNewerHistory, mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
+import { mergeCommittedTurn, mergeNewerHistory, mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
 import {
   createPendingUserMessage,
   reconcilePendingUserMessage,
@@ -285,7 +285,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     alignAfterNextContentCommit,
   } = useMessageAutofollow(timeline);
 
+  /** 以权威 Run 投影更新按钮状态，并使更早发出的请求响应失效。 */
+  const applyAuthoritativeRun = useCallback((run: ChatRunSummary | undefined) => {
+    streamRunRevisionRef.current += 1;
+    setActiveRun(run?.status === "queued" || run?.status === "running" ? run : undefined);
+  }, []);
+
   const applySnapshot = useCallback((next: SessionSnapshot, alignment: SnapshotAlignment = "follow") => {
+    applyAuthoritativeRun(next.run);
     if (alignment === "once") {
       initialSseSnapshotRef.current = { id: next.id, lastEventId: next.lastEventId };
       alignAfterNextContentCommit();
@@ -328,7 +335,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       // 旧版快照缺少分支身份时不跨未知分支回填，仅保留原有投影行为。
       setTimeline(pendingResult.timeline);
     }
-  }, [alignAfterNextContentCommit, resumeFollowing]);
+  }, [alignAfterNextContentCommit, applyAuthoritativeRun, resumeFollowing]);
 
   useEffect(() => {
     const previous = previousPendingRef.current;
@@ -348,6 +355,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       applySnapshot(next);
       return;
     }
+    applyAuthoritativeRun(next.run);
     setSession((current) => {
       if (!current || current.id !== next.id) return current;
       const merged = {
@@ -367,7 +375,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       confirmedThinkingLevelRef.current = next.thinkingLevel;
       setSelectedThinkingLevel(next.thinkingLevel);
     }
-  }, [applySnapshot]);
+  }, [applyAuthoritativeRun, applySnapshot]);
 
   const historyLoader = useSessionHistory({
     snapshot: session,
@@ -422,13 +430,54 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
 
   const stream = useSessionStream({
     sessionId: session?.id,
+    initialCursor: session?.lastEventId,
     onSnapshot: applyStreamSnapshot,
+    onTurnCommitted: ({ id, messages: committedMessages, history }) => {
+      const current = sessionSnapshotRef.current;
+      if (!current || current.id !== sessionIdRef.current) return false;
+      if (focusedHistoryRef.current?.sessionId === current.id) {
+        const next = { ...current, lastEventId: id };
+        sessionSnapshotRef.current = next;
+        setSession(next);
+        return true;
+      }
+      if (!current.history) return false;
+      if (current.history.branchToken !== history.branchToken) return false;
+      const messages = mergeCommittedTurn(current.messages, committedMessages);
+      const next = {
+        ...current,
+        messages,
+        history: {
+          ...history,
+          ...(current.history.startEntryId ? { startEntryId: current.history.startEntryId } : {}),
+          hasMoreBefore: current.history.hasMoreBefore,
+        },
+        lastEventId: id,
+      };
+      sessionSnapshotRef.current = next;
+      setSession(next);
+      setRunNotice(modelRunNotice(messages));
+      const pendingResult = reconcilePendingUserMessage(
+        current.id,
+        parsePiHistory(messages, true),
+        pendingUserMessageRef.current,
+      );
+      pendingUserMessageRef.current = pendingResult.pending;
+      const responseResult = reconcilePendingQuestionResponse(
+        current.id,
+        history.branchToken,
+        pendingResult.timeline,
+        pendingQuestionResponseRef.current,
+      );
+      pendingQuestionResponseRef.current = responseResult.pending;
+      setTimeline(responseResult.timeline);
+      return true;
+    },
     onTimelineEvent: (event) => {
       if (!focusedHistoryRef.current) setTimeline((current) => reduceTimeline(current, event));
     },
     onRunChange: (run) => {
-      streamRunRevisionRef.current += 1;
-      setActiveRun(run);
+      applyAuthoritativeRun(run);
     },
     onModelChange: (model) => {
       setSession((current) => current ? { ...current, model } : current);
@@ -469,6 +518,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     onError: setRunNotice,
     onUnexpectedError: (reason) => void reportFailure(reason, "恢复会话实时连接"),
   });
+
+  /** 请求当前 Session 的权威投影；异步返回时拒绝写入已经切换离开的会话。 */
+  const refreshSessionProjection = useCallback(async (sessionId: string, alignment: SnapshotAlignment = "follow") => {
+    const latest = await api.openSession(sessionId);
+    if (sessionIdRef.current !== sessionId) return undefined;
+    applySnapshot(latest, alignment);
+    return latest;
+  }, [applySnapshot]);
 
   const registerMediaSummary = useCallback((summary: WorkspaceFileSummary) => {
     setMediaSummaries((current) => current[summary.path] === summary ? current : { ...current, [summary.path]: summary });
@@ -674,7 +731,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setTimeline([]);
     setMediaSummaries({});
     setPreviewImage(undefined);
-    setActiveRun(undefined);
+    applyAuthoritativeRun(undefined);
     setDraft("");
     setDraftReferences([]);
     setAttachmentItems([]);
@@ -827,7 +884,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         confirmedThinkingLevelRef.current = opened.thinkingLevel;
         setSelectedThinkingLevel(opened.thinkingLevel);
       }
-      setActiveRun(opened.run?.status === "queued" || opened.run?.status === "running" ? opened.run : undefined);
+      applyAuthoritativeRun(opened.run);
       setTimeline(parsePiHistory(target.messages, false));
       if (!await focusSessionEntry(hit.entryId)) throw new Error("SESSION_ENTRY_NOT_FOUND");
       closeSidebar();
@@ -1045,6 +1102,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
     const branchEntryId = editingEntryId;
     const previousAttachmentItems = attachmentItems;
+    let requestSessionId: string | undefined;
     try {
       stopSpeech();
       let baseSession = session;
@@ -1060,6 +1118,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (branchEntryId) setEditingEntryId(undefined);
       const wasDraft = !baseSession;
       const activeSession = baseSession ?? await createConversation(selectedAgentId);
+      requestSessionId = activeSession.id;
       if (wasDraft && !isSameModel(activeSession.model, selectedModel)) {
         await api.setModel(activeSession.id, selectedModel.provider, selectedModel.id);
         activeSession.model = selectedModel;
@@ -1121,12 +1180,22 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         }, ...current.filter((item) => item.id !== activeSession.id)]));
       }
       if (branchEntryId) {
+        const runRevision = streamRunRevisionRef.current;
         const result = await api.sendBranchMessage(activeSession.id, branchEntryId, text, files.map((file) => file.path), draftReferences);
+        if (sessionIdRef.current !== activeSession.id) return;
+        if (streamRunRevisionRef.current !== runRevision) {
+          await refreshSessionProjection(activeSession.id, "once");
+          return;
+        }
         // 分支发送立刻以服务端导航快照替换旧路径，同时保留本地待发送气泡。
         applySnapshot(result.snapshot, "once");
         setActiveRun(result.run);
       } else {
-        setActiveRun(await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences));
+        const runRevision = streamRunRevisionRef.current;
+        const run = await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences);
+        if (sessionIdRef.current === activeSession.id && streamRunRevisionRef.current === runRevision) {
+          setActiveRun(run);
+        }
       }
       if (activeSession.pendingQuestion) {
         questionDraft.clear();
@@ -1136,13 +1205,27 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       }
     } catch (reason) {
       autoSpeechEligibilityRef.current = undefined;
-      pendingUserMessageRef.current = undefined;
-      setActiveRun(undefined);
-      setTimeline((current) => reduceTimeline(current, { type: "generation_finished", outcome: "error" }));
-      setDraft(text);
-      setDraftReferences(draftReferences);
-      setAttachmentItems(previousAttachmentItems);
-      if (branchEntryId) setEditingEntryId(branchEntryId);
+      const stillCurrentSession = !requestSessionId || sessionIdRef.current === requestSessionId;
+      if (!stillCurrentSession) return;
+      if (!requestSessionId || pendingUserMessageRef.current?.sessionId === requestSessionId) {
+        pendingUserMessageRef.current = undefined;
+      }
+      let recoveredActiveRun = false;
+      if (requestSessionId && sessionIdRef.current === requestSessionId) {
+        try {
+          const recovered = await refreshSessionProjection(requestSessionId);
+          recoveredActiveRun = recovered?.run?.status === "queued" || recovered?.run?.status === "running";
+        } catch {
+          // 请求结果不确定时保留当前状态，等待 SSE 或后续重连恢复，避免误报空闲。
+        }
+      }
+      if (!recoveredActiveRun) {
+        setTimeline((current) => reduceTimeline(current, { type: "generation_finished", outcome: "error" }));
+        setDraft(text);
+        setDraftReferences(draftReferences);
+        setAttachmentItems(previousAttachmentItems);
+        if (branchEntryId) setEditingEntryId(branchEntryId);
+      }
       await reportFailure(reason, branchEntryId ? "编辑并重新发送消息" : "发送消息");
     }
   };
@@ -1236,9 +1319,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
 
   const abort = async () => {
     if (!session) return;
+    const targetSessionId = session.id;
     stopSpeech();
     try {
-      await api.abort(session.id);
+      await api.abort(targetSessionId);
+      await refreshSessionProjection(targetSessionId);
     } catch (reason) {
       await reportFailure(reason, "停止消息生成");
     }
@@ -1255,9 +1340,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       // 浏览器和服务端都按 Session 串行化，确保快速连续选择时最后一次选择最终生效。
       const request = modelChangeQueueRef.current
-        .catch(() => undefined)
+        // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
+        .then(() => undefined, () => undefined)
         .then(() => api.setModel(targetSessionId, model.provider, model.id));
-      modelChangeQueueRef.current = request.catch(() => undefined);
+      modelChangeQueueRef.current = request.then(() => undefined, () => undefined);
       await request;
       if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
       setSession((current) => current?.id === targetSessionId ? { ...current, model } : current);
@@ -1275,9 +1361,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if (!targetSessionId) return;
     try {
       const request = thinkingLevelChangeQueueRef.current
-        .catch(() => undefined)
+        // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
+        .then(() => undefined, () => undefined)
         .then(() => api.setThinkingLevel(targetSessionId, thinkingLevel));
-      thinkingLevelChangeQueueRef.current = request.catch(() => undefined);
+      thinkingLevelChangeQueueRef.current = request.then(() => undefined, () => undefined);
       await request;
       if (generation !== thinkingLevelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
       confirmedThinkingLevelRef.current = thinkingLevel;
@@ -1429,8 +1516,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     );
     try {
       stopSpeech();
+      const runRevision = streamRunRevisionRef.current;
       const result = await api.regenerateSessionBranch(targetSessionId, entryId);
       if (sessionIdRef.current !== targetSessionId) return;
+      if (streamRunRevisionRef.current !== runRevision) {
+        await refreshSessionProjection(targetSessionId, "once");
+        return;
+      }
       applySnapshot(result.snapshot, "once");
       setActiveRun(result.run);
       setError("");

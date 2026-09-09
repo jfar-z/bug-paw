@@ -4,6 +4,30 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.1.10 - 2026-09-09
+
+### 新增 / Added
+
+- 增加 AIGC 产物和任务的创建时间正倒序切换，支持任务多选、全选、取消全选和批量删除，并保持已交付到 Agent 工作目录的附件不受任务清理影响。
+- 增加统一的全局错误事件与右上角错误提示链路，使普通页面请求、后台任务、浏览器自动化、AIGC、语音和实时会话异常都能向用户展示明确的错误阶段与安全诊断信息。
+- 增加实时会话 `turn_committed` 轻量提交协议，使用 HTTP Projection 游标续接 SSE，并在当前轮次过大时自动切换到权威投影恢复。
+
+- Added creation-time ascending and descending sorting for AIGC outputs and tasks, plus task selection, select-all, clear-selection, and bulk deletion while preserving artifacts already delivered to Agent workspaces.
+- Added a unified global error-event and top-right notification path so page requests, background tasks, browser automation, AIGC, speech, and realtime-session failures expose clear stages and safe diagnostics to users.
+- Added the lightweight realtime `turn_committed` protocol, continuing SSE from HTTP Projection cursors and automatically recovering through authoritative projections when the current turn is too large.
+
+### 修复 / Fixed
+
+- 修复打开会话、Projection 恢复、发送响应迟到或丢失、停止生成及快速切换会话时的运行状态竞态，避免发送按钮状态回退、旧事件串入当前会话或错误状态被覆盖。
+- 修复服务端、前端和异步链路使用模糊兜底文案、静默捕获或仅记录日志的问题，并增加架构门禁防止异常被伪装成空数据或成功结果。
+- 修复 AIGC 任务删除时的任务、媒体资产和工作区交付文件边界，支持批量删除任务及其 AIGC 资产，同时保留已经交付给 Agent 的独立附件。
+- 修复长会话在用户刚发送消息时重复推送最近二十轮历史并触发 512 KiB 实时事件上限的问题；实时通道现在仅合并当前提交轮次，不再将可恢复状态误报为 Agent 执行失败。
+
+- Fixed run-state races during session opening, Projection recovery, late or lost send responses, generation cancellation, and rapid session switching, preventing composer-state rollback, cross-session event leakage, and overwritten errors.
+- Fixed vague fallback messages, silent catches, and log-only failures across server, frontend, and asynchronous paths, with architecture checks preventing failures from being disguised as empty data or successful results.
+- Fixed task, media-asset, and delivered-workspace-file boundaries during AIGC cleanup, allowing bulk deletion of tasks and managed AIGC assets while retaining independent artifacts already delivered to Agents.
+- Fixed long sessions resending the latest twenty turns immediately after a user message and exceeding the 512 KiB realtime-event limit; the realtime channel now merges only the committed turn and no longer reports recoverable state as an Agent execution failure.
+
 ## 0.1.9 - 2026-09-08
 
 ### 新增 / Added

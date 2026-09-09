@@ -10,6 +10,9 @@ export interface SpeechAudio {
 
   /** 监听播放完成或失败。 */
   addEventListener(type: "ended" | "error", listener: () => void, options?: { once?: boolean }): void;
+
+  /** 返回底层播放器最近一次可诊断错误。 */
+  getError?(): unknown;
 }
 
 /** 已创建音频及其资源释放动作。 */
@@ -225,7 +228,9 @@ export class StreamingTtsController {
     const completion = new Promise<void>((resolve, reject) => {
       cancelWait = resolve;
       ready.audio.addEventListener("ended", resolve, { once: true });
-      ready.audio.addEventListener("error", () => reject(new Error("音频播放失败")), { once: true });
+      ready.audio.addEventListener("error", () => reject(
+        ready.audio.getError?.() ?? new Error("音频元素触发 error 事件，但浏览器未提供媒体错误详情"),
+      ), { once: true });
     });
     session.currentAudio = { ...ready, cancelWait };
     this.publish({ messageId: session.messageId, phase: "playing" });

@@ -20,7 +20,7 @@ export class DomainError extends Error {
     return {
       error: {
         code: this.code,
-        message: toSafePublicMessage(this, "请求失败"),
+        message: toSafePublicMessage(this, `服务端错误 ${this.code} 未提供可公开消息`),
         requestId,
         ...(details && Object.keys(details).length > 0 ? { details } : {}),
       },
