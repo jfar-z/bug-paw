@@ -452,6 +452,7 @@ export const api = {
   getAigcMediaRender: (id: string) => request<AigcMediaRenderJob>(`/api/aigc/media-renders/${encodeURIComponent(id)}`),
   cancelAigcMediaRender: (id: string) => request<AigcMediaRenderJob>(`/api/aigc/media-renders/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   deleteAigcTask: (id: string) => request<void>(`/api/aigc/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  deleteSelectedAigcTasks: (ids: string[]) => request<{ removedIds: string[] }>("/api/aigc/tasks", { method: "DELETE", body: JSON.stringify({ ids }) }),
   runAigcInterface: (input: AigcRunRequest) => request<AigcTaskRecord>("/api/aigc/tasks", { method: "POST", body: JSON.stringify(input) }),
   cancelAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   retryAigcTask: (id: string) => request<AigcTaskRecord>(`/api/aigc/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" }),

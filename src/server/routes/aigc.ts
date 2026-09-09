@@ -291,6 +291,21 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     return reply.send(await dependencies.tasks.list());
   });
 
+  app.delete<{ Body: { ids?: string[] } }>("/api/aigc/tasks", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = isRecord(request.body) ? request.body : undefined;
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 500
+      || ids.some((id) => typeof id !== "string" || !id.trim()) || new Set(ids).size !== ids.length) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "AIGC 批量删除任务参数无效");
+    }
+    try {
+      return reply.send(await dependencies.tasks.removeMany(ids));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
   app.get<{ Querystring: { kind?: string; sort?: string; page?: string; pageSize?: string } }>("/api/aigc/outputs", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const kind = request.query.kind ?? "image";

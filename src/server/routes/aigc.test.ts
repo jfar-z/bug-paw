@@ -66,6 +66,7 @@ it("提供产物分页、任务删除与图片缩略图接口", async () => {
       createdAt: "2026-08-17T00:00:00.000Z", updatedAt: "2026-08-17T00:00:00.000Z",
     };
     const removed: string[] = [];
+    const removedBatches: string[][] = [];
     const app = Fastify();
     registerAigcRoutes(app, {
       authService: { isAuthenticated: async () => true } as never,
@@ -75,6 +76,7 @@ it("提供产物分页、任务删除与图片缩略图接口", async () => {
         get: async () => task,
         listOutputs: async () => ({ items: [], counts: { image: 1, video: 0, audio: 0, other: 0 }, page: 1, pageSize: 24, total: 1, totalPages: 1 }),
         remove: async (id: string) => { removed.push(id); return task; },
+        removeMany: async (ids: string[]) => { removedBatches.push(ids); return { removedIds: ids }; },
       } as never,
       assets: { resolveThumbnailPath: async () => thumbnailPath } as never,
       publicFiles: {} as never,
@@ -91,6 +93,11 @@ it("提供产物分页、任务删除与图片缩略图接口", async () => {
     expect(thumbnail.headers["cache-control"]).toContain("immutable");
     expect((await app.inject({ method: "DELETE", url: "/api/aigc/tasks/task-1" })).statusCode).toBe(204);
     expect(removed).toEqual(["task-1"]);
+    const bulkDelete = await app.inject({ method: "DELETE", url: "/api/aigc/tasks", payload: { ids: ["task-1", "task-2"] } });
+    expect(bulkDelete.statusCode).toBe(200);
+    expect(bulkDelete.json()).toEqual({ removedIds: ["task-1", "task-2"] });
+    expect(removedBatches).toEqual([["task-1", "task-2"]]);
+    expect((await app.inject({ method: "DELETE", url: "/api/aigc/tasks", payload: { ids: [] } })).statusCode).toBe(400);
     await app.close();
   });
 });

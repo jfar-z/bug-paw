@@ -160,7 +160,20 @@ export class AigcTaskService {
     return removed;
   }
 
-  /** 按媒体分组、任务 ID 顺序返回铺平后的产物页。 */
+  /** 批量删除已确认选中的任务，并复用单任务的中止与资产清理流程。 */
+  async removeMany(ids: string[]): Promise<{ removedIds: string[] }> {
+    for (const id of ids) {
+      if (!await this.dependencies.repository.get(id)) throw new Error(`AIGC 任务不存在：${id}`);
+    }
+    const removedIds: string[] = [];
+    for (const id of ids) {
+      await this.remove(id);
+      removedIds.push(id);
+    }
+    return { removedIds };
+  }
+
+  /** 按媒体分组、任务与产物创建时间返回铺平后的产物页。 */
   async listOutputs(input: { kind: AigcOutputKind; sort: "asc" | "desc"; page: number; pageSize: number }): Promise<AigcOutputPage> {
     const tasks = await this.dependencies.repository.list();
     const counts = { image: 0, video: 0, audio: 0, other: 0 } satisfies Record<AigcOutputKind, number>;
@@ -169,8 +182,9 @@ export class AigcTaskService {
       counts[kind] += 1;
       return { ...asset, taskId: task.id, interfaceName: task.interfaceName, taskCreatedAt: task.createdAt, kind };
     })).filter((asset) => asset.kind === input.kind).sort((left, right) => {
-      const taskOrder = left.taskId.localeCompare(right.taskId);
-      const order = taskOrder || left.id.localeCompare(right.id);
+      const taskOrder = left.taskCreatedAt.localeCompare(right.taskCreatedAt);
+      const assetOrder = left.createdAt.localeCompare(right.createdAt);
+      const order = taskOrder || assetOrder || left.taskId.localeCompare(right.taskId) || left.id.localeCompare(right.id);
       return input.sort === "asc" ? order : -order;
     });
     const total = items.length;

@@ -1632,11 +1632,16 @@ function AigcTasksPage() {
   const [document, setDocument] = useState<AigcTaskDocument>();
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState<"all" | "active" | "succeeded" | "failed">("all");
+  const [sort, setSort] = useState<"asc" | "desc">("desc");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<AigcTaskSummary>();
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   async function refresh() {
     const next = await api.getAigcTasks();
     setDocument(next);
+    setSelectedIds((current) => current.filter((id) => next.tasks.some((task) => task.id === id)));
     return next;
   }
 
@@ -1647,6 +1652,11 @@ function AigcTasksPage() {
     }, 3_000);
     return () => window.clearInterval(timer);
   }, [runApiTask]);
+
+  useEffect(() => {
+    setSelectedIds([]);
+    setBulkDeleteOpen(false);
+  }, [filter]);
 
   async function cancel(id: string) {
     const result = await runApiTask(() => api.cancelAigcTask(id), { operation: "取消 AIGC 任务", expected: aigcExpected(setMessage) });
@@ -1668,24 +1678,57 @@ function AigcTasksPage() {
     }
   }
 
+  /** 删除用户明确勾选的任务，已交付到 Agent 工作区的附件由工作区继续持有。 */
+  async function removeSelected() {
+    if (!selectedIds.length || bulkDeleting) return;
+    setBulkDeleting(true);
+    const result = await runApiTask(() => api.deleteSelectedAigcTasks(selectedIds), { operation: "删除选中的 AIGC 任务", expected: aigcExpected(setMessage) });
+    setBulkDeleting(false);
+    if (result.status === "success") {
+      const removedCount = result.data.removedIds.length;
+      setSelectedIds([]);
+      setBulkDeleteOpen(false);
+      setMessage(`已删除 ${removedCount} 个任务及其 AIGC 产物，Agent 工作目录附件已保留`);
+      await refresh();
+    }
+  }
+
   const visibleTasks = (document?.tasks ?? []).filter((task) => {
     if (filter === "active") return task.status === "queued" || task.status === "running";
     if (filter === "failed") return task.status === "failed" || task.status === "cancelled";
     if (filter === "succeeded") return task.status === "succeeded";
     return true;
+  }).sort((left, right) => {
+    const order = left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+    return sort === "asc" ? order : -order;
   });
+  const selectedSet = new Set(selectedIds);
+  const selectedTasks = (document?.tasks ?? []).filter((task) => selectedSet.has(task.id));
+  const selectedAssetCount = selectedTasks.reduce((total, task) => total + task.assetCount, 0);
+
+  function toggleSelection(id: string, checked: boolean) {
+    setSelectedIds((current) => checked ? [...current, id] : current.filter((selectedId) => selectedId !== id));
+  }
 
   return (
     <div className="aigc-workbench-page">
       <header className="aigc-page-heading"><h1>任务与产物</h1><p>按创作状态查看进度、失败原因，并进入详情直接预览生成结果。</p></header>
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
-      <div className="scheduled-task-segmented aigc-task-filters" role="group" aria-label="任务状态筛选">
-        {([{ value: "all", label: "全部" }, { value: "active", label: "进行中" }, { value: "succeeded", label: "已完成" }, { value: "failed", label: "需处理" }] as const).map((item) => <button key={item.value} type="button" className={filter === item.value ? "is-active" : undefined} onClick={() => setFilter(item.value)}>{item.label}</button>)}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between", gap: 12, marginBottom: 16 }}>
+        <div className="scheduled-task-segmented aigc-task-filters" role="group" aria-label="任务状态筛选">
+          {([{ value: "all", label: "全部" }, { value: "active", label: "进行中" }, { value: "succeeded", label: "已完成" }, { value: "failed", label: "需处理" }] as const).map((item) => <button key={item.value} type="button" className={filter === item.value ? "is-active" : undefined} onClick={() => setFilter(item.value)}>{item.label}</button>)}
+        </div>
+        <div className="aigc-task-actions" style={{ alignItems: "flex-end" }}>
+          <label style={{ display: "grid", gap: 4, color: "var(--text-tertiary)", fontSize: 10 }}>创建时间<select style={{ minHeight: 40, padding: "0 10px", border: "1px solid var(--border)", borderRadius: 7, color: "var(--text-secondary)", background: "var(--surface)", fontSize: 11 }} aria-label="任务创建时间排序" value={sort} onChange={(event) => setSort(event.target.value as "asc" | "desc")}><option value="desc">最新在前</option><option value="asc">最早在前</option></select></label>
+          <button type="button" disabled={!visibleTasks.length} onClick={() => setSelectedIds(visibleTasks.map((task) => task.id))}>全选</button>
+          <button type="button" disabled={!selectedIds.length} onClick={() => setSelectedIds([])}>取消全选</button>
+          <button type="button" className="danger-button" style={{ borderColor: "color-mix(in srgb, var(--danger) 55%, var(--border))", color: "var(--danger)", background: "color-mix(in srgb, var(--danger) 8%, var(--surface))" }} disabled={!selectedIds.length} onClick={() => setBulkDeleteOpen(true)}>删除选中{selectedIds.length ? `（${selectedIds.length}）` : ""}</button>
+        </div>
       </div>
       <div className="aigc-task-list">
         {visibleTasks.map((task) => (
           <section key={task.id} className="aigc-task-row">
-            <div><strong>{task.interfaceName}</strong><span className={`aigc-status-badge is-${task.status}`}>{taskStatusLabel(task.status)}</span><small>{formatAigcTime(task.createdAt)}</small></div>
+            <div><input type="checkbox" aria-label={`选择任务 ${task.id}`} checked={selectedSet.has(task.id)} onChange={(event) => toggleSelection(task.id, event.target.checked)} /><strong>{task.interfaceName}</strong><span className={`aigc-status-badge is-${task.status}`}>{taskStatusLabel(task.status)}</span><small>{formatAigcTime(task.createdAt)}</small></div>
             <p>{task.error ? task.error.message : task.status === "succeeded" ? `${task.assetCount} 个产物可预览` : task.status === "running" ? "正在生成，请保持页面打开或稍后回来查看" : "等待执行"}</p>
             <div className="aigc-task-actions">
               {(task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
@@ -1697,7 +1740,8 @@ function AigcTasksPage() {
         ))}
         {!visibleTasks.length ? <p className="configuration-help">当前筛选下没有任务。</p> : null}
       </div>
-      {deleteTarget ? <ConfirmationDialog title="删除任务？" description={`任务 ${deleteTarget.id} 及其 ${deleteTarget.assetCount} 个产物将被永久删除，无法恢复。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
+      {deleteTarget ? <ConfirmationDialog title="删除任务？" description={`任务 ${deleteTarget.id} 及其 ${deleteTarget.assetCount} 个 AIGC 产物将被永久删除；已交付至 Agent 工作目录的附件会保留。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
+      {bulkDeleteOpen ? <ConfirmationDialog title={`删除选中的 ${selectedIds.length} 个任务？`} description={`这些任务及其 ${selectedAssetCount} 个 AIGC 产物将被永久删除；已交付至 Agent 工作目录的附件会保留。`} confirmLabel="删除选中" busy={bulkDeleting} onCancel={() => setBulkDeleteOpen(false)} onConfirm={() => void removeSelected()} /> : null}
     </div>
   );
 }
@@ -1772,7 +1816,7 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
         {(task.status === "failed" || task.status === "cancelled") ? <button type="button" className="configuration-secondary-action" onClick={() => void retry()}><RefreshCw size={15} />重试</button> : null}
       </section>
       {previewAsset ? <div className="media-lightbox" role="dialog" aria-modal="true" aria-label={`${previewAsset.name} 大图预览`}><button type="button" className="media-lightbox__close" aria-label="关闭产物预览" onClick={() => setPreviewAsset(undefined)}><X size={20} /></button><div className="media-lightbox__stage"><img src={aigcTaskAssetUrl(task.id, previewAsset.id)} alt={previewAsset.name} /></div></div> : null}
-      {deleteOpen ? <ConfirmationDialog title="删除任务？" description={`任务 ${task.id} 及其 ${task.assets.length} 个产物将被永久删除，无法恢复。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteOpen(false)} onConfirm={() => void remove()} /> : null}
+      {deleteOpen ? <ConfirmationDialog title="删除任务？" description={`任务 ${task.id} 及其 ${task.assets.length} 个 AIGC 产物将被永久删除；已交付至 Agent 工作目录的附件会保留。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteOpen(false)} onConfirm={() => void remove()} /> : null}
     </div>
   );
 }

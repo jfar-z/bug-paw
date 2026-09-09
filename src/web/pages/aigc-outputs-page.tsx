@@ -47,7 +47,7 @@ export function AigcOutputsPage() {
   return <main className="aigc-assets-page">
     <header className="aigc-assets-heading">
       <div><span>AIGC WORKBENCH</span><h1>产物查看</h1></div>
-      <label>任务 ID 排序<select aria-label="任务 ID 排序" value={sort} onChange={(event) => changeSort(event.target.value as "asc" | "desc")}><option value="desc">降序</option><option value="asc">升序</option></select></label>
+      <label>创建时间<select aria-label="产物创建时间排序" value={sort} onChange={(event) => changeSort(event.target.value as "asc" | "desc")}><option value="desc">最新在前</option><option value="asc">最早在前</option></select></label>
     </header>
 
     <div className="aigc-assets-tabs" role="tablist" aria-label="产物类型">
@@ -67,15 +67,17 @@ export function AigcOutputsPage() {
 
 function OutputCard({ item, onPreview }: { item: AigcOutputItem; onPreview: () => void }) {
   const source = aigcTaskAssetUrl(item.taskId, item.id);
+  const [thumbnailState, setThumbnailState] = useState<"loading" | "loaded" | "failed">("loading");
   return <article className="aigc-output-card">
     <button type="button" className="aigc-output-card__preview" aria-label={`预览 ${item.name}`} onClick={onPreview}>
-      {item.kind === "image" ? <img src={aigcTaskThumbnailUrl(item.taskId, item.id)} alt={item.name} loading="lazy" /> : null}
+      {item.kind === "image" && thumbnailState !== "loaded" ? <span className="aigc-output-card__type" style={{ gridArea: "1 / 1" }} role="status"><ImageIcon size={24} aria-hidden="true" />{thumbnailState === "failed" ? "缩略图加载失败" : "正在加载"}</span> : null}
+      {item.kind === "image" ? <img style={{ gridArea: "1 / 1", opacity: thumbnailState === "loaded" ? 1 : 0 }} src={aigcTaskThumbnailUrl(item.taskId, item.id)} alt={item.name} loading="lazy" onLoad={() => setThumbnailState("loaded")} onError={() => setThumbnailState("failed")} /> : null}
       {item.kind === "video" ? <video src={source} preload="metadata" muted aria-label={item.name} /> : null}
       {item.kind === "audio" ? <span className="aigc-output-card__type"><FileAudio size={34} aria-hidden="true" />音频</span> : null}
       {item.kind === "other" ? <span className="aigc-output-card__type"><File size={34} aria-hidden="true" />{fileExtension(item.name)}</span> : null}
     </button>
     {item.kind === "audio" ? <audio src={source} controls preload="metadata" aria-label={`播放 ${item.name}`} /> : null}
-    <footer><span><strong title={item.name}>{item.name}</strong><small title={item.taskId}>任务 {item.taskId}</small><small>{formatFileSize(item.size)} · {item.interfaceName}</small></span><a href={aigcTaskAssetUrl(item.taskId, item.id, true)} download={item.name} aria-label={`下载 ${item.name}`} title="下载"><Download size={16} /></a></footer>
+    <footer><span><strong title={item.name}>{item.name}</strong><small>{formatAigcOutputTime(item.taskCreatedAt)}</small><small>{formatFileSize(item.size)} · {item.interfaceName}</small></span><a href={aigcTaskAssetUrl(item.taskId, item.id, true)} download={item.name} aria-label={`下载 ${item.name}`} title="下载"><Download size={16} /></a></footer>
   </article>;
 }
 
@@ -103,4 +105,9 @@ function formatFileSize(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** 将产物所属任务的创建时间格式化为紧凑的本地时间。 */
+function formatAigcOutputTime(value: string): string {
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }

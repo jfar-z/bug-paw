@@ -52,7 +52,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     const request = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/replace"));
     expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: "r1", fileName: "new.json" });
     expect(await screen.findByText("已替换原始工作流，现有映射和接口配置保持不变")).toBeInTheDocument();
-    expect(screen.getByText("new.json")).toBeInTheDocument();
+    expect(screen.getAllByText("new.json").length).toBeGreaterThan(0);
     expect(replaceButton).toBeInTheDocument();
   });
 
@@ -200,6 +200,45 @@ describe("AigcWorkbenchPage 创作台", () => {
     renderAigcPage({ page: "aigc-run", interfaceId: "comfy-image" });
 
     expect(await screen.findByRole("tab", { name: "ComfyUI input" })).toBeInTheDocument();
+  });
+
+  it("按创建时间排序、选择并批量删除任务", async () => {
+    let deleted = false;
+    const tasks = [
+      { id: "task-old", interfaceId: "interface-1", interfaceName: "旧任务", channelId: "channel-1", status: "succeeded", assetCount: 1, createdAt: "2026-09-08T08:00:00.000Z", updatedAt: "2026-09-08T08:01:00.000Z" },
+      { id: "task-new", interfaceId: "interface-1", interfaceName: "新任务", channelId: "channel-1", status: "succeeded", assetCount: 2, createdAt: "2026-09-09T08:00:00.000Z", updatedAt: "2026-09-09T08:01:00.000Z" },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/tasks" && init?.method === "DELETE") {
+        deleted = true;
+        return new Response(JSON.stringify({ removedIds: ["task-old", "task-new"] }));
+      }
+      if (url === "/api/v1/aigc/tasks") return new Response(JSON.stringify({ tasks: deleted ? [] : tasks }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-tasks" });
+
+    await screen.findByText("新任务");
+    expect(screen.getAllByRole("checkbox").map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
+      "选择任务 task-new",
+      "选择任务 task-old",
+    ]);
+    fireEvent.change(screen.getByLabelText("任务创建时间排序"), { target: { value: "asc" } });
+    expect(screen.getAllByRole("checkbox").map((checkbox) => checkbox.getAttribute("aria-label"))).toEqual([
+      "选择任务 task-old",
+      "选择任务 task-new",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除选中（2）" }));
+    expect(screen.getByText(/Agent 工作目录的附件会保留/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "删除选中" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true));
+    const request = fetchMock.mock.calls.find(([, init]) => init?.method === "DELETE");
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ ids: ["task-old", "task-new"] });
+    expect(await screen.findByText(/已删除 2 个任务/)).toBeInTheDocument();
   });
 
 });
