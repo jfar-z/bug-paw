@@ -202,6 +202,7 @@ interface ChatEventBase {
 export type ChatEvent = ChatEventBase & (
   | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; thinkingLevel?: ThinkingLevel; run?: ChatRunSummary; pendingQuestion?: PendingQuestionProjection; lastEventId: number }
   | { type: "projection_required"; lastEventId: number }
+  | { type: "turn_committed"; messages: unknown[]; history: SessionHistoryPage }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel }
   | { type: "run_started"; run: ChatRunSummary }
@@ -224,6 +225,8 @@ export type ChatEvent = ChatEventBase & (
 
 type UnsequencedChatEvent =
   | { type: "snapshot"; messages: unknown[]; history: SessionHistoryPage; model?: ModelSummary; thinkingLevel?: ThinkingLevel; run?: ChatRunSummary; pendingQuestion?: PendingQuestionProjection; lastEventId: number }
+  | { type: "projection_required"; lastEventId: number }
+  | { type: "turn_committed"; messages: unknown[]; history: SessionHistoryPage }
   | { type: "model_changed"; model: ModelSummary }
   | { type: "thinking_level_changed"; thinkingLevel: ThinkingLevel }
   | { type: "run_started"; run: ChatRunSummary }
@@ -579,24 +582,29 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     };
   }
 
-  /**
-   * 在生成结束后推送权威快照，使浏览器立即获得 Pi 写入后的稳定节点 ID。
-   *
-   * 快照的游标预先指向即将写入 Journal 的事件 ID，避免客户端重复消费该快照。
-   */
-  function publishSessionSnapshot(sessionId: string, session: PiSessionAdapter, run?: ChatRunSummary): void {
+  /** 推送当前已提交轮次，使浏览器获得稳定节点 ID，而不重复传输整页历史。 */
+  function publishCommittedTurn(sessionId: string, session: PiSessionAdapter): void {
     const nextEventId = lastEventId(sessionId) + 1;
-    const page = snapshotMessages(sessionId, session);
-    publishSequenced(sessionId, {
-      type: "snapshot",
-      messages: page.messages,
+    const managed = sessionRegistry.peek(sessionId);
+    if (!managed || managed.session !== session) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
+    const branchMessages = liveSessionMessages(session);
+    const page = buildLatestHistoryPage(branchMessages, managed.branchToken, session.branchLeafId);
+    const event: UnsequencedChatEvent = {
+      type: "turn_committed",
+      messages: projectSessionMessages(latestUserTurn(page.messages), { questionResolutionMessages: branchMessages }),
       history: page.history,
-      model: toModelSummary(session.model),
-      thinkingLevel: session.thinkingLevel,
-      run,
-      pendingQuestion: options.questionState?.findPending(sessionId),
+    };
+    const runId = runs.get(sessionId)?.runId;
+    const bytes = serializedBytes({ ...event, id: nextEventId, sessionId, ...(runId ? { runId } : {}) });
+    if (bytes <= SYSTEM_LIMITS.realtimeEventBytes) {
+      publishSequenced(sessionId, event);
+      return;
+    }
+    // 单个轮次仍可能包含超大工具参数，改由 HTTP Projection 恢复完整权威状态。
+    publishSequenced(sessionId, {
+      type: "projection_required",
       lastEventId: nextEventId,
-    });
+    }, { associateCurrentRun: false });
   }
 
   function checkpointProjection(sessionId: string): { sessionId: string; version: number; checkpoint: RunCheckpoint } | undefined {
@@ -662,7 +670,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     void Promise.resolve().then(() => {
       // Pi 已在 prompt 启动阶段写入用户节点后，立即把稳定节点 ID 同步给在线客户端。
       if (runs.get(sessionId) === run && run.status === "running") {
-        publishSessionSnapshot(sessionId, session, toRunSummary(run));
+        publishCommittedTurn(sessionId, session);
       }
     });
     return run;
@@ -750,7 +758,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       }
       run.finishedAt = new Date().toISOString();
       if (run.status === "completed" || run.status === "error") {
-        publishSessionSnapshot(run.sessionId, session, toRunSummary(run));
+        publishCommittedTurn(run.sessionId, session);
       }
       if (outcome.status === "error") {
         publishSequenced(run.sessionId, {
@@ -1856,6 +1864,12 @@ function isValidSessionName(name: string): boolean {
 function normalizeGeneratedSessionName(name: string | undefined): string | undefined {
   const normalized = name?.trim();
   return normalized ? [...normalized].slice(0, 50).join("") : undefined;
+}
+
+/** 从历史页中提取最后一个完整用户轮次。 */
+function latestUserTurn(messages: readonly unknown[]): unknown[] {
+  const start = messages.findLastIndex((message) => isRecord(message) && message.role === "user");
+  return start < 0 ? [] : messages.slice(start);
 }
 
 /** 把单个实时事件限制在客户端与 Journal 都能承受的硬上限内。 */

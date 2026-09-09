@@ -31,7 +31,7 @@ import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
 import { useSessionStream } from "../use-session-stream";
 import { useSessionHistory } from "../use-session-history";
-import { mergeNewerHistory, mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
+import { mergeCommittedTurn, mergeNewerHistory, mergeOlderHistory, reconcileSnapshotMessages } from "../session-history";
 import {
   createPendingUserMessage,
   reconcilePendingUserMessage,
@@ -430,7 +430,49 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
 
   const stream = useSessionStream({
     sessionId: session?.id,
+    initialCursor: session?.lastEventId,
     onSnapshot: applyStreamSnapshot,
+    onTurnCommitted: ({ id, messages: committedMessages, history }) => {
+      const current = sessionSnapshotRef.current;
+      if (!current || current.id !== sessionIdRef.current) return false;
+      if (focusedHistoryRef.current?.sessionId === current.id) {
+        const next = { ...current, lastEventId: id };
+        sessionSnapshotRef.current = next;
+        setSession(next);
+        return true;
+      }
+      if (!current.history) return false;
+      if (current.history.branchToken !== history.branchToken) return false;
+      const messages = mergeCommittedTurn(current.messages, committedMessages);
+      const next = {
+        ...current,
+        messages,
+        history: {
+          ...history,
+          ...(current.history.startEntryId ? { startEntryId: current.history.startEntryId } : {}),
+          hasMoreBefore: current.history.hasMoreBefore,
+        },
+        lastEventId: id,
+      };
+      sessionSnapshotRef.current = next;
+      setSession(next);
+      setRunNotice(modelRunNotice(messages));
+      const pendingResult = reconcilePendingUserMessage(
+        current.id,
+        parsePiHistory(messages, true),
+        pendingUserMessageRef.current,
+      );
+      pendingUserMessageRef.current = pendingResult.pending;
+      const responseResult = reconcilePendingQuestionResponse(
+        current.id,
+        history.branchToken,
+        pendingResult.timeline,
+        pendingQuestionResponseRef.current,
+      );
+      pendingQuestionResponseRef.current = responseResult.pending;
+      setTimeline(responseResult.timeline);
+      return true;
+    },
     onTimelineEvent: (event) => {
       if (!focusedHistoryRef.current) setTimeline((current) => reduceTimeline(current, event));
     },

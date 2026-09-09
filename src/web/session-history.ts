@@ -29,6 +29,18 @@ export function mergeNewerHistory(currentMessages: readonly unknown[], pageMessa
   ];
 }
 
+/** 用服务端刚提交的稳定轮次替换当前末尾，保留客户端已经分页加载的更早历史。 */
+export function mergeCommittedTurn(currentMessages: readonly unknown[], turnMessages: readonly unknown[]): unknown[] {
+  if (turnMessages.length === 0) return [...currentMessages];
+  const firstEntryId = messageEntryId(turnMessages[0]);
+  const currentTurnStart = firstEntryId
+    ? currentMessages.findIndex((message) => messageEntryId(message) === firstEntryId)
+    : -1;
+  return currentTurnStart < 0
+    ? [...currentMessages, ...turnMessages]
+    : [...currentMessages.slice(0, currentTurnStart), ...turnMessages];
+}
+
 export function snapshotExtendsCurrentBranch(current: SessionSnapshot, next: SessionSnapshot): boolean {
   return Boolean(current.history && next.history)
     && current.id === next.id
