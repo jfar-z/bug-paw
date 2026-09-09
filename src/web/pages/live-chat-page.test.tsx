@@ -86,7 +86,7 @@ class FakeEventSource {
     const suppliedId = typeof original.id === "number" ? original.id : undefined;
     const id = suppliedId ?? this.nextEventId;
     this.nextEventId = Math.max(this.nextEventId, id + 1);
-    const isRunScopedEvent = !["snapshot", "session_renamed", "question_pending", "question_resolved"].includes(type);
+    const isRunScopedEvent = !["snapshot", "projection_required", "session_renamed", "question_pending", "question_resolved"].includes(type);
     const normalized = {
       id,
       type,
@@ -294,7 +294,13 @@ beforeEach(() => {
       return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
     }
     if (url === "/api/v1/sessions/session-1") {
-      return new Response(JSON.stringify(sessionOneSnapshot ?? { id: "session-1", messages: [], thinkingLevel: "medium", lastEventId: 0 }));
+      return new Response(JSON.stringify(sessionOneSnapshot ?? {
+        id: "session-1",
+        messages: [],
+        history: { branchToken: "branch-a", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+        thinkingLevel: "medium",
+        lastEventId: 0,
+      }));
     }
     if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
       return new Response(null, { status: 204 });
@@ -490,6 +496,29 @@ it("Projection 恢复时同步服务端运行状态", async () => {
   await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
 });
 
+it("提交轮次事件用稳定节点替换本地待发送消息", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  fireEvent.change(screen.getByRole("textbox", { name: "消息内容" }), { target: { value: "当前问题" } });
+  fireEvent.click(screen.getByRole("button", { name: "发送消息" }));
+  await screen.findByRole("button", { name: "停止生成" });
+
+  act(() => FakeEventSource.instances[0]!.emit("turn_committed", {
+    messages: [{ role: "user", content: "当前问题", __piEntryId: "user-current" }],
+    history: {
+      startEntryId: "user-current",
+      endEntryId: "user-current",
+      branchToken: "branch-a",
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+      turnCount: 1,
+    },
+  }));
+
+  expect(messageRowTexts().filter((text) => text.includes("当前问题"))).toHaveLength(1);
+});
+
 it("SSE 终态不会被迟到的发送响应覆盖", async () => {
   const pendingMessage = deferred<Response>();
   messageResponse = pendingMessage.promise;
@@ -597,7 +626,7 @@ it("草稿首次发送只创建一个 session 并先建立其事件流", async (
     await screen.findByRole("button", { name: "停止生成" });
     await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-new/messages"));
     expect(operationLog.filter((entry) => entry === "fetch:POST:/api/v1/sessions")).toHaveLength(1);
-    expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events"))
+    expect(operationLog.indexOf("sse:/api/v1/sessions/session-new/events?after=0"))
       .toBeLessThan(operationLog.indexOf("fetch:POST:/api/v1/sessions/session-new/messages"));
   });
 

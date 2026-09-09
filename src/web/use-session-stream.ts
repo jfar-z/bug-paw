@@ -3,7 +3,7 @@ import type { ChatRunSummary } from "../shared/contracts";
 import { isProjectionRequiredEvent, isSessionEvent, isSessionSnapshotEvent } from "../shared/api/chat-validation";
 import { api, ApiClientError, type ModelSummary, type SessionSnapshot } from "./api";
 import type { TimelineEvent } from "./conversation-timeline";
-import { isSessionHistoryPage } from "../shared/session-history-contracts";
+import { isSessionHistoryPage, type SessionHistoryPage } from "../shared/session-history-contracts";
 import type { ThinkingLevel } from "../shared/configuration-contracts";
 import { PendingQuestionProjectionSchema, type PendingQuestionProjection } from "../shared/session-question-contracts";
 import { Check } from "typebox/value";
@@ -15,7 +15,9 @@ export interface QuestionResolvedNotice {
 
 interface SessionStreamOptions {
   sessionId?: string;
+  initialCursor?: number;
   onSnapshot: (snapshot: SessionSnapshot) => void;
+  onTurnCommitted?: (event: { id: number; messages: unknown[]; history: SessionHistoryPage }) => boolean;
   onTimelineEvent: (event: TimelineEvent) => void;
   onRunChange: (run: ChatRunSummary | undefined) => void;
   onModelChange?: (model: ModelSummary) => void;
@@ -103,7 +105,9 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       return;
     }
 
-    const cursor = reconnectRequest?.sessionId === options.sessionId ? reconnectRequest.cursor : undefined;
+    const cursor = reconnectRequest?.sessionId === options.sessionId
+      ? reconnectRequest.cursor
+      : options.initialCursor;
     if (cursor !== undefined) lastEventIdRef.current = cursor;
     const query = cursor === undefined ? "" : `?after=${encodeURIComponent(String(cursor))}`;
     const source = new EventSource(`/api/v1/sessions/${encodeURIComponent(options.sessionId)}/events${query}`);
@@ -250,6 +254,22 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       }
       // 恢复 Projection 期间暂停增量输入，避免迟到快照覆盖已经应用的更高序号事件。
       recoverProjection();
+    });
+    source.addEventListener("turn_committed", (rawEvent) => {
+      const payload = parse("turn_committed", rawEvent as MessageEvent);
+      if (!payload) return;
+      if (!isSessionEvent(payload) || payload.type !== "turn_committed") {
+        reportInvalidEvent("turn_committed", "schema", payload);
+        return;
+      }
+      if (!accept(payload)) return;
+      flushDeltas();
+      const applied = callbacks()?.onTurnCommitted?.({
+        id: payload.id,
+        messages: payload.messages,
+        history: payload.history,
+      });
+      if (applied === false) recoverProjection();
     });
     source.addEventListener("run_started", (rawEvent) => {
       const payload = parse("run_started", rawEvent as MessageEvent);
