@@ -1,6 +1,6 @@
 import type { QuestionResponseEntry } from "../../../conversation-timeline";
 import { QuestionResponseCard } from "../../../components/question-response-card";
-import type { IdentityPreview } from "../../../pages/chat-page";
+import type { IdentityPreview } from "../chat-types";
 import { UserAvatar } from "./user-avatar";
 
 interface QuestionResponseMessageProps {

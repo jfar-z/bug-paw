@@ -4,7 +4,7 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, TouchEvent as Re
 
 import { sortSessionsPinnedFirst } from "../../../../shared/session-sort";
 import type { SessionSummary } from "../../../api";
-import type { IdentityPreview } from "../../../pages/chat-page";
+import type { IdentityPreview } from "../chat-types";
 import { SessionActionsMenu } from "../../../components/session-actions-menu";
 import { SecondarySidebarHeader } from "../../../components/secondary-sidebar-header";
 import { UserAvatar } from "./user-avatar";

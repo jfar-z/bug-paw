@@ -25,7 +25,6 @@ import {
   type ConversationEntry,
   type UserEntry,
 } from "../conversation-timeline";
-import type { IdentityPreview } from "./chat-page";
 import type { ThemePreference } from "../theme";
 import { useMessageAutofollow } from "../use-message-autofollow";
 import { useViewportScrollLock } from "../use-viewport-scroll-lock";
@@ -49,6 +48,8 @@ import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/configuration-
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
+import type { IdentityPreview } from "../features/chat/chat-types";
+import { ChatInteractionCoordinator, type ChatInteractionTicket } from "../features/chat/chat-interaction-coordinator";
 import { useMobileWorkspaceSwipe, type MobileWorkspaceDrawer } from "../features/chat/mobile-workspace-swipe";
 import { classifyDataFileLink } from "../workspace-links";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
@@ -254,12 +255,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const initialSseSnapshotRef = useRef<{ id: string; lastEventId: number } | undefined>(undefined);
   const pendingUserMessageRef = useRef<PendingUserMessage | undefined>(undefined);
   const pendingQuestionResponseRef = useRef<PendingQuestionResponse | undefined>(undefined);
-  const questionSubmissionGenerationRef = useRef(0);
   const streamRunRevisionRef = useRef(0);
-  const agentSelectionGenerationRef = useRef(0);
-  const modelChangeGenerationRef = useRef(0);
   const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const thinkingLevelChangeGenerationRef = useRef(0);
   const thinkingLevelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const confirmedThinkingLevelRef = useRef<ThinkingLevel>("medium");
   const selectedAgentIdRef = useRef<string | undefined>(selectedAgentId);
@@ -269,6 +266,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const focusHighlightTimerRef = useRef<number | undefined>(undefined);
   const autoSpeechEligibilityRef = useRef<AutoSpeechEligibility | undefined>(undefined);
   const speechControllerRef = useRef<SpeechControllerEntry | undefined>(undefined);
+  const pageMountedRef = useRef(false);
+  const interactionCoordinatorRef = useRef<ChatInteractionCoordinator | undefined>(undefined);
+  interactionCoordinatorRef.current ??= new ChatInteractionCoordinator();
+  const interactionCoordinator = interactionCoordinatorRef.current;
   const [speechState, setSpeechState] = useState<SpeechPlaybackState>({ phase: "idle" });
   selectedAgentIdRef.current = selectedAgentId;
   sessionIdRef.current = session?.id;
@@ -284,6 +285,29 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     pauseFollowing,
     alignAfterNextContentCommit,
   } = useMessageAutofollow(timeline);
+
+  useEffect(() => {
+    pageMountedRef.current = true;
+    return () => {
+      pageMountedRef.current = false;
+      interactionCoordinator.invalidateAll("page-unmounted");
+    };
+  }, [interactionCoordinator]);
+
+  /** 页面仍挂载且交互代次有效时才允许异步结果回写。 */
+  const guardInteraction = useCallback((ticket: ChatInteractionTicket, checkpoint: string): boolean => (
+    pageMountedRef.current && interactionCoordinator.guard(ticket, checkpoint)
+  ), [interactionCoordinator]);
+
+  /** 会话归属变化时废弃所有可能回写旧会话的异步动作。 */
+  const invalidateSessionInteractions = (reason: string) => {
+    interactionCoordinator.invalidate("branch-navigation", reason);
+    interactionCoordinator.invalidate("history-edit", reason);
+    interactionCoordinator.invalidate("message-send", reason);
+    interactionCoordinator.invalidate("projection-refresh", reason);
+    interactionCoordinator.invalidate("question-submission", reason);
+    setQuestionSubmitting(false);
+  };
 
   /** 以权威 Run 投影更新按钮状态，并使更早发出的请求响应失效。 */
   const applyAuthoritativeRun = useCallback((run: ChatRunSummary | undefined) => {
@@ -521,11 +545,23 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
 
   /** 请求当前 Session 的权威投影；异步返回时拒绝写入已经切换离开的会话。 */
   const refreshSessionProjection = useCallback(async (sessionId: string, alignment: SnapshotAlignment = "follow") => {
-    const latest = await api.openSession(sessionId);
-    if (sessionIdRef.current !== sessionId) return undefined;
-    applySnapshot(latest, alignment);
-    return latest;
-  }, [applySnapshot]);
+    const ticket = interactionCoordinator.begin("projection-refresh", { sessionId, alignment });
+    try {
+      const latest = await api.openSession(sessionId);
+      if (!guardInteraction(ticket, "projection-response") || sessionIdRef.current !== sessionId) return undefined;
+      const current = sessionSnapshotRef.current;
+      if (current?.id === sessionId && latest.lastEventId < current.lastEventId) {
+        interactionCoordinator.finish(ticket, "applied", { ignoredOlderProjection: true });
+        return current;
+      }
+      applySnapshot(latest, alignment);
+      interactionCoordinator.finish(ticket, "applied", { lastEventId: latest.lastEventId });
+      return latest;
+    } catch (reason) {
+      if (interactionCoordinator.isCurrent(ticket)) interactionCoordinator.finish(ticket, "failed");
+      throw reason;
+    }
+  }, [applySnapshot, guardInteraction, interactionCoordinator]);
 
   const registerMediaSummary = useCallback((summary: WorkspaceFileSummary) => {
     setMediaSummaries((current) => current[summary.path] === summary ? current : { ...current, [summary.path]: summary });
@@ -586,8 +622,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   }, []);
 
   useEffect(() => {
-    let active = true;
-    const generation = ++agentSelectionGenerationRef.current;
+    const ticket = interactionCoordinator.begin("agent-selection", { source: "bootstrap" });
     const globalSettingsTask = runOptionalApiTask(
       () => api.getGlobalSettings(),
       {
@@ -598,9 +633,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     );
     Promise.all([api.listAgents(), api.listModels(), globalSettingsTask])
       .then(async ([agentResult, modelResult, globalSettingsResult]) => {
-        if (!active || generation !== agentSelectionGenerationRef.current) {
-          return;
-        }
+        if (!guardInteraction(ticket, "catalog-response")) return;
         const globalSettings = globalSettingsResult.status === "success" ? globalSettingsResult.data : undefined;
         const defaultProvider = globalSettings?.effective?.defaultProvider;
         const defaultModel = globalSettings?.effective?.defaultModel;
@@ -620,26 +653,31 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         const initialModel = findAgentModel(initialAgent, modelResult.models, inheritedModel);
         setSelectedModel(initialModel);
         setSelectedThinkingLevel(findAgentThinkingLevel(initialAgent, initialModel));
-        if (!initialAgentId) return;
+        if (!initialAgentId) {
+          interactionCoordinator.finish(ticket, "applied", { hasAgent: false });
+          return;
+        }
         const sessionResult = await api.listSessions(initialAgentId);
-        if (!active || generation !== agentSelectionGenerationRef.current) return;
+        if (!guardInteraction(ticket, "session-list-response")) return;
         setSessions(sessionResult.sessions);
         if (sessionResult.sessions[0]) {
           const opened = await api.openSession(sessionResult.sessions[0].id);
-          if (active && generation === agentSelectionGenerationRef.current) {
-            applySnapshot(opened);
-          }
+          if (!guardInteraction(ticket, "initial-session-response")) return;
+          applySnapshot(opened);
         }
+        interactionCoordinator.finish(ticket, "applied", { hasAgent: true });
       })
       .catch((reason: unknown) => {
-        if (active && generation === agentSelectionGenerationRef.current) {
-          void reportFailure(reason, "加载聊天工作台");
-        }
+        if (!guardInteraction(ticket, "bootstrap-error")) return;
+        interactionCoordinator.finish(ticket, "failed");
+        void reportFailure(reason, "加载聊天工作台");
       });
     return () => {
-      active = false;
+      if (interactionCoordinator.isCurrent(ticket)) {
+        interactionCoordinator.invalidate("agent-selection", "bootstrap-effect-cleanup");
+      }
     };
-  }, [applySnapshot, reportFailure, runOptionalApiTask]);
+  }, [applySnapshot, guardInteraction, interactionCoordinator, reportFailure, runOptionalApiTask]);
 
   useEffect(() => {
     let active = true;
@@ -675,9 +713,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     };
   }, [archiveDialogOpen, reportFailure, selectedAgentId]);
 
-  const createConversation = async (agentId: string) => {
+  const createConversation = async (agentId: string, ticket: ChatInteractionTicket) => {
     setError("");
     const created = await api.createSession(agentId);
+    if (!guardInteraction(ticket, "create-session-response")) return undefined;
     flushSync(() => applySnapshot(created));
     return created;
   };
@@ -720,6 +759,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   });
 
   const enterDraft = () => {
+    invalidateSessionInteractions("enter-draft");
+    interactionCoordinator.invalidate("session-transition", "enter-draft");
     stopSpeech();
     stream.close();
     focusedHistoryRef.current = undefined;
@@ -816,8 +857,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   };
 
   /** 丢弃聚焦窗口并重新读取 Session 的最新活动分支。 */
-  const restoreLatestConversation = async (sessionId: string): Promise<SessionSnapshot> => {
+  const restoreLatestConversation = async (
+    sessionId: string,
+    ticket: ChatInteractionTicket,
+  ): Promise<SessionSnapshot | undefined> => {
     const latest = await api.openSession(sessionId);
+    if (!guardInteraction(ticket, "restore-latest-response") || sessionIdRef.current !== sessionId) return undefined;
     focusedHistoryRef.current = undefined;
     setFocusedHistory(undefined);
     setFocusedEntryId(undefined);
@@ -827,7 +872,9 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   };
 
   const openConversation = async (sessionId: string) => {
-    if (openingSessionRef.current || (session?.id === sessionId && !focusedHistoryRef.current)) return;
+    if (session?.id === sessionId && !focusedHistoryRef.current) return;
+    invalidateSessionInteractions("open-session");
+    const ticket = interactionCoordinator.begin("session-transition", { sessionId, source: "sidebar" });
     stopSpeech();
     pendingUserMessageRef.current = undefined;
     setError("");
@@ -842,19 +889,27 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setFocusedHistory(undefined);
       setFocusedEntryId(undefined);
       sessionSnapshotRef.current = undefined;
-      applySnapshot(await api.openSession(sessionId), "once");
+      const opened = await api.openSession(sessionId);
+      if (!guardInteraction(ticket, "open-session-response")) return;
+      applySnapshot(opened, "once");
       closeSidebar();
+      interactionCoordinator.finish(ticket, "applied", { lastEventId: opened.lastEventId });
     } catch (reason) {
+      if (!guardInteraction(ticket, "open-session-error")) return;
+      interactionCoordinator.finish(ticket, "failed");
       await reportFailure(reason, "打开会话");
     } finally {
-      openingSessionRef.current = undefined;
-      setOpeningSessionId(undefined);
+      if (pageMountedRef.current && interactionCoordinator.isCurrent(ticket)) {
+        openingSessionRef.current = undefined;
+        setOpeningSessionId(undefined);
+      }
     }
   };
 
   /** 打开搜索命中的 Session，并用稳定 entry ID 切换到目标历史窗口。 */
   const openSearchHit = async (hit: SessionTextSearchHit): Promise<void> => {
-    if (openingSessionRef.current) throw new Error("正在打开其他会话，请稍后重试");
+    invalidateSessionInteractions("open-search-hit");
+    const ticket = interactionCoordinator.begin("session-transition", { sessionId: hit.sessionId, source: "search" });
     stopSpeech();
     pendingUserMessageRef.current = undefined;
     setError("");
@@ -865,9 +920,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setOpeningSessionId(hit.sessionId);
     try {
       const opened = await api.openSession(hit.sessionId);
+      if (!guardInteraction(ticket, "search-session-response")) return;
       const branchToken = opened.history?.branchToken;
       if (!branchToken) throw new Error("SESSION_BRANCH_CHANGED");
       const target = await api.loadSessionHistoryTarget(hit.sessionId, hit.entryId, branchToken);
+      if (!guardInteraction(ticket, "search-history-response")) return;
       if (target.sessionId !== hit.sessionId || target.targetEntryId !== hit.entryId || target.history.branchToken !== branchToken) {
         throw new Error("SESSION_ENTRY_NOT_FOUND");
       }
@@ -887,28 +944,41 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       applyAuthoritativeRun(opened.run);
       setTimeline(parsePiHistory(target.messages, false));
       if (!await focusSessionEntry(hit.entryId)) throw new Error("SESSION_ENTRY_NOT_FOUND");
+      if (!guardInteraction(ticket, "search-focus-complete")) return;
       closeSidebar();
       setSessionSearchOpen(false);
+      interactionCoordinator.finish(ticket, "applied", { entryId: hit.entryId });
     } catch {
+      if (!guardInteraction(ticket, "search-session-error")) return;
+      interactionCoordinator.finish(ticket, "failed");
       throw new Error("记录已变化，请重新搜索");
     } finally {
-      openingSessionRef.current = undefined;
-      setOpeningSessionId(undefined);
+      if (pageMountedRef.current && interactionCoordinator.isCurrent(ticket)) {
+        openingSessionRef.current = undefined;
+        setOpeningSessionId(undefined);
+      }
     }
   };
 
   const returnToLatest = async () => {
     const targetSessionId = focusedHistoryRef.current?.sessionId;
     if (!targetSessionId || openingSessionRef.current) return;
+    invalidateSessionInteractions("return-latest");
+    const ticket = interactionCoordinator.begin("session-transition", { sessionId: targetSessionId, source: "return-latest" });
     openingSessionRef.current = targetSessionId;
     setOpeningSessionId(targetSessionId);
     try {
-      await restoreLatestConversation(targetSessionId);
+      const restored = await restoreLatestConversation(targetSessionId, ticket);
+      if (restored) interactionCoordinator.finish(ticket, "applied", { lastEventId: restored.lastEventId });
     } catch (reason) {
+      if (!guardInteraction(ticket, "return-latest-error")) return;
+      interactionCoordinator.finish(ticket, "failed");
       await reportFailure(reason, "返回最新消息");
     } finally {
-      openingSessionRef.current = undefined;
-      setOpeningSessionId(undefined);
+      if (pageMountedRef.current && interactionCoordinator.isCurrent(ticket)) {
+        openingSessionRef.current = undefined;
+        setOpeningSessionId(undefined);
+      }
     }
   };
 
@@ -1100,6 +1170,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if ((!text && files.length === 0 && references.length === 0) || streaming || attachmentBusy || !selectedAgentId || !selectedModel) {
       return;
     }
+    const ticket = interactionCoordinator.begin("message-send", {
+      sessionId: session?.id ?? "draft",
+      agentId: selectedAgentId,
+      branch: Boolean(editingEntryId),
+    });
     const branchEntryId = editingEntryId;
     const previousAttachmentItems = attachmentItems;
     let requestSessionId: string | undefined;
@@ -1108,7 +1183,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       let baseSession = session;
       let baseTimeline = timeline;
       if (focusedHistoryRef.current) {
-        baseSession = await restoreLatestConversation(focusedHistoryRef.current.sessionId);
+        baseSession = await restoreLatestConversation(focusedHistoryRef.current.sessionId, ticket);
+        if (!baseSession) return;
         baseTimeline = parsePiHistory(
           baseSession.messages,
           baseSession.run?.status === "queued" || baseSession.run?.status === "running",
@@ -1117,17 +1193,21 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       // 分支请求尚未返回前即退出编辑态，避免来源消息持续显示“编辑中”。
       if (branchEntryId) setEditingEntryId(undefined);
       const wasDraft = !baseSession;
-      const activeSession = baseSession ?? await createConversation(selectedAgentId);
+      const activeSession = baseSession ?? await createConversation(selectedAgentId, ticket);
+      if (!activeSession || !guardInteraction(ticket, "session-ready")) return;
       requestSessionId = activeSession.id;
       if (wasDraft && !isSameModel(activeSession.model, selectedModel)) {
         await api.setModel(activeSession.id, selectedModel.provider, selectedModel.id);
+        if (!guardInteraction(ticket, "draft-model-response")) return;
         activeSession.model = selectedModel;
       }
       if (wasDraft && activeSession.thinkingLevel !== selectedThinkingLevel) {
         await api.setThinkingLevel(activeSession.id, selectedThinkingLevel);
+        if (!guardInteraction(ticket, "draft-thinking-response")) return;
         activeSession.thinkingLevel = selectedThinkingLevel;
       }
       await stream.ensureOpen();
+      if (!guardInteraction(ticket, "stream-ready")) return;
       setDraft("");
       setDraftReferences([]);
       setAttachmentItems([]);
@@ -1182,7 +1262,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       if (branchEntryId) {
         const runRevision = streamRunRevisionRef.current;
         const result = await api.sendBranchMessage(activeSession.id, branchEntryId, text, files.map((file) => file.path), draftReferences);
-        if (sessionIdRef.current !== activeSession.id) return;
+        if (!guardInteraction(ticket, "branch-send-response") || sessionIdRef.current !== activeSession.id) return;
         if (streamRunRevisionRef.current !== runRevision) {
           await refreshSessionProjection(activeSession.id, "once");
           return;
@@ -1193,6 +1273,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       } else {
         const runRevision = streamRunRevisionRef.current;
         const run = await api.sendMessage(activeSession.id, text, files.map((file) => file.path), draftReferences);
+        if (!guardInteraction(ticket, "send-response")) return;
         if (sessionIdRef.current === activeSession.id && streamRunRevisionRef.current === runRevision) {
           setActiveRun(run);
         }
@@ -1203,7 +1284,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         sessionSnapshotRef.current = next;
         setSession(next);
       }
+      interactionCoordinator.finish(ticket, "applied", { sessionId: activeSession.id });
     } catch (reason) {
+      if (!guardInteraction(ticket, "send-error")) return;
+      interactionCoordinator.finish(ticket, "failed", { sessionId: requestSessionId });
       autoSpeechEligibilityRef.current = undefined;
       const stillCurrentSession = !requestSessionId || sessionIdRef.current === requestSessionId;
       if (!stillCurrentSession) return;
@@ -1236,7 +1320,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const submittedSessionId = session.id;
     const submittedQuestionId = pendingQuestion.id;
     const submittedBranchToken = session.history?.branchToken;
-    const submissionGeneration = ++questionSubmissionGenerationRef.current;
+    const ticket = interactionCoordinator.begin("question-submission", {
+      sessionId: submittedSessionId,
+      questionId: submittedQuestionId,
+    });
     setQuestionSubmitting(true);
     setError("");
     setRunNotice("");
@@ -1247,8 +1334,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         version: pendingQuestion.version,
         answers,
       });
-      if (questionSubmissionGenerationRef.current !== submissionGeneration
-        || sessionIdRef.current !== submittedSessionId) return;
+      if (!guardInteraction(ticket, "question-response") || sessionIdRef.current !== submittedSessionId) return;
       // Run 启动快照可能先清除待答状态；成功响应仍需立即写入权威回答卡片。
       pendingQuestionResponseRef.current = submittedBranchToken
         ? createPendingQuestionResponse(submittedSessionId, submittedBranchToken, result.resolution)
@@ -1267,13 +1353,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       // Run 事件比 POST 响应更权威；期间若已收到开始或终态事件，不再用迟到响应覆盖。
       if (streamRunRevisionRef.current === runRevision) setActiveRun(result.run);
       resumeFollowing();
+      interactionCoordinator.finish(ticket, "applied", { sessionId: submittedSessionId });
     } catch (reason) {
-      if (questionSubmissionGenerationRef.current === submissionGeneration
-        && sessionIdRef.current === submittedSessionId) {
+      if (guardInteraction(ticket, "question-error") && sessionIdRef.current === submittedSessionId) {
+        interactionCoordinator.finish(ticket, "failed", { sessionId: submittedSessionId });
         await reportFailure(reason, "提交提问回答");
       }
     } finally {
-      if (questionSubmissionGenerationRef.current === submissionGeneration) setQuestionSubmitting(false);
+      if (pageMountedRef.current && interactionCoordinator.isCurrent(ticket)) setQuestionSubmitting(false);
     }
   };
 
@@ -1330,11 +1417,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   };
 
   const changeModel = async (model: ModelSummary) => {
-    const generation = ++modelChangeGenerationRef.current;
     const targetSessionId = session?.id;
+    const ticket = interactionCoordinator.begin("model-change", {
+      sessionId: targetSessionId ?? "draft",
+      provider: model.provider,
+      modelId: model.id,
+    });
     setSelectedModel(model);
     if (!targetSessionId) {
       setSelectedThinkingLevel((current) => normalizeThinkingLevelForModel(current, model));
+      interactionCoordinator.finish(ticket, "applied", { draft: true });
       return;
     }
     try {
@@ -1345,20 +1437,28 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         .then(() => api.setModel(targetSessionId, model.provider, model.id));
       modelChangeQueueRef.current = request.then(() => undefined, () => undefined);
       await request;
-      if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
+      if (!guardInteraction(ticket, "model-response") || sessionIdRef.current !== targetSessionId) return;
       setSession((current) => current?.id === targetSessionId ? { ...current, model } : current);
+      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId });
     } catch (reason) {
-      if (generation !== modelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
+      if (!guardInteraction(ticket, "model-error") || sessionIdRef.current !== targetSessionId) return;
+      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId });
       await reportFailure(reason, "切换会话模型");
     }
   };
 
   /** 串行持久化会话思考深度，快速切换时以最后一次选择为准。 */
   const changeThinkingLevel = async (thinkingLevel: ThinkingLevel) => {
-    const generation = ++thinkingLevelChangeGenerationRef.current;
     const targetSessionId = session?.id;
+    const ticket = interactionCoordinator.begin("thinking-level-change", {
+      sessionId: targetSessionId ?? "draft",
+      thinkingLevel,
+    });
     setSelectedThinkingLevel(thinkingLevel);
-    if (!targetSessionId) return;
+    if (!targetSessionId) {
+      interactionCoordinator.finish(ticket, "applied", { draft: true });
+      return;
+    }
     try {
       const request = thinkingLevelChangeQueueRef.current
         // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
@@ -1366,12 +1466,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         .then(() => api.setThinkingLevel(targetSessionId, thinkingLevel));
       thinkingLevelChangeQueueRef.current = request.then(() => undefined, () => undefined);
       await request;
-      if (generation !== thinkingLevelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
+      if (!guardInteraction(ticket, "thinking-response") || sessionIdRef.current !== targetSessionId) return;
       confirmedThinkingLevelRef.current = thinkingLevel;
       setSession((current) => current?.id === targetSessionId ? { ...current, thinkingLevel } : current);
+      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId });
     } catch (reason) {
-      if (generation !== thinkingLevelChangeGenerationRef.current || sessionIdRef.current !== targetSessionId) return;
+      if (!guardInteraction(ticket, "thinking-error") || sessionIdRef.current !== targetSessionId) return;
       setSelectedThinkingLevel(confirmedThinkingLevelRef.current);
+      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId });
       await reportFailure(reason, "切换思考深度");
     }
   };
@@ -1459,9 +1561,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   /** 将 Pi 历史用户消息还原到现有编辑器，协议文本由服务端在返回前拆解。 */
   const editHistory = async (entryId: string) => {
     if (!session || streaming || isOpeningSession) return;
+    const targetSessionId = session.id;
+    const ticket = interactionCoordinator.begin("history-edit", { sessionId: targetSessionId, entryId });
     try {
       stopSpeech();
-      const result = await api.editSessionBranch(session.id, entryId);
+      const result = await api.editSessionBranch(targetSessionId, entryId);
+      if (!guardInteraction(ticket, "history-edit-response") || sessionIdRef.current !== targetSessionId) return;
       setEditingEntryId(entryId);
       setDraft(result.draft.text);
       setDraftReferences(result.draft.references);
@@ -1476,7 +1581,10 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         };
       }));
       setError(result.draft.missingFilePaths.length > 0 ? `历史附件已失效：${result.draft.missingFilePaths.join("、")}` : "");
+      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId, entryId });
     } catch (reason) {
+      if (!guardInteraction(ticket, "history-edit-error") || sessionIdRef.current !== targetSessionId) return;
+      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId, entryId });
       await reportFailure(reason, "编辑历史消息");
     }
   };
@@ -1494,6 +1602,11 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const regenerate = async (entryId: string) => {
     if (!session || streaming || isOpeningSession) return;
     const targetSessionId = session.id;
+    const ticket = interactionCoordinator.begin("branch-navigation", {
+      sessionId: targetSessionId,
+      entryId,
+      action: "regenerate",
+    });
     const sourceEntry = timeline.find((entry): entry is UserEntry => (
       entry.type === "user" && entry.piEntryId === entryId
     ));
@@ -1518,7 +1631,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       stopSpeech();
       const runRevision = streamRunRevisionRef.current;
       const result = await api.regenerateSessionBranch(targetSessionId, entryId);
-      if (sessionIdRef.current !== targetSessionId) return;
+      if (!guardInteraction(ticket, "regenerate-response") || sessionIdRef.current !== targetSessionId) return;
       if (streamRunRevisionRef.current !== runRevision) {
         await refreshSessionProjection(targetSessionId, "once");
         return;
@@ -1526,12 +1639,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       applySnapshot(result.snapshot, "once");
       setActiveRun(result.run);
       setError("");
+      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId, entryId });
     } catch (reason) {
-      if (sessionIdRef.current !== targetSessionId) return;
+      if (!guardInteraction(ticket, "regenerate-error") || sessionIdRef.current !== targetSessionId) return;
       const pending = pendingUserMessageRef.current;
       if (pending?.sessionId === targetSessionId && pending.entry.id === pendingEntry.id) {
         pendingUserMessageRef.current = undefined;
       }
+      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId, entryId });
       await reportFailure(reason, "重新生成回答");
     }
   };
@@ -1539,23 +1654,33 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   /** 切换到历史分支的可渲染叶节点，不触发编辑草稿回填。 */
   const navigateHistory = async (entryId: string) => {
     if (!session || streaming || isOpeningSession) return;
+    const targetSessionId = session.id;
+    const ticket = interactionCoordinator.begin("branch-navigation", {
+      sessionId: targetSessionId,
+      entryId,
+      action: "navigate",
+    });
     try {
       stopSpeech();
-      const snapshot = await api.navigateSessionBranch(session.id, entryId);
+      const snapshot = await api.navigateSessionBranch(targetSessionId, entryId);
+      if (!guardInteraction(ticket, "navigate-response") || sessionIdRef.current !== targetSessionId) return;
       setEditingEntryId(undefined);
       setDraft("");
       setDraftReferences([]);
       setAttachmentItems([]);
       setError("");
       applySnapshot(snapshot, "once");
+      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId, entryId });
     } catch (reason) {
+      if (!guardInteraction(ticket, "navigate-error") || sessionIdRef.current !== targetSessionId) return;
+      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId, entryId });
       await reportFailure(reason, "切换会话分支");
     }
   };
 
   const selectAgent = async (agentId: string) => {
     if (streaming || isOpeningSession) return;
-    const generation = ++agentSelectionGenerationRef.current;
+    const ticket = interactionCoordinator.begin("agent-selection", { agentId, source: "menu" });
     const nextAgent = agents.find((item) => item.profile.id === agentId);
     cacheSelectedAgentId(agentId);
     setSelectedAgentId(agentId);
@@ -1565,9 +1690,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setSelectedThinkingLevel(findAgentThinkingLevel(nextAgent, nextModel));
     try {
       const result = await api.listSessions(agentId);
-      if (generation === agentSelectionGenerationRef.current) setSessions(result.sessions);
+      if (!guardInteraction(ticket, "agent-sessions-response")) return;
+      setSessions(result.sessions);
+      interactionCoordinator.finish(ticket, "applied", { agentId });
     } catch (reason) {
-      if (generation === agentSelectionGenerationRef.current) {
+      if (guardInteraction(ticket, "agent-selection-error")) {
+        interactionCoordinator.finish(ticket, "failed", { agentId });
         await reportFailure(reason, "切换 Agent");
       }
     }

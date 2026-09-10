@@ -28,6 +28,7 @@ import "../resources.css";
 import { MessageNavigator, type MessageNavigationEntry } from "../components/message-navigator";
 import { ProductMark } from "../components/product-mark";
 import type { ThemePreference } from "../theme";
+import type { IdentityPreview } from "../features/chat/chat-types";
 import { LiveChatPage } from "./live-chat-page";
 
 interface ChatPageProps {
@@ -36,12 +37,6 @@ interface ChatPageProps {
   userIdentity?: IdentityPreview;
   agentIdentity?: IdentityPreview;
   live?: boolean;
-}
-
-export interface IdentityPreview {
-  displayName: string;
-  avatarText: string;
-  avatar?: { kind: "image"; revision: string };
 }
 
 const previewSessions = ["梳理项目架构", "检查容器部署", "pi SDK 接入思路"];
