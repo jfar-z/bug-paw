@@ -113,7 +113,10 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
     const activatedNodeIds = new Set(workflow.inputMappings.flatMap((mapping) => hasInputValue(input.inputs[mapping.name])
       ? mapping.activation?.nodeIds ?? []
       : []));
-    const apiWorkflow = uiWorkflow ? convertUiToApi(uiWorkflow, workflow.nodeMetadata, activatedNodeIds) : toApiWorkflow(workflow.raw);
+    const conversion: ApiWorkflowConversion = uiWorkflow
+      ? convertUiToApi(uiWorkflow, workflow.nodeMetadata, activatedNodeIds)
+      : { workflow: toApiWorkflow(workflow.raw), subgraphInputs: new Map<string, Map<string, SubgraphInputBinding>>() };
+    const apiWorkflow = conversion.workflow;
     const resolvedFieldMetadata = resolveWorkflowFieldMetadata(workflow);
     const removedNodeIds = new Set<string>();
     for (const mapping of workflow.inputMappings) {
@@ -125,22 +128,24 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
       }
       if (mapping.type === "image" || mapping.type === "video" || mapping.type === "audio") {
         const uploaded = await this.uploadAsset(input, mapping, value);
-        setPath(apiWorkflow, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), uploaded);
+        setConvertedPath(conversion, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), uploaded);
         continue;
       }
       const normalized = coerceValue(mapping, value);
+      const resolvedField = resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field);
+      const executionValue = coerceSubgraphInputValue(conversion, mapping.nodeId, resolvedField, normalized);
       const nodeClass = workflow.nodes.find((node) => node.id === mapping.nodeId)?.type;
       const metadata = resolvedFieldMetadata[mapping.nodeId]?.[mapping.field]
         ?? (nodeClass ? workflow.nodeMetadata?.[nodeClass]?.fields[mapping.field] : undefined);
       if (metadata && "conflict" in metadata && metadata.conflict) {
         throw new TypeError(`工作流入参 ${mapping.name} 无法解析：${metadata.conflict}`);
       }
-      validateMetadataValue(mapping.name, mapping.type, normalized, metadata, mapping.enumOptions);
+      validateMetadataValue(mapping.name, mapping.type, executionValue, metadata, mapping.enumOptions);
       if (nodeClass === "PrimitiveNode" && mapping.field === "widgets_values.0") {
-        setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, normalized);
+        setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, executionValue);
         continue;
       }
-      setPath(apiWorkflow, mapping.nodeId, resolveComfyUiMappedField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field), normalized);
+      setConvertedPath(conversion, mapping.nodeId, resolvedField, executionValue);
     }
     pruneConditionalNodes(apiWorkflow, removedNodeIds);
     return apiWorkflow;
@@ -321,16 +326,64 @@ function toApiWorkflow(raw: unknown): Record<string, unknown> {
   return structuredClone(raw);
 }
 
-/** 将 UI 导出格式转换为 API 格式。 */
+interface UiInputTarget {
+  nodeId: string;
+  field: string;
+}
+
+interface UiOutputSource {
+  nodeId: string;
+  slot: number;
+}
+
+interface SubgraphInputBinding {
+  type?: string;
+  targets: UiInputTarget[];
+}
+
+interface ApiWorkflowConversion {
+  workflow: Record<string, unknown>;
+  subgraphInputs: Map<string, Map<string, SubgraphInputBinding>>;
+}
+
+interface FlattenedUiWorkflow {
+  nodes: Record<string, unknown>[];
+  links: unknown[][];
+  defaults: Array<UiInputTarget & { value: unknown }>;
+  subgraphInputs: Map<string, Map<string, SubgraphInputBinding>>;
+}
+
+interface FlattenedContainer {
+  inputs: Map<number, UiInputTarget[]>;
+  outputs: Map<number, UiOutputSource>;
+}
+
+interface UiNodeReference {
+  nodeId?: string;
+  inputNames?: string[];
+  inputs?: Map<number, UiInputTarget[]>;
+  outputs?: Map<number, UiOutputSource>;
+}
+
+interface NormalizedUiLink {
+  id: string;
+  sourceNodeId: string;
+  sourceSlot: number;
+  targetNodeId: string;
+  targetSlot: number;
+  type?: unknown;
+}
+
+/** 将 UI 导出格式转换为 API 格式，并把外部子图展开为可执行节点。 */
 function convertUiToApi(
   raw: Record<string, unknown> & { nodes: unknown[]; links?: unknown[] },
   nodeMetadata?: ComfyUiNodeMetadata,
   activatedNodeIds = new Set<string>(),
-): Record<string, unknown> {
+): ApiWorkflowConversion {
+  const flattened = flattenUiWorkflow(raw);
   const api: Record<string, unknown> = {};
   const nodeById = new Map<string, Record<string, unknown>>();
-  for (const value of raw.nodes) {
-    if (!isRecord(value)) continue;
+  for (const value of flattened.nodes) {
     nodeById.set(String(value.id), value);
     if (value.type === "PrimitiveNode" || isBypassedNode(value, activatedNodeIds)) continue;
     const metadata = typeof value.type === "string" ? nodeMetadata?.[value.type] : undefined;
@@ -339,18 +392,15 @@ function convertUiToApi(
     applyUiWidgetValues(node.inputs as Record<string, unknown>, value, metadata?.widgetInputs, metadata?.fields);
     api[String(value.id)] = node;
   }
-  if (Array.isArray(raw.links)) {
-    const linkById = new Map(raw.links
-      .filter((link): link is unknown[] => Array.isArray(link) && link.length >= 5)
-      .map((link) => [String(link[0]), link]));
-    for (const link of raw.links) {
-      if (!Array.isArray(link) || link.length < 5) continue;
+  for (const target of flattened.defaults) setPath(api, target.nodeId, `inputs.${target.field}`, target.value);
+  if (flattened.links.length > 0) {
+    for (const link of flattened.links) {
       const [, , , targetId, targetSlot] = link;
       const targetNode = api[String(targetId)];
       const target = nodeById.get(String(targetId));
       const targetName = uiInputName(target, Number(targetSlot));
       if (isRecord(targetNode) && isRecord(targetNode.inputs)) {
-        const source = resolveUiLinkSource(link, nodeById, linkById, activatedNodeIds);
+        const source = resolveUiLinkSource(link, nodeById, flattened.links, activatedNodeIds);
         if (!source) continue;
         if (source.node.type === "PrimitiveNode") {
           (targetNode.inputs as Record<string, unknown>)[targetName] = primitiveValue(source.node);
@@ -360,7 +410,145 @@ function convertUiToApi(
       }
     }
   }
-  return api;
+  return { workflow: api, subgraphInputs: flattened.subgraphInputs };
+}
+
+/** 递归展开 definitions.subgraphs，并记录实例公开端口的真实写入目标。 */
+function flattenUiWorkflow(raw: Record<string, unknown> & { nodes: unknown[]; links?: unknown[] }): FlattenedUiWorkflow {
+  const definitions = subgraphDefinitions(raw.definitions);
+  const flattened: FlattenedUiWorkflow = { nodes: [], links: [], defaults: [], subgraphInputs: new Map() };
+  flattenUiContainer(raw.nodes, raw.links, "", definitions, flattened);
+  return flattened;
+}
+
+/** 展开一层 UI 图容器；子图边界使用 -10 和 -20 表示公开输入与输出。 */
+function flattenUiContainer(
+  nodesValue: unknown,
+  linksValue: unknown,
+  namespace: string,
+  definitions: Map<string, Record<string, unknown>>,
+  flattened: FlattenedUiWorkflow,
+): FlattenedContainer {
+  const references = new Map<string, UiNodeReference>();
+  const nodes = Array.isArray(nodesValue) ? nodesValue.filter(isRecord) : [];
+  for (const node of nodes) {
+    const localId = String(node.id);
+    const nodeId = namespace ? `${namespace}:${localId}` : localId;
+    const definition = typeof node.type === "string" ? definitions.get(node.type) : undefined;
+    if (!definition) {
+      flattened.nodes.push({ ...structuredClone(node), id: nodeId });
+      references.set(localId, { nodeId, inputNames: uiInputNames(node) });
+      continue;
+    }
+    const child = flattenUiContainer(definition.nodes, definition.links, nodeId, definitions, flattened);
+    references.set(localId, child);
+    const publicInputs = Array.isArray(definition.inputs) ? definition.inputs : [];
+    const bindings = new Map<string, SubgraphInputBinding>();
+    for (let index = 0; index < publicInputs.length; index += 1) {
+      const port = isRecord(publicInputs[index]) ? publicInputs[index] : undefined;
+      const name = typeof port?.name === "string" ? port.name : `slot_${index}`;
+      const targets = child.inputs.get(index) ?? [];
+      bindings.set(name, {
+        ...(typeof port?.type === "string" ? { type: port.type } : {}),
+        targets,
+      });
+      const value = subgraphInstanceValue(node, name, index);
+      if (value !== undefined) {
+        for (const target of targets) flattened.defaults.push({ ...target, value });
+      }
+    }
+    flattened.subgraphInputs.set(nodeId, bindings);
+  }
+
+  const inputs = new Map<number, UiInputTarget[]>();
+  const outputs = new Map<number, UiOutputSource>();
+  for (const link of normalizeUiLinks(linksValue, namespace)) {
+    const source = link.sourceNodeId === "-10"
+      ? undefined
+      : resolveFlattenedOutput(references.get(link.sourceNodeId), link.sourceSlot);
+    const targets = link.targetNodeId === "-20"
+      ? undefined
+      : resolveFlattenedInputs(references.get(link.targetNodeId), link.targetSlot);
+    if (link.sourceNodeId === "-10" && targets) {
+      const current = inputs.get(link.sourceSlot) ?? [];
+      current.push(...targets);
+      inputs.set(link.sourceSlot, current);
+      continue;
+    }
+    if (link.targetNodeId === "-20" && source) {
+      outputs.set(link.targetSlot, source);
+      continue;
+    }
+    if (!source || !targets) continue;
+    for (const target of targets) {
+      const targetNode = flattened.nodes.find((node) => String(node.id) === target.nodeId);
+      const targetSlot = uiInputSlot(targetNode, target.field);
+      if (targetSlot < 0) continue;
+      flattened.links.push([link.id, source.nodeId, source.slot, target.nodeId, targetSlot, link.type]);
+    }
+  }
+  return { inputs, outputs };
+}
+
+/** 收集合法的外部子图定义，避免 UUID 节点直接进入 Prompt API。 */
+function subgraphDefinitions(value: unknown): Map<string, Record<string, unknown>> {
+  if (!isRecord(value) || !Array.isArray(value.subgraphs)) return new Map();
+  return new Map(value.subgraphs.flatMap((definition) => isRecord(definition) && typeof definition.id === "string"
+    ? [[definition.id, definition] as const]
+    : []));
+}
+
+/** 将顶层数组连线和子图对象连线统一为内部结构。 */
+function normalizeUiLinks(value: unknown, namespace: string): NormalizedUiLink[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((link, index) => {
+    if (Array.isArray(link) && link.length >= 5) {
+      return [{
+        id: `${namespace || "root"}:${String(link[0] ?? index)}`,
+        sourceNodeId: String(link[1]),
+        sourceSlot: Number(link[2]),
+        targetNodeId: String(link[3]),
+        targetSlot: Number(link[4]),
+        type: link[5],
+      }];
+    }
+    if (!isRecord(link)) return [];
+    return [{
+      id: `${namespace || "root"}:${String(link.id ?? index)}`,
+      sourceNodeId: String(link.origin_id),
+      sourceSlot: Number(link.origin_slot),
+      targetNodeId: String(link.target_id),
+      targetSlot: Number(link.target_slot),
+      type: link.type,
+    }];
+  }).filter((link) => Number.isInteger(link.sourceSlot) && Number.isInteger(link.targetSlot));
+}
+
+function resolveFlattenedOutput(reference: UiNodeReference | undefined, slot: number): UiOutputSource | undefined {
+  if (!reference) return undefined;
+  return reference.nodeId ? { nodeId: reference.nodeId, slot } : reference.outputs?.get(slot);
+}
+
+function resolveFlattenedInputs(reference: UiNodeReference | undefined, slot: number): UiInputTarget[] | undefined {
+  if (!reference) return undefined;
+  if (!reference.nodeId) return reference.inputs?.get(slot);
+  return [{ nodeId: reference.nodeId, field: reference.inputNames?.[slot] ?? `slot_${slot}` }];
+}
+
+/** 从子图实例的具名值或顺序值读取公开输入默认值。 */
+function subgraphInstanceValue(node: Record<string, unknown>, name: string, index: number): unknown {
+  if (isRecord(node.widgets_values_named) && node.widgets_values_named[name] !== undefined) return node.widgets_values_named[name];
+  return Array.isArray(node.widgets_values) ? node.widgets_values[index] : undefined;
+}
+
+function uiInputSlot(node: Record<string, unknown> | undefined, field: string): number {
+  if (!isRecord(node) || !Array.isArray(node.inputs)) return -1;
+  return node.inputs.findIndex((value) => isRecord(value) && value.name === field);
+}
+
+function uiInputNames(node: Record<string, unknown>): string[] {
+  if (!Array.isArray(node.inputs)) return [];
+  return node.inputs.map((value, index) => isRecord(value) && typeof value.name === "string" ? value.name : `slot_${index}`);
 }
 
 interface ResolvedUiLinkSource {
@@ -373,7 +561,7 @@ interface ResolvedUiLinkSource {
 function resolveUiLinkSource(
   link: unknown[],
   nodeById: Map<string, Record<string, unknown>>,
-  linkById: Map<string, unknown[]>,
+  links: unknown[][],
   activatedNodeIds: Set<string>,
   visited = new Set<string>(),
 ): ResolvedUiLinkSource | undefined {
@@ -389,15 +577,15 @@ function resolveUiLinkSource(
   const inputs = Array.isArray(sourceNode.inputs) ? sourceNode.inputs : [];
   const output = isRecord(outputs[sourceSlot]) ? outputs[sourceSlot] : undefined;
   const candidates = inputs.flatMap((value, index) => {
-    if (!isRecord(value) || value.link === null || value.link === undefined) return [];
-    const inputLink = linkById.get(String(value.link));
+    if (!isRecord(value)) return [];
+    const inputLink = links.find((candidate) => String(candidate[3]) === sourceId && Number(candidate[4]) === index);
     if (!inputLink || !uiSlotTypesCompatible(value.type, output?.type)) return [];
     return [{ value, index, link: inputLink }];
   });
   const selected = candidates.find(({ value }) => typeof output?.name === "string" && value.name === output.name)
     ?? candidates.find(({ index }) => index === sourceSlot)
     ?? (candidates.length === 1 ? candidates[0] : undefined);
-  return selected ? resolveUiLinkSource(selected.link, nodeById, linkById, activatedNodeIds, visited) : undefined;
+  return selected ? resolveUiLinkSource(selected.link, nodeById, links, activatedNodeIds, visited) : undefined;
 }
 
 /** ComfyUI 的复合槽位类型以逗号分隔，任一类型相交即可旁路。 */
@@ -444,10 +632,20 @@ function applyUiWidgetValues(
     return;
   }
   if (!Array.isArray(values)) return;
+  const namedValues = node.widgets_values_named;
+  if ((!widgetInputs?.length && !fields) && isRecord(namedValues)) {
+    let applied = false;
+    for (const [name, value] of Object.entries(namedValues)) {
+      // control_after_generate 只控制前端下次随机化行为，不属于 Prompt API 输入。
+      if (name === "control_after_generate" || !isWidgetScalar(value)) continue;
+      inputs[name] = value;
+      applied = true;
+    }
+    if (applied) return;
+  }
   const descriptors = widgetInputs?.length
     ? widgetInputs
     : fallbackWidgetInputs(String(node.type), fields);
-  const namedValues = node.widgets_values_named;
   if (isRecord(namedValues) && applyNamedWidgetValues(inputs, namedValues, descriptors, fields)) return;
   const names = expandWidgetInputNames(descriptors, values);
   for (let index = 0; index < Math.min(names.length, values.length); index += 1) {
@@ -551,6 +749,36 @@ function setPath(workflow: Record<string, unknown>, nodeId: string, field: strin
   if (!isRecord(node) || !isRecord(node.inputs)) throw new TypeError(`工作流节点 ${nodeId} 不存在`);
   const base = field.replace(/^(inputs|widgets_values)\./, "");
   node.inputs[base] = value;
+}
+
+/** 子图实例字段需要写入展开后的全部内部目标。 */
+function setConvertedPath(conversion: ApiWorkflowConversion, nodeId: string, field: string, value: unknown): void {
+  const base = field.replace(/^(inputs|widgets_values)\./, "");
+  const binding = conversion.subgraphInputs.get(nodeId)?.get(base);
+  if (!binding) {
+    setPath(conversion.workflow, nodeId, field, value);
+    return;
+  }
+  if (binding.targets.length === 0) throw new TypeError(`子图节点 ${nodeId} 的输入 ${base} 没有内部目标`);
+  for (const target of binding.targets) setPath(conversion.workflow, target.nodeId, `inputs.${target.field}`, value);
+}
+
+/** 兼容旧映射把 INT/FLOAT/BOOLEAN 子图端口保存成字符串的情况。 */
+function coerceSubgraphInputValue(
+  conversion: ApiWorkflowConversion,
+  nodeId: string,
+  field: string,
+  value: unknown,
+): unknown {
+  const base = field.replace(/^(inputs|widgets_values)\./, "");
+  const type = conversion.subgraphInputs.get(nodeId)?.get(base)?.type?.toUpperCase();
+  if (type === "INT" && typeof value === "string" && /^-?\d+$/u.test(value.trim())) return Number(value);
+  if (type === "FLOAT" && typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  if (type === "BOOLEAN" && typeof value === "string") {
+    if (value.toLowerCase() === "true") return true;
+    if (value.toLowerCase() === "false") return false;
+  }
+  return value;
 }
 
 /** 删除未启用的条件节点，并清理剩余节点指向它们的输入连接。 */
