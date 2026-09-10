@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -40,6 +40,66 @@ describe("AIGC 工作流服务", () => {
     expect(created.workflow.inputMappings).toEqual([expect.objectContaining({ name: "steps", type: "int" })]);
     expect(created.workflow.outputMappings).toEqual([expect.objectContaining({ name: "image", mediaType: "image" })]);
     expect((await service.list()).workflows).toHaveLength(1);
+  });
+
+  it("导入子图工作流时解析子图名称和参数别名", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "Krea-2",
+      fileName: "krea-2.json",
+      workflowJson: subgraphUiWorkflow(),
+      inputMappings: [],
+      outputMappings: [],
+    });
+
+    expect(created.workflow.nodes[0]).toMatchObject({
+      id: "30",
+      type: "subgraph-krea-2",
+      title: "Text to Image (Krea-2 Turbo)",
+    });
+    expect(created.workflow.nodes[0].fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "inputs.value", label: "prompt" }),
+      expect.objectContaining({ name: "inputs.value_1", label: "prompt_enhance" }),
+      expect.objectContaining({ name: "widgets_values.0", label: "prompt" }),
+      expect.objectContaining({ name: "widgets_values.1", label: "prompt_enhance" }),
+    ]));
+  });
+
+  it("读取旧版持久化记录时从原始工作流补齐子图展示信息", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aigc-workflows-legacy-"));
+    roots.push(root);
+    const filePath = join(root, "workflows.json");
+    await writeFile(filePath, JSON.stringify({
+      workflows: [{
+        id: "legacy-krea-2",
+        name: "Krea-2",
+        fileName: "krea-2.json",
+        originalHash: "legacy-hash",
+        raw: subgraphUiWorkflow(),
+        nodes: [{
+          id: "30",
+          type: "subgraph-krea-2",
+          fields: [
+            { name: "inputs.value", kind: "input" },
+            { name: "widgets_values.0", kind: "widget", valueType: "string" },
+          ],
+        }],
+        edges: [],
+        inputMappings: [],
+        inputGroups: [],
+        outputMappings: [],
+        createdAt: "2026-09-10T00:00:00.000Z",
+        updatedAt: "2026-09-10T00:00:00.000Z",
+      }],
+    }), "utf8");
+
+    const document = await new AigcWorkflowService(filePath).get("legacy-krea-2");
+
+    expect(document.workflow.nodes[0]).toMatchObject({ title: "Text to Image (Krea-2 Turbo)" });
+    expect(document.workflow.nodes[0].fields).toEqual([
+      expect.objectContaining({ name: "inputs.value", label: "prompt" }),
+      expect.objectContaining({ name: "widgets_values.0", label: "prompt" }),
+    ]);
   });
 
   it("同步节点定义后将媒体控件索引迁移为稳定字段并隐藏预览状态", async () => {
@@ -156,6 +216,35 @@ function primitiveUiWorkflow() {
       [273, 144, 0, 57, 0, "COMBO"],
       [274, 144, 0, 120, 0, "COMBO"],
     ],
+  };
+}
+
+/** 带外部子图定义的 ComfyUI UI 工作流。 */
+function subgraphUiWorkflow() {
+  return {
+    definitions: {
+      subgraphs: [{
+        id: "subgraph-krea-2",
+        name: "Text to Image (Krea-2 Turbo)",
+        inputs: [
+          { id: "prompt-port", name: "value", label: "prompt", type: "STRING" },
+          { id: "enhance-port", name: "value_1", label: "prompt_enhance", type: "BOOLEAN" },
+        ],
+        outputs: [{ id: "image-port", name: "IMAGE", type: "IMAGE" }],
+      }],
+    },
+    nodes: [{
+      id: 30,
+      type: "subgraph-krea-2",
+      inputs: [
+        { name: "value", label: "prompt", type: "STRING", widget: { name: "value" } },
+        { name: "value_1", label: "prompt_enhance", type: "BOOLEAN", widget: { name: "value_1" } },
+      ],
+      outputs: [{ name: "IMAGE", type: "IMAGE" }],
+      widgets_values: ["测试提示词", false],
+      widgets_values_named: { value: "测试提示词", value_1: false },
+    }],
+    links: [],
   };
 }
 

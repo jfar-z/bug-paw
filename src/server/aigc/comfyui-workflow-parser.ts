@@ -13,6 +13,12 @@ export interface ParsedComfyUiWorkflow {
   originalHash: string;
 }
 
+interface ComfyUiSubgraphDefinition {
+  name?: string;
+  inputLabels: Map<string, string>;
+  outputLabels: Map<string, string>;
+}
+
 /** 解析 ComfyUI 的 UI 导出格式与 API 格式，但绝不执行节点脚本。 */
 export class ComfyUiWorkflowParser {
   /** 解析工作流并返回稳定 hash、节点和连线。 */
@@ -34,12 +40,14 @@ export class ComfyUiWorkflowParser {
       if (!isRecord(node)) throw new TypeError(`工作流节点 ${index + 1} 格式无效`);
       return node;
     });
+    const subgraphDefinitions = parseSubgraphDefinitions(raw.definitions);
     const nodesById = new Map<string, Record<string, unknown>>();
     const nodes = nodeRecords.map((node) => {
       const id = String(node.id);
       if (!id) throw new TypeError("工作流节点缺少 ID");
       nodesById.set(id, node);
-      return this.nodeFromUiRecord(id, node);
+      const nodeType = typeof node.type === "string" ? node.type : "unknown";
+      return this.nodeFromUiRecord(id, node, subgraphDefinitions.get(nodeType));
     });
 
     const edges = (raw.links as unknown[]).flatMap((link, index) => {
@@ -90,36 +98,46 @@ export class ComfyUiWorkflowParser {
   }
 
   /** 把 UI 节点记录解析成节点与候选字段。 */
-  private nodeFromUiRecord(id: string, node: Record<string, unknown>): ComfyUiNode {
+  private nodeFromUiRecord(id: string, node: Record<string, unknown>, subgraph?: ComfyUiSubgraphDefinition): ComfyUiNode {
     const inputs = Array.isArray(node.inputs) ? node.inputs as unknown[] : [];
     const outputs = Array.isArray(node.outputs) ? node.outputs as unknown[] : [];
     const widgets = Array.isArray(node.widgets_values) ? node.widgets_values as unknown[] : [];
     const fields: ComfyUiField[] = [
       ...inputs.flatMap((field, index) => {
         if (!isRecord(field)) return [];
+        const name = typeof field.name === "string" ? field.name : `input_${index}`;
+        const label = fieldDisplayLabel(field) ?? subgraph?.inputLabels.get(name);
         return [{
-          name: `inputs.${typeof field.name === "string" ? field.name : `input_${index}`}`,
+          name: `inputs.${name}`,
+          ...(label ? { label } : {}),
           kind: "input" as const,
           valueType: inferValueType(field.default),
         }];
       }),
       ...outputs.flatMap((field, index) => {
         if (!isRecord(field)) return [];
+        const name = typeof field.name === "string" ? field.name : `output_${index}`;
+        const label = fieldDisplayLabel(field) ?? subgraph?.outputLabels.get(name);
         return [{
-          name: `outputs.${typeof field.name === "string" ? field.name : `output_${index}`}`,
+          name: `outputs.${name}`,
+          ...(label ? { label } : {}),
           kind: "output" as const,
         }];
       }),
-      ...widgets.map((value, index) => ({
-        name: `widgets_values.${index}`,
-        kind: "widget" as const,
-        valueType: inferValueType(value),
-      })),
+      ...widgets.map((value, index) => {
+        const label = widgetDisplayLabel(node, inputs, index, subgraph);
+        return {
+          name: `widgets_values.${index}`,
+          ...(label ? { label } : {}),
+          kind: "widget" as const,
+          valueType: inferValueType(value),
+        };
+      }),
     ];
     return {
       id,
       type: typeof node.type === "string" ? node.type : "unknown",
-      title: typeof node.title === "string" ? node.title : undefined,
+      title: typeof node.title === "string" ? node.title : subgraph?.name,
       fields,
     };
   }
@@ -143,6 +161,56 @@ export class ComfyUiWorkflowParser {
     }
     return fields;
   }
+}
+
+/** 读取 ComfyUI definitions.subgraphs 中的名称和端口展示别名。 */
+function parseSubgraphDefinitions(value: unknown): Map<string, ComfyUiSubgraphDefinition> {
+  if (!isRecord(value) || !Array.isArray(value.subgraphs)) return new Map();
+  return new Map(value.subgraphs.flatMap((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string") return [];
+    return [[candidate.id, {
+      ...(typeof candidate.name === "string" && candidate.name.trim() ? { name: candidate.name.trim() } : {}),
+      inputLabels: portLabels(candidate.inputs),
+      outputLabels: portLabels(candidate.outputs),
+    } satisfies ComfyUiSubgraphDefinition] as const];
+  }));
+}
+
+/** 按内部端口名索引子图公开别名。 */
+function portLabels(value: unknown): Map<string, string> {
+  if (!Array.isArray(value)) return new Map();
+  return new Map(value.flatMap((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.name !== "string") return [];
+    const label = fieldDisplayLabel(candidate);
+    return label ? [[candidate.name, label] as const] : [];
+  }));
+}
+
+/** 读取用户在 ComfyUI 中为端口配置的展示别名。 */
+function fieldDisplayLabel(field: Record<string, unknown>): string | undefined {
+  const label = typeof field.label === "string" ? field.label.trim() : "";
+  return label || undefined;
+}
+
+/** 将 widgets_values 索引关联回具名控件及其子图端口别名。 */
+function widgetDisplayLabel(
+  node: Record<string, unknown>,
+  inputs: unknown[],
+  index: number,
+  subgraph?: ComfyUiSubgraphDefinition,
+): string | undefined {
+  const namedValues = isRecord(node.widgets_values_named) ? Object.keys(node.widgets_values_named) : [];
+  const widgetName = namedValues[index];
+  if (widgetName) {
+    const input = inputs.find((candidate) => isRecord(candidate)
+      && (candidate.name === widgetName || (isRecord(candidate.widget) && candidate.widget.name === widgetName)));
+    if (isRecord(input)) return fieldDisplayLabel(input) ?? subgraph?.inputLabels.get(widgetName);
+    return subgraph?.inputLabels.get(widgetName);
+  }
+  const input = inputs[index];
+  if (!isRecord(input)) return undefined;
+  const inputName = typeof input.name === "string" ? input.name : undefined;
+  return fieldDisplayLabel(input) ?? (inputName ? subgraph?.inputLabels.get(inputName) : undefined);
 }
 
 /** 根据节点类型返回常见输出字段名。 */

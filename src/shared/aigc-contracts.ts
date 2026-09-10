@@ -209,6 +209,8 @@ export interface ComfyUiNode {
 /** 解析后的 ComfyUI 节点字段。 */
 export interface ComfyUiField {
   name: string;
+  /** ComfyUI 节点为字段配置的展示别名，不影响真实映射路径。 */
+  label?: string;
   kind: "input" | "output" | "widget" | "unknown";
   /** 基于 ComfyUI 节点字段内容推断出的值类型。 */
   valueType?: AigcWorkflowInputType;
