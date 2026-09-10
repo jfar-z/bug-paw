@@ -294,6 +294,30 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     pageMountedRef.current && interactionCoordinator.guard(ticket, checkpoint)
   ), [interactionCoordinator]);
 
+  /** 按代次接纳同类会话列表读取，阻止跨标签同步和手动刷新乱序覆盖。 */
+  const loadSessionSummaries = useCallback(async (
+    agentId: string,
+    archived: boolean,
+    source: string,
+  ): Promise<SessionSummary[] | undefined> => {
+    const channel = archived ? "archived-session-list" as const : "session-list" as const;
+    const ticket = interactionCoordinator.begin(channel, { agentId, source });
+    try {
+      const result = await api.listSessions(agentId, archived);
+      if (!guardInteraction(ticket, "session-list-response")) return undefined;
+      if (selectedAgentIdRef.current !== agentId) {
+        interactionCoordinator.finish(ticket, "applied", { ignoredAgentChange: true });
+        return undefined;
+      }
+      interactionCoordinator.finish(ticket, "applied", { count: result.sessions.length });
+      return result.sessions;
+    } catch (reason) {
+      if (!guardInteraction(ticket, "session-list-error")) return undefined;
+      interactionCoordinator.finish(ticket, "failed");
+      throw reason;
+    }
+  }, [guardInteraction, interactionCoordinator]);
+
   /** 同步 Session 权威运行时字段，并保持命令式快照引用与 React 状态一致。 */
   const applySessionRuntimeChange = useCallback((targetSessionId: string, patch: {
     model?: ModelSummary;
@@ -472,7 +496,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   });
 
   const stream = useSessionStream({
-    sessionId: session?.id,
+    // 切换期间立即撤销旧 Session 的实时流归属，失败回退后会按原 Session 自动重连。
+    sessionId: openingSessionId ? undefined : session?.id,
     initialCursor: session?.lastEventId,
     onSnapshot: applyStreamSnapshot,
     onTurnCommitted: ({ id, messages: committedMessages, history }) => {
@@ -665,6 +690,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         }
         const initialAgentId = initialAgent?.profile.id;
         setAgents(availableAgents);
+        selectedAgentIdRef.current = initialAgentId;
         setSelectedAgentId(initialAgentId);
         setModels(modelResult.models);
         setGlobalDefaultModel(inheritedModel);
@@ -673,11 +699,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
           interactionCoordinator.finish(ticket, "applied", { hasAgent: false });
           return;
         }
-        const sessionResult = await api.listSessions(initialAgentId);
+        const sessionSummaries = await loadSessionSummaries(initialAgentId, false, "bootstrap");
         if (!guardInteraction(ticket, "session-list-response")) return;
-        setSessions(sessionResult.sessions);
-        if (sessionResult.sessions[0]) {
-          const opened = await api.openSession(sessionResult.sessions[0].id);
+        if (!sessionSummaries) return;
+        setSessions(sessionSummaries);
+        if (sessionSummaries[0]) {
+          const opened = await api.openSession(sessionSummaries[0].id);
           if (!guardInteraction(ticket, "initial-session-response")) return;
           applySnapshot(opened);
         }
@@ -693,7 +720,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         interactionCoordinator.invalidate("agent-selection", "bootstrap-effect-cleanup");
       }
     };
-  }, [applySnapshot, guardInteraction, initializeForAgent, interactionCoordinator, reportFailure, runOptionalApiTask]);
+  }, [applySnapshot, guardInteraction, initializeForAgent, interactionCoordinator, loadSessionSummaries, reportFailure, runOptionalApiTask]);
 
   useEffect(() => {
     let active = true;
@@ -712,12 +739,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     let active = true;
     const sync = createSessionListSync(() => {
       if (selectedAgentId) {
-        void api.listSessions(selectedAgentId)
-          .then((result) => { if (active) setSessions(result.sessions); })
+        void loadSessionSummaries(selectedAgentId, false, "broadcast")
+          .then((result) => { if (active && result) setSessions(result); })
           .catch((reason: unknown) => { if (active) void reportFailure(reason, "同步会话列表"); });
         if (archiveDialogOpen) {
-          void api.listSessions(selectedAgentId, true)
-            .then((result) => { if (active) setArchivedSessions(result.sessions); })
+          void loadSessionSummaries(selectedAgentId, true, "broadcast")
+            .then((result) => { if (active && result) setArchivedSessions(result); })
             .catch((reason: unknown) => { if (active) void reportFailure(reason, "同步归档会话"); });
         }
       }
@@ -727,7 +754,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       active = false;
       sync.close();
     };
-  }, [archiveDialogOpen, reportFailure, selectedAgentId]);
+  }, [archiveDialogOpen, loadSessionSummaries, reportFailure, selectedAgentId]);
 
   const createConversation = async (agentId: string, ticket: ChatInteractionTicket) => {
     setError("");
@@ -777,6 +804,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const resetToDraft = (draftAgent: AgentProfileDocument | undefined) => {
     invalidateSessionInteractions("enter-draft");
     interactionCoordinator.invalidate("session-transition", "enter-draft");
+    openingSessionRef.current = undefined;
+    setOpeningSessionId(undefined);
     stopSpeech();
     stream.close();
     focusedHistoryRef.current = undefined;
@@ -801,6 +830,16 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
 
   const enterDraft = () => {
     resetToDraft(agents.find((item) => item.profile.id === selectedAgentId));
+  };
+
+  /** 仅当被移除 Session 仍是当前目标时退出，避免迟到响应清空已经切换的新会话。 */
+  const leaveRemovedSessions = (removedSessionIds: ReadonlySet<string>) => {
+    const openingSessionId = openingSessionRef.current;
+    const currentSessionId = sessionIdRef.current;
+    if ((openingSessionId && removedSessionIds.has(openingSessionId))
+      || (!openingSessionId && currentSessionId && removedSessionIds.has(currentSessionId))) {
+      enterDraft();
+    }
   };
 
   const clearSessionLongPress = () => {
@@ -1003,13 +1042,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     if (!agentId || refreshingSessions || openingSessionRef.current) return;
     setRefreshingSessions(true);
     try {
-      const result = await api.listSessions(agentId);
-      if (selectedAgentIdRef.current !== agentId) return;
-      setSessions(result.sessions);
+      const nextSessions = await loadSessionSummaries(agentId, false, "manual-refresh");
+      if (!nextSessions) return;
+      setSessions(nextSessions);
       const activeSessionId = sessionIdRef.current;
-      if (activeSessionId && !result.sessions.some((item) => item.id === activeSessionId)) {
-        if (result.sessions[0]) {
-          await openConversation(result.sessions[0].id);
+      if (activeSessionId && !nextSessions.some((item) => item.id === activeSessionId)) {
+        if (nextSessions[0]) {
+          await openConversation(nextSessions[0].id);
         } else {
           enterDraft();
         }
@@ -1050,9 +1089,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       await api.archiveSession(sessionId);
       setSessions((current) => current.filter((item) => item.id !== sessionId));
-      if (session?.id === sessionId) {
-        enterDraft();
-      }
+      leaveRemovedSessions(new Set([sessionId]));
       sessionSyncRef.current?.notify();
     } catch (reason) {
       await reportFailure(reason, "归档会话");
@@ -1067,9 +1104,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       } else {
         setSessions((current) => current.filter((item) => item.id !== sessionId));
       }
-      if (session?.id === sessionId) {
-        enterDraft();
-      }
+      leaveRemovedSessions(new Set([sessionId]));
       sessionSyncRef.current?.notify();
     } catch (reason) {
       await reportFailure(reason, "删除会话");
@@ -1114,28 +1149,28 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setSessionBulkBusy(true);
     setError("");
     try {
-      const activeArchivedSession = preview.target.mode === "all_archived"
-        && Boolean(session?.id && archivedSessions.some((item) => item.id === session.id));
+      const archivedSessionIds = new Set(archivedSessions.map((item) => item.id));
       await api.executeSessionBulk(preview.action, preview.target, preview.fingerprint);
       if (preview.target.mode === "all_archived") {
         if (!selectedAgentId) return;
         const [normal, archived] = await Promise.all([
-          api.listSessions(selectedAgentId),
-          api.listSessions(selectedAgentId, true),
+          loadSessionSummaries(selectedAgentId, false, "bulk-operation"),
+          loadSessionSummaries(selectedAgentId, true, "bulk-operation"),
         ]);
-        setSessions(normal.sessions);
-        setArchivedSessions(archived.sessions);
+        if (!normal || !archived) return;
+        setSessions(normal);
+        setArchivedSessions(archived);
         setSessionBulkPreview(undefined);
         sessionSyncRef.current?.notify();
-        if (preview.action === "delete" && activeArchivedSession) enterDraft();
+        if (preview.action === "delete") leaveRemovedSessions(archivedSessionIds);
         return;
       }
       const removedIds = new Set(preview.target.sessionIds);
       setSessions((current) => current.filter((item) => !removedIds.has(item.id)));
       sessionSyncRef.current?.notify();
-      if (session?.id && removedIds.has(session.id)) {
-        enterDraft();
-      } else {
+      const currentSessionWasRemoved = Boolean(sessionIdRef.current && removedIds.has(sessionIdRef.current));
+      leaveRemovedSessions(removedIds);
+      if (!currentSessionWasRemoved) {
         cancelSessionSelection();
       }
     } catch (reason) {
@@ -1150,8 +1185,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setArchiveDialogOpen(true);
     try {
       if (!selectedAgentId) return;
-      const result = await api.listSessions(selectedAgentId, true);
-      setArchivedSessions(result.sessions);
+      const result = await loadSessionSummaries(selectedAgentId, true, "archive-dialog");
+      if (result) setArchivedSessions(result);
     } catch (reason) {
       await reportFailure(reason, "加载归档会话");
     }
@@ -1161,9 +1196,13 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     try {
       await api.unarchiveSession(sessionId);
       if (!selectedAgentId) return;
-      const [normal, archived] = await Promise.all([api.listSessions(selectedAgentId), api.listSessions(selectedAgentId, true)]);
-      setSessions(normal.sessions);
-      setArchivedSessions(archived.sessions);
+      const [normal, archived] = await Promise.all([
+        loadSessionSummaries(selectedAgentId, false, "restore-session"),
+        loadSessionSummaries(selectedAgentId, true, "restore-session"),
+      ]);
+      if (!normal || !archived) return;
+      setSessions(normal);
+      setArchivedSessions(archived);
       sessionSyncRef.current?.notify();
     } catch (reason) {
       await reportFailure(reason, "恢复会话");
@@ -1639,12 +1678,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const ticket = interactionCoordinator.begin("agent-selection", { agentId, source: "menu" });
     const nextAgent = agents.find((item) => item.profile.id === agentId);
     cacheSelectedAgentId(agentId);
+    selectedAgentIdRef.current = agentId;
     setSelectedAgentId(agentId);
     resetToDraft(nextAgent);
     try {
-      const result = await api.listSessions(agentId);
+      const result = await loadSessionSummaries(agentId, false, "agent-selection");
       if (!guardInteraction(ticket, "agent-sessions-response")) return;
-      setSessions(result.sessions);
+      if (!result) return;
+      setSessions(result);
       interactionCoordinator.finish(ticket, "applied", { agentId });
     } catch (reason) {
       if (guardInteraction(ticket, "agent-selection-error")) {

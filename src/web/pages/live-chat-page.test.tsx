@@ -31,6 +31,8 @@ let messageResponse: Promise<Response> | undefined;
 let abortResponse: Promise<Response> | undefined;
 let editResponse: Promise<Response> | undefined;
 let thinkingLevelResponse: Promise<Response> | undefined;
+let archiveResponse: Promise<Response> | undefined;
+let sessionListResponseQueue: Promise<Response>[] = [];
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 function deferred<T>() {
@@ -60,9 +62,11 @@ class HistoryObserverDouble {
 class FakeEventSource {
   static readonly OPEN = 1;
   static instances: FakeEventSource[] = [];
+  static reportErrorOnClose = false;
   readonly readyState = FakeEventSource.OPEN;
   readonly listeners = new Map<string, EventListener[]>();
   onerror: (() => void) | null = null;
+  closed = false;
   private nextEventId = 1;
 
   constructor(readonly url: string) {
@@ -74,7 +78,10 @@ class FakeEventSource {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
 
-  close() {}
+  close() {
+    this.closed = true;
+    if (FakeEventSource.reportErrorOnClose) this.onerror?.();
+  }
 
   /** 模拟浏览器完成 EventSource 自动重连。 */
   emitOpen() {
@@ -218,6 +225,7 @@ function mediaQueryResult(matches: boolean): MediaQueryList {
 
 beforeEach(() => {
   FakeEventSource.instances = [];
+  FakeEventSource.reportErrorOnClose = false;
   RecordingBroadcastChannel.instances = [];
   PageFakeAudio.instances = [];
   operationLog.length = 0;
@@ -231,6 +239,8 @@ beforeEach(() => {
   abortResponse = undefined;
   editResponse = undefined;
   thinkingLevelResponse = undefined;
+  archiveResponse = undefined;
+  sessionListResponseQueue = [];
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -248,6 +258,8 @@ beforeEach(() => {
       return new Response(JSON.stringify({ id: "session-new", agentId: "default", messages: [], lastEventId: 0 }));
     }
     if (url === "/api/v1/sessions?agentId=default") {
+      const queued = sessionListResponseQueue.shift();
+      if (queued) return queued;
       return new Response(JSON.stringify({ sessions: [
         { id: "session-1", firstMessage: "测试", modified: "", messageCount: 0 },
         { id: "session-2", firstMessage: "第二会话", modified: "", messageCount: 2, scheduledTaskCount: 2 },
@@ -315,6 +327,9 @@ beforeEach(() => {
     }
     if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
       return thinkingLevelResponse ?? new Response(null, { status: 204 });
+    }
+    if (url === "/api/v1/sessions/session-1/archive" && init?.method === "POST") {
+      return archiveResponse ?? new Response(null, { status: 204 });
     }
     if (url === "/api/v1/sessions/session-2") {
       return new Response(JSON.stringify(sessionTwoSnapshot ?? {
@@ -650,6 +665,68 @@ it("旧会话的迟到事件不能污染当前会话", async () => {
   }));
 
   expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible();
+});
+
+it("删除当前会话时主动关闭实时连接不会上报断线错误", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  FakeEventSource.reportErrorOnClose = true;
+
+  fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+  fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+
+  await waitFor(() => expect(operationLog).toContain("fetch:DELETE:/api/v1/sessions/session-1"));
+  await waitFor(() => expect(FakeEventSource.instances[0]?.closed).toBe(true));
+  expect(screen.queryByText(/会话实时连接中断/u)).not.toBeInTheDocument();
+  expect(screen.queryByText("恢复会话实时连接")).not.toBeInTheDocument();
+});
+
+it("归档旧会话的迟到响应不会清空已经打开的新会话", async () => {
+  const pendingArchive = deferred<Response>();
+  archiveResponse = pendingArchive.promise;
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+
+  fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "归档" }));
+  await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-1/archive"));
+  fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
+  await waitFor(() => expect(messageRowTexts().some((text) => text.includes("第二会话问题"))).toBe(true));
+
+  pendingArchive.resolve(new Response(null, { status: 204 }));
+
+  await waitFor(() => expect(screen.getByRole("button", { name: /^第二会话/ }).closest(".session-row")).toHaveClass("is-active"));
+  expect(messageRowTexts().some((text) => text.includes("第二会话问题"))).toBe(true);
+});
+
+it("跨标签页同步的旧列表响应不会覆盖较新的手动刷新结果", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(RecordingBroadcastChannel.instances.length).toBeGreaterThan(0));
+  const staleList = deferred<Response>();
+  const latestList = deferred<Response>();
+  sessionListResponseQueue.push(staleList.promise, latestList.promise);
+  const initialRequestCount = operationLog.filter((entry) => entry === "fetch:GET:/api/v1/sessions?agentId=default").length;
+
+  act(() => RecordingBroadcastChannel.instances.at(-1)?.onmessage?.({ data: "sessions-invalidated" } as MessageEvent));
+  await waitFor(() => expect(operationLog.filter((entry) => entry === "fetch:GET:/api/v1/sessions?agentId=default")).toHaveLength(initialRequestCount + 1));
+  fireEvent.click(screen.getByRole("button", { name: "刷新会话列表" }));
+  await waitFor(() => expect(operationLog.filter((entry) => entry === "fetch:GET:/api/v1/sessions?agentId=default")).toHaveLength(initialRequestCount + 2));
+
+  latestList.resolve(new Response(JSON.stringify({ sessions: [
+    { id: "session-1", firstMessage: "测试", modified: "", messageCount: 0 },
+    { id: "session-2", name: "最新列表", firstMessage: "第二会话", modified: "", messageCount: 2 },
+  ] })));
+  await screen.findByRole("button", { name: /^最新列表/ });
+  staleList.resolve(new Response(JSON.stringify({ sessions: [
+    { id: "session-1", firstMessage: "测试", modified: "", messageCount: 0 },
+    { id: "session-2", name: "旧列表", firstMessage: "第二会话", modified: "", messageCount: 2 },
+  ] })));
+
+  await waitFor(() => expect(screen.queryByRole("button", { name: /^旧列表/ })).not.toBeInTheDocument());
+  expect(screen.getByRole("button", { name: /^最新列表/ })).toBeVisible();
 });
 
 it("切换会话后丢弃迟到的历史编辑响应", async () => {

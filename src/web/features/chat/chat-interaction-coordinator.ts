@@ -1,11 +1,13 @@
 export type ChatInteractionChannel =
   | "agent-selection"
+  | "archived-session-list"
   | "branch-navigation"
   | "history-edit"
   | "message-send"
   | "model-change"
   | "projection-refresh"
   | "question-submission"
+  | "session-list"
   | "session-transition"
   | "thinking-level-change";
 

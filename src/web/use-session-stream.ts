@@ -85,8 +85,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
   }, [flushDeltas]);
 
   const closeTransport = useCallback(() => {
-    sourceRef.current?.close();
+    const source = sourceRef.current;
+    // 先撤销传输归属，再主动关闭连接，避免部分浏览器同步触发 onerror 时误报断线。
     sourceRef.current = undefined;
+    source?.close();
     lastEventIdRef.current = 0;
     if (animationFrameRef.current !== undefined) cancelAnimationFrame(animationFrameRef.current);
     animationFrameRef.current = undefined;
