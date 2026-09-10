@@ -15,7 +15,7 @@ import type {
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import type { AigcExecutionInput, AigcExecutionResult, AigcProtocolAdapter } from "./aigc-protocol-adapter";
 import { validateMetadataValue } from "./aigc-workflow-service";
-import { resolveComfyUiMappedField } from "./comfyui-mapped-field";
+import { isComfyUiPrimitiveValueField, resolveComfyUiMappedField } from "./comfyui-mapped-field";
 
 const POLL_INTERVAL_MS = 1_000;
 const QUEUE_POLL_EVERY = 3;
@@ -141,7 +141,8 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
         throw new TypeError(`工作流入参 ${mapping.name} 无法解析：${metadata.conflict}`);
       }
       validateMetadataValue(mapping.name, mapping.type, executionValue, metadata, mapping.enumOptions);
-      if (nodeClass === "PrimitiveNode" && mapping.field === "widgets_values.0") {
+      if (nodeClass === "PrimitiveNode"
+        && isComfyUiPrimitiveValueField(uiWorkflow, workflow.nodeMetadata, mapping.nodeId, mapping.field)) {
         setPrimitiveTargets(apiWorkflow, workflow.edges, mapping.nodeId, executionValue);
         continue;
       }

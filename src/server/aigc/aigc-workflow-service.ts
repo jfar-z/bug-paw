@@ -282,7 +282,9 @@ function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
 /** 同步后以 API 稳定字段替换控件索引，并隐藏无法解析的前端状态控件。 */
 function detailNode(workflow: StoredAigcWorkflow, node: ComfyUiNode): ComfyUiNode {
   const metadata = workflow.nodeMetadata?.[node.type];
-  if (!metadata?.widgetInputs?.length) return { ...node, fields: node.fields.map((field) => ({ ...field })) };
+  if (node.type === "PrimitiveNode" || !metadata?.widgetInputs?.length) {
+    return { ...node, fields: node.fields.map((field) => ({ ...field })) };
+  }
   const fields = node.fields.flatMap((field) => {
     if (field.kind !== "widget") return [{ ...field }];
     const name = resolveComfyUiMappedField(workflow.raw, workflow.nodeMetadata, node.id, field.name);

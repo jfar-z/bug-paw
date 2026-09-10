@@ -168,6 +168,32 @@ it("展开外部子图并把公开端口映射到内部节点", async () => {
   expect(submittedPrompt).toHaveProperty("52.inputs.images", ["30:1", 0]);
 });
 
+it("兼容已迁移为 API 别名的 PrimitiveNode 映射并写入全部下游", async () => {
+  let submittedPrompt: Record<string, unknown> | undefined;
+  const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+    const url = String(requestInput);
+    if (url.endsWith("/prompt")) {
+      submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+      return json({ prompt_id: "prompt-primitive" });
+    }
+    if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-primitive"]], queue_pending: [] });
+    if (url.endsWith("/history/prompt-primitive")) {
+      return json({ "prompt-primitive": { outputs: { "80": { images: [{ filename: "result.png" }] } } } });
+    }
+    if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+    throw new Error(`未处理请求 ${url}`);
+  });
+  const workflow = primitiveWorkflow();
+  workflow.inputMappings[0].field = "inputs.value";
+
+  await new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0)
+    .execute(input(workflow, { aspect_ratio: "4:3" }));
+
+  expect(submittedPrompt).not.toHaveProperty("144");
+  expect(submittedPrompt).toHaveProperty("57.inputs.aspect_ratio", "4:3");
+  expect(submittedPrompt).toHaveProperty("120.inputs.aspect_ratio", "4:3");
+});
+
 });
 
 function input(
@@ -278,7 +304,14 @@ function primitiveWorkflow(): AigcWorkflowDetail & { raw: unknown } {
     id: "workflow-primitive",
     raw: {
       nodes: [
-        { id: 144, type: "PrimitiveNode", inputs: [], outputs: [{ name: "COMBO", type: "COMBO", links: [273, 274] }], widgets_values: ["16:9", "fixed", ""] },
+        {
+          id: 144,
+          type: "PrimitiveNode",
+          inputs: [],
+          outputs: [{ name: "COMBO", type: "COMBO", links: [273, 274] }],
+          widgets_values: ["16:9", "fixed", ""],
+          widgets_values_named: { value: "16:9", control_after_generate: "fixed", control_filter_list: "" },
+        },
         { id: 57, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 273 }], outputs: [], widgets_values: ["16:9", 1, 8] },
         { id: 120, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 274 }], outputs: [], widgets_values: ["16:9", 1, 8] },
         { id: 80, type: "SaveImage", inputs: [], outputs: [], widgets_values: ["result"] },

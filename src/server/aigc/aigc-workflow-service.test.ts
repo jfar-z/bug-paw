@@ -140,6 +140,37 @@ describe("AIGC 工作流服务", () => {
     ]));
   });
 
+  it("同步节点定义时保留 PrimitiveNode 控件映射", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "视频尺寸",
+      fileName: "primitive.json",
+      workflowJson: primitiveUiWorkflow(),
+      inputMappings: [{
+        id: "ratio",
+        name: "ratio",
+        nodeId: "144",
+        field: "widgets_values.0",
+        type: "enum",
+        required: true,
+        enumOptions: ["4:3", "16:9"],
+      }],
+      outputMappings: [],
+    });
+
+    expect(created.workflow.inputMappings[0].field).toBe("widgets_values.0");
+
+    const synced = await service.syncNodeMetadata(created.workflow.id, {
+      ResolutionSelector: {
+        fields: { "inputs.aspect_ratio": { comfyType: "COMBO", valueType: "enum", enumOptions: ["4:3", "16:9"] } },
+        widgetInputs: [{ name: "aspect_ratio" }],
+      },
+    }, "2026-09-10T15:00:00.000Z", created.revision);
+
+    expect(synced.workflow.inputMappings[0].field).toBe("widgets_values.0");
+    expect((await service.getPrivate(created.workflow.id))?.inputMappings[0].field).toBe("widgets_values.0");
+  });
+
   it("替换原始工作流时保留标识、映射和节点元数据", async () => {
     const service = await fixture();
     const created = await service.create({
@@ -208,6 +239,11 @@ function primitiveUiWorkflow() {
         inputs: [],
         outputs: [{ name: "COMBO", type: "COMBO", links: [273, 274] }],
         widgets_values: ["16:9", "fixed", ""],
+        widgets_values_named: {
+          value: "16:9",
+          control_after_generate: "fixed",
+          control_filter_list: "",
+        },
       },
       { id: 57, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 273 }], outputs: [], widgets_values: ["16:9", 1, 8] },
       { id: 120, type: "ResolutionSelector", inputs: [{ name: "aspect_ratio", type: "COMBO", link: 274 }], outputs: [], widgets_values: ["16:9", 1, 8] },

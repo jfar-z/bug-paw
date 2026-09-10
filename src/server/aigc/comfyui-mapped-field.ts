@@ -12,11 +12,31 @@ export function resolveComfyUiMappedField(
   if (!Number.isInteger(index) || index < 0) return field;
   const node = raw.nodes.find((value) => isRecord(value) && String(value.id) === nodeId);
   if (!isRecord(node) || !Array.isArray(node.widgets_values) || typeof node.type !== "string") return field;
+  // PrimitiveNode 不会进入 API Prompt，必须保留控件索引供执行阶段改写下游节点。
+  if (node.type === "PrimitiveNode") return field;
   const descriptors = nodeMetadata?.[node.type]?.widgetInputs;
   const resolved = descriptors?.length
     ? expandWidgetInputNames(descriptors, node.widgets_values)[index]
     : fallbackWidgetInputName(node, index);
   return resolved ? `inputs.${resolved}` : field;
+}
+
+/** 判断字段是否表示 PrimitiveNode 的首个实际值，兼容已持久化的 API 字段别名。 */
+export function isComfyUiPrimitiveValueField(
+  raw: unknown,
+  nodeMetadata: ComfyUiNodeMetadata | undefined,
+  nodeId: string,
+  field: string,
+): boolean {
+  if (!isRecord(raw) || !Array.isArray(raw.nodes)) return false;
+  const node = raw.nodes.find((value) => isRecord(value) && String(value.id) === nodeId);
+  if (!isRecord(node) || node.type !== "PrimitiveNode" || !Array.isArray(node.widgets_values)) return false;
+  if (field === "widgets_values.0") return true;
+  const descriptors = nodeMetadata?.PrimitiveNode?.widgetInputs;
+  const resolved = descriptors?.length
+    ? expandWidgetInputNames(descriptors, node.widgets_values)[0]
+    : fallbackWidgetInputName(node, 0);
+  return Boolean(resolved) && field === `inputs.${resolved}`;
 }
 
 /** 无节点定义时使用 ComfyUI 持久化的具名控件恢复字段名。 */
