@@ -30,6 +30,7 @@ let questionAnswerResponse: Promise<Response> | undefined;
 let messageResponse: Promise<Response> | undefined;
 let abortResponse: Promise<Response> | undefined;
 let editResponse: Promise<Response> | undefined;
+let thinkingLevelResponse: Promise<Response> | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 function deferred<T>() {
@@ -229,6 +230,7 @@ beforeEach(() => {
   messageResponse = undefined;
   abortResponse = undefined;
   editResponse = undefined;
+  thinkingLevelResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -312,7 +314,7 @@ beforeEach(() => {
       }));
     }
     if (url === "/api/v1/sessions/session-1/thinking-level" && init?.method === "PUT") {
-      return new Response(null, { status: 204 });
+      return thinkingLevelResponse ?? new Response(null, { status: 204 });
     }
     if (url === "/api/v1/sessions/session-2") {
       return new Response(JSON.stringify(sessionTwoSnapshot ?? {
@@ -674,6 +676,21 @@ it("切换会话后丢弃迟到的历史编辑响应", async () => {
 
   await waitFor(() => expect(screen.getByRole("textbox", { name: "消息内容" })).toHaveValue(""));
   expect(screen.queryByText("正在编辑历史消息")).not.toBeInTheDocument();
+});
+
+it("思考深度尚未确认时禁止发送消息", async () => {
+  const pendingThinkingLevel = deferred<Response>();
+  thinkingLevelResponse = pendingThinkingLevel.promise;
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  const sendButton = await screen.findByRole("button", { name: "发送消息" });
+
+  fireEvent.click(screen.getByRole("button", { name: "思考深度：中" }));
+  fireEvent.click(screen.getByRole("option", { name: "高 high" }));
+
+  await waitFor(() => expect(operationLog).toContain("fetch:PUT:/api/v1/sessions/session-1/thinking-level"));
+  expect(sendButton).toBeDisabled();
+  pendingThinkingLevel.resolve(new Response(null, { status: 204 }));
+  await waitFor(() => expect(sendButton).toBeEnabled());
 });
 
 it("草稿首次发送只创建一个 session 并先建立其事件流", async () => {

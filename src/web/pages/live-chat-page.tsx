@@ -44,12 +44,12 @@ import {
 import { createSessionListSync, type SessionListSync } from "../session-sync";
 import { navigateTo, WORKBENCH_NAVIGATION_TOGGLE_EVENT } from "../router";
 import type { AgentReference } from "../../shared/agent-reference-contracts";
-import { THINKING_LEVELS, type ThinkingLevel } from "../../shared/configuration-contracts";
 import { ChatSidebar } from "../features/chat/components/chat-sidebar";
 import { ConversationTimelineView } from "../features/chat/components/conversation-timeline-view";
 import { ProfileDialog } from "../features/chat/components/profile-dialog";
 import type { IdentityPreview } from "../features/chat/chat-types";
 import { ChatInteractionCoordinator, type ChatInteractionTicket } from "../features/chat/chat-interaction-coordinator";
+import { isSameModel, useChatRuntimeControls } from "../features/chat/use-chat-runtime-controls";
 import { useMobileWorkspaceSwipe, type MobileWorkspaceDrawer } from "../features/chat/mobile-workspace-swipe";
 import { classifyDataFileLink } from "../workspace-links";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../speech-text";
@@ -210,8 +210,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
-  const [selectedModel, setSelectedModel] = useState<ModelSummary>();
-  const [selectedThinkingLevel, setSelectedThinkingLevel] = useState<ThinkingLevel>("medium");
   const [globalDefaultModel, setGlobalDefaultModel] = useState<{ provider: string; id: string }>();
   const [openingSessionId, setOpeningSessionId] = useState<string>();
   const [session, setSession] = useState<SessionSnapshot>();
@@ -256,9 +254,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const pendingUserMessageRef = useRef<PendingUserMessage | undefined>(undefined);
   const pendingQuestionResponseRef = useRef<PendingQuestionResponse | undefined>(undefined);
   const streamRunRevisionRef = useRef(0);
-  const modelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const thinkingLevelChangeQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const confirmedThinkingLevelRef = useRef<ThinkingLevel>("medium");
   const selectedAgentIdRef = useRef<string | undefined>(selectedAgentId);
   const sessionIdRef = useRef<string | undefined>(session?.id);
   const sessionSnapshotRef = useRef<SessionSnapshot | undefined>(session);
@@ -299,6 +294,37 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     pageMountedRef.current && interactionCoordinator.guard(ticket, checkpoint)
   ), [interactionCoordinator]);
 
+  /** 同步 Session 权威运行时字段，并保持命令式快照引用与 React 状态一致。 */
+  const applySessionRuntimeChange = useCallback((targetSessionId: string, patch: {
+    model?: ModelSummary;
+    thinkingLevel?: SessionSnapshot["thinkingLevel"];
+  }) => {
+    setSession((current) => {
+      if (!current || current.id !== targetSessionId) return current;
+      const next = { ...current, ...patch };
+      sessionSnapshotRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const {
+    selectedModel,
+    selectedThinkingLevel,
+    runtimeChanging,
+    applySnapshotRuntime,
+    initializeForAgent,
+    applyModelEvent,
+    applyThinkingLevelEvent,
+    changeModel,
+    changeThinkingLevel,
+    invalidateSessionRuntime,
+  } = useChatRuntimeControls({
+    coordinator: interactionCoordinator,
+    guardInteraction,
+    onSessionRuntimeChange: applySessionRuntimeChange,
+    onFailure: reportFailure,
+  });
+
   /** 会话归属变化时废弃所有可能回写旧会话的异步动作。 */
   const invalidateSessionInteractions = (reason: string) => {
     interactionCoordinator.invalidate("branch-navigation", reason);
@@ -306,6 +332,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     interactionCoordinator.invalidate("message-send", reason);
     interactionCoordinator.invalidate("projection-refresh", reason);
     interactionCoordinator.invalidate("question-submission", reason);
+    invalidateSessionRuntime(reason);
     setQuestionSubmitting(false);
   };
 
@@ -333,11 +360,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     sessionSnapshotRef.current = mergedSnapshot;
     setSession(mergedSnapshot);
     setRunNotice(modelRunNotice(mergedSnapshot.messages));
-    if (next.model) setSelectedModel(next.model);
-    if (next.thinkingLevel) {
-      confirmedThinkingLevelRef.current = next.thinkingLevel;
-      setSelectedThinkingLevel(next.thinkingLevel);
-    }
+    applySnapshotRuntime(next);
     const running = next.run?.status === "queued" || next.run?.status === "running";
     const pendingResult = reconcilePendingUserMessage(
       next.id,
@@ -359,7 +382,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       // 旧版快照缺少分支身份时不跨未知分支回填，仅保留原有投影行为。
       setTimeline(pendingResult.timeline);
     }
-  }, [alignAfterNextContentCommit, applyAuthoritativeRun, resumeFollowing]);
+  }, [alignAfterNextContentCommit, applyAuthoritativeRun, applySnapshotRuntime, resumeFollowing]);
 
   useEffect(() => {
     const previous = previousPendingRef.current;
@@ -394,12 +417,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       sessionSnapshotRef.current = merged;
       return merged;
     });
-    if (next.model) setSelectedModel(next.model);
-    if (next.thinkingLevel) {
-      confirmedThinkingLevelRef.current = next.thinkingLevel;
-      setSelectedThinkingLevel(next.thinkingLevel);
-    }
-  }, [applyAuthoritativeRun, applySnapshot]);
+    applySnapshotRuntime(next);
+  }, [applyAuthoritativeRun, applySnapshot, applySnapshotRuntime]);
 
   const historyLoader = useSessionHistory({
     snapshot: session,
@@ -504,13 +523,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       applyAuthoritativeRun(run);
     },
     onModelChange: (model) => {
-      setSession((current) => current ? { ...current, model } : current);
-      setSelectedModel(model);
+      const targetSessionId = sessionIdRef.current;
+      if (targetSessionId) applyModelEvent(targetSessionId, model);
     },
     onThinkingLevelChange: (thinkingLevel) => {
-      confirmedThinkingLevelRef.current = thinkingLevel;
-      setSession((current) => current ? { ...current, thinkingLevel } : current);
-      setSelectedThinkingLevel(thinkingLevel);
+      const targetSessionId = sessionIdRef.current;
+      if (targetSessionId) applyThinkingLevelEvent(targetSessionId, thinkingLevel);
     },
     onSessionRenamed: (sessionId, name) => {
       setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, name } : item));
@@ -650,9 +668,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         setSelectedAgentId(initialAgentId);
         setModels(modelResult.models);
         setGlobalDefaultModel(inheritedModel);
-        const initialModel = findAgentModel(initialAgent, modelResult.models, inheritedModel);
-        setSelectedModel(initialModel);
-        setSelectedThinkingLevel(findAgentThinkingLevel(initialAgent, initialModel));
+        initializeForAgent(initialAgent, modelResult.models, inheritedModel);
         if (!initialAgentId) {
           interactionCoordinator.finish(ticket, "applied", { hasAgent: false });
           return;
@@ -677,7 +693,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         interactionCoordinator.invalidate("agent-selection", "bootstrap-effect-cleanup");
       }
     };
-  }, [applySnapshot, guardInteraction, interactionCoordinator, reportFailure, runOptionalApiTask]);
+  }, [applySnapshot, guardInteraction, initializeForAgent, interactionCoordinator, reportFailure, runOptionalApiTask]);
 
   useEffect(() => {
     let active = true;
@@ -758,7 +774,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     onCloseDrawer: (drawer) => drawer === "sessions" ? closeSidebar() : closeResources(),
   });
 
-  const enterDraft = () => {
+  const resetToDraft = (draftAgent: AgentProfileDocument | undefined) => {
     invalidateSessionInteractions("enter-draft");
     interactionCoordinator.invalidate("session-transition", "enter-draft");
     stopSpeech();
@@ -779,11 +795,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     setError("");
     setRunNotice("");
     pendingUserMessageRef.current = undefined;
-    const draftAgent = agents.find((item) => item.profile.id === selectedAgentId);
-    const draftModel = findAgentModel(draftAgent, models, globalDefaultModel);
-    setSelectedModel(draftModel);
-    setSelectedThinkingLevel(findAgentThinkingLevel(draftAgent, draftModel));
+    initializeForAgent(draftAgent, models, globalDefaultModel);
     closeSidebar();
+  };
+
+  const enterDraft = () => {
+    resetToDraft(agents.find((item) => item.profile.id === selectedAgentId));
   };
 
   const clearSessionLongPress = () => {
@@ -936,11 +953,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
       setFocusedEntryId(hit.entryId);
       sessionSnapshotRef.current = focusedSnapshot;
       setSession(focusedSnapshot);
-      if (opened.model) setSelectedModel(opened.model);
-      if (opened.thinkingLevel) {
-        confirmedThinkingLevelRef.current = opened.thinkingLevel;
-        setSelectedThinkingLevel(opened.thinkingLevel);
-      }
+      applySnapshotRuntime(opened);
       applyAuthoritativeRun(opened.run);
       setTimeline(parsePiHistory(target.messages, false));
       if (!await focusSessionEntry(hit.entryId)) throw new Error("SESSION_ENTRY_NOT_FOUND");
@@ -1167,7 +1180,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const files = attachmentItems.flatMap((item) => item.status === "uploaded" && item.workspaceFile ? [item.workspaceFile] : []);
     const references = mergeMessageReferences(draftReferences, files);
     const attachmentBusy = attachmentItems.some((item) => item.status !== "uploaded");
-    if ((!text && files.length === 0 && references.length === 0) || streaming || attachmentBusy || !selectedAgentId || !selectedModel) {
+    if ((!text && files.length === 0 && references.length === 0)
+      || streaming
+      || runtimeChanging
+      || attachmentBusy
+      || !selectedAgentId
+      || !selectedModel) {
       return;
     }
     const ticket = interactionCoordinator.begin("message-send", {
@@ -1416,68 +1434,6 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     }
   };
 
-  const changeModel = async (model: ModelSummary) => {
-    const targetSessionId = session?.id;
-    const ticket = interactionCoordinator.begin("model-change", {
-      sessionId: targetSessionId ?? "draft",
-      provider: model.provider,
-      modelId: model.id,
-    });
-    setSelectedModel(model);
-    if (!targetSessionId) {
-      setSelectedThinkingLevel((current) => normalizeThinkingLevelForModel(current, model));
-      interactionCoordinator.finish(ticket, "applied", { draft: true });
-      return;
-    }
-    try {
-      // 浏览器和服务端都按 Session 串行化，确保快速连续选择时最后一次选择最终生效。
-      const request = modelChangeQueueRef.current
-        // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
-        .then(() => undefined, () => undefined)
-        .then(() => api.setModel(targetSessionId, model.provider, model.id));
-      modelChangeQueueRef.current = request.then(() => undefined, () => undefined);
-      await request;
-      if (!guardInteraction(ticket, "model-response") || sessionIdRef.current !== targetSessionId) return;
-      setSession((current) => current?.id === targetSessionId ? { ...current, model } : current);
-      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId });
-    } catch (reason) {
-      if (!guardInteraction(ticket, "model-error") || sessionIdRef.current !== targetSessionId) return;
-      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId });
-      await reportFailure(reason, "切换会话模型");
-    }
-  };
-
-  /** 串行持久化会话思考深度，快速切换时以最后一次选择为准。 */
-  const changeThinkingLevel = async (thinkingLevel: ThinkingLevel) => {
-    const targetSessionId = session?.id;
-    const ticket = interactionCoordinator.begin("thinking-level-change", {
-      sessionId: targetSessionId ?? "draft",
-      thinkingLevel,
-    });
-    setSelectedThinkingLevel(thinkingLevel);
-    if (!targetSessionId) {
-      interactionCoordinator.finish(ticket, "applied", { draft: true });
-      return;
-    }
-    try {
-      const request = thinkingLevelChangeQueueRef.current
-        // 前一请求的调用方已经展示失败；这里只等待队列释放，避免重复弹出同一错误。
-        .then(() => undefined, () => undefined)
-        .then(() => api.setThinkingLevel(targetSessionId, thinkingLevel));
-      thinkingLevelChangeQueueRef.current = request.then(() => undefined, () => undefined);
-      await request;
-      if (!guardInteraction(ticket, "thinking-response") || sessionIdRef.current !== targetSessionId) return;
-      confirmedThinkingLevelRef.current = thinkingLevel;
-      setSession((current) => current?.id === targetSessionId ? { ...current, thinkingLevel } : current);
-      interactionCoordinator.finish(ticket, "applied", { sessionId: targetSessionId });
-    } catch (reason) {
-      if (!guardInteraction(ticket, "thinking-error") || sessionIdRef.current !== targetSessionId) return;
-      setSelectedThinkingLevel(confirmedThinkingLevelRef.current);
-      interactionCoordinator.finish(ticket, "failed", { sessionId: targetSessionId });
-      await reportFailure(reason, "切换思考深度");
-    }
-  };
-
   const activeAgentId = session?.agentId ?? selectedAgentId;
   const activeAgent = agents.find((item) => item.profile.id === activeAgentId);
   const noAvailableAgent = agents.length === 0;
@@ -1684,10 +1640,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     const nextAgent = agents.find((item) => item.profile.id === agentId);
     cacheSelectedAgentId(agentId);
     setSelectedAgentId(agentId);
-    const nextModel = findAgentModel(nextAgent, models, globalDefaultModel);
-    enterDraft();
-    setSelectedModel(nextModel);
-    setSelectedThinkingLevel(findAgentThinkingLevel(nextAgent, nextModel));
+    resetToDraft(nextAgent);
     try {
       const result = await api.listSessions(agentId);
       if (!guardInteraction(ticket, "agent-sessions-response")) return;
@@ -1903,7 +1856,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
                   onTranscript={(transcript) => setDraft((current) => appendSpeechTranscript(current, transcript))}
                   onError={setError}
                 />
-                <button type="button" disabled={isOpeningSession || (!streaming && (!selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button>
+                <button type="button" disabled={isOpeningSession || (!streaming && (runtimeChanging || !selectedAgentId || !selectedModel))} className={streaming ? "send-button is-running" : "send-button"} aria-label={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} title={streaming ? "停止生成" : editingEntryId ? "创建分支并发送" : "发送消息"} onClick={() => void (streaming ? abort() : send())}>{streaming ? <CircleStop size={18} /> : <Send size={18} />}</button>
               </div>}
             />
           </div>}
@@ -2054,44 +2007,4 @@ function userMessageDomId(entryId: string): string {
 function summarizePrompt(text: string, filePaths: string[] = []): string {
   const compact = text.replace(/\s+/g, " ").trim() || filePaths.join("、");
   return compact.length > 48 ? `${compact.slice(0, 48)}…` : compact;
-}
-
-/**
- * 优先选择 Agent 已保存的默认模型；未覆盖时沿用全局默认模型。
- */
-function findAgentModel(
-  agent: AgentProfileDocument | undefined,
-  models: ModelSummary[],
-  globalDefaultModel?: { provider: string; id: string },
-): ModelSummary | undefined {
-  const defaultModel = agent?.profile.defaultModel ?? globalDefaultModel;
-  return models.find((model) => model.provider === defaultModel?.provider && model.id === defaultModel.id) ?? models[0];
-}
-
-/** 根据模型归一化能力选择 Agent 的初始思考深度。 */
-function findAgentThinkingLevel(agent: AgentProfileDocument | undefined, model: ModelSummary | undefined): ThinkingLevel {
-  return normalizeThinkingLevelForModel(agent?.profile.defaultThinkingLevel ?? "medium", model);
-}
-
-/** 避免草稿态展示模型不支持的思考深度。 */
-function normalizeThinkingLevelForModel(thinkingLevel: ThinkingLevel, model: ModelSummary | undefined): ThinkingLevel {
-  const available = model?.thinkingLevels;
-  if (!available?.length || available.includes(thinkingLevel)) return thinkingLevel;
-  const requestedIndex = THINKING_LEVELS.indexOf(thinkingLevel);
-  for (let index = requestedIndex + 1; index < THINKING_LEVELS.length; index += 1) {
-    const candidate = THINKING_LEVELS[index]!;
-    if (available.includes(candidate)) return candidate;
-  }
-  for (let index = requestedIndex - 1; index >= 0; index -= 1) {
-    const candidate = THINKING_LEVELS[index]!;
-    if (available.includes(candidate)) return candidate;
-  }
-  return available[0] ?? "off";
-}
-
-/**
- * 判断两个模型是否指向同一运行时配置，避免新会话重复写入其默认模型。
- */
-function isSameModel(left: ModelSummary | undefined, right: ModelSummary | undefined): boolean {
-  return left?.provider === right?.provider && left?.id === right?.id;
 }
