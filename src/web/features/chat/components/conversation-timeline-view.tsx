@@ -9,7 +9,7 @@ import { AgentReferenceChips } from "../../../components/agent-reference-chips";
 import { MessageAttachments } from "../../../components/message-attachments";
 import { MessageNavigator } from "../../../components/message-navigator";
 import type { AgentTurn, ConversationEntry } from "../../../conversation-timeline";
-import type { IdentityPreview } from "../../../pages/chat-page";
+import type { IdentityPreview } from "../chat-types";
 import { agentTurnSpeechText, prepareSpeechSegments } from "../../../speech-text";
 import type { ThemePreference } from "../../../theme";
 import { UserAvatar } from "./user-avatar";

@@ -1,4 +1,4 @@
-import type { IdentityPreview } from "../../../pages/chat-page";
+import type { IdentityPreview } from "../chat-types";
 
 /** 渲染用户头像；未上传图片时保留原有首字母占位。 */
 export function UserAvatar({ identity, className }: { identity: IdentityPreview; className: string }) {

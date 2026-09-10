@@ -29,6 +29,7 @@ let sessionTwoSnapshot: Record<string, unknown> | undefined;
 let questionAnswerResponse: Promise<Response> | undefined;
 let messageResponse: Promise<Response> | undefined;
 let abortResponse: Promise<Response> | undefined;
+let editResponse: Promise<Response> | undefined;
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 function deferred<T>() {
@@ -227,6 +228,7 @@ beforeEach(() => {
   questionAnswerResponse = undefined;
   messageResponse = undefined;
   abortResponse = undefined;
+  editResponse = undefined;
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -344,7 +346,7 @@ beforeEach(() => {
       return new Response(JSON.stringify({ id: "archived-1", agentId: "default", messages: [], lastEventId: 0 }));
     }
     if (url.endsWith("/edit")) {
-      return new Response(JSON.stringify({ snapshot: { id: "session-1", messages: [], lastEventId: 0 }, draft: { text: "编辑后的版本", filePaths: [], missingFilePaths: [], references: [] } }));
+      return editResponse ?? new Response(JSON.stringify({ snapshot: { id: "session-1", messages: [], lastEventId: 0 }, draft: { text: "编辑后的版本", filePaths: [], missingFilePaths: [], references: [] } }));
     }
     if (url.endsWith("/navigate")) {
       return new Response(JSON.stringify({
@@ -646,6 +648,32 @@ it("旧会话的迟到事件不能污染当前会话", async () => {
   }));
 
   expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible();
+});
+
+it("切换会话后丢弃迟到的历史编辑响应", async () => {
+  const pendingEdit = deferred<Response>();
+  editResponse = pendingEdit.promise;
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [{ role: "user", content: "准备编辑的旧消息", __piEntryId: "user-edit" }],
+    history: { branchToken: "branch-edit", hasMoreBefore: false, hasMoreAfter: false, turnCount: 1 },
+    thinkingLevel: "medium",
+    lastEventId: 1,
+  };
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  fireEvent.click(await screen.findByRole("button", { name: "重新编辑消息" }));
+  await waitFor(() => expect(operationLog.some((entry) => entry.includes("/branches/user-edit/edit"))).toBe(true));
+
+  fireEvent.click(screen.getByRole("button", { name: /^第二会话/ }));
+  await waitFor(() => expect(messageRowTexts().some((text) => text.includes("第二会话问题"))).toBe(true));
+  pendingEdit.resolve(new Response(JSON.stringify({
+    snapshot: { id: "session-1", messages: [], lastEventId: 1 },
+    draft: { text: "不应进入新会话的草稿", filePaths: [], missingFilePaths: [], references: [] },
+  })));
+
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "消息内容" })).toHaveValue(""));
+  expect(screen.queryByText("正在编辑历史消息")).not.toBeInTheDocument();
 });
 
 it("草稿首次发送只创建一个 session 并先建立其事件流", async () => {

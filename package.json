@@ -1,6 +1,6 @@
 {
   "name": "pi-agent-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Self-hosted personal Web Agent powered by the Pi coding agent SDK",
   "private": true,
   "license": "Apache-2.0",
