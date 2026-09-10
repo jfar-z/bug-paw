@@ -13,9 +13,24 @@ export function resolveComfyUiMappedField(
   const node = raw.nodes.find((value) => isRecord(value) && String(value.id) === nodeId);
   if (!isRecord(node) || !Array.isArray(node.widgets_values) || typeof node.type !== "string") return field;
   const descriptors = nodeMetadata?.[node.type]?.widgetInputs;
-  if (!descriptors?.length) return field;
-  const resolved = expandWidgetInputNames(descriptors, node.widgets_values)[index];
+  const resolved = descriptors?.length
+    ? expandWidgetInputNames(descriptors, node.widgets_values)[index]
+    : fallbackWidgetInputName(node, index);
   return resolved ? `inputs.${resolved}` : field;
+}
+
+/** 无节点定义时使用 ComfyUI 持久化的具名控件恢复字段名。 */
+function fallbackWidgetInputName(node: Record<string, unknown>, index: number): string | undefined {
+  const namedValues = isRecord(node.widgets_values_named) ? Object.keys(node.widgets_values_named) : [];
+  const named = namedValues[index];
+  if (named && named !== "control_after_generate") return named;
+  const inputs = Array.isArray(node.inputs) ? node.inputs : [];
+  const widgets = inputs.flatMap((value) => {
+    if (!isRecord(value) || !isRecord(value.widget)) return [];
+    const name = typeof value.widget.name === "string" ? value.widget.name : value.name;
+    return typeof name === "string" ? [name] : [];
+  });
+  return widgets[index];
 }
 
 /** 动态控件根据当前选项在父字段后展开对应子字段。 */

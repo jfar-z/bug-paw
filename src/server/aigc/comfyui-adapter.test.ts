@@ -139,6 +139,35 @@ it("具名控件值忽略随机种子前端控制项并保持后续字段类型"
   expect(submittedPrompt).not.toHaveProperty("168.inputs.control_after_generate");
 });
 
+it("展开外部子图并把公开端口映射到内部节点", async () => {
+  let submittedPrompt: Record<string, unknown> | undefined;
+  const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+    const url = String(requestInput);
+    if (url.endsWith("/prompt")) {
+      submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+      return json({ prompt_id: "prompt-subgraph" });
+    }
+    if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-subgraph"]], queue_pending: [] });
+    if (url.endsWith("/history/prompt-subgraph")) {
+      return json({ "prompt-subgraph": { outputs: { "52": { images: [{ filename: "result.png" }] } } } });
+    }
+    if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+    throw new Error(`未处理请求 ${url}`);
+  });
+
+  await new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0)
+    .execute(input(subgraphExecutionWorkflow(), { prompt: "新的提示词", height: "1920" }));
+
+  expect(submittedPrompt).not.toHaveProperty("30");
+  expect(submittedPrompt).toHaveProperty("30:1.class_type", "GeneratorNode");
+  expect(submittedPrompt).toHaveProperty("30:1.inputs", {
+    prompt: "新的提示词",
+    height: 1920,
+    style: "cinematic",
+  });
+  expect(submittedPrompt).toHaveProperty("52.inputs.images", ["30:1", 0]);
+});
+
 });
 
 function input(
@@ -394,6 +423,69 @@ function reservedVramWorkflow(): AigcWorkflowDetail & { raw: unknown } {
         ],
       },
     },
+  };
+}
+
+/** 用最小节点验证子图边界输入、输出和旧字符串数值映射。 */
+function subgraphExecutionWorkflow(): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-subgraph",
+    raw: {
+      definitions: {
+        subgraphs: [{
+          id: "subgraph-generator",
+          name: "Generator",
+          inputs: [
+            { name: "value", type: "STRING" },
+            { name: "height", type: "INT" },
+          ],
+          outputs: [{ name: "IMAGE", type: "IMAGE" }],
+          nodes: [{
+            id: 1,
+            type: "GeneratorNode",
+            inputs: [
+              { name: "prompt", type: "STRING", widget: { name: "prompt" }, link: 1 },
+              { name: "height", type: "INT", widget: { name: "height" }, link: 2 },
+              { name: "style", type: "STRING", widget: { name: "style" }, link: null },
+            ],
+            outputs: [{ name: "IMAGE", type: "IMAGE", links: [3] }],
+            widgets_values: ["默认提示词", 1024, "cinematic"],
+            widgets_values_named: { prompt: "默认提示词", height: 1024, style: "cinematic" },
+          }],
+          links: [
+            { id: 1, origin_id: -10, origin_slot: 0, target_id: 1, target_slot: 0, type: "STRING" },
+            { id: 2, origin_id: -10, origin_slot: 1, target_id: 1, target_slot: 1, type: "INT" },
+            { id: 3, origin_id: 1, origin_slot: 0, target_id: -20, target_slot: 0, type: "IMAGE" },
+          ],
+        }],
+      },
+      nodes: [
+        {
+          id: 30,
+          type: "subgraph-generator",
+          inputs: [
+            { name: "value", type: "STRING", widget: { name: "value" }, link: null },
+            { name: "height", type: "INT", widget: { name: "height" }, link: null },
+          ],
+          outputs: [{ name: "IMAGE", type: "IMAGE", links: [4] }],
+          widgets_values: ["默认提示词", 1024],
+          widgets_values_named: { value: "默认提示词", height: 1024 },
+        },
+        { id: 52, type: "PreviewImage", inputs: [{ name: "images", type: "IMAGE", link: 4 }], outputs: [] },
+      ],
+      links: [[4, 30, 0, 52, 0, "IMAGE"]],
+    },
+    nodes: [
+      { id: "30", type: "subgraph-generator", fields: [{ name: "widgets_values.0", kind: "widget", valueType: "string" }] },
+      { id: "52", type: "PreviewImage", fields: [{ name: "outputs.images", kind: "output" }] },
+    ],
+    edges: [{ id: "4", sourceNodeId: "30", sourceField: "outputs.IMAGE", targetNodeId: "52", targetField: "inputs.images" }],
+    inputMappings: [
+      { id: "prompt", name: "prompt", nodeId: "30", field: "widgets_values.0", type: "string", required: true },
+      { id: "height", name: "height", nodeId: "30", field: "inputs.height", type: "string", required: true },
+    ],
+    outputMappings: [{ id: "result", name: "result", nodeId: "52", field: "outputs.images", mediaType: "image" }],
   };
 }
 
