@@ -350,7 +350,7 @@ function InputMappingBuilder(props: {
                 <div className="aigc-field-picker">
                   {selectedFields.map((field) => (
                     <button type="button" key={field.name} className={draft.field === field.name ? "is-selected" : undefined} onClick={() => selectField(field)}>
-                      <strong title={field.name}>{field.name}</strong><small>{fieldMetadataSummary(fieldMetadata(workflow, selectedNode, field.name)) ?? field.valueType ?? field.kind}</small>
+                      <strong title={field.name}>{fieldLabel(field)}</strong><small>{fieldMetadataSummary(fieldMetadata(workflow, selectedNode, field.name)) ?? field.valueType ?? field.kind}</small>
                     </button>
                   ))}
                   {!draft.nodeId ? <p className="configuration-help">请先从左侧将一个节点选为映射节点。</p> : null}
@@ -591,7 +591,7 @@ function OutputMappingBuilder(props: {
                   <div className="aigc-field-picker">
                     {selectedFields.map((field) => (
                       <button type="button" key={field.name} className={draft.field === field.name ? "is-selected" : undefined} onClick={() => updateDraft("field", field.name)}>
-                        <strong title={field.name}>{field.name}</strong><small>{field.kind}</small>
+                        <strong title={field.name}>{fieldLabel(field)}</strong><small>{field.kind}</small>
                       </button>
                     ))}
                     {!draft.nodeId ? <p className="configuration-help">请先从左侧将一个节点选为映射节点。</p> : null}
@@ -864,6 +864,11 @@ function nodeLabel(node: ComfyUiNode | undefined, fallback: string): string {
   return node?.title || node?.type || fallback;
 }
 
+/** 展示 ComfyUI 字段别名，同时保留字段 name 作为实际映射路径。 */
+function fieldLabel(field: ComfyUiField): string {
+  return field.label?.trim() || field.name;
+}
+
 /** 汇总节点选项同时展示检索所依据的 ID、标题和类型。 */
 function referenceBoundaryLabel(node: ComfyUiNode): string {
   const title = node.title?.trim();
@@ -876,6 +881,7 @@ function edgeLabel(edge: ComfyUiEdge): string {
 
 /** 从字段名生成一个可读的默认参数名。 */
 function parameterNameFromField(field: ComfyUiField): string {
+  if (field.label?.trim()) return field.label.trim();
   const last = field.name.split(".").at(-1) ?? field.name;
   return last || "value";
 }

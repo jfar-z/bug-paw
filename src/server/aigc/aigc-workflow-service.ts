@@ -26,6 +26,7 @@ import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 const MAX_WORKFLOW_JSON_BYTES = 4 * 1024 * 1024;
 const INPUT_TYPES = new Set<AigcWorkflowInputType>(["bool", "int", "double", "string", "enum", "image", "video", "audio"]);
 const OUTPUT_MEDIA_TYPES = new Set(["image", "video", "audio", "json", "text"]);
+const workflowParser = new ComfyUiWorkflowParser();
 
 interface StoredAigcWorkflow extends AigcWorkflowDetail {
   /** 导入时的原始工作流，仅服务端执行使用。 */
@@ -39,7 +40,6 @@ interface StoredAigcWorkflows {
 /** 管理 ComfyUI 工作流导入、解析和字段映射。 */
 export class AigcWorkflowService {
   private readonly store;
-  private readonly parser = new ComfyUiWorkflowParser();
 
   /**
    * @param filePath 工作流配置文件路径
@@ -216,7 +216,7 @@ export class AigcWorkflowService {
   private parseRawWorkflow(raw: unknown) {
     const bytes = Buffer.byteLength(JSON.stringify(raw) ?? "", "utf8");
     if (bytes > MAX_WORKFLOW_JSON_BYTES) throw new TypeError("ComfyUI 工作流文件不能超过 4 MiB");
-    return this.parser.parse(raw);
+    return workflowParser.parse(raw);
   }
 }
 
@@ -256,7 +256,7 @@ function toSummary(workflow: StoredAigcWorkflow): AigcWorkflowSummary {
 
 /** 复制详情对象，避免调用方修改持久化内容。 */
 function toDetail(workflow: StoredAigcWorkflow): AigcWorkflowDetail {
-  const nodes = workflow.nodes.map((node) => detailNode(workflow, node));
+  const nodes = refreshNodePresentation(workflow.raw, workflow.nodes).map((node) => detailNode(workflow, node));
   const resolvedFieldMetadata = resolveWorkflowFieldMetadata({ ...workflow, nodes });
   return {
     id: workflow.id,
@@ -305,7 +305,7 @@ function normalizeSettings(value: unknown): StoredAigcWorkflows {
       .map((workflow) => ({
         ...workflow,
         raw: workflow.raw,
-        nodes: workflow.nodes.map((node) => ({ ...node, fields: [...node.fields] })),
+        nodes: workflow.nodes.map((node) => ({ ...node, fields: node.fields.map((field) => ({ ...field })) })),
         edges: workflow.edges.map((edge) => ({ ...edge })),
         inputMappings: workflow.inputMappings.map(cloneInputMapping),
         inputGroups: Array.isArray(workflow.inputGroups) ? workflow.inputGroups.map(cloneInputGroup) : [],
@@ -314,6 +314,23 @@ function normalizeSettings(value: unknown): StoredAigcWorkflows {
         ...(typeof workflow.nodeMetadataSyncedAt === "string" ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
       })),
   };
+}
+
+/** 从原始工作流补齐新版展示信息，使已导入记录无需重新上传即可生效。 */
+function refreshNodePresentation(raw: unknown, storedNodes: ComfyUiNode[]): ComfyUiNode[] {
+  const parsedNodes = new Map(workflowParser.parse(raw).nodes.map((node) => [node.id, node]));
+  return storedNodes.map((node) => {
+    const parsed = parsedNodes.get(node.id);
+    const parsedFields = new Map(parsed?.fields.map((field) => [field.name, field]) ?? []);
+    return {
+      ...node,
+      ...(parsed?.title ? { title: parsed.title } : {}),
+      fields: node.fields.map((field) => {
+        const label = parsedFields.get(field.name)?.label ?? field.label;
+        return { ...field, ...(label ? { label } : {}) };
+      }),
+    };
+  });
 }
 
 function normalizeName(value: string): string {

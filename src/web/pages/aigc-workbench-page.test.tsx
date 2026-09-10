@@ -17,6 +17,34 @@ function renderAigcPage(route: Parameters<typeof AigcWorkbenchPage>[0]["route"] 
 }
 
 describe("AigcWorkbenchPage 创作台", () => {
+  it("配置映射按子图名称和字段别名展示", async () => {
+    const workflow = {
+      id: "workflow-subgraph", name: "Krea-2", fileName: "krea-2.json", originalHash: "hash",
+      nodes: [{
+        id: "30", type: "subgraph-krea-2", title: "Text to Image (Krea-2 Turbo)",
+        fields: [{ name: "inputs.value", label: "prompt", kind: "input", valueType: "string" }],
+      }],
+      edges: [], inputMappings: [], outputMappings: [],
+      createdAt: "2026-09-10T00:00:00.000Z", updatedAt: "2026-09-10T00:00:00.000Z",
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/aigc/workflows/workflow-subgraph")) return new Response(JSON.stringify({ revision: "r1", workflow }));
+      if (url.endsWith("/capabilities/aigc/channels")) return new Response(JSON.stringify({ channels: [] }));
+      return new Response("{}");
+    }));
+    renderAigcPage({ page: "aigc-workflow-detail", workflowId: workflow.id });
+
+    fireEvent.click(await screen.findByRole("button", { name: "新增入参" }));
+    const nodeButton = await screen.findByRole("button", { name: "浏览节点 Text to Image (Krea-2 Turbo)" });
+    expect(nodeButton).toHaveTextContent("Text to Image (Krea-2 Turbo)");
+    fireEvent.click(nodeButton);
+    fireEvent.click(screen.getByRole("button", { name: "选为映射节点" }));
+
+    expect(screen.getByText("prompt")).toHaveAttribute("title", "inputs.value");
+    expect(screen.getByLabelText("入参名称")).toHaveValue("prompt");
+  });
+
   it("确认后替换原始工作流并保留当前映射", async () => {
     const workflow = {
       id: "workflow-1", name: "文生图", fileName: "old.json", originalHash: "old-hash",
@@ -37,7 +65,7 @@ describe("AigcWorkbenchPage 创作台", () => {
     renderAigcPage({ page: "aigc-workflow-detail", workflowId: "workflow-1" });
 
     const replaceButton = await screen.findByRole("button", { name: "替换原始工作流" });
-    expect(screen.getByText("old.json")).toBeInTheDocument();
+    expect(screen.getAllByText("old.json")).not.toHaveLength(0);
     const file = {
       name: "new.json",
       text: vi.fn(async () => JSON.stringify({ "1": { class_type: "KSampler", inputs: { steps: 30 } } })),
