@@ -208,6 +208,15 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
     async start() { if (closing) throw new DomainError("OPERATION_ABORTED", "服务已经关闭"); await prepareNextRuns(); await schedule(); },
     stopAndDrain,
     boundTasks: options.store.listBoundTasks,
+    /** 聚合当前 Agent 的会话绑定数量，避免列表接口逐会话查询。 */
+    async boundTaskCounts(agentId: string) {
+      const counts = new Map<string, number>();
+      for (const task of await options.store.listTasks(agentId)) {
+        if (task.target.type !== "existing_session") continue;
+        counts.set(task.target.sessionId, (counts.get(task.target.sessionId) ?? 0) + 1);
+      }
+      return counts;
+    },
     removeTasksForSession: options.store.removeTasksForSession,
   };
 }

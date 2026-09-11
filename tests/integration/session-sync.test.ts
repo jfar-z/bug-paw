@@ -60,6 +60,34 @@ class SynchronizedSession implements PiSessionAdapter {
 }
 
 describe("Session 多客户端同步集成", () => {
+  it("运行中的会话摘要无需重新解析持久化历史即可立即更新", async () => {
+    const session = new SynchronizedSession();
+    const gateway = createPiRuntimeGateway(createBackend(session));
+
+    expect(await gateway.listSessions()).toMatchObject([{
+      id: session.sessionId,
+      messageCount: 0,
+    }]);
+    await gateway.openSession(session.sessionId);
+
+    const prompt = gateway.prompt(session.sessionId, "新的性能问题");
+    await vi.waitFor(() => expect(session.isStreaming).toBe(true));
+    expect(await gateway.listSessions()).toMatchObject([{
+      id: session.sessionId,
+      messageCount: 1,
+      firstMessage: "新的性能问题",
+    }]);
+
+    session.complete();
+    await prompt;
+    expect(await gateway.listSessions()).toMatchObject([{
+      id: session.sessionId,
+      messageCount: 2,
+      firstMessage: "新的性能问题",
+    }]);
+    gateway.dispose();
+  });
+
   it("两个客户端收到相同事件序列，重连客户端按游标补发且不中断其他客户端", async () => {
     const session = new SynchronizedSession();
     const gateway = createPiRuntimeGateway(createBackend(session));
@@ -154,7 +182,7 @@ function createBackend(session: SynchronizedSession): PiRuntimeBackend {
       path: session.sessionFile,
       created: "2026-08-07T00:00:00.000Z",
       modified: "2026-08-07T00:00:00.000Z",
-      messageCount: 1,
+      messageCount: session.messages.length,
       firstMessage: "同步输出",
     }],
     createSession: async () => session,
