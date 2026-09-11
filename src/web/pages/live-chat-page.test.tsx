@@ -476,6 +476,21 @@ beforeEach(() => {
 
 describe("LiveChatPage 时间线", () => {
 
+it("粗指针环境仍按键盘修饰键区分发送与换行", async () => {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => mediaQueryResult(query === "(pointer: coarse)")));
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  const composer = screen.getByRole("textbox", { name: "消息内容" });
+  fireEvent.change(composer, { target: { value: "键盘发送测试" } });
+
+  fireEvent.keyDown(composer, { key: "Enter", code: "Enter", shiftKey: true });
+  expect(operationLog).not.toContain("fetch:POST:/api/v1/sessions/session-1/messages");
+
+  fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+  await waitFor(() => expect(operationLog).toContain("fetch:POST:/api/v1/sessions/session-1/messages"));
+  await screen.findByRole("button", { name: "停止生成" });
+});
+
 it("打开会话时立即按权威快照同步发送按钮状态", async () => {
   sessionOneSnapshot = {
     id: "session-1",
