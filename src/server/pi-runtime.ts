@@ -57,6 +57,7 @@ import type { PendingQuestionProjection } from "../shared/session-question-contr
 import type { QuestionResolvedNotice } from "./questions/session-question-reconciliation";
 import { AskUserRunState } from "./questions/ask-user-run-state";
 import { createAskUserMessageGuardExtension } from "./questions/ask-user-message-guard";
+import { SessionSummaryCache } from "./sessions/session-summary-cache";
 
 const DEFAULT_RETRIEVAL_CAPABILITIES: EffectiveRetrievalCapabilities = {
   knowledgeSearch: false,
@@ -353,6 +354,8 @@ interface ManagedRun extends ChatRunSummary {
   completion: Promise<void>;
   releaseTurn: () => void;
   titleInput?: string;
+  initialSessionMessageCount: number;
+  initialSummaryMessageCount?: number;
 }
 
 interface PiRuntimeGatewayOptions {
@@ -388,7 +391,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   const runs = new Map<string, ManagedRun>();
   const eventLogs = new Map<string, EventJournal<ChatEvent>>();
   const recoveredCheckpoints = new Map<string, RunCheckpoint>();
-  const pendingSessionSummaries = new Map<string, SessionSummary>();
+  const sessionSummaries = new Map<string, SessionSummary>();
   const abortRequested = new Set<string>();
   const forcedRunErrors = new Map<string, string>();
   const idleListeners = new Set<() => void>();
@@ -420,8 +423,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     listSessions: async () => {
       const ownedIds = new Set(await sessionMetadataStore.listIdsByAgent(options.sessionText!.agentId));
       const persisted = await backend.listSessions();
-      const persistedIds = new Set(persisted.map(({ id }) => id));
-      const sessions = [...persisted, ...[...pendingSessionSummaries.values()].filter(({ id }) => !persistedIds.has(id))];
+      const sessions = mergePersistedSessionSummaries(persisted);
       return sessions.filter(({ id }) => ownedIds.has(id));
     },
     readPersistedBranch: (session) => options.sessionText!.readPersistedBranch(session),
@@ -429,6 +431,17 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     isArchived: (sessionId) => sessionMetadataStore.isArchived(sessionId),
   }) : undefined;
   if (sessionTextService) options.sessionText?.registerService?.(sessionTextService);
+
+  /** 合并首次扫描结果与进程内实时摘要，后续列表不必重新读取完整历史。 */
+  function mergePersistedSessionSummaries(persisted: readonly SessionSummary[]): SessionSummary[] {
+    for (const summary of persisted) {
+      const current = sessionSummaries.get(summary.id);
+      sessionSummaries.set(summary.id, current
+        ? { ...summary, ...current, path: summary.path || current.path }
+        : { ...summary });
+    }
+    return [...sessionSummaries.values()];
+  }
 
   function publish(event: ChatEvent): void {
     listeners.get(event.sessionId)?.forEach((listener) => listener(event));
@@ -555,6 +568,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
   }
 
   async function ensureSessionExists(sessionId: string): Promise<void> {
+    if (sessionSummaries.has(sessionId)) return;
     if ((await backend.listSessions()).some((session) => session.id === sessionId)) {
       return;
     }
@@ -646,6 +660,17 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     }
     const releaseTurn = sessionRegistry.startTurn(sessionId);
     managed?.toolCallCircuitBreaker.reset();
+    const summary = sessionSummaries.get(sessionId);
+    const initialSessionMessageCount = session.messages.length;
+    const initialSummaryMessageCount = summary?.messageCount;
+    if (summary) {
+      sessionSummaries.set(sessionId, {
+        ...summary,
+        modified: new Date().toISOString(),
+        messageCount: summary.messageCount + 1,
+        firstMessage: summary.messageCount === 0 ? summarizePendingPrompt(text) : summary.firstMessage,
+      });
+    }
     const run = {
       runId: randomUUID(),
       sessionId,
@@ -653,6 +678,8 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       startedAt: new Date().toISOString(),
       completion: Promise.resolve(),
       releaseTurn,
+      initialSessionMessageCount,
+      ...(initialSummaryMessageCount === undefined ? {} : { initialSummaryMessageCount }),
       ...(session.messages.length === 0 && titleInput?.trim() ? { titleInput: titleInput.trim() } : {}),
     };
     runs.set(sessionId, run);
@@ -720,6 +747,8 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
             return true;
           });
           if (applied) {
+            const summary = sessionSummaries.get(sessionId);
+            if (summary) sessionSummaries.set(sessionId, { ...summary, name: sessionName });
             status = "renamed";
             return;
           }
@@ -793,6 +822,15 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       publishSequenced(run.sessionId, { type: "error", code: "AGENT_EXECUTION_FAILED", message: run.error });
     } finally {
       sessionTextService?.invalidate(run.sessionId);
+      const summary = sessionSummaries.get(run.sessionId);
+      if (summary && run.initialSummaryMessageCount !== undefined) {
+        const appendedMessages = Math.max(0, session.messages.length - run.initialSessionMessageCount);
+        sessionSummaries.set(run.sessionId, {
+          ...summary,
+          modified: run.finishedAt ?? new Date().toISOString(),
+          messageCount: run.initialSummaryMessageCount + appendedMessages,
+        });
+      }
       abortRequested.delete(run.sessionId);
       forcedRunErrors.delete(run.sessionId);
       session.askUserRunState?.reset();
@@ -860,17 +898,15 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       const archivedIds = new Set(await sessionMetadataStore.listArchivedIds());
       const archived = listOptions.archived ?? false;
       const persisted = await backend.listSessions();
-      const persistedIds = new Set(persisted.map((session) => session.id));
-      persistedIds.forEach((sessionId) => pendingSessionSummaries.delete(sessionId));
-      return [...persisted, ...pendingSessionSummaries.values()]
-        .filter((session) => archivedIds.has(session.id) === archived)
+      return mergePersistedSessionSummaries(persisted)
+        .filter((session) => !deletingSessions.has(session.id) && archivedIds.has(session.id) === archived)
         .sort((left, right) => right.modified.localeCompare(left.modified));
     },
 
     async createSession() {
       const created = await backend.createSession();
       const now = new Date().toISOString();
-      pendingSessionSummaries.set(created.sessionId, {
+      sessionSummaries.set(created.sessionId, {
         id: created.sessionId,
         path: created.sessionFile ?? "",
         created: now,
@@ -971,18 +1007,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
     } : {}),
 
     async startPrompt(sessionId, text, userText) {
-      const run = await sessionMutations.run(sessionId, async () => {
-        const summary = pendingSessionSummaries.get(sessionId);
-        if (summary) {
-          pendingSessionSummaries.set(sessionId, {
-            ...summary,
-            modified: new Date().toISOString(),
-            messageCount: Math.max(1, summary.messageCount),
-            firstMessage: summary.messageCount === 0 ? summarizePendingPrompt(text) : summary.firstMessage,
-          });
-        }
-        return beginRun(sessionId, text, userText);
-      });
+      const run = await sessionMutations.run(sessionId, async () => beginRun(sessionId, text, userText));
       return toRunSummary(run);
     },
 
@@ -1077,8 +1102,8 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         session.setSessionName(sanitized);
         sessionTextService?.invalidate(sessionId);
         manuallyRenamedSessions.add(sessionId);
-        const summary = pendingSessionSummaries.get(sessionId);
-        if (summary) pendingSessionSummaries.set(sessionId, { ...summary, name: sanitized });
+        const summary = sessionSummaries.get(sessionId);
+        if (summary) sessionSummaries.set(sessionId, { ...summary, name: sanitized });
       });
     },
 
@@ -1124,7 +1149,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         listeners.delete(sessionId);
         eventLogs.delete(sessionId);
         recoveredCheckpoints.delete(sessionId);
-        pendingSessionSummaries.delete(sessionId);
+        sessionSummaries.delete(sessionId);
         let completed = false;
         return {
           async commit() {
@@ -1173,7 +1198,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
         listeners.delete(sessionId);
         eventLogs.delete(sessionId);
         recoveredCheckpoints.delete(sessionId);
-        pendingSessionSummaries.delete(sessionId);
+        sessionSummaries.delete(sessionId);
         try {
           await staged?.commit();
           await options.checkpointStore?.remove(sessionId).catch(() => undefined);
@@ -1273,7 +1298,7 @@ export function createPiRuntimeGateway(backend: PiRuntimeBackend, options: PiRun
       subscriptionTerminators.clear();
       runs.clear();
       eventLogs.clear();
-      pendingSessionSummaries.clear();
+      sessionSummaries.clear();
       abortRequested.clear();
       deletingSessions.clear();
       manuallyRenamedSessions.clear();
@@ -1355,6 +1380,18 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
   const appendSystemPrompt = [...(options.appendSystemPrompt ?? [])];
   let runtimeTools: ToolDefinition[] = [];
   const circuitBreakerTools = new Map((options.customTools ?? []).map((tool) => [tool.name, tool]));
+  const sessionSummaryCache = new SessionSummaryCache(async () => {
+    const sessionInfos = await SessionManager.list(options.cwd, sessionDir);
+    return sessionInfos.map((session) => ({
+      id: session.id,
+      path: session.path,
+      name: session.name,
+      created: session.created.toISOString(),
+      modified: session.modified.toISOString(),
+      messageCount: session.messageCount,
+      firstMessage: session.firstMessage,
+    }));
+  });
 
   async function createWithManager(sessionManager: SessionManager): Promise<PiSessionAdapter> {
     const model = modelRuntime.getModel(selectedProviderId, selectedDefaultModel);
@@ -1424,20 +1461,11 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       return commandCatalog ?? [];
     },
     async listSessions() {
-      const sessionInfos = await SessionManager.list(options.cwd, sessionDir);
-      return sessionInfos.map((session) => ({
-        id: session.id,
-        path: session.path,
-        name: session.name,
-        created: session.created.toISOString(),
-        modified: session.modified.toISOString(),
-        messageCount: session.messageCount,
-        firstMessage: session.firstMessage,
-      }));
+      return sessionSummaryCache.list();
     },
     createSession: () => createWithManager(SessionManager.create(options.cwd, sessionDir)),
     async openSession(sessionId) {
-      const sessionInfo = (await SessionManager.list(options.cwd, sessionDir)).find((session) => session.id === sessionId);
+      const sessionInfo = await sessionSummaryCache.find(sessionId);
       if (!sessionInfo) {
         throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
       }
@@ -1465,26 +1493,54 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       return text?.type === "text" ? text.text.replace(/[\r\n]+/g, " ").trim() : undefined;
     },
     async deleteSession(sessionId) {
-      const sessionInfo = (await SessionManager.list(options.cwd, sessionDir)).find((session) => session.id === sessionId);
+      const sessionInfo = await sessionSummaryCache.find(sessionId);
       if (!sessionInfo) {
         throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
       }
       const resolvedFile = assertManagedSessionFile(sessionDir, sessionInfo.path);
       await unlink(resolvedFile);
+      sessionSummaryCache.remove(sessionId);
     },
     async stageDeleteSession(sessionId) {
-      const sessionInfo = (await SessionManager.list(options.cwd, sessionDir)).find((session) => session.id === sessionId);
+      const sessionInfo = await sessionSummaryCache.find(sessionId);
       if (!sessionInfo) throw new PiRuntimeError("SESSION_NOT_FOUND", "会话不存在");
       const source = assertManagedSessionFile(sessionDir, sessionInfo.path);
-      if (options.stageSessionDeletion) return options.stageSessionDeletion(sessionId, source);
-      const staged = `${source}.deleting-${randomUUID()}`;
-      await rename(source, staged);
+      let stagedDeletion: StagedSessionDeletion;
+      try {
+        stagedDeletion = options.stageSessionDeletion
+          ? await options.stageSessionDeletion(sessionId, source)
+          : await stageLocalSessionDeletion(source);
+        sessionSummaryCache.remove(sessionId);
+      } catch (error) {
+        sessionSummaryCache.upsert(sessionInfo);
+        throw error;
+      }
       return {
-        async commit() { await rm(staged, { force: true }); },
-        async rollback() { await rename(staged, source); },
+        async commit() {
+          try {
+            await stagedDeletion.commit();
+          } catch (error) {
+            sessionSummaryCache.upsert(sessionInfo);
+            throw error;
+          }
+        },
+        async rollback() {
+          await stagedDeletion.rollback();
+          sessionSummaryCache.upsert(sessionInfo);
+        },
       };
     },
   };
+
+  /** 将本机会话文件移入同目录暂存名，提交后再永久删除。 */
+  async function stageLocalSessionDeletion(source: string): Promise<StagedSessionDeletion> {
+    const staged = `${source}.deleting-${randomUUID()}`;
+    await rename(source, staged);
+    return {
+      async commit() { await rm(staged, { force: true }); },
+      async rollback() { await rename(staged, source); },
+    };
+  }
 
   return createPiRuntimeGateway(backend, {
     checkpointStore: options.checkpointStore,

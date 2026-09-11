@@ -123,6 +123,10 @@ async function createTestApp(
   workspaceFiles?: WorkspaceFileService,
   referenceResolver?: AgentReferenceResolver,
   chatService?: Pick<ChatApplicationService, "startBranchTurn">,
+  scheduledTasks?: {
+    boundTasks(sessionId: string): Promise<Array<unknown>>;
+    boundTaskCounts?(agentId: string): Promise<ReadonlyMap<string, number>>;
+  },
 ) {
   const root = await mkdtemp(join(tmpdir(), "pi-agent-chat-routes-"));
   temporaryRoots.push(root);
@@ -134,7 +138,12 @@ async function createTestApp(
   registerSetupRoutes(app, { paths });
   registerAuthRoutes(app, { authService });
   registerModelRoutes(app, { authService, runtime });
-  registerSessionRoutes(app, { authService, runtime, sessionBulk: createSessionBulkDouble((sessionId) => runtime.deleteSession(sessionId)) });
+  registerSessionRoutes(app, {
+    authService,
+    runtime,
+    scheduledTasks,
+    sessionBulk: createSessionBulkDouble((sessionId) => runtime.deleteSession(sessionId)),
+  });
   registerChatRoutes(app, { authService, runtime, workspaceFiles, referenceResolver, chatService: chatService as ChatApplicationService | undefined, heartbeatMs: 50 });
   await app.ready();
   return { app, runtime };
@@ -184,6 +193,27 @@ it("登录后列出模型、创建会话并切换模型", async () => {
     });
     expect(switched.statusCode).toBe(204);
     expect(runtime.setModel).toHaveBeenCalledWith("session-1", "test", "model-1");
+  });
+
+  it("会话列表通过单次聚合读取附加定时任务数量", async () => {
+    const boundTasks = vi.fn(async () => []);
+    const boundTaskCounts = vi.fn(async () => new Map([["session-1", 2]]));
+    const { app } = await createTestApp(new FakeRuntime(), undefined, undefined, undefined, {
+      boundTasks,
+      boundTaskCounts,
+    });
+    const authCookie = await initializeAndLogin(app);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/sessions?agentId=default",
+      headers: { cookie: authCookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ sessions: [{ id: "session-1", scheduledTaskCount: 2 }] });
+    expect(boundTaskCounts).toHaveBeenCalledOnce();
+    expect(boundTasks).not.toHaveBeenCalled();
   });
 
 it("流式生成期间返回 busy，并允许通过独立请求终止", async () => {

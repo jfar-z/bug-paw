@@ -17,7 +17,11 @@ interface SessionRouteDependencies {
   runtime?: PiRuntimeGateway;
   runtimeSupervisor?: RuntimeSupervisor;
   sessionMetadata?: SessionMetadataStore;
-  scheduledTasks?: { boundTasks(sessionId: string): Promise<Array<unknown>> };
+  scheduledTasks?: {
+    boundTasks(sessionId: string): Promise<Array<unknown>>;
+    /** 一次读取 Agent 下全部会话的定时任务绑定数量。 */
+    boundTaskCounts?(agentId: string): Promise<ReadonlyMap<string, number>>;
+  };
   sessionBulk?: SessionBulkService;
   assertCanCreateSession?: (agentId: string) => Promise<void>;
 }
@@ -76,14 +80,23 @@ export function registerSessionRoutes(app: FastifyInstance, dependencies: Sessio
     if (!agentId) return sendApiError(reply, 400, "AGENT_REQUIRED", "读取 Session 必须指定 agentId");
     const acquired = await acquireRuntimeForAgent(dependencies, agentId);
     try {
-      const sessions = await acquired.runtime.listSessions({ archived: request.query.archived === "true" });
-      const pinnedIds = new Set(await dependencies.sessionMetadata?.listPinnedIds(agentId) ?? []);
-      const enrichedSessions = await Promise.all(sessions.map(async (session) => ({
+      const [sessions, pinned, aggregatedTaskCounts] = await Promise.all([
+        acquired.runtime.listSessions({ archived: request.query.archived === "true" }),
+        dependencies.sessionMetadata?.listPinnedIds(agentId) ?? [],
+        dependencies.scheduledTasks?.boundTaskCounts?.(agentId),
+      ]);
+      // 兼容未实现聚合接口的测试或外部适配器；生产服务始终走单次聚合读取。
+      const taskCounts = aggregatedTaskCounts ?? new Map(await Promise.all(sessions.map(async (session) => [
+        session.id,
+        (await dependencies.scheduledTasks?.boundTasks(session.id) ?? []).length,
+      ] as const)));
+      const pinnedIds = new Set(pinned);
+      const enrichedSessions = sessions.map((session) => ({
         ...session,
         agentId,
         pinned: pinnedIds.has(session.id),
-        scheduledTaskCount: (await dependencies.scheduledTasks?.boundTasks(session.id) ?? []).length,
-      })));
+        scheduledTaskCount: taskCounts.get(session.id) ?? 0,
+      }));
       return reply.send({ sessions: sortSessionsPinnedFirst(enrichedSessions) });
     } finally {
       acquired.release();
