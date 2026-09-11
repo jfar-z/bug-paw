@@ -29,12 +29,12 @@ type Candidate =
   | { type: "file"; name: string; description: string; reference: FileReference }
   | { type: "command"; name: string; description: string };
 
-/** 判断当前回车是否应提交消息，移动端和组合输入统一保留原生换行。 */
+/** 判断当前回车是否应提交消息，输入法组合和带修饰键的回车保留原生换行。 */
 function shouldSubmitComposerOnEnter(event: ReactKeyboardEvent<HTMLTextAreaElement>): boolean {
   if (event.key !== "Enter") return false;
   if (event.nativeEvent.isComposing || event.keyCode === 229) return false;
   if (event.shiftKey || event.ctrlKey || event.metaKey) return false;
-  return !(window.matchMedia?.("(pointer: coarse)").matches ?? false);
+  return true;
 }
 
 /**
