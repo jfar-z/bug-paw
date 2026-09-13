@@ -22,14 +22,13 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
   // 字段列表属于工具对象内部的属性，不是工具 parameters 根 Schema。
   const parameterEntries = Type.Array(Type.Object({
     name: Type.String({ minLength: 1, maxLength: 80 }),
-    text: Type.Optional(Type.String({ maxLength: 20_000 })),
-    number: Type.Optional(Type.Number()),
-    boolean: Type.Optional(Type.Boolean()),
-    path: Type.Optional(Type.Union([
-      Type.String({ minLength: 1, maxLength: 1_024 }),
+    value: Type.Union([
+      Type.String({ maxLength: 20_000 }),
+      Type.Number(),
+      Type.Boolean(),
       Type.Null(),
-    ], { description: "当前 Agent 工作区相对路径；可选媒体不提供时可传 JSON null，服务端按渠道协议上传或发布" })),
-  }, { additionalProperties: false }), { maxItems: 100, description: "每项按字段类型只提供 text、number、boolean、path 中的一种值" });
+    ], { description: "按接口字段类型提供原生 JSON 值；媒体字段使用当前 Agent 工作区相对路径，可选媒体未提供时传 JSON null" }),
+  }, { additionalProperties: false }), { maxItems: 100, description: "每项只提供 name 和 value，禁止添加其他值字段" });
   return [
     defineTool({
       name: "aigc_list_interfaces", label: "查询 AIGC 接口",

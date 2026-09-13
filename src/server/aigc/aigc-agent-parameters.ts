@@ -24,13 +24,10 @@ export interface AigcAgentOutput {
   multiple: boolean;
 }
 
-/** 固定形状的参数项，避免向 Provider 发送动态 Record Schema。 */
+/** 固定形状的参数项，避免模型为多种可选值字段补齐无效默认值。 */
 export interface AigcAgentParameter {
   name: string;
-  text?: string;
-  number?: number;
-  boolean?: boolean;
-  path?: string | null;
+  value: string | number | boolean | null;
 }
 
 /** 从既有接口定义提取稳定字段，并保留真实默认值及数值约束。 */
@@ -106,19 +103,14 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
   const values: Record<string, string | number | boolean> = Object.create(null);
   const fieldsByName = new Map(fields.map((field) => [field.name, field]));
   for (const parameter of parameters) {
-    if (!parameter || typeof parameter !== "object") throw new TypeError("参数必须为字段项");
+    if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) throw new TypeError("参数必须为字段项");
+    if (Object.keys(parameter).sort().join(",") !== "name,value") throw new TypeError("每个参数必须且只能提供 name 和 value");
     const field = fieldsByName.get(parameter.name);
     if (!field || Object.hasOwn(values, parameter.name)) throw new TypeError("参数名称无效或重复");
-    const keys = Object.keys(parameter).filter((key) => key !== "name" && parameter[key as keyof AigcAgentParameter] !== undefined);
-    const expected = field.source === "workspace" ? "path"
-      : field.type === "enum" ? (typeof parameter.text === "string" ? "text" : typeof parameter.boolean === "boolean" ? "boolean" : "number")
-      : field.type === "string" ? "text" : field.type === "boolean" ? "boolean" : "number";
-    if (keys.length !== 1 || keys[0] !== expected) throw new TypeError(`参数 ${field.name} 必须且只能提供 ${expected}`);
-    const value = parameter[expected];
-    if (value === undefined) throw new TypeError("参数值缺失");
+    const value = parameter.value;
     // 可选媒体允许 Agent 显式传 null，统一按未提供处理。
     if (value === null) {
-      if (expected !== "path") throw new TypeError(`参数 ${field.name} 值无效`);
+      if (field.source !== "workspace") throw new TypeError(`参数 ${field.name} 值无效`);
       continue;
     }
     values[field.name] = value;
@@ -130,7 +122,9 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
       if (field.required) throw new TypeError(`缺少必填参数 ${field.name}`);
       continue;
     }
-    if (field.source || field.type === "string") {
+    if (field.source) {
+      if (typeof value !== "string" || !value.trim() || value.length > 1_024) throw new TypeError(`参数 ${field.name} 工作区路径无效`);
+    } else if (field.type === "string") {
       if (typeof value !== "string" || value.length > 20_000 || (field.required && !value.trim())) throw new TypeError(`参数 ${field.name} 文本无效`);
     } else if (field.type === "enum") {
       if (!["string", "number", "boolean"].includes(typeof value)) throw new TypeError("枚举值类型无效");

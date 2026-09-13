@@ -69,7 +69,7 @@ async function fixture(
   };
   const service = limits ? new AigcAgentService(dependencies, limits) : new AigcAgentService(dependencies);
   const tools = createAigcAgentTools(context, service);
-  const submit = (requestKey = "one") => ({ interfaceId: item.id, requestKey, parameters: [{ name: "prompt", text: "test" }] });
+  const submit = (requestKey = "one") => ({ interfaceId: item.id, requestKey, parameters: [{ name: "prompt", value: "test" }] });
   const close = async () => {
     await tasks.close();
     await rm(root, { recursive: true, force: true });
@@ -170,11 +170,12 @@ describe("AIGC Agent 工具", () => {
     expect(JSON.stringify(discoveryTool.parameters)).not.toContain('"optional"');
     const runParameters = f.tools.find((tool) => tool.name === "aigc_run")?.parameters;
     expect(JSON.stringify(runParameters)).not.toContain('"url"');
-    const pathSchema = (runParameters as {
-      properties: { parameters: { items: { properties: { path: { anyOf: unknown[]; description: string } } } } };
-    }).properties.parameters.items.properties.path;
-    expect(pathSchema.anyOf).toContainEqual({ type: "null" });
-    expect(pathSchema.description).toContain("可选媒体不提供时可传 JSON null");
+    const parameterSchema = (runParameters as {
+      properties: { parameters: { items: { required: string[]; properties: Record<string, unknown> } } };
+    }).properties.parameters.items;
+    expect(parameterSchema.required).toEqual(["name", "value"]);
+    expect(Object.keys(parameterSchema.properties)).toEqual(["name", "value"]);
+    expect(JSON.stringify(parameterSchema.properties.value)).toContain('"type":"null"');
     const listOutput = await discoveryTool.execute("list-call", {
       action: "list", interfaceId: null, offset: 0,
     }, undefined, undefined, {} as never);
@@ -255,7 +256,7 @@ describe("AIGC Agent 工具", () => {
     const stored = await new AigcTaskRepository(join(f.root, "tasks.json")).get(a.taskId);
     expect(stored?.agentOrigin).toMatchObject({ ...context, requestKey: "one" });
     expect(f.adapter.execute.mock.calls[0][0].inputs.steps).toBe(8);
-    await expect(f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", text: "changed" }] })).rejects.toMatchObject({ code: "AIGC_IDEMPOTENCY_CONFLICT" });
+    await expect(f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "changed" }] })).rejects.toMatchObject({ code: "AIGC_IDEMPOTENCY_CONFLICT" });
   });
 
   it("归属校验拒绝其他 Agent 和历史手动任务", async () => {
@@ -286,11 +287,18 @@ describe("AIGC Agent 工具", () => {
 
   it("校验参数失败时不创建任务或调用上游", async () => {
     const f = await fixture();
+    const gptFilledLegacyParameters = [{
+      name: "prompt", text: "x", number: 0, boolean: false, path: null,
+    }];
+    await expect(f.service.run(context, {
+      ...f.submit(), parameters: gptFilledLegacyParameters as never,
+    })).rejects.toThrow("每个参数必须且只能提供 name 和 value");
     for (const parameters of [
-      [], [{ name: "prompt", text: "" }], [{ name: "prompt", text: "x", path: "x.png" }],
-      [{ name: "prompt", text: "x" }, { name: "prompt", text: "y" }],
-      [{ name: "prompt", text: "x" }, { name: "steps", number: 1.5 }],
-      [{ name: "agentId", text: "agent-b" }],
+      [], [{ name: "prompt", value: "" }], [{ name: "prompt", value: "x", text: "x" }],
+      [{ name: "prompt", value: "x" }, { name: "prompt", value: "y" }],
+      [{ name: "prompt", value: "x" }, { name: "steps", value: 1.5 }],
+      [{ name: "prompt", value: null }],
+      [{ name: "agentId", value: "agent-b" }],
     ]) await expect(f.service.run(context, { ...f.submit(), parameters })).rejects.toBeInstanceOf(TypeError);
     expect(await f.tasks.listRecords()).toHaveLength(0);
     expect(f.adapter.execute).not.toHaveBeenCalled();
@@ -350,10 +358,10 @@ describe("AIGC Agent 工具", () => {
     await writeFile(join(f.workspaces, "agent-a", "source.txt"), "text");
     await symlink(join(f.workspaces, "agent-a", "source.png"), join(f.workspaces, "agent-a", "link.png"));
     for (const path of ["../agent-b/secret.png", "/etc/passwd", "link.png", "source.txt", "missing.png"]) {
-      await expect(f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", text: "x" }, { name: "image", path }] })).rejects.toThrow();
+      await expect(f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: path }] })).rejects.toThrow();
     }
     expect(await f.tasks.listRecords()).toHaveLength(0);
-    const task = await f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", text: "x" }, { name: "image", path: "source.png" }] });
+    const task = await f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }] });
     await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
     const asset = f.adapter.execute.mock.calls[0][0].inputs.image as { assetId: string };
     expect(asset.assetId).toBeTruthy();
@@ -372,11 +380,11 @@ describe("AIGC Agent 工具", () => {
 
     const withoutImage = await f.service.run(context, {
       ...f.submit("without-image"),
-      parameters: [{ name: "prompt", text: "x" }],
+      parameters: [{ name: "prompt", value: "x" }],
     });
     const nullImage = await f.service.run(context, {
       ...f.submit("null-image"),
-      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: null }],
+      parameters: [{ name: "prompt", value: "x" }, { name: "image", value: null }],
     });
     await vi.waitFor(async () => {
       expect((await f.tasks.get(withoutImage.taskId))?.status).toBe("succeeded");
@@ -400,7 +408,7 @@ describe("AIGC Agent 工具", () => {
     await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
     await expect(f.service.run(context, {
       ...f.submit("grok-null-image"),
-      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: null }],
+      parameters: [{ name: "prompt", value: "x" }, { name: "image", value: null }],
     })).rejects.toThrow("缺少必填参数 image");
     const detail = await f.service.list(context, { interfaceId: f.item.id });
     expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
@@ -408,7 +416,7 @@ describe("AIGC Agent 工具", () => {
     ]));
     const task = await f.service.run(context, {
       ...f.submit(),
-      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: "source.png" }],
+      parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }],
     });
     await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
     const publicFiles = await f.publicFiles.list();
@@ -429,7 +437,7 @@ describe("AIGC Agent 工具", () => {
     await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
     await expect(f.service.run(context, {
       ...f.submit(),
-      parameters: [{ name: "prompt", text: "x" }, { name: "image", path: "source.png" }],
+      parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }],
     })).rejects.toMatchObject({ code: "AIGC_PUBLIC_ORIGIN_UNAVAILABLE" });
     expect(await f.tasks.listRecords()).toHaveLength(0);
     expect(await f.publicFiles.list()).toHaveLength(0);
@@ -477,7 +485,7 @@ describe("AIGC Agent 工具", () => {
       ],
     } as unknown as AigcWorkflowDetail;
     const fields = agentFields({ ...f.item, protocol: "comfyui" }, workflow);
-    expect(validateAgentParameters(fields, [{ name: "mode", number: 0 }, { name: "enabled", boolean: false }])).toEqual({ seed: 10, mode: 0, enabled: false });
+    expect(validateAgentParameters(fields, [{ name: "mode", value: 0 }, { name: "enabled", value: false }])).toEqual({ seed: 10, mode: 0, enabled: false });
     await expect(f.service.run(context, f.submit(), AbortSignal.abort())).rejects.toThrow();
     expect(f.adapter.execute).not.toHaveBeenCalled();
   });

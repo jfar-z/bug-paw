@@ -23,6 +23,7 @@ Agent 自身的 `ROLE.md`、`BEHAVIOR.md`、`RULES.md`、`USER.md` 和 `BOOTSHAR
 - `Type.Record`、嵌套 `$ref`、条件 Schema 和复杂组合关键字仅在目标 Provider 已验证支持时使用。默认按多个 Provider 共同支持的 JSON Schema 子集设计。
 - 新增或修改工具时，禁止定义所有属性均为 `Type.Optional`、并依赖模型生成空 `{}` 选择默认操作的参数对象。部分 GPT/Responses 模型会主动填写 Schema 中声明的可选属性，造成伪造 ID、名称或分页值；历史工具触及相关逻辑时必须同步迁移。
 - 单个工具承担多种操作时必须设置必填 `action`。某操作没有值的条件字段应优先定义为包含 `Type.Null()` 的必填联合类型，并要求模型显式传 JSON `null`；由 `execute` 校验 `action` 与字段组合。仅在已验证目标 Provider 能稳定省略属性时才使用 `Type.Optional`，禁止用默认值猜测模型意图。
+- 同一业务参数需要承载字符串、数字、布尔值或 `null` 时，使用单一必填 `value` 属性，并由服务层结合字段定义校验真实类型。禁止并列声明 `text`、`number`、`boolean`、`path` 等互斥可选属性；部分 GPT/Responses 路径会把所有已声明属性补成空值、`0`、`false` 或 `null`。
 - 对象默认设置 `additionalProperties: false`，减少模型生成未声明字段；如果业务确实需要动态键，必须在设计和测试中说明目标 Provider 的兼容性。
 
 推荐的单工具多操作形式：
