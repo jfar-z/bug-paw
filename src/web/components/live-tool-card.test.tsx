@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ToolBlock } from "../conversation-timeline";
+import type { ThinkingBlock, ToolBlock } from "../conversation-timeline";
 import { LiveToolCard } from "./live-tool-card";
+import { ThinkingCard } from "./thinking-card";
 
 describe("LiveToolCard", () => {
   it("已完成的 read 工具可从独立按钮打开受支持文件", () => {
@@ -31,7 +32,35 @@ describe("LiveToolCard", () => {
 
     expect(screen.queryByRole("button", { name: /查看 .* 文件内容/ })).not.toBeInTheDocument();
   });
+
+  it("工具调用与思考的完成状态使用相同字体、字号和颜色", () => {
+    const { container } = render(<>
+      <LiveToolCard tool={readTool("notes/readme.md")} />
+      <ThinkingCard thinking={completedThinking()} />
+    </>);
+    const toolStatus = container.querySelector<HTMLElement>(".live-tool-card__status");
+    const thinkingStatus = container.querySelector<HTMLElement>(".thinking-card__status");
+
+    expect(toolStatus).not.toBeNull();
+    expect(thinkingStatus).not.toBeNull();
+    expect(toolStatus?.style.cssText).toBe(thinkingStatus?.style.cssText);
+    expect(toolStatus).toHaveStyle({
+      color: "var(--text-primary)",
+      fontFamily: '"Manrope Variable", Manrope, sans-serif',
+      fontSize: "11px",
+      fontWeight: "500",
+    });
+  });
 });
+
+function completedThinking(): ThinkingBlock {
+  return {
+    id: "thinking-completed",
+    type: "thinking",
+    text: "completed thinking",
+    streaming: false,
+  };
+}
 
 function readTool(path: string, status: ToolBlock["status"] = "completed"): ToolBlock {
   return {

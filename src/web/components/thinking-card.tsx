@@ -2,6 +2,7 @@ import { Brain, CheckCircle2, ChevronDown, ChevronRight, LoaderCircle } from "lu
 import { useLayoutEffect, useRef, useState } from "react";
 import type { ThinkingBlock } from "../conversation-timeline";
 import { useStreamingTextReveal } from "../use-streaming-text-reveal";
+import { activityStatusStyle } from "./activity-status-style";
 import { CollapsibleRegion } from "./collapsible-region";
 
 interface ThinkingCardProps {
@@ -39,7 +40,7 @@ export function ThinkingCard({ thinking }: ThinkingCardProps) {
         <strong className="activity-item__action">{thinking.streaming ? "正在思考" : "思考过程"}</strong>
         <span
           className="thinking-card__status"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" }}
+          style={activityStatusStyle}
         >
           {thinking.streaming
             ? <LoaderCircle className="spinner" size={14} aria-hidden="true" />

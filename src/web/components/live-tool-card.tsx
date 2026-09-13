@@ -3,6 +3,7 @@ import { useState, type CSSProperties } from "react";
 import { formatToolValue, type ToolBlock } from "../conversation-timeline";
 import { toolActivityCopy, toolStatusCopy, toolTargetPath } from "../features/chat/tool-activity-copy";
 import { dataFileLinkMediaKind } from "../workspace-links";
+import { activityStatusStyle } from "./activity-status-style";
 import { CollapsibleRegion } from "./collapsible-region";
 
 interface LiveToolCardProps {
@@ -53,7 +54,7 @@ export function LiveToolCard({ tool, onLinkActivate }: LiveToolCardProps) {
           </button> : null}
           <span
             className="live-tool-card__status"
-            style={styles.status}
+            style={activityStatusStyle}
           >
             {statusIcon}<span>{toolStatusCopy(tool)}</span>
           </span>
@@ -86,7 +87,6 @@ const styles: Record<string, CSSProperties> = {
   header: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", gap: 2 },
   controls: { display: "inline-flex", minHeight: 28, alignItems: "center", gap: 2 },
   previewButton: { display: "inline-grid", width: 28, height: 28, placeItems: "center", padding: 0, border: 0, borderRadius: 7, color: "var(--text-tertiary)", background: "transparent" },
-  status: { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" },
 };
 
 /** 展示不含原始参数的生成进度，避免大内容撑开工具详情。 */
