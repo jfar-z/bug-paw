@@ -20,7 +20,7 @@ import type {
 } from "../../shared/aigc-contracts";
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
-import { resolveComfyUiMappedField } from "./comfyui-mapped-field";
+import { isComfyUiPrimitiveValueField, resolveComfyUiMappedField } from "./comfyui-mapped-field";
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 
 const MAX_WORKFLOW_JSON_BYTES = 4 * 1024 * 1024;
@@ -97,7 +97,7 @@ export class AigcWorkflowService {
     return { revision: written.revision, workflow: toDetail(next) };
   }
 
-  /** 替换原始工作流，并在写入前确认现有映射仍然有效。 */
+  /** 替换原始工作流，保留兼容映射并移除新工作流已无法承载的映射。 */
   async replace(id: string, input: AigcWorkflowReplaceInput, revision: string): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
     const loaded = await this.store.read();
     const settings = normalizeSettings(loaded.value);
@@ -112,8 +112,10 @@ export class AigcWorkflowService {
       ? Object.fromEntries(Object.entries(previous.nodeMetadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)))
       : undefined;
 
-    assertInputMappingsCompatible(previous.inputMappings, raw, parsed.nodes, nodeMetadata);
-    const inputMappings = normalizeInputMappings(previous.inputMappings, parsed.nodes, parsed.edges, nodeMetadata);
+    const retainedInputMappings = compatibleReplacementInputMappings(previous.inputMappings, raw, parsed.nodes, nodeMetadata);
+    const inputMappings = normalizeInputMappings(retainedInputMappings, parsed.nodes, parsed.edges, nodeMetadata);
+    const retainedInputGroups = compatibleReplacementInputGroups(previous.inputGroups ?? [], inputMappings, parsed.nodes);
+    const retainedOutputMappings = previous.outputMappings.filter((mapping) => parsed.nodes.some((node) => node.id === mapping.nodeId));
     const next: StoredAigcWorkflow = {
       ...previous,
       fileName,
@@ -122,8 +124,8 @@ export class AigcWorkflowService {
       nodes: parsed.nodes,
       edges: parsed.edges,
       inputMappings,
-      inputGroups: normalizeInputGroups(previous.inputGroups ?? [], inputMappings, parsed.nodes),
-      outputMappings: normalizeOutputMappings(previous.outputMappings, parsed.nodes),
+      inputGroups: normalizeInputGroups(retainedInputGroups, inputMappings, parsed.nodes),
+      outputMappings: normalizeOutputMappings(retainedOutputMappings, parsed.nodes),
       updatedAt: new Date().toISOString(),
     };
     if (nodeMetadata && Object.keys(nodeMetadata).length > 0) {
@@ -220,22 +222,36 @@ export class AigcWorkflowService {
   }
 }
 
-/** 确认每个已有入参仍能落到新工作流的同一节点字段。 */
-function assertInputMappingsCompatible(
+/** 保留新工作流仍可承载的入参，并修复历史 PrimitiveNode API 字段别名。 */
+function compatibleReplacementInputMappings(
   mappings: AigcWorkflowInputMapping[],
   raw: unknown,
   nodes: ComfyUiNode[],
   nodeMetadata?: ComfyUiNodeMetadata,
-): void {
-  for (const mapping of mappings) {
+): AigcWorkflowInputMapping[] {
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  return mappings.flatMap((mapping) => {
     const node = nodes.find((candidate) => candidate.id === mapping.nodeId);
-    if (!node) throw new TypeError(`无法保留入参“${mapping.name}”：节点 ${mapping.nodeId} 不存在`);
-    const compatible = node.fields.some((field) => field.name === mapping.field
-      || resolveComfyUiMappedField(raw, nodeMetadata, mapping.nodeId, field.name) === mapping.field);
-    if (!compatible) {
-      throw new TypeError(`无法保留入参“${mapping.name}”：节点 ${mapping.nodeId} 缺少字段 ${mapping.field}`);
-    }
-  }
+    if (!node || mapping.activation?.nodeIds.some((nodeId) => !nodeIds.has(nodeId))) return [];
+    const field = isComfyUiPrimitiveValueField(raw, nodeMetadata, mapping.nodeId, mapping.field)
+      ? "widgets_values.0"
+      : mapping.field;
+    const compatible = node.fields.some((candidate) => candidate.name === field
+      || resolveComfyUiMappedField(raw, nodeMetadata, mapping.nodeId, candidate.name) === field);
+    return compatible ? [{ ...mapping, field }] : [];
+  });
+}
+
+/** 仅保留成员与汇总节点都仍存在的参考输入组。 */
+function compatibleReplacementInputGroups(
+  groups: AigcWorkflowInputGroup[],
+  mappings: AigcWorkflowInputMapping[],
+  nodes: ComfyUiNode[],
+): AigcWorkflowInputGroup[] {
+  const mappingIds = new Set(mappings.map((mapping) => mapping.id));
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  return groups.filter((group) => nodeIds.has(group.boundaryNodeId)
+    && group.mappingIds.every((mappingId) => mappingIds.has(mappingId)));
 }
 
 /** 将持久化记录映射成列表摘要。 */

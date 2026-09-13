@@ -209,7 +209,41 @@ describe("AIGC 工作流服务", () => {
     });
   });
 
-  it("新工作流缺少已映射字段时拒绝替换且不修改原记录", async () => {
+  it("替换工作流时兼容历史 PrimitiveNode API 字段别名", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "视频尺寸",
+      fileName: "old.json",
+      workflowJson: primitiveUiWorkflow(),
+      inputMappings: [{
+        id: "ratio",
+        name: "ratio",
+        nodeId: "144",
+        field: "inputs.value",
+        type: "enum",
+        required: true,
+        enumOptions: ["4:3", "16:9"],
+      }],
+      outputMappings: [],
+    });
+    const replacement = primitiveUiWorkflow();
+    const primitive = replacement.nodes[0];
+    if (!primitive) throw new Error("测试工作流缺少 PrimitiveNode");
+    if (!primitive.widgets_values_named) throw new Error("测试 PrimitiveNode 缺少具名控件值");
+    primitive.widgets_values[0] = "4:3";
+    primitive.widgets_values_named.value = "4:3";
+
+    const replaced = await service.replace(created.workflow.id, {
+      fileName: "new.json",
+      workflowJson: replacement,
+    }, created.revision);
+
+    expect(replaced.workflow.fileName).toBe("new.json");
+    expect(replaced.workflow.inputMappings[0].field).toBe("widgets_values.0");
+    expect((await service.getPrivate(created.workflow.id))?.inputMappings[0].field).toBe("widgets_values.0");
+  });
+
+  it("新工作流缺少已映射字段时完成替换并移除不兼容映射", async () => {
     const service = await fixture();
     const created = await service.create({
       name: "文生图",
@@ -219,13 +253,15 @@ describe("AIGC 工作流服务", () => {
       outputMappings: [],
     });
 
-    await expect(service.replace(created.workflow.id, {
+    const replaced = await service.replace(created.workflow.id, {
       fileName: "incompatible.json",
       workflowJson: { "1": { class_type: "KSampler", inputs: { seed: 1 } } },
-    }, created.revision)).rejects.toThrow("无法保留入参“steps”：节点 1 缺少字段 inputs.steps");
+    }, created.revision);
 
     const current = await service.get(created.workflow.id);
-    expect(current.workflow).toMatchObject({ fileName: "old.json", originalHash: created.workflow.originalHash });
+    expect(replaced.workflow).toMatchObject({ fileName: "incompatible.json", inputMappings: [] });
+    expect(current.workflow).toMatchObject({ fileName: "incompatible.json", inputMappings: [] });
+    expect(current.workflow.originalHash).not.toBe(created.workflow.originalHash);
   });
 
 });

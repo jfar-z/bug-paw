@@ -2008,13 +2008,22 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
         expected: aigcExpected(setMessage),
       });
       if (result.status !== "success") return;
+      const removedInputNames = inputMappings
+        .filter((mapping) => !result.data.workflow.inputMappings.some((candidate) => candidate.id === mapping.id))
+        .map((mapping) => mapping.name);
+      const removedOutputNames = outputMappings
+        .filter((mapping) => !result.data.workflow.outputMappings.some((candidate) => candidate.id === mapping.id))
+        .map((mapping) => mapping.name);
+      const removedNames = [...removedInputNames, ...removedOutputNames];
       setDetail(result.data.workflow);
       setRevision(result.data.revision);
       setName(result.data.workflow.name);
       setInputMappings(result.data.workflow.inputMappings);
       setInputGroups(result.data.workflow.inputGroups ?? []);
       setOutputMappings(result.data.workflow.outputMappings);
-      setMessage("已替换原始工作流，现有映射和接口配置保持不变");
+      setMessage(removedNames.length > 0
+        ? `已替换原始工作流；已移除不兼容映射：${removedNames.join("、")}`
+        : "已替换原始工作流，现有映射和接口配置保持不变");
     } finally {
       setReplacing(false);
     }
@@ -2056,7 +2065,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
       <div className="configuration-save-bar">
         <button type="button" className="configuration-primary-action" disabled={!detail || !isDirty} onClick={() => void save()}><Save size={15} />{isDirty ? "保存映射" : "已保存"}</button>
       </div>
-      {replacement ? <ConfirmationDialog title={`替换为“${replacement.fileName}”？`} description="系统会保留当前工作流 ID、出入参节点映射和接口配置；如果新工作流缺少任何已映射节点或字段，本次替换将整体取消。" confirmLabel="确认替换" busy={replacing} onCancel={() => setReplacement(undefined)} onConfirm={() => void replaceWorkflow()} /> : null}
+      {replacement ? <ConfirmationDialog title={`替换为“${replacement.fileName}”？`} description="系统会保留当前工作流 ID、接口配置及仍兼容的出入参映射；新工作流已无法承载的映射会被移除，并在替换完成后列出。" confirmLabel="确认替换" busy={replacing} onCancel={() => setReplacement(undefined)} onConfirm={() => void replaceWorkflow()} /> : null}
       {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="工作流映射仍有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
     </div>
   );
