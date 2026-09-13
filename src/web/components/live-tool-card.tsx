@@ -1,19 +1,22 @@
-import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleSlash2, LoaderCircle, TerminalSquare } from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleSlash2, Eye, LoaderCircle, TerminalSquare } from "lucide-react";
+import { useState, type CSSProperties } from "react";
 import { formatToolValue, type ToolBlock } from "../conversation-timeline";
-import { toolActivityCopy, toolStatusCopy } from "../features/chat/tool-activity-copy";
+import { toolActivityCopy, toolStatusCopy, toolTargetPath } from "../features/chat/tool-activity-copy";
+import { dataFileLinkMediaKind } from "../workspace-links";
 import { CollapsibleRegion } from "./collapsible-region";
 
 interface LiveToolCardProps {
   tool: ToolBlock;
+  onLinkActivate?(href: string): boolean;
 }
 
 /**
  * 在活动轨迹中展示可折叠的工具入参、实时输出和最终结果。
  */
-export function LiveToolCard({ tool }: LiveToolCardProps) {
+export function LiveToolCard({ tool, onLinkActivate }: LiveToolCardProps) {
   const [expanded, setExpanded] = useState(false);
   const output = tool.status === "running" ? tool.partialResult : tool.result;
+  const previewPath = readToolPreviewPath(tool);
   const active = tool.status === "preparing" || tool.status === "parameterizing" || tool.status === "running";
   const statusIcon = active
     ? <LoaderCircle className="spinner" size={14} aria-hidden="true" />
@@ -25,23 +28,35 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
 
   return (
     <section className={`live-tool-card is-${tool.status}`}>
-      <button
-        type="button"
-        className="live-tool-card__summary"
-        aria-expanded={expanded}
-        aria-label={`${expanded ? "收起" : "展开"} ${tool.name} 工具详情`}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
-        <TerminalSquare size={17} aria-hidden="true" />
-        <strong className="activity-item__action">{toolActivityCopy(tool)}</strong>
-        <span
-          className="live-tool-card__status"
-          style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" }}
+      <div style={styles.header}>
+        <button
+          type="button"
+          className="live-tool-card__summary"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "收起" : "展开"} ${tool.name} 工具详情`}
+          onClick={() => setExpanded((current) => !current)}
         >
-          {statusIcon}<span>{toolStatusCopy(tool)}</span>
-        </span>
-      </button>
+          {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
+          <TerminalSquare size={17} aria-hidden="true" />
+          <strong className="activity-item__action">{toolActivityCopy(tool)}</strong>
+          <span
+            className="live-tool-card__status"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" }}
+          >
+            {statusIcon}<span>{toolStatusCopy(tool)}</span>
+          </span>
+        </button>
+        {previewPath && onLinkActivate ? <button
+          type="button"
+          className="icon-button"
+          style={styles.previewButton}
+          aria-label={`查看 ${previewPath} 文件内容`}
+          title="查看文件内容"
+          onClick={() => onLinkActivate(previewPath)}
+        >
+          <Eye size={15} aria-hidden="true" />
+        </button> : null}
+      </div>
 
       <CollapsibleRegion expanded={expanded} className="live-tool-card__collapse">
         <div className="live-tool-card__details">
@@ -57,6 +72,18 @@ export function LiveToolCard({ tool }: LiveToolCardProps) {
     </section>
   );
 }
+
+/** 仅允许已完成的 read 工具复用 Markdown 文件链接支持的预览范围。 */
+export function readToolPreviewPath(tool: ToolBlock): string | undefined {
+  if (tool.name !== "read" || tool.status !== "completed") return undefined;
+  const path = toolTargetPath(tool.args);
+  return path && dataFileLinkMediaKind(path) ? path : undefined;
+}
+
+const styles: Record<string, CSSProperties> = {
+  header: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", gap: 2 },
+  previewButton: { display: "inline-grid", width: 28, height: 28, placeItems: "center", padding: 0, border: 0, borderRadius: 7, color: "var(--text-tertiary)", background: "transparent" },
+};
 
 /** 展示不含原始参数的生成进度，避免大内容撑开工具详情。 */
 function ToolParameterProgress({ tool }: { tool: ToolBlock }) {

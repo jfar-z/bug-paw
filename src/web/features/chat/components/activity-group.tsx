@@ -10,6 +10,7 @@ export interface ActivityGroupProps {
   trailing: boolean;
   turnStreaming: boolean;
   expandedOverride?: boolean;
+  onLinkActivate?(href: string): boolean;
   onExpandedChange(expanded: boolean): void;
 }
 
@@ -19,6 +20,7 @@ export function ActivityGroup({
   trailing,
   turnStreaming,
   expandedOverride,
+  onLinkActivate,
   onExpandedChange,
 }: ActivityGroupProps) {
   const summary = activityGroupSummary(blocks);
@@ -40,7 +42,7 @@ export function ActivityGroup({
       <div className="activity-rail">
         {blocks.map((block) => block.type === "thinking"
           ? <ThinkingCard key={block.id} thinking={block} />
-          : <LiveToolCard key={block.id} tool={block} />)}
+          : <LiveToolCard key={block.id} tool={block} onLinkActivate={onLinkActivate} />)}
       </div>
     </CollapsibleRegion>
   </section>;

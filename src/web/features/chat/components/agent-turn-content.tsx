@@ -46,6 +46,7 @@ export function AgentTurnContent({
           trailing={index === items.length - 1}
           turnStreaming={streaming}
           expandedOverride={expandedOverrides[item.id]}
+          onLinkActivate={onLinkActivate}
           onExpandedChange={(expanded) => setExpandedOverrides((current) => ({ ...current, [item.id]: expanded }))}
         />;
       }
