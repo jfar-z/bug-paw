@@ -33,6 +33,7 @@ let editResponse: Promise<Response> | undefined;
 let thinkingLevelResponse: Promise<Response> | undefined;
 let archiveResponse: Promise<Response> | undefined;
 let sessionListResponseQueue: Promise<Response>[] = [];
+let documentVisibilityState: DocumentVisibilityState = "visible";
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
 
 function deferred<T>() {
@@ -60,10 +61,12 @@ class HistoryObserverDouble {
 }
 
 class FakeEventSource {
+  static readonly CONNECTING = 0;
   static readonly OPEN = 1;
+  static readonly CLOSED = 2;
   static instances: FakeEventSource[] = [];
   static reportErrorOnClose = false;
-  readonly readyState = FakeEventSource.OPEN;
+  readyState = FakeEventSource.OPEN;
   readonly listeners = new Map<string, EventListener[]>();
   onerror: (() => void) | null = null;
   closed = false;
@@ -80,17 +83,20 @@ class FakeEventSource {
 
   close() {
     this.closed = true;
+    this.readyState = FakeEventSource.CLOSED;
     if (FakeEventSource.reportErrorOnClose) this.onerror?.();
   }
 
   /** 模拟浏览器完成 EventSource 自动重连。 */
   emitOpen() {
+    this.readyState = FakeEventSource.OPEN;
     const event = { data: "" } as MessageEvent;
     this.listeners.get("open")?.forEach((listener) => listener(event));
   }
 
   /** 模拟浏览器把原生连接错误同时分发给 error 监听器和 onerror。 */
   emitTransportError() {
+    this.readyState = FakeEventSource.CONNECTING;
     const event = new Event("error");
     this.listeners.get("error")?.forEach((listener) => listener(event));
     this.onerror?.();
@@ -241,6 +247,7 @@ beforeEach(() => {
   thinkingLevelResponse = undefined;
   archiveResponse = undefined;
   sessionListResponseQueue = [];
+  documentVisibilityState = "visible";
   intersectionObserverCallbacks.length = 0;
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -248,6 +255,7 @@ beforeEach(() => {
   vi.stubGlobal("BroadcastChannel", RecordingBroadcastChannel);
   vi.stubGlobal("IntersectionObserver", HistoryObserverDouble);
   vi.stubGlobal("matchMedia", vi.fn(() => mediaQueryResult(false)));
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => documentVisibilityState);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     operationLog.push(`fetch:${init?.method ?? "GET"}:${url}`);
@@ -561,6 +569,70 @@ it("运行中会话的原生连接错误不会被当作 error 业务事件解析
   expect(await screen.findByText("会话实时连接中断，EventSource 未提供 HTTP 状态，浏览器正在自动重连")).toBeVisible();
   expect(screen.queryByText(/会话实时事件“error”未通过JSON 解析/u)).not.toBeInTheDocument();
   expect(FakeEventSource.instances).toHaveLength(1);
+});
+
+it("息屏期间断线后在页面恢复可见时按最后游标重建实时连接", async () => {
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    history: { branchToken: "branch-resume", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-session-1",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-13T00:00:00.000Z",
+    },
+    lastEventId: 18,
+  };
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "停止生成" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  const suspendedSource = FakeEventSource.instances[0]!;
+
+  documentVisibilityState = "hidden";
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  act(() => suspendedSource.emitTransportError());
+  expect(FakeEventSource.instances).toHaveLength(1);
+
+  documentVisibilityState = "visible";
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+  expect(suspendedSource.closed).toBe(true);
+  expect(FakeEventSource.instances[1]!.url).toBe("/api/v1/sessions/session-1/events?after=18");
+  await waitFor(() => expect(screen.queryByText("实时连接暂时中断，浏览器会自动重连。")).not.toBeInTheDocument());
+});
+
+it("前台断线超过原生重连宽限期后主动重建实时连接", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  const stalledSource = FakeEventSource.instances[0]!;
+
+  act(() => stalledSource.emitTransportError());
+
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2), { timeout: 3_000 });
+  expect(stalledSource.closed).toBe(true);
+  expect(FakeEventSource.instances[1]!.url).toBe("/api/v1/sessions/session-1/events?after=0");
+});
+
+it("浏览器原生重连成功后恢复页面不会重复创建实时连接", async () => {
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+  const source = FakeEventSource.instances[0]!;
+
+  act(() => source.emitTransportError());
+  act(() => source.emitOpen());
+  documentVisibilityState = "hidden";
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+  documentVisibilityState = "visible";
+  act(() => document.dispatchEvent(new Event("visibilitychange")));
+
+  expect(FakeEventSource.instances).toHaveLength(1);
+  expect(source.closed).toBe(false);
 });
 
 it("提交轮次事件用稳定节点替换本地待发送消息", async () => {

@@ -37,6 +37,7 @@ export interface SessionStreamControl {
 }
 
 const PROJECTION_RECOVERY_TIMEOUT_MS = 10_000;
+const EVENT_SOURCE_RECONNECT_GRACE_MS = 2_000;
 
 /**
  * 统一管理会话 SSE、事件去重和刷新后的运行状态恢复。
@@ -116,10 +117,41 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     sourceRef.current = source;
     let active = true;
     let projectionRecovering = false;
+    let transportRestarting = false;
     let recoveryController: AbortController | undefined;
+    let reconnectTimer: number | undefined;
     const callbacks = () => callbacksRef.current.sessionId === options.sessionId
       ? callbacksRef.current
       : undefined;
+    const clearReconnectTimer = () => {
+      if (reconnectTimer === undefined) return;
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    };
+    const restartTransport = () => {
+      if (!active || sourceRef.current !== source || projectionRecovering || transportRestarting) return;
+      transportRestarting = true;
+      clearReconnectTimer();
+      setReconnectRequest((current) => ({
+        sessionId: options.sessionId!,
+        cursor: lastEventIdRef.current,
+        nonce: (current?.nonce ?? 0) + 1,
+      }));
+    };
+    const checkTransportAfterResume = () => {
+      if (document.visibilityState !== "visible") return;
+      if (source.readyState === EventSource.OPEN) {
+        clearReconnectTimer();
+        setReconnecting(false);
+        return;
+      }
+      // 移动端息屏后原生 EventSource 可能永久停在 CONNECTING，恢复前台时主动续接游标。
+      restartTransport();
+    };
+    const scheduleTransportRestart = () => {
+      if (document.visibilityState !== "visible" || reconnectTimer !== undefined) return;
+      reconnectTimer = window.setTimeout(checkTransportAfterResume, EVENT_SOURCE_RECONNECT_GRACE_MS);
+    };
     const recoverProjection = (notice?: string) => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       projectionRecovering = true;
@@ -204,7 +236,10 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     };
 
     source.addEventListener("open", () => {
-      if (active && sourceRef.current === source && callbacks()) setReconnecting(false);
+      if (active && sourceRef.current === source && callbacks()) {
+        clearReconnectTimer();
+        setReconnecting(false);
+      }
     });
     source.addEventListener("snapshot", (rawEvent) => {
       if (projectionRecovering) return;
@@ -513,12 +548,19 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       if (!active || sourceRef.current !== source || projectionRecovering) return;
       setReconnecting(true);
       const message = "会话实时连接中断，EventSource 未提供 HTTP 状态，浏览器正在自动重连";
-      callbacksRef.current.onError(message);
       callbacksRef.current.onUnexpectedError?.(new ApiClientError("SESSION_STREAM_DISCONNECTED", message, 0));
+      scheduleTransportRestart();
     };
+    document.addEventListener("visibilitychange", checkTransportAfterResume);
+    window.addEventListener("online", checkTransportAfterResume);
+    window.addEventListener("pageshow", checkTransportAfterResume);
 
     return () => {
       active = false;
+      clearReconnectTimer();
+      document.removeEventListener("visibilitychange", checkTransportAfterResume);
+      window.removeEventListener("online", checkTransportAfterResume);
+      window.removeEventListener("pageshow", checkTransportAfterResume);
       if (refreshProjectionRef.current === recoverProjection) {
         refreshProjectionRef.current = () => undefined;
       }
