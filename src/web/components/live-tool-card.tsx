@@ -39,23 +39,25 @@ export function LiveToolCard({ tool, onLinkActivate }: LiveToolCardProps) {
           {expanded ? <ChevronDown size={16} aria-hidden="true" /> : <ChevronRight size={16} aria-hidden="true" />}
           <TerminalSquare size={17} aria-hidden="true" />
           <strong className="activity-item__action">{toolActivityCopy(tool)}</strong>
+        </button>
+        <div className="live-tool-card__controls" style={styles.controls}>
+          {previewPath && onLinkActivate ? <button
+            type="button"
+            className="icon-button"
+            style={styles.previewButton}
+            aria-label={`查看 ${previewPath} 文件内容`}
+            title="查看文件内容"
+            onClick={() => onLinkActivate(previewPath)}
+          >
+            <Eye size={15} aria-hidden="true" />
+          </button> : null}
           <span
             className="live-tool-card__status"
-            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" }}
+            style={styles.status}
           >
             {statusIcon}<span>{toolStatusCopy(tool)}</span>
           </span>
-        </button>
-        {previewPath && onLinkActivate ? <button
-          type="button"
-          className="icon-button"
-          style={styles.previewButton}
-          aria-label={`查看 ${previewPath} 文件内容`}
-          title="查看文件内容"
-          onClick={() => onLinkActivate(previewPath)}
-        >
-          <Eye size={15} aria-hidden="true" />
-        </button> : null}
+        </div>
       </div>
 
       <CollapsibleRegion expanded={expanded} className="live-tool-card__collapse">
@@ -82,7 +84,9 @@ export function readToolPreviewPath(tool: ToolBlock): string | undefined {
 
 const styles: Record<string, CSSProperties> = {
   header: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", alignItems: "start", gap: 2 },
+  controls: { display: "inline-flex", minHeight: 28, alignItems: "center", gap: 2 },
   previewButton: { display: "inline-grid", width: 28, height: 28, placeItems: "center", padding: 0, border: 0, borderRadius: 7, color: "var(--text-tertiary)", background: "transparent" },
+  status: { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 500, lineHeight: 1, whiteSpace: "nowrap" },
 };
 
 /** 展示不含原始参数的生成进度，避免大内容撑开工具详情。 */

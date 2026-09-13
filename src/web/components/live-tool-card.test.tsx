@@ -8,7 +8,14 @@ describe("LiveToolCard", () => {
     const onLinkActivate = vi.fn(() => true);
     render(<LiveToolCard tool={readTool("notes/readme.md")} onLinkActivate={onLinkActivate} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "查看 notes/readme.md 文件内容" }));
+    const previewButton = screen.getByRole("button", { name: "查看 notes/readme.md 文件内容" });
+    const controls = previewButton.parentElement;
+
+    expect(controls).toHaveClass("live-tool-card__controls");
+    expect(controls?.children[0]).toBe(previewButton);
+    expect(controls?.children[1]).toHaveClass("live-tool-card__status");
+
+    fireEvent.click(previewButton);
 
     expect(onLinkActivate).toHaveBeenCalledWith("notes/readme.md");
     expect(screen.getByRole("button", { name: "展开 read 工具详情" })).toHaveAttribute("aria-expanded", "false");
