@@ -212,6 +212,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   const [selectedAgentId, setSelectedAgentId] = useState<string>();
   const [globalDefaultModel, setGlobalDefaultModel] = useState<{ provider: string; id: string }>();
   const [openingSessionId, setOpeningSessionId] = useState<string>();
+  const [suspendedSessionStreamId, setSuspendedSessionStreamId] = useState<string>();
   const [session, setSession] = useState<SessionSnapshot>();
   const [timeline, setTimeline] = useState<ConversationEntry[]>([]);
   const [focusedHistory, setFocusedHistory] = useState<FocusedHistory>();
@@ -496,8 +497,8 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   });
 
   const stream = useSessionStream({
-    // 切换期间立即撤销旧 Session 的实时流归属，失败回退后会按原 Session 自动重连。
-    sessionId: openingSessionId ? undefined : session?.id,
+    // 切换或删除期间立即撤销旧 Session 的实时流归属，失败回退后会按原 Session 自动重连。
+    sessionId: openingSessionId || suspendedSessionStreamId === session?.id ? undefined : session?.id,
     initialCursor: session?.lastEventId,
     onSnapshot: applyStreamSnapshot,
     onTurnCommitted: ({ id, messages: committedMessages, history }) => {
@@ -806,6 +807,7 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
     interactionCoordinator.invalidate("session-transition", "enter-draft");
     openingSessionRef.current = undefined;
     setOpeningSessionId(undefined);
+    setSuspendedSessionStreamId(undefined);
     stopSpeech();
     stream.close();
     focusedHistoryRef.current = undefined;
@@ -1097,6 +1099,12 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
   };
 
   const deleteConversation = async (sessionId: string, archived = false, confirmBoundTasks = false) => {
+    const suspendingCurrentStream = !openingSessionRef.current && sessionIdRef.current === sessionId;
+    if (suspendingCurrentStream) {
+      // 服务端会在 DELETE 响应前终止 SSE，先撤销流归属，避免把预期关闭误报为网络中断。
+      flushSync(() => setSuspendedSessionStreamId(sessionId));
+      stream.close();
+    }
     try {
       await api.deleteSession(sessionId, confirmBoundTasks);
       if (archived) {
@@ -1105,8 +1113,14 @@ export function LiveChatPage({ theme, userIdentity }: LiveChatPageProps) {
         setSessions((current) => current.filter((item) => item.id !== sessionId));
       }
       leaveRemovedSessions(new Set([sessionId]));
+      if (suspendingCurrentStream) {
+        setSuspendedSessionStreamId((current) => current === sessionId ? undefined : current);
+      }
       sessionSyncRef.current?.notify();
     } catch (reason) {
+      if (suspendingCurrentStream) {
+        setSuspendedSessionStreamId((current) => current === sessionId ? undefined : current);
+      }
       await reportFailure(reason, "删除会话");
     }
   };

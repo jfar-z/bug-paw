@@ -32,6 +32,7 @@ let abortResponse: Promise<Response> | undefined;
 let editResponse: Promise<Response> | undefined;
 let thinkingLevelResponse: Promise<Response> | undefined;
 let archiveResponse: Promise<Response> | undefined;
+let deleteResponse: Promise<Response> | undefined;
 let sessionListResponseQueue: Promise<Response>[] = [];
 let documentVisibilityState: DocumentVisibilityState = "visible";
 const intersectionObserverCallbacks: IntersectionObserverCallback[] = [];
@@ -246,6 +247,7 @@ beforeEach(() => {
   editResponse = undefined;
   thinkingLevelResponse = undefined;
   archiveResponse = undefined;
+  deleteResponse = undefined;
   sessionListResponseQueue = [];
   documentVisibilityState = "visible";
   intersectionObserverCallbacks.length = 0;
@@ -323,6 +325,9 @@ beforeEach(() => {
       };
       const sessionCount = body.target.mode === "selected" ? body.target.sessionIds.length : 1;
       return new Response(JSON.stringify({ action: body.action, sessionCount, affectedTaskCount: 2 }));
+    }
+    if (url === "/api/v1/sessions/session-1" && init?.method === "DELETE") {
+      return deleteResponse ?? new Response(null, { status: 204 });
     }
     if (url === "/api/v1/sessions/session-1") {
       return new Response(JSON.stringify(sessionOneSnapshot ?? {
@@ -754,20 +759,48 @@ it("旧会话的迟到事件不能污染当前会话", async () => {
   expect(screen.getByRole("button", { name: "发送消息" })).toBeVisible();
 });
 
-it("删除当前会话时主动关闭实时连接不会上报断线错误", async () => {
+it("删除当前会话时服务端先断流不会上报断线错误", async () => {
+  const pendingDelete = deferred<Response>();
+  deleteResponse = pendingDelete.promise;
   renderLiveChatPage(<LiveChatPage {...props} />);
   await screen.findByRole("button", { name: "发送消息" });
   await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-  FakeEventSource.reportErrorOnClose = true;
+  const deletedSource = FakeEventSource.instances[0]!;
 
   fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
   fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
   fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
 
   await waitFor(() => expect(operationLog).toContain("fetch:DELETE:/api/v1/sessions/session-1"));
-  await waitFor(() => expect(FakeEventSource.instances[0]?.closed).toBe(true));
+  expect(deletedSource.closed).toBe(true);
+  act(() => deletedSource.emitTransportError());
   expect(screen.queryByText(/会话实时连接中断/u)).not.toBeInTheDocument();
   expect(screen.queryByText("恢复会话实时连接")).not.toBeInTheDocument();
+
+  pendingDelete.resolve(new Response(null, { status: 204 }));
+  await waitFor(() => expect(screen.queryByRole("button", { name: "管理会话：测试" })).not.toBeInTheDocument());
+});
+
+it("删除当前会话失败后恢复实时连接", async () => {
+  const pendingDelete = deferred<Response>();
+  deleteResponse = pendingDelete.promise;
+  renderLiveChatPage(<LiveChatPage {...props} />);
+  await screen.findByRole("button", { name: "发送消息" });
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+  fireEvent.click(screen.getByRole("button", { name: "管理会话：测试" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+  fireEvent.click(screen.getByRole("button", { name: "永久删除" }));
+  await waitFor(() => expect(operationLog).toContain("fetch:DELETE:/api/v1/sessions/session-1"));
+  expect(FakeEventSource.instances[0]?.closed).toBe(true);
+
+  pendingDelete.resolve(new Response(JSON.stringify({
+    error: { code: "DELETE_SESSION_FAILED", message: "会话文件删除失败", requestId: "delete-request-1" },
+  }), { status: 500 }));
+
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+  expect(FakeEventSource.instances[1]!.url).toBe("/api/v1/sessions/session-1/events?after=0");
+  expect(await screen.findByText("删除会话失败")).toBeVisible();
 });
 
 it("归档旧会话的迟到响应不会清空已经打开的新会话", async () => {
