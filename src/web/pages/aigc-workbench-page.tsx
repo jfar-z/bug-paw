@@ -31,6 +31,7 @@ import type {
   AigcWorkflowSummary,
   ComfyUiFieldMetadata,
 } from "../../shared/aigc-contracts";
+import { AIGC_TASK_BULK_DELETE_LIMIT } from "../../shared/aigc-contracts";
 import { createDefaultOpenAiParameters, resolveOpenAiParameterDefinitions } from "../../shared/aigc-openai-parameters";
 import { aigcComfyUiInputContentUrl, aigcInputAssetUrl, aigcTaskAssetUrl, api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
@@ -1682,14 +1683,32 @@ function AigcTasksPage() {
   async function removeSelected() {
     if (!selectedIds.length || bulkDeleting) return;
     setBulkDeleting(true);
-    const result = await runApiTask(() => api.deleteSelectedAigcTasks(selectedIds), { operation: "删除选中的 AIGC 任务", expected: aigcExpected(setMessage) });
-    setBulkDeleting(false);
-    if (result.status === "success") {
-      const removedCount = result.data.removedIds.length;
+    const batches = chunkTaskIds(selectedIds);
+    let removedCount = 0;
+    try {
+      for (const [index, ids] of batches.entries()) {
+        const operation = batches.length > 1
+          ? `删除选中的 AIGC 任务（第 ${index + 1}/${batches.length} 批）`
+          : "删除选中的 AIGC 任务";
+        const result = await runApiTask(
+          () => api.deleteSelectedAigcTasks(ids),
+          { operation },
+        );
+        if (result.status !== "success") {
+          if (removedCount > 0) {
+            await refresh();
+            setMessage(`已删除 ${removedCount} 个任务，剩余任务因错误未删除`);
+          }
+          return;
+        }
+        removedCount += result.data.removedIds.length;
+      }
       setSelectedIds([]);
       setBulkDeleteOpen(false);
       setMessage(`已删除 ${removedCount} 个任务及其 AIGC 产物，Agent 工作目录附件已保留`);
       await refresh();
+    } finally {
+      setBulkDeleting(false);
     }
   }
 
@@ -1744,6 +1763,15 @@ function AigcTasksPage() {
       {bulkDeleteOpen ? <ConfirmationDialog title={`删除选中的 ${selectedIds.length} 个任务？`} description={`这些任务及其 ${selectedAssetCount} 个 AIGC 产物将被永久删除；已交付至 Agent 工作目录的附件会保留。`} confirmLabel="删除选中" busy={bulkDeleting} onCancel={() => setBulkDeleteOpen(false)} onConfirm={() => void removeSelected()} /> : null}
     </div>
   );
+}
+
+/** 按服务端单次上限拆分任务标识，避免“全选”超过接口保护阈值。 */
+function chunkTaskIds(ids: string[]): string[][] {
+  const batches: string[][] = [];
+  for (let offset = 0; offset < ids.length; offset += AIGC_TASK_BULK_DELETE_LIMIT) {
+    batches.push(ids.slice(offset, offset + AIGC_TASK_BULK_DELETE_LIMIT));
+  }
+  return batches;
 }
 
 /** 任务详情页。 */

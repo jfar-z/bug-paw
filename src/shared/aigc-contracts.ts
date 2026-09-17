@@ -386,6 +386,9 @@ export interface AigcInterfaceInput {
 /** AIGC 任务状态。 */
 export type AigcTaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
+/** 单次批量删除任务接口允许提交的最大任务数。 */
+export const AIGC_TASK_BULK_DELETE_LIMIT = 500;
+
 /** 任务产物引用。 */
 export interface AigcTaskAsset {
   id: string;

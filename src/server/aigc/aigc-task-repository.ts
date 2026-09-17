@@ -80,6 +80,24 @@ export class AigcTaskRepository {
     });
   }
 
+  /** 批量删除任务并只持久化一次，失败时恢复整批内存记录。 */
+  async removeMany(ids: string[]): Promise<AigcTaskRecord[] | undefined> {
+    await this.ready;
+    return this.mutations.run("tasks", async () => {
+      const current = ids.map((id) => this.tasks.get(id));
+      if (current.some((task) => !task)) return undefined;
+      const tasks = current as AigcTaskRecord[];
+      for (const task of tasks) this.tasks.delete(task.id);
+      try {
+        await this.persist();
+        return tasks.map(copyTask);
+      } catch (error) {
+        for (const task of tasks) this.tasks.set(task.id, task);
+        throw error;
+      }
+    });
+  }
+
   /** 加载历史文件并容错缺失或损坏内容。 */
   private async load(): Promise<void> {
     const value = await readJson<AigcTaskRecord[]>(this.filePath);

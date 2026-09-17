@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AIGC_TASK_BULK_DELETE_LIMIT } from "../../shared/aigc-contracts";
 import { ApiTaskProvider } from "../api-task-provider";
 import { ErrorToastProvider } from "../error-toast-provider";
 import { AigcProviderControl, AigcWorkbenchPage } from "./aigc-workbench-page";
@@ -267,6 +268,80 @@ describe("AigcWorkbenchPage 创作台", () => {
     const request = fetchMock.mock.calls.find(([, init]) => init?.method === "DELETE");
     expect(JSON.parse(String(request?.[1]?.body))).toEqual({ ids: ["task-old", "task-new"] });
     expect(await screen.findByText(/已删除 2 个任务/)).toBeInTheDocument();
+  });
+
+  it("全选超过单次上限时自动分批删除", async () => {
+    let tasks = Array.from({ length: AIGC_TASK_BULK_DELETE_LIMIT + 1 }, (_, index) => ({
+      id: `task-${index}`,
+      interfaceId: "interface-1",
+      interfaceName: `任务 ${index}`,
+      channelId: "channel-1",
+      status: "succeeded",
+      assetCount: 0,
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:01:00.000Z",
+    }));
+    const deletedBatches: string[][] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/tasks" && init?.method === "DELETE") {
+        const ids = (JSON.parse(String(init.body)) as { ids: string[] }).ids;
+        deletedBatches.push(ids);
+        const removed = new Set(ids);
+        tasks = tasks.filter((task) => !removed.has(task.id));
+        return new Response(JSON.stringify({ removedIds: ids }));
+      }
+      if (url === "/api/v1/aigc/tasks") return new Response(JSON.stringify({ tasks }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderAigcPage({ page: "aigc-tasks" });
+
+    await screen.findByText("任务 0");
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.click(screen.getByRole("button", { name: `删除选中（${AIGC_TASK_BULK_DELETE_LIMIT + 1}）` }));
+    fireEvent.click(screen.getByRole("button", { name: "删除选中" }));
+
+    await waitFor(() => expect(deletedBatches).toHaveLength(2));
+    expect(deletedBatches.map((batch) => batch.length)).toEqual([AIGC_TASK_BULK_DELETE_LIMIT, 1]);
+    expect(await screen.findByText(`已删除 ${AIGC_TASK_BULK_DELETE_LIMIT + 1} 个任务及其 AIGC 产物，Agent 工作目录附件已保留`)).toBeInTheDocument();
+  });
+
+  it("批量删除失败时通过全局错误弹窗展示服务端错误", async () => {
+    const tasks = [{
+      id: "task-1",
+      interfaceId: "interface-1",
+      interfaceName: "失败任务",
+      channelId: "channel-1",
+      status: "succeeded",
+      assetCount: 0,
+      createdAt: "2026-09-17T08:00:00.000Z",
+      updatedAt: "2026-09-17T08:01:00.000Z",
+    }];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/aigc/tasks" && init?.method === "DELETE") {
+        return new Response(JSON.stringify({
+          error: {
+            code: "VALIDATION_FAILED",
+            message: `AIGC 批量删除任务参数无效，单次最多删除 ${AIGC_TASK_BULK_DELETE_LIMIT} 个任务`,
+            requestId: "request-bulk-delete",
+          },
+        }), { status: 400, headers: { "Content-Type": "application/json" } });
+      }
+      if (url === "/api/v1/aigc/tasks") return new Response(JSON.stringify({ tasks }));
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    renderAigcPage({ page: "aigc-tasks" });
+
+    await screen.findByText("失败任务");
+    fireEvent.click(screen.getByRole("button", { name: "全选" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除选中（1）" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除选中" }));
+
+    expect(await screen.findByText("删除选中的 AIGC 任务失败")).toBeInTheDocument();
+    expect(screen.getByText(`AIGC 批量删除任务参数无效，单次最多删除 ${AIGC_TASK_BULK_DELETE_LIMIT} 个任务`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看错误详情" }));
+    expect(screen.getByText("request-bulk-delete")).toBeInTheDocument();
   });
 
 });

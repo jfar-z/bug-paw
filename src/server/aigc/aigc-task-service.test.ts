@@ -122,4 +122,27 @@ describe("AIGC 任务服务", () => {
     expect(ascending.items.map((asset) => asset.name)).toEqual(["older.png", "newer.png"]);
   });
 
+  it("批量删除任务并清理对应产物", async () => {
+    const { service, repository, item, assets } = await fixture({ assets: [] });
+    const removeTaskOutputs = vi.spyOn(assets, "removeTaskOutputs");
+    const base = {
+      interfaceId: item.id,
+      interfaceName: item.name,
+      channelId: item.channelId,
+      status: "succeeded" as const,
+      inputs: {},
+      assets: [],
+      createdAt: "2026-09-17T10:00:00.000Z",
+      updatedAt: "2026-09-17T10:00:00.000Z",
+    };
+    await repository.create({ ...base, id: "task-batch-1" });
+    await repository.create({ ...base, id: "task-batch-2" });
+
+    await expect(service.removeMany(["task-batch-1", "task-batch-2"])).resolves.toEqual({
+      removedIds: ["task-batch-1", "task-batch-2"],
+    });
+    await expect(repository.list()).resolves.toEqual([]);
+    expect(removeTaskOutputs).toHaveBeenCalledTimes(2);
+  });
+
 });

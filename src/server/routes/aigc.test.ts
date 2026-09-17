@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-import type { AigcTaskRecord } from "../../shared/aigc-contracts";
+import { AIGC_TASK_BULK_DELETE_LIMIT, type AigcTaskRecord } from "../../shared/aigc-contracts";
 import { registerAigcChannelRoutes } from "./aigc-channels";
 import { registerAigcRoutes } from "./aigc";
 
@@ -98,6 +98,16 @@ it("提供产物分页、任务删除与图片缩略图接口", async () => {
     expect(bulkDelete.json()).toEqual({ removedIds: ["task-1", "task-2"] });
     expect(removedBatches).toEqual([["task-1", "task-2"]]);
     expect((await app.inject({ method: "DELETE", url: "/api/aigc/tasks", payload: { ids: [] } })).statusCode).toBe(400);
+    const oversized = await app.inject({
+      method: "DELETE",
+      url: "/api/aigc/tasks",
+      payload: { ids: Array.from({ length: AIGC_TASK_BULK_DELETE_LIMIT + 1 }, (_, index) => `task-${index}`) },
+    });
+    expect(oversized.statusCode).toBe(400);
+    expect(oversized.json()).toMatchObject({
+      error: { message: `AIGC 批量删除任务参数无效，单次最多删除 ${AIGC_TASK_BULK_DELETE_LIMIT} 个任务` },
+    });
+    expect(removedBatches).toEqual([["task-1", "task-2"]]);
     await app.close();
   });
 });

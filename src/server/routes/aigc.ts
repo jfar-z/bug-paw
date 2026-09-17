@@ -17,6 +17,7 @@ import type {
   AigcWorkflowReplaceInput,
   AigcWorkflowUpdateInput,
 } from "../../shared/aigc-contracts";
+import { AIGC_TASK_BULK_DELETE_LIMIT } from "../../shared/aigc-contracts";
 import type { AigcAssetService } from "../aigc/aigc-asset-service";
 import type { AigcComfyUiInputService } from "../aigc/aigc-comfyui-input-service";
 import { AigcMediaProjectError, type AigcMediaProjectService } from "../aigc/aigc-media-project-service";
@@ -295,9 +296,14 @@ function registerTaskRoutes(app: FastifyInstance, dependencies: AigcRouteDepende
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const body = isRecord(request.body) ? request.body : undefined;
     const ids = body?.ids;
-    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 500
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > AIGC_TASK_BULK_DELETE_LIMIT
       || ids.some((id) => typeof id !== "string" || !id.trim()) || new Set(ids).size !== ids.length) {
-      return sendApiError(reply, 400, "VALIDATION_FAILED", "AIGC 批量删除任务参数无效");
+      return sendApiError(
+        reply,
+        400,
+        "VALIDATION_FAILED",
+        `AIGC 批量删除任务参数无效，单次最多删除 ${AIGC_TASK_BULK_DELETE_LIMIT} 个任务`,
+      );
     }
     try {
       return reply.send(await dependencies.tasks.removeMany(ids));

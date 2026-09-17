@@ -160,17 +160,22 @@ export class AigcTaskService {
     return removed;
   }
 
-  /** 批量删除已确认选中的任务，并复用单任务的中止与资产清理流程。 */
+  /** 批量删除已确认选中的任务，整批任务记录只持久化一次。 */
   async removeMany(ids: string[]): Promise<{ removedIds: string[] }> {
     for (const id of ids) {
       if (!await this.dependencies.repository.get(id)) throw new Error(`AIGC 任务不存在：${id}`);
     }
-    const removedIds: string[] = [];
+    for (const id of ids) this.controllers.get(id)?.abort();
+    await Promise.all(ids.map((id) => this.executions.get(id)?.catch(() => undefined)));
     for (const id of ids) {
-      await this.remove(id);
-      removedIds.push(id);
+      await this.dependencies.assets.removeTaskOutputs(id);
     }
-    return { removedIds };
+    const removed = await this.dependencies.repository.removeMany(ids);
+    if (!removed) throw new Error("部分 AIGC 任务在批量删除期间已不存在");
+    for (const id of ids) {
+      this.executionStates.delete(id);
+    }
+    return { removedIds: removed.map((task) => task.id) };
   }
 
   /** 按媒体分组、任务与产物创建时间返回铺平后的产物页。 */
