@@ -120,6 +120,7 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
     let transportRestarting = false;
     let recoveryController: AbortController | undefined;
     let reconnectTimer: number | undefined;
+    let pageWasHidden = document.visibilityState !== "visible";
     const callbacks = () => callbacksRef.current.sessionId === options.sessionId
       ? callbacksRef.current
       : undefined;
@@ -138,19 +139,36 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
         nonce: (current?.nonce ?? 0) + 1,
       }));
     };
-    const checkTransportAfterResume = () => {
+    const checkTransportAfterReconnectGrace = () => {
+      reconnectTimer = undefined;
       if (document.visibilityState !== "visible") return;
       if (source.readyState === EventSource.OPEN) {
-        clearReconnectTimer();
         setReconnecting(false);
         return;
       }
-      // 移动端息屏后原生 EventSource 可能永久停在 CONNECTING，恢复前台时主动续接游标。
       restartTransport();
     };
     const scheduleTransportRestart = () => {
       if (document.visibilityState !== "visible" || reconnectTimer !== undefined) return;
-      reconnectTimer = window.setTimeout(checkTransportAfterResume, EVENT_SOURCE_RECONNECT_GRACE_MS);
+      reconnectTimer = window.setTimeout(checkTransportAfterReconnectGrace, EVENT_SOURCE_RECONNECT_GRACE_MS);
+    };
+    const restartAfterVisibilityResume = () => {
+      if (document.visibilityState !== "visible") {
+        pageWasHidden = true;
+        return;
+      }
+      if (!pageWasHidden) return;
+      pageWasHidden = false;
+      // 移动端息屏后 EventSource 可能保留 OPEN 假状态，恢复前台时必须主动续接最后游标。
+      restartTransport();
+    };
+    const restartAfterNetworkRecovery = () => {
+      if (document.visibilityState === "visible") restartTransport();
+    };
+    const restartAfterPageRestore = (event: PageTransitionEvent) => {
+      if (!event.persisted || document.visibilityState !== "visible") return;
+      pageWasHidden = false;
+      restartTransport();
     };
     const recoverProjection = (notice?: string) => {
       if (!active || sourceRef.current !== source || projectionRecovering) return;
@@ -551,16 +569,16 @@ export function useSessionStream(options: SessionStreamOptions): SessionStreamCo
       callbacksRef.current.onUnexpectedError?.(new ApiClientError("SESSION_STREAM_DISCONNECTED", message, 0));
       scheduleTransportRestart();
     };
-    document.addEventListener("visibilitychange", checkTransportAfterResume);
-    window.addEventListener("online", checkTransportAfterResume);
-    window.addEventListener("pageshow", checkTransportAfterResume);
+    document.addEventListener("visibilitychange", restartAfterVisibilityResume);
+    window.addEventListener("online", restartAfterNetworkRecovery);
+    window.addEventListener("pageshow", restartAfterPageRestore);
 
     return () => {
       active = false;
       clearReconnectTimer();
-      document.removeEventListener("visibilitychange", checkTransportAfterResume);
-      window.removeEventListener("online", checkTransportAfterResume);
-      window.removeEventListener("pageshow", checkTransportAfterResume);
+      document.removeEventListener("visibilitychange", restartAfterVisibilityResume);
+      window.removeEventListener("online", restartAfterNetworkRecovery);
+      window.removeEventListener("pageshow", restartAfterPageRestore);
       if (refreshProjectionRef.current === recoverProjection) {
         refreshProjectionRef.current = () => undefined;
       }

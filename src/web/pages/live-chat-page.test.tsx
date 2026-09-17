@@ -623,21 +623,38 @@ it("前台断线超过原生重连宽限期后主动重建实时连接", async (
   expect(FakeEventSource.instances[1]!.url).toBe("/api/v1/sessions/session-1/events?after=0");
 });
 
-it("浏览器原生重连成功后恢复页面不会重复创建实时连接", async () => {
+it("息屏后的僵尸 OPEN 连接会按最后游标重建并接收遗漏终态", async () => {
+  sessionOneSnapshot = {
+    id: "session-1",
+    agentId: "default",
+    messages: [],
+    history: { branchToken: "branch-zombie-open", hasMoreBefore: false, hasMoreAfter: false, turnCount: 0 },
+    thinkingLevel: "medium",
+    run: {
+      runId: "run-session-1",
+      sessionId: "session-1",
+      status: "running",
+      startedAt: "2026-09-13T00:00:00.000Z",
+    },
+    lastEventId: 18,
+  };
   renderLiveChatPage(<LiveChatPage {...props} />);
-  await screen.findByRole("button", { name: "发送消息" });
+  await screen.findByRole("button", { name: "停止生成" });
   await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
-  const source = FakeEventSource.instances[0]!;
+  const zombieSource = FakeEventSource.instances[0]!;
 
-  act(() => source.emitTransportError());
-  act(() => source.emitOpen());
   documentVisibilityState = "hidden";
   act(() => document.dispatchEvent(new Event("visibilitychange")));
   documentVisibilityState = "visible";
   act(() => document.dispatchEvent(new Event("visibilitychange")));
 
-  expect(FakeEventSource.instances).toHaveLength(1);
-  expect(source.closed).toBe(false);
+  await waitFor(() => expect(FakeEventSource.instances).toHaveLength(2));
+  expect(zombieSource.closed).toBe(true);
+  expect(FakeEventSource.instances[1]!.url).toBe("/api/v1/sessions/session-1/events?after=18");
+
+  act(() => FakeEventSource.instances[1]!.emit("completed", { id: 19 }));
+
+  await screen.findByRole("button", { name: "发送消息" });
 });
 
 it("提交轮次事件用稳定节点替换本地待发送消息", async () => {
