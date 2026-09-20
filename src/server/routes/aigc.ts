@@ -199,8 +199,7 @@ function registerWorkflowRoutes(app: FastifyInstance, dependencies: AigcRouteDep
       return sendApiError(reply, 400, "VALIDATION_FAILED", "请提供 ComfyUI 渠道和配置版本");
     }
     try {
-      const current = await dependencies.workflows.get(request.params.id);
-      const nodeClasses = current.workflow.nodes.map((node) => node.type);
+      const nodeClasses = await dependencies.workflows.metadataNodeClasses(request.params.id);
       const synced = await dependencies.comfyuiInputs.getNodeMetadata(body.channelId, nodeClasses);
       const updated = await dependencies.workflows.syncNodeMetadata(
         request.params.id,

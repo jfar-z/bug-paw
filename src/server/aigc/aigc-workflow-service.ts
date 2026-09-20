@@ -21,6 +21,11 @@ import type {
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
 import { createVersionedJsonStore } from "../configuration/versioned-json-store";
 import { isComfyUiPrimitiveValueField, resolveComfyUiMappedField } from "./comfyui-mapped-field";
+import {
+  projectComfyUiSubgraphMetadata,
+  referencedComfyUiNodeMetadataClasses,
+  remoteComfyUiNodeClasses,
+} from "./comfyui-node-metadata-plan";
 import { ComfyUiWorkflowParser } from "./comfyui-workflow-parser";
 
 const MAX_WORKFLOW_JSON_BYTES = 4 * 1024 * 1024;
@@ -62,6 +67,15 @@ export class AigcWorkflowService {
     const workflow = settings.workflows.find((candidate) => candidate.id === id);
     if (!workflow) throw new Error("AIGC 工作流不存在");
     return { revision: loaded.revision, workflow: toDetail(workflow) };
+  }
+
+  /** 返回节点定义同步需要请求的真实 ComfyUI 节点类型。 */
+  async metadataNodeClasses(id: string): Promise<string[]> {
+    const loaded = await this.store.read();
+    const settings = normalizeSettings(loaded.value);
+    const workflow = settings.workflows.find((candidate) => candidate.id === id);
+    if (!workflow) throw new Error("AIGC 工作流不存在");
+    return remoteComfyUiNodeClasses(workflow.raw, workflow.nodes);
   }
 
   /** 导入并保存一个工作流。 */
@@ -107,9 +121,13 @@ export class AigcWorkflowService {
     const fileName = normalizeFileName(input.fileName);
     const raw = input.workflowJson;
     const parsed = this.parseRawWorkflow(raw);
-    const referencedTypes = new Set(parsed.nodes.map((node) => node.type));
-    const nodeMetadata = previous.nodeMetadata
-      ? Object.fromEntries(Object.entries(previous.nodeMetadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)))
+    const referencedTypes = referencedComfyUiNodeMetadataClasses(raw, parsed.nodes);
+    const retainedMetadata = previous.nodeMetadata
+      ? filterNodeMetadata(previous.nodeMetadata, referencedTypes)
+      : undefined;
+    const projectedMetadata = retainedMetadata ? projectComfyUiSubgraphMetadata(raw, retainedMetadata) : {};
+    const nodeMetadata = retainedMetadata
+      ? filterNodeMetadata({ ...retainedMetadata, ...projectedMetadata }, referencedTypes)
       : undefined;
 
     const retainedInputMappings = compatibleReplacementInputMappings(previous.inputMappings, raw, parsed.nodes, nodeMetadata);
@@ -152,9 +170,10 @@ export class AigcWorkflowService {
     const index = settings.workflows.findIndex((workflow) => workflow.id === id);
     if (index < 0) throw new Error("AIGC 工作流不存在");
     const previous = settings.workflows[index];
-    const referencedTypes = new Set(previous.nodes.map((node) => node.type));
-    const accepted = Object.fromEntries(Object.entries(metadata).filter(([nodeClass]) => referencedTypes.has(nodeClass)));
-    const nodeMetadata = { ...(previous.nodeMetadata ?? {}), ...accepted };
+    const referencedTypes = referencedComfyUiNodeMetadataClasses(previous.raw, previous.nodes);
+    const combinedMetadata = { ...(previous.nodeMetadata ?? {}), ...metadata };
+    const projectedMetadata = projectComfyUiSubgraphMetadata(previous.raw, combinedMetadata);
+    const nodeMetadata = filterNodeMetadata({ ...combinedMetadata, ...projectedMetadata }, referencedTypes);
     const next: StoredAigcWorkflow = {
       ...previous,
       nodeMetadata,
@@ -302,7 +321,10 @@ function detailNode(workflow: StoredAigcWorkflow, node: ComfyUiNode): ComfyUiNod
     return { ...node, fields: node.fields.map((field) => ({ ...field })) };
   }
   const fields = node.fields.flatMap((field) => {
-    if (field.kind !== "widget") return [{ ...field }];
+    if (field.kind !== "widget") {
+      const valueType = metadata.fields[field.name]?.valueType ?? field.valueType;
+      return [{ ...field, ...(valueType ? { valueType } : {}) }];
+    }
     const name = resolveComfyUiMappedField(workflow.raw, workflow.nodeMetadata, node.id, field.name);
     if (name === field.name) return [];
     const valueType = metadata.fields[name]?.valueType ?? field.valueType;
@@ -600,6 +622,11 @@ function cloneNodeMetadata(value: ComfyUiNodeMetadata): ComfyUiNodeMetadata {
       ...(metadata.enumOptions ? { enumOptions: [...metadata.enumOptions] } : {}),
     }])),
   }]));
+}
+
+/** 仅保留当前工作流真实引用的节点定义，避免替换后残留旧子图元数据。 */
+function filterNodeMetadata(value: ComfyUiNodeMetadata, nodeClasses: Set<string>): ComfyUiNodeMetadata {
+  return Object.fromEntries(Object.entries(value).filter(([nodeClass]) => nodeClasses.has(nodeClass)));
 }
 
 /** 宽容恢复控件字段顺序，并丢弃异常深度或非法字段名。 */

@@ -118,7 +118,7 @@ describe("AIGC 工作流节点元数据路由", () => {
     registerAigcRoutes(app, {
       authService: { isAuthenticated: async () => true } as never,
       workflows: {
-        get: async () => ({ revision: "r1", workflow: { nodes: [{ type: "KSampler" }, { type: "KSampler" }] } }),
+        metadataNodeClasses: async () => ["KSampler"],
         syncNodeMetadata: async () => ({ revision: "r2", workflow: { id: "workflow-1", nodeMetadataSyncedAt: "2026-08-20T08:00:00.000Z" } }),
       } as never,
       interfaces: {} as never,

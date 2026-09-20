@@ -171,6 +171,76 @@ describe("AIGC 工作流服务", () => {
     expect((await service.getPrivate(created.workflow.id))?.inputMappings[0].field).toBe("widgets_values.0");
   });
 
+  it("同步子图内部定义并恢复公开接口名和 PrimitiveNode 枚举", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "Qwen Image",
+      fileName: "qwen-image.json",
+      workflowJson: primitiveSubgraphUiWorkflow(),
+      inputMappings: [{
+        id: "subgraph-unet",
+        name: "subgraph_unet",
+        nodeId: "459",
+        field: "widgets_values.0",
+        type: "enum",
+        required: true,
+        enumOptions: ["legacy-unet.safetensors"],
+      }],
+      outputMappings: [],
+    });
+
+    expect(await service.metadataNodeClasses(created.workflow.id)).toEqual(["UNETLoader", "CLIPLoader"]);
+
+    const synced = await service.syncNodeMetadata(created.workflow.id, {
+      UNETLoader: {
+        fields: {
+          "inputs.unet_name": {
+            comfyType: "COMBO",
+            valueType: "enum",
+            enumOptions: ["qwen21\\qwen_image_2.1_bf16.safetensors", "qwen21\\qwen_image_2.1_int8.safetensors"],
+          },
+        },
+        widgetInputs: [{ name: "unet_name" }],
+      },
+      CLIPLoader: {
+        fields: {
+          "inputs.clip_name": {
+            comfyType: "COMBO",
+            valueType: "enum",
+            enumOptions: ["qwen3vl_8b_bf16.safetensors", "qwen3vl_8b_fp8.safetensors"],
+          },
+        },
+        widgetInputs: [{ name: "clip_name" }],
+      },
+    }, "2026-09-20T08:00:00.000Z", created.revision);
+
+    expect(synced.workflow.inputMappings[0].field).toBe("inputs.unet_name");
+    expect(synced.workflow.nodeMetadata?.["subgraph-qwen"]?.widgetInputs).toEqual([
+      { name: "unet_name" },
+      { name: "clip_name" },
+    ]);
+    expect(synced.workflow.nodeMetadata?.["subgraph-qwen"]?.fields["inputs.unet_name"]?.enumOptions).toEqual([
+      "qwen21\\qwen_image_2.1_bf16.safetensors",
+      "qwen21\\qwen_image_2.1_int8.safetensors",
+    ]);
+    expect(synced.workflow.nodes.find((node) => node.id === "459")?.fields).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "inputs.unet_name", valueType: "enum" }),
+      expect.objectContaining({ name: "inputs.clip_name", valueType: "enum" }),
+    ]));
+    expect(synced.workflow.nodes.find((node) => node.id === "459")?.fields).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "widgets_values.0" }),
+      expect.objectContaining({ name: "widgets_values.1" }),
+    ]));
+    expect(synced.workflow.resolvedFieldMetadata?.["489"]?.["widgets_values.0"]?.enumOptions).toEqual([
+      "qwen21\\qwen_image_2.1_bf16.safetensors",
+      "qwen21\\qwen_image_2.1_int8.safetensors",
+    ]);
+    expect(synced.workflow.resolvedFieldMetadata?.["490"]?.["widgets_values.0"]?.enumOptions).toEqual([
+      "qwen3vl_8b_bf16.safetensors",
+      "qwen3vl_8b_fp8.safetensors",
+    ]);
+  });
+
   it("替换原始工作流时保留标识、映射和节点元数据", async () => {
     const service = await fixture();
     const created = await service.create({
@@ -287,6 +357,82 @@ function primitiveUiWorkflow() {
     links: [
       [273, 144, 0, 57, 0, "COMBO"],
       [274, 144, 0, 120, 0, "COMBO"],
+    ],
+  };
+}
+
+/** PrimitiveNode 连接到外部子图公开 COMBO 端口的最小工作流。 */
+function primitiveSubgraphUiWorkflow() {
+  return {
+    definitions: {
+      subgraphs: [{
+        id: "subgraph-qwen",
+        name: "Image Edit",
+        inputs: [
+          { id: "unet-port", name: "unet_name", type: "COMBO" },
+          { id: "clip-port", name: "clip_name", type: "COMBO" },
+        ],
+        outputs: [],
+        nodes: [
+          {
+            id: 451,
+            type: "UNETLoader",
+            inputs: [{ name: "unet_name", type: "COMBO", widget: { name: "unet_name" }, link: 663 }],
+            outputs: [],
+            widgets_values: ["qwen21\\qwen_image_2.1_bf16.safetensors"],
+            widgets_values_named: { unet_name: "qwen21\\qwen_image_2.1_bf16.safetensors" },
+          },
+          {
+            id: 453,
+            type: "CLIPLoader",
+            inputs: [{ name: "clip_name", type: "COMBO", widget: { name: "clip_name" }, link: 664 }],
+            outputs: [],
+            widgets_values: ["qwen3vl_8b_bf16.safetensors"],
+            widgets_values_named: { clip_name: "qwen3vl_8b_bf16.safetensors" },
+          },
+        ],
+        links: [
+          { id: 663, origin_id: -10, origin_slot: 0, target_id: 451, target_slot: 0, type: "COMBO" },
+          { id: 664, origin_id: -10, origin_slot: 1, target_id: 453, target_slot: 0, type: "COMBO" },
+        ],
+      }],
+    },
+    nodes: [
+      {
+        id: 489,
+        type: "PrimitiveNode",
+        inputs: [],
+        outputs: [{ name: "COMBO", type: "COMBO", links: [743] }],
+        widgets_values: ["qwen21\\qwen_image_2.1_bf16.safetensors", "fixed", ""],
+        widgets_values_named: { value: "qwen21\\qwen_image_2.1_bf16.safetensors", control_after_generate: "fixed", control_filter_list: "" },
+      },
+      {
+        id: 490,
+        type: "PrimitiveNode",
+        inputs: [],
+        outputs: [{ name: "COMBO", type: "COMBO", links: [744] }],
+        widgets_values: ["qwen3vl_8b_bf16.safetensors", "fixed", ""],
+        widgets_values_named: { value: "qwen3vl_8b_bf16.safetensors", control_after_generate: "fixed", control_filter_list: "" },
+      },
+      {
+        id: 459,
+        type: "subgraph-qwen",
+        inputs: [
+          { name: "unet_name", type: "COMBO", widget: { name: "unet_name" }, link: 743 },
+          { name: "clip_name", type: "COMBO", widget: { name: "clip_name" }, link: 744 },
+        ],
+        outputs: [],
+        widgets_values: ["qwen21\\qwen_image_2.1_bf16.safetensors", "qwen3vl_8b_bf16.safetensors"],
+        widgets_values_named: {
+          unet_name: "qwen21\\qwen_image_2.1_bf16.safetensors",
+          clip_name: "qwen3vl_8b_bf16.safetensors",
+        },
+      },
+      { id: 463, type: "MarkdownNote", inputs: [], outputs: [], widgets_values: ["说明"] },
+    ],
+    links: [
+      [743, 489, 0, 459, 0, "COMBO"],
+      [744, 490, 0, 459, 1, "COMBO"],
     ],
   };
 }
