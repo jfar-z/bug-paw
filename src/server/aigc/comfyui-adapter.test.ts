@@ -156,13 +156,14 @@ it("展开外部子图并把公开端口映射到内部节点", async () => {
   });
 
   await new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0)
-    .execute(input(subgraphExecutionWorkflow(), { prompt: "新的提示词", height: "1920" }));
+    .execute(input(subgraphExecutionWorkflow(), { prompt: "新的提示词" }));
 
   expect(submittedPrompt).not.toHaveProperty("30");
   expect(submittedPrompt).toHaveProperty("30:1.class_type", "GeneratorNode");
   expect(submittedPrompt).toHaveProperty("30:1.inputs", {
     prompt: "新的提示词",
-    height: 1920,
+    cfg: 1,
+    height: ["10", 0],
     style: "cinematic",
   });
   expect(submittedPrompt).toHaveProperty("52.inputs.images", ["30:1", 0]);
@@ -471,6 +472,7 @@ function subgraphExecutionWorkflow(): AigcWorkflowDetail & { raw: unknown } {
           name: "Generator",
           inputs: [
             { name: "value", type: "STRING" },
+            { name: "cfg", type: "FLOAT" },
             { name: "height", type: "INT" },
           ],
           outputs: [{ name: "IMAGE", type: "IMAGE" }],
@@ -479,44 +481,60 @@ function subgraphExecutionWorkflow(): AigcWorkflowDetail & { raw: unknown } {
             type: "GeneratorNode",
             inputs: [
               { name: "prompt", type: "STRING", widget: { name: "prompt" }, link: 1 },
-              { name: "height", type: "INT", widget: { name: "height" }, link: 2 },
+              { name: "cfg", type: "FLOAT", widget: { name: "cfg" }, link: 2 },
+              { name: "height", type: "INT", widget: { name: "height" }, link: 3 },
               { name: "style", type: "STRING", widget: { name: "style" }, link: null },
             ],
-            outputs: [{ name: "IMAGE", type: "IMAGE", links: [3] }],
-            widgets_values: ["默认提示词", 1024, "cinematic"],
-            widgets_values_named: { prompt: "默认提示词", height: 1024, style: "cinematic" },
+            outputs: [{ name: "IMAGE", type: "IMAGE", links: [4] }],
+            widgets_values: ["默认提示词", 1, 1024, "cinematic"],
+            widgets_values_named: { prompt: "默认提示词", cfg: 1, height: 1024, style: "cinematic" },
           }],
           links: [
             { id: 1, origin_id: -10, origin_slot: 0, target_id: 1, target_slot: 0, type: "STRING" },
-            { id: 2, origin_id: -10, origin_slot: 1, target_id: 1, target_slot: 1, type: "INT" },
-            { id: 3, origin_id: 1, origin_slot: 0, target_id: -20, target_slot: 0, type: "IMAGE" },
+            { id: 2, origin_id: -10, origin_slot: 1, target_id: 1, target_slot: 1, type: "FLOAT" },
+            { id: 3, origin_id: -10, origin_slot: 2, target_id: 1, target_slot: 2, type: "INT" },
+            { id: 4, origin_id: 1, origin_slot: 0, target_id: -20, target_slot: 0, type: "IMAGE" },
           ],
         }],
       },
       nodes: [
         {
+          id: 10,
+          type: "IntegerNode",
+          inputs: [],
+          outputs: [{ name: "INT", type: "INT", links: [5] }],
+          widgets_values: [1536],
+          widgets_values_named: { value: 1536 },
+        },
+        {
           id: 30,
           type: "subgraph-generator",
           inputs: [
             { name: "value", type: "STRING", widget: { name: "value" }, link: null },
-            { name: "height", type: "INT", widget: { name: "height" }, link: null },
+            { name: "height", type: "INT", widget: { name: "height" }, link: 5 },
           ],
           outputs: [{ name: "IMAGE", type: "IMAGE", links: [4] }],
-          widgets_values: ["默认提示词", 1024],
-          widgets_values_named: { value: "默认提示词", height: 1024 },
+          widgets_values: ["默认提示词", 1, 1024],
+          widgets_values_named: { value: "默认提示词", cfg: 1, height: 1024 },
         },
         { id: 52, type: "PreviewImage", inputs: [{ name: "images", type: "IMAGE", link: 4 }], outputs: [] },
       ],
-      links: [[4, 30, 0, 52, 0, "IMAGE"]],
+      links: [
+        [4, 30, 0, 52, 0, "IMAGE"],
+        [5, 10, 0, 30, 1, "INT"],
+      ],
     },
     nodes: [
+      { id: "10", type: "IntegerNode", fields: [{ name: "outputs.INT", kind: "output" }] },
       { id: "30", type: "subgraph-generator", fields: [{ name: "widgets_values.0", kind: "widget", valueType: "string" }] },
       { id: "52", type: "PreviewImage", fields: [{ name: "outputs.images", kind: "output" }] },
     ],
-    edges: [{ id: "4", sourceNodeId: "30", sourceField: "outputs.IMAGE", targetNodeId: "52", targetField: "inputs.images" }],
+    edges: [
+      { id: "4", sourceNodeId: "30", sourceField: "outputs.IMAGE", targetNodeId: "52", targetField: "inputs.images" },
+      { id: "5", sourceNodeId: "10", sourceField: "outputs.INT", targetNodeId: "30", targetField: "inputs.height" },
+    ],
     inputMappings: [
       { id: "prompt", name: "prompt", nodeId: "30", field: "widgets_values.0", type: "string", required: true },
-      { id: "height", name: "height", nodeId: "30", field: "inputs.height", type: "string", required: true },
     ],
     outputMappings: [{ id: "result", name: "result", nodeId: "52", field: "outputs.images", mediaType: "image" }],
   };

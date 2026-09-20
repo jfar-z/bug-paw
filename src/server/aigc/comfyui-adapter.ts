@@ -442,7 +442,7 @@ function flattenUiContainer(
       continue;
     }
     const child = flattenUiContainer(definition.nodes, definition.links, nodeId, definitions, flattened);
-    references.set(localId, child);
+    references.set(localId, remapSubgraphReference(node, definition, child));
     const publicInputs = Array.isArray(definition.inputs) ? definition.inputs : [];
     const bindings = new Map<string, SubgraphInputBinding>();
     for (let index = 0; index < publicInputs.length; index += 1) {
@@ -489,6 +489,47 @@ function flattenUiContainer(
     }
   }
   return { inputs, outputs };
+}
+
+/** 按公开端口名对齐子图实例与定义，避免隐藏 widget 端口导致后续连线整体错位。 */
+function remapSubgraphReference(
+  instance: Record<string, unknown>,
+  definition: Record<string, unknown>,
+  child: FlattenedContainer,
+): UiNodeReference {
+  return {
+    inputs: remapSubgraphSlots(instance.inputs, definition.inputs, child.inputs),
+    outputs: remapSubgraphSlots(instance.outputs, definition.outputs, child.outputs),
+  };
+}
+
+/** 将实例端口下标映射到同名定义端口；无名称的旧格式才保留同下标兼容。 */
+function remapSubgraphSlots<T>(
+  instancePortsValue: unknown,
+  definitionPortsValue: unknown,
+  definitionSlots: Map<number, T>,
+): Map<number, T> {
+  const instancePorts = Array.isArray(instancePortsValue) ? instancePortsValue : [];
+  const definitionPorts = Array.isArray(definitionPortsValue) ? definitionPortsValue : [];
+  const definitionIndexes = new Map<string, number>();
+  for (let index = 0; index < definitionPorts.length; index += 1) {
+    const name = portName(definitionPorts[index]);
+    if (name && !definitionIndexes.has(name)) definitionIndexes.set(name, index);
+  }
+
+  const remapped = new Map<number, T>();
+  for (let index = 0; index < instancePorts.length; index += 1) {
+    const name = portName(instancePorts[index]);
+    const definitionIndex = name ? definitionIndexes.get(name) : index;
+    if (definitionIndex === undefined) continue;
+    const slot = definitionSlots.get(definitionIndex);
+    if (slot !== undefined) remapped.set(index, slot);
+  }
+  return remapped;
+}
+
+function portName(value: unknown): string | undefined {
+  return isRecord(value) && typeof value.name === "string" && value.name ? value.name : undefined;
 }
 
 /** 收集合法的外部子图定义，避免 UUID 节点直接进入 Prompt API。 */
