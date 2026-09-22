@@ -453,7 +453,7 @@ function flattenUiContainer(
         ...(typeof port?.type === "string" ? { type: port.type } : {}),
         targets,
       });
-      const value = subgraphInstanceValue(node, name, index);
+      const value = subgraphInstanceValue(node, publicInputs, name, index);
       if (value !== undefined) {
         for (const target of targets) flattened.defaults.push({ ...target, value });
       }
@@ -577,10 +577,47 @@ function resolveFlattenedInputs(reference: UiNodeReference | undefined, slot: nu
   return [{ nodeId: reference.nodeId, field: reference.inputNames?.[slot] ?? `slot_${slot}` }];
 }
 
-/** 从子图实例的具名值或顺序值读取公开输入默认值。 */
-function subgraphInstanceValue(node: Record<string, unknown>, name: string, index: number): unknown {
-  if (isRecord(node.widgets_values_named) && node.widgets_values_named[name] !== undefined) return node.widgets_values_named[name];
-  return Array.isArray(node.widgets_values) ? node.widgets_values[index] : undefined;
+/** 从子图实例的具名值或实际 widget 顺序读取公开输入默认值。 */
+function subgraphInstanceValue(
+  node: Record<string, unknown>,
+  publicInputs: unknown[],
+  name: string,
+  index: number,
+): unknown {
+  if (isRecord(node.widgets_values_named)
+    && Object.prototype.hasOwnProperty.call(node.widgets_values_named, name)) {
+    return node.widgets_values_named[name];
+  }
+  if (!Array.isArray(node.widgets_values)) return undefined;
+  const widgetIndex = subgraphWidgetValueIndex(node, publicInputs, index);
+  return widgetIndex === undefined ? undefined : node.widgets_values[widgetIndex];
+}
+
+/** 将公开输入下标换算为 widgets_values 下标，媒体连线端口不占用控件值。 */
+function subgraphWidgetValueIndex(
+  node: Record<string, unknown>,
+  publicInputs: unknown[],
+  targetIndex: number,
+): number | undefined {
+  let widgetIndex = 0;
+  for (let index = 0; index <= targetIndex; index += 1) {
+    if (!subgraphInputUsesWidget(node, publicInputs[index], index)) continue;
+    if (index === targetIndex) return widgetIndex;
+    widgetIndex += 1;
+  }
+  return undefined;
+}
+
+/** 判断子图公开输入是否由实例 widget 持久化；隐藏控件没有实例端口，仍需占位。 */
+function subgraphInputUsesWidget(node: Record<string, unknown>, publicInput: unknown, index: number): boolean {
+  const instanceInputs = Array.isArray(node.inputs) ? node.inputs : [];
+  const name = portName(publicInput);
+  if (name) {
+    const instanceInput = instanceInputs.find((value) => portName(value) === name);
+    return !instanceInput || (isRecord(instanceInput) && isRecord(instanceInput.widget));
+  }
+  const instanceInput = instanceInputs[index];
+  return !instanceInput || (isRecord(instanceInput) && isRecord(instanceInput.widget));
 }
 
 function uiInputSlot(node: Record<string, unknown> | undefined, field: string): number {

@@ -169,6 +169,30 @@ it("展开外部子图并把公开端口映射到内部节点", async () => {
   expect(submittedPrompt).toHaveProperty("52.inputs.images", ["30:1", 0]);
 });
 
+it.each([true, false])("子图媒体端口不占用控件默认值，具名值=%s", async (withNamedValues) => {
+  let submittedPrompt: Record<string, unknown> | undefined;
+  const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
+    const url = String(requestInput);
+    if (url.endsWith("/prompt")) {
+      submittedPrompt = (JSON.parse(String(init?.body)) as { prompt: Record<string, unknown> }).prompt;
+      return json({ prompt_id: "prompt-subgraph-media" });
+    }
+    if (url.endsWith("/queue")) return json({ queue_running: [[1, "prompt-subgraph-media"]], queue_pending: [] });
+    if (url.endsWith("/history/prompt-subgraph-media")) {
+      return json({ "prompt-subgraph-media": { outputs: { "52": { images: [{ filename: "result.png" }] } } } });
+    }
+    if (url.includes("/view?")) return new Response(Buffer.from("png"), { status: 200 });
+    throw new Error(`未处理请求 ${url}`);
+  });
+
+  await new ComfyUiAigcAdapter(request as unknown as typeof fetch, () => undefined, 0)
+    .execute(input(subgraphMediaDefaultsWorkflow(withNamedValues), {}));
+
+  expect(submittedPrompt).toHaveProperty("30:1.inputs.prompt", "默认提示词");
+  expect(submittedPrompt).toHaveProperty("30:1.inputs.batch_size", 1);
+  expect(submittedPrompt).not.toHaveProperty("30:1.inputs.image");
+});
+
 it("兼容已迁移为 API 别名的 PrimitiveNode 映射并写入全部下游", async () => {
   let submittedPrompt: Record<string, unknown> | undefined;
   const request = vi.fn(async (requestInput: string | URL | Request, init?: RequestInit) => {
@@ -536,6 +560,84 @@ function subgraphExecutionWorkflow(): AigcWorkflowDetail & { raw: unknown } {
     inputMappings: [
       { id: "prompt", name: "prompt", nodeId: "30", field: "widgets_values.0", type: "string", required: true },
     ],
+    outputMappings: [{ id: "result", name: "result", nodeId: "52", field: "outputs.images", mediaType: "image" }],
+  };
+}
+
+/** 模拟公开媒体端口夹在普通 widget 之间的 Qwen 子图。 */
+function subgraphMediaDefaultsWorkflow(withNamedValues: boolean): AigcWorkflowDetail & { raw: unknown } {
+  return {
+    ...imageWorkflow(),
+    id: "workflow-subgraph-media-defaults",
+    raw: {
+      definitions: {
+        subgraphs: [{
+          id: "subgraph-qwen",
+          name: "Qwen Generator",
+          inputs: [
+            { name: "prompt", type: "STRING" },
+            { name: "image", type: "IMAGE" },
+            { name: "batch_size", type: "INT" },
+          ],
+          outputs: [{ name: "IMAGE", type: "IMAGE" }],
+          nodes: [{
+            id: 1,
+            type: "QwenGenerator",
+            inputs: [
+              { name: "prompt", type: "STRING", widget: { name: "prompt" }, link: 1 },
+              { name: "image", type: "IMAGE", link: 2 },
+              { name: "batch_size", type: "INT", widget: { name: "batch_size" }, link: 3 },
+            ],
+            outputs: [{ name: "IMAGE", type: "IMAGE", links: [4] }],
+            widgets_values: ["默认提示词", 1],
+            widgets_values_named: { prompt: "默认提示词", batch_size: 1 },
+          }],
+          links: [
+            { id: 1, origin_id: -10, origin_slot: 0, target_id: 1, target_slot: 0, type: "STRING" },
+            { id: 2, origin_id: -10, origin_slot: 1, target_id: 1, target_slot: 1, type: "IMAGE" },
+            { id: 3, origin_id: -10, origin_slot: 2, target_id: 1, target_slot: 2, type: "INT" },
+            { id: 4, origin_id: 1, origin_slot: 0, target_id: -20, target_slot: 0, type: "IMAGE" },
+          ],
+        }],
+      },
+      nodes: [
+        {
+          id: 20,
+          type: "LoadImage",
+          mode: 4,
+          inputs: [],
+          outputs: [{ name: "IMAGE", type: "IMAGE", links: [5] }],
+          widgets_values: ["reference.png"],
+        },
+        {
+          id: 30,
+          type: "subgraph-qwen",
+          inputs: [
+            { name: "prompt", type: "STRING", widget: { name: "prompt" }, link: null },
+            { name: "image", type: "IMAGE", link: 5 },
+            { name: "batch_size", type: "INT", widget: { name: "batch_size" }, link: null },
+          ],
+          outputs: [{ name: "IMAGE", type: "IMAGE", links: [6] }],
+          widgets_values: ["默认提示词", 1],
+          ...(withNamedValues ? { widgets_values_named: { prompt: "默认提示词", batch_size: 1 } } : {}),
+        },
+        { id: 52, type: "PreviewImage", inputs: [{ name: "images", type: "IMAGE", link: 6 }], outputs: [] },
+      ],
+      links: [
+        [5, 20, 0, 30, 1, "IMAGE"],
+        [6, 30, 0, 52, 0, "IMAGE"],
+      ],
+    },
+    nodes: [
+      { id: "20", type: "LoadImage", fields: [] },
+      { id: "30", type: "subgraph-qwen", fields: [] },
+      { id: "52", type: "PreviewImage", fields: [] },
+    ],
+    edges: [
+      { id: "5", sourceNodeId: "20", sourceField: "outputs.IMAGE", targetNodeId: "30", targetField: "inputs.image" },
+      { id: "6", sourceNodeId: "30", sourceField: "outputs.IMAGE", targetNodeId: "52", targetField: "inputs.images" },
+    ],
+    inputMappings: [],
     outputMappings: [{ id: "result", name: "result", nodeId: "52", field: "outputs.images", mediaType: "image" }],
   };
 }
