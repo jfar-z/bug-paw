@@ -537,13 +537,16 @@ export interface AigcComfyUiInputFile {
 }
 
 /** 手动试运行提交的入参。 */
-export type AigcRunInputValue =
+export type AigcSingleRunInputValue =
   | boolean
   | number
   | string
   | { assetId: string; name: string; mediaType: string; source?: "upload" | "public" }
   | { url: string; name: string; mediaType: string }
   | { filename: string; name: string; mediaType: string; subfolder?: string; type?: string; source: "comfyui_input" };
+
+/** 图片编辑可按输入顺序提供多张参考图。 */
+export type AigcRunInputValue = AigcSingleRunInputValue | AigcSingleRunInputValue[];
 
 /** 手动试运行请求。 */
 export interface AigcRunRequest {

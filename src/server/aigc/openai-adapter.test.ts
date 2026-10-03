@@ -58,6 +58,28 @@ describe("OpenAiAigcAdapter", () => {
     expect(form.get("image")).toBeInstanceOf(File);
   });
 
+  it("按输入顺序提交多张编辑参考图", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openai-multi-edit-"));
+    roots.push(root);
+    const first = join(root, "first.png");
+    const second = join(root, "second.png");
+    await writeFile(first, "first");
+    await writeFile(second, "second");
+    const request = successfulRequest();
+    const adapter = new OpenAiAigcAdapter(request as unknown as typeof fetch);
+    const execution = input({ prompt: "组合图片", image: [
+      { assetId: "first", name: "first.png", mediaType: "image/png" },
+      { assetId: "second", name: "second.png", mediaType: "image/png" },
+    ] });
+    execution.assets = { resolveInputPath: vi.fn(async (id: string) => id === "first" ? first : second) } as never;
+
+    await adapter.execute(execution);
+
+    const form = request.mock.calls[0][1]?.body as FormData;
+    expect(form.get("image")).toBeNull();
+    expect((form.getAll("image[]") as File[]).map((file) => file.name)).toEqual(["first.png", "second.png"]);
+  });
+
 function input(inputs: Record<string, unknown>, imagePath?: string, publicImagePath?: string): AigcExecutionInput {
     return {
       item: {

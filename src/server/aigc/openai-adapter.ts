@@ -56,16 +56,21 @@ export class OpenAiAigcAdapter implements AigcProtocolAdapter {
     config: AigcOpenAiInterfaceConfig,
     prompt: string,
   ): Promise<AigcExecutionResult> {
-    const image = readAsset(input.inputs.image);
-    const imagePath = image.source === "public"
-      ? await input.publicFiles?.resolvePath(image.assetId)
-      : await input.assets.resolveInputPath(image.assetId);
-    if (!imagePath) throw new Error("图片入参文件不存在");
-    const imageBuffer = await readFile(imagePath);
+    const images = Array.isArray(input.inputs.image) ? input.inputs.image : [input.inputs.image];
+    if (images.length < 1 || images.length > 16) throw new TypeError("图片编辑最多支持 16 张参考图");
     const form = new FormData();
     form.set("model", config.model);
     form.set("prompt", prompt);
-    form.set("image", new Blob([imageBuffer], { type: image.mediaType || "application/octet-stream" }), image.name || basename(imagePath));
+    for (const value of images) {
+      const image = readAsset(value);
+      const imagePath = image.source === "public"
+        ? await input.publicFiles?.resolvePath(image.assetId)
+        : await input.assets.resolveInputPath(image.assetId);
+      if (!imagePath) throw new Error("图片入参文件不存在");
+      const imageBuffer = await readFile(imagePath);
+      form.append(images.length === 1 ? "image" : "image[]",
+        new Blob([imageBuffer], { type: image.mediaType || "application/octet-stream" }), image.name || basename(imagePath));
+    }
     for (const [name, value] of Object.entries(readRequestParameters(config, input.inputs))) {
       form.set(name, String(value));
     }

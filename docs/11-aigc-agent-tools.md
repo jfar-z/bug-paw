@@ -37,7 +37,7 @@ The interface editor stores an Agent-specific usage description. With `interface
 }
 ```
 
-每个参数项必须且只能提供 `name` 和 `value`。`value` 按接口字段类型使用原生 JSON 字符串、数字或布尔值；媒体字段使用工作区相对路径字符串。先读取接口定义，不猜测字段。可选字段缺失时使用已配置默认值；可选媒体字段也可显式传 `value: null`，等同于未提供。非媒体字段传 `null`、必填字段缺失或没有默认值时拒绝提交。枚举保留真实标量类型，数字枚举不能强制转为字符串。OpenAI“图片生成与编辑”接口省略参考图时调用文生图端点，提供工作区图片路径时调用图片编辑端点。
+每个参数项必须且只能提供 `name` 和 `value`。`value` 按接口字段类型使用原生 JSON 字符串、数字或布尔值；媒体字段使用工作区相对路径字符串。先读取接口定义，不猜测字段。可选字段缺失时使用已配置默认值；可选媒体字段也可显式传 `value: null`，等同于未提供。非媒体字段传 `null`、必填字段缺失或没有默认值时拒绝提交。枚举保留真实标量类型，数字枚举不能强制转为字符串。OpenAI“图片生成与编辑”接口省略参考图时调用文生图端点，提供参考图时调用图片编辑端点。OpenAI/Grok 图片编辑的 `image` 也接受有序路径数组，例如 `{ "name": "image", "value": ["attachments/first.png", "attachments/second.png"] }`；单张路径继续有效。OpenAI 最多 16 张，Grok 最多 5 张；其他媒体字段仍只接受单个路径。
 
 所有接口的本地媒体均通过参数项的 `value` 指定当前 Agent 工作区相对路径，不接受任意资产 ID、宿主机路径、其他 Agent 文件或 ComfyUI input 文件名。服务端复用工作区路径、符号链接、大小和媒体类型校验，并按协议处理：OpenAI 保存到私有输入区后以 multipart 上传，ComfyUI 保存到私有输入区后上传到 ComfyUI input，Grok 自动复制到公开目录并提交稳定 URL。
 

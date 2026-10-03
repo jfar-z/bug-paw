@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import mime from "mime";
-import type { AigcRunInputValue, AigcTaskRecord } from "../../shared/aigc-contracts";
+import type { AigcRunInputValue, AigcSingleRunInputValue, AigcTaskRecord } from "../../shared/aigc-contracts";
 import type { WorkspaceFileService } from "../attachments";
 import type { WorkspaceFileManager } from "../workspace-files";
 import { KeyedMutex } from "../core/keyed-mutex";
@@ -152,37 +152,44 @@ export class AigcAgentService {
       const publicUploads: string[] = [];
       try {
         // 先读取并校验全部媒体，再保存临时输入，避免错误参数启动上游计算。
-        const media = new Map<string, Awaited<ReturnType<WorkspaceFileManager["readFile"]>>>();
+        const media = new Map<string, Awaited<ReturnType<WorkspaceFileManager["readFile"]>>[]>();
         let totalBytes = 0;
         for (const field of fields) {
           if (values[field.name] === undefined) continue;
           if (field.source === "workspace") {
-            const file = await this.dependencies.workspace.readFile(context.agentId, String(values[field.name]), 100 * 1024 * 1024);
-            if (!file.mediaType.startsWith(`${field.type}/`)) throw new TypeError(`参数 ${field.name} 媒体类型不匹配`);
-            totalBytes += file.content.length;
-            if (totalBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参总量不能超过 200 MiB");
-            media.set(field.name, file);
-          } else prepared[field.name] = values[field.name];
-        }
-        for (const [name, file] of media) {
-          signal?.throwIfAborted();
-          if (item.protocol === "grok") {
-            const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
-            if (!publicOrigin) {
-              throw new AigcAgentError("AIGC_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 本地媒体需要配置 BUG_PAW_PUBLIC_ORIGIN，或使用明确的 BUG_PAW_BIND_ADDRESS");
+            const references = Array.isArray(values[field.name]) ? values[field.name] as string[] : [values[field.name] as string];
+            const files = [];
+            for (const reference of references) {
+              const file = await this.dependencies.workspace.readFile(context.agentId, reference, 100 * 1024 * 1024);
+              if (!file.mediaType.startsWith(`${field.type}/`)) throw new TypeError(`参数 ${field.name} 媒体类型不匹配`);
+              totalBytes += file.content.length;
+              if (totalBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参总量不能超过 200 MiB");
+              files.push(file);
             }
-            const saved = await this.dependencies.publicFiles.save(
-              Readable.from(file.content),
-              `agent-${randomUUID()}-${file.name}`,
-              file.mediaType,
-            );
-            publicUploads.push(saved.id);
-            prepared[name] = `${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`;
-          } else {
-            const saved = await this.dependencies.assets.saveInput(Readable.from(file.content), file.name, file.mediaType);
-            uploads.push(saved.id);
-            prepared[name] = { assetId: saved.id, name: saved.name, mediaType: saved.mediaType };
+            media.set(field.name, files);
+          } else prepared[field.name] = values[field.name] as AigcSingleRunInputValue;
+        }
+        for (const [name, files] of media) {
+          signal?.throwIfAborted();
+          const references: AigcSingleRunInputValue[] = [];
+          for (const file of files) {
+            if (item.protocol === "grok") {
+              const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
+              if (!publicOrigin) {
+                throw new AigcAgentError("AIGC_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 本地媒体需要配置 BUG_PAW_PUBLIC_ORIGIN，或使用明确的 BUG_PAW_BIND_ADDRESS");
+              }
+              const saved = await this.dependencies.publicFiles.save(
+                Readable.from(file.content), `agent-${randomUUID()}-${file.name}`, file.mediaType,
+              );
+              publicUploads.push(saved.id);
+              references.push(`${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`);
+            } else {
+              const saved = await this.dependencies.assets.saveInput(Readable.from(file.content), file.name, file.mediaType);
+              uploads.push(saved.id);
+              references.push({ assetId: saved.id, name: saved.name, mediaType: saved.mediaType });
+            }
           }
+          prepared[name] = Array.isArray(values[name]) ? references : references[0];
         }
         // 文件准备可能耗时，提交前再次核对授权与发布状态。
         await this.authorize(context, tool);

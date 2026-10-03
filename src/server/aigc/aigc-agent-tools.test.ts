@@ -396,6 +396,31 @@ describe("AIGC Agent 工具", () => {
     expect(saveInput).not.toHaveBeenCalled();
   });
 
+  it("图片编辑保留有序多图并拒绝超出 Grok 数量限制", async () => {
+    const f = await fixture();
+    await f.interfaces.update(f.item.id, { ...f.item, capability: "image-edit" }, (await f.interfaces.list()).revision);
+    await writeFile(join(f.workspaces, "agent-a", "first.png"), "first");
+    await writeFile(join(f.workspaces, "agent-a", "second.png"), "second");
+    const detail = await f.service.list(context, { interfaceId: f.item.id });
+    expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
+      expect.objectContaining({ name: "image", multiple: true, maxItems: 16 }),
+    ]));
+    const task = await f.service.run(context, { ...f.submit("multi-openai"), parameters: [
+      { name: "prompt", value: "组合" }, { name: "image", value: ["first.png", "second.png"] },
+    ] });
+    await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
+    expect((f.adapter.execute.mock.calls[0][0].inputs.image as { name: string }[]).map((asset) => asset.name))
+      .toEqual(["first.png", "second.png"]);
+    await expect(f.service.run(context, { ...f.submit("invalid-image"), parameters: [
+      { name: "prompt", value: "组合" }, { name: "image", value: ["first.png", "missing.png"] },
+    ] })).rejects.toThrow();
+    await f.interfaces.update(f.item.id, { ...f.item, protocol: "grok", capability: "image-edit",
+      channelId: "grok-channel", config: { model: "grok-imagine" } }, (await f.interfaces.list()).revision);
+    await expect(f.service.run(context, { ...f.submit("too-many"), parameters: [
+      { name: "prompt", value: "组合" }, { name: "image", value: Array(6).fill("first.png") },
+    ] })).rejects.toThrow("媒体引用无效");
+  });
+
   it("Grok 媒体字段统一接收本地路径并自动发布为稳定 URL", async () => {
     const f = await fixture();
     await f.interfaces.update(f.item.id, {
@@ -423,6 +448,15 @@ describe("AIGC Agent 工具", () => {
     expect(publicFiles).toHaveLength(1);
     expect(f.adapter.execute.mock.calls[0][0].inputs.image).toBe(`https://bugpaw.example/aigc-public/files/${publicFiles[0].id}`);
     expect(await f.publicFiles.resolvePath(publicFiles[0].id)).toBeTruthy();
+    await writeFile(join(f.workspaces, "agent-a", "second.png"), "second");
+    const multi = await f.service.run(context, { ...f.submit("grok-multi"), parameters: [
+      { name: "prompt", value: "组合" }, { name: "image", value: ["source.png", "second.png"] },
+    ] });
+    await vi.waitFor(async () => expect((await f.tasks.get(multi.taskId))?.status).toBe("succeeded"));
+    const published = await f.publicFiles.list();
+    const references = f.adapter.execute.mock.calls[1][0].inputs.image as string[];
+    expect(references.map((url) => published.find((file) => url.endsWith(`/${file.id}`))?.name.split("-").at(-1)))
+      .toEqual(["source.png", "second.png"]);
   });
 
   it("Grok 缺少公开 Origin 时拒绝提交且不残留公开文件", async () => {

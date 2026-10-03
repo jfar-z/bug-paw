@@ -311,7 +311,8 @@ export class AigcTaskService {
 
 /** 判断任务是否包含只能由 ComfyUI 直接引用的 input 目录文件。 */
 function hasComfyUiInput(inputs: Record<string, unknown>): boolean {
-  return Object.values(inputs).some((value) => typeof value === "object" && value !== null && "source" in value && value.source === "comfyui_input");
+  return Object.values(inputs).some((value) => (Array.isArray(value) ? value : [value]).some((entry) =>
+    typeof entry === "object" && entry !== null && "source" in entry && entry.source === "comfyui_input"));
 }
 
 /** 将任务记录映射为列表摘要。 */

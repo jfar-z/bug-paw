@@ -156,7 +156,10 @@ function buildPayload(
     const size = readSize(inputs.size ?? config.size);
     if (size) payload.size = size;
   }
-  if (operation === "image.edit" || (operation === "video.generate" && inputs.image !== undefined)) {
+  if (operation === "image.edit" && Array.isArray(inputs.image)) {
+    if (inputs.image.length < 1 || inputs.image.length > 5) throw new TypeError("Grok 图片编辑支持 1 到 5 张参考图");
+    payload.images = inputs.image.map((value) => ({ url: readInputUrl(value, "图片"), type: "image_url" }));
+  } else if (operation === "image.edit" || (operation === "video.generate" && inputs.image !== undefined)) {
     payload.image = { url: readInputUrl(inputs.image, "图片") };
   }
   if (operation === "video.edit" || operation === "video.extend") {

@@ -19,7 +19,7 @@
 | `aigc_read_output` | `download` | 以 base64 读取不超过 8 MiB 的产物 |
 | `aigc_cancel_task` | `cancel` | 取消当前客户端的任务 |
 
-接口发现首次传 `{ "action": "list", "interfaceId": null, "offset": 0 }`；读取详情传 `{ "action": "get", "interfaceId": "<列表中的 ID>", "offset": null }`。媒体字段在详情中标记 `source: "upload"`，其 `value` 必须是该客户端上传获得的 `inputId`。普通字段使用原生 JSON 字符串、数字或布尔值。任务提交示例：
+接口发现首次传 `{ "action": "list", "interfaceId": null, "offset": 0 }`；读取详情传 `{ "action": "get", "interfaceId": "<列表中的 ID>", "offset": null }`。媒体字段在详情中标记 `source: "upload"`，其 `value` 必须是该客户端上传获得的 `inputId`。OpenAI/Grok 图片编辑的 `image` 可传有序 `inputId` 数组，单个 `inputId` 继续有效；详情中的 `multiple` 和 `maxItems` 表示数量约束。普通字段使用原生 JSON 字符串、数字或布尔值。任务提交示例：
 
 ```json
 {
@@ -27,12 +27,12 @@
   "requestKey": "cover-001",
   "parameters": [
     { "name": "prompt", "value": "城市天际线" },
-    { "name": "image", "value": "<inputId>" }
+    { "name": "image", "value": ["<第一个 inputId>", "<第二个 inputId>"] }
   ]
 }
 ```
 
-同一客户端重复使用相同 `requestKey` 和参数会返回既有任务；参数变化则报冲突。新键表示新计费任务。任务仍使用现有 AIGC 引擎、状态与取消语义；MCP HTTP 请求不会等待最长 30 分钟的生成过程。
+OpenAI 图片编辑最多 16 张，Grok 最多 5 张；图片转视频、视频编辑和 ComfyUI 映射仍按各自单媒体字段调用。同一客户端重复使用相同 `requestKey` 和参数会返回既有任务；参数变化则报冲突。新键表示新计费任务。任务仍使用现有 AIGC 引擎、状态与取消语义；MCP HTTP 请求不会等待最长 30 分钟的生成过程。
 
 ## 大文件
 
