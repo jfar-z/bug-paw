@@ -23,7 +23,7 @@ export function referenceInputFamilies(workflow: Pick<AigcWorkflowDetail, "nodes
   const fieldOrder = new Map(boundary.fields.map((field, index) => [field.name, index]));
   const groups = new Map<string, string[]>();
   for (const edge of incoming) {
-    const prefix = parentFieldPath(edge.targetField);
+    const prefix = referenceFamilyPrefix(boundary.type, edge.targetField);
     const fields = groups.get(prefix) ?? [];
     if (!fields.includes(edge.targetField)) fields.push(edge.targetField);
     groups.set(prefix, fields);
@@ -103,7 +103,9 @@ function rootInputFields(workflow: AigcWorkflowDetail, nodeId: string): string[]
     .map((field) => field.name);
 }
 
-function parentFieldPath(field: string): string {
+function referenceFamilyPrefix(nodeType: string, field: string): string {
+  // ImpactMakeImageBatch 的图片槽位使用扁平编号，需归入同一个参考接口。
+  if (nodeType === "ImpactMakeImageBatch" && /^inputs\.image[1-9]\d*$/.test(field)) return "inputs.image";
   const segments = field.split(".");
   return segments.length > 2 ? segments.slice(0, -1).join(".") : field;
 }
