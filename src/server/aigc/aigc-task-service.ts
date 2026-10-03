@@ -58,12 +58,13 @@ export class AigcTaskService {
   }
 
   /** 创建任务并异步开始执行。 */
-  async createRun(request: AigcRunRequest, agentOrigin?: AigcTaskRecord["agentOrigin"]): Promise<AigcTaskRecord> {
+  async createRun(request: AigcRunRequest, agentOrigin?: AigcTaskRecord["agentOrigin"], mcpOrigin?: AigcTaskRecord["mcpOrigin"]): Promise<AigcTaskRecord> {
     if (this.closing) throw new Error("AIGC 服务正在停止");
     const item = await this.dependencies.interfaces.get(request.interfaceId);
     if (!item) throw new Error("AIGC 接口不存在");
     if (!item.enabled) throw new Error("AIGC 接口未启用");
     if (agentOrigin && !item.toolPublishEnabled) throw new Error("AIGC 接口未发布");
+    if (mcpOrigin && !item.mcpPublishEnabled) throw new Error("AIGC 接口未开放给外部 MCP");
     if (item.protocol !== "comfyui" && hasComfyUiInput(request.inputs)) {
       throw new TypeError("仅 ComfyUI 接口支持 ComfyUI input");
     }
@@ -72,6 +73,7 @@ export class AigcTaskService {
     const task = await this.dependencies.repository.create({
       id: randomUUID(),
       ...(agentOrigin ? { agentOrigin } : {}),
+      ...(mcpOrigin ? { mcpOrigin } : {}),
       interfaceId: item.id,
       interfaceName: item.name,
       channelId: item.channelId,
@@ -222,7 +224,7 @@ export class AigcTaskService {
     if (controller.signal.aborted) return;
     const item = await this.dependencies.interfaces.get(task.interfaceId);
     if (!item) return this.failTask(id, { code: "AIGC_INTERFACE_MISSING", message: "AIGC 接口不存在" });
-    if (!item.enabled || (task.agentOrigin && !item.toolPublishEnabled)) {
+    if (!item.enabled || (task.agentOrigin && !item.toolPublishEnabled) || (task.mcpOrigin && !item.mcpPublishEnabled)) {
       return this.failTask(id, { code: "AIGC_INTERFACE_DISABLED", message: "AIGC 接口未启用或已撤销发布" });
     }
     const channel = (await this.dependencies.connections.read()).channels.find((candidate) => candidate.id === item.channelId);
@@ -230,7 +232,7 @@ export class AigcTaskService {
     if (!channel.enabled) return this.failTask(id, { code: "AIGC_CHANNEL_DISABLED", message: "AIGC 渠道未启用" });
     const adapter = this.dependencies.adapters[item.protocol];
     if (!adapter) return this.failTask(id, { code: "AIGC_PROTOCOL_UNSUPPORTED", message: "AIGC 协议暂不支持" });
-    const signal = task.agentOrigin
+    const signal = task.agentOrigin || task.mcpOrigin
       ? AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60_000)])
       : controller.signal;
     let upstreamCancellation: "confirmed" | "unknown" = "unknown";

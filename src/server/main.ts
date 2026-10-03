@@ -78,6 +78,8 @@ import { AigcTaskService } from "./aigc/aigc-task-service";
 import { AigcAgentService } from "./aigc/aigc-agent-service";
 import { readAigcAgentLimits } from "./aigc/aigc-agent-limits";
 import { createAigcAgentTools } from "./aigc/aigc-agent-tools";
+import { AigcMcpService } from "./aigc/aigc-mcp-service";
+import { registerAigcMcpRoutes } from "./routes/aigc-mcp";
 import { AigcMediaProjectService } from "./aigc/aigc-media-project-service";
 import { OpenAiAigcAdapter } from "./aigc/openai-adapter";
 import { GrokAigcAdapter } from "./aigc/grok-adapter";
@@ -341,6 +343,8 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
   const aigcPublicFiles = new AigcPublicFileService(join(paths.appDir, "aigc-public-files"));
   const aigcPublicOrigin = resolveAigcPublicOrigin(process.env);
+  const aigcSubmissionLocks = new KeyedMutex();
+  const aigcAgentLimits = readAigcAgentLimits(process.env);
   const aigcComfyUiInputs = new AigcComfyUiInputService(aigcConnections, aigcCredentials);
   const aigcTasks = new AigcTaskService({
     repository: new AigcTaskRepository(join(paths.appDir, "aigc-tasks.json")),
@@ -361,7 +365,12 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     tasks: aigcTasks, assets: aigcAssets, publicFiles: aigcPublicFiles, publicOrigin: aigcPublicOrigin,
     workspace: workspaceFileManager, files: workspaceFiles,
     allowedTools: async (agentId) => (await agentStore.get(agentId))?.profile.allowedTools ?? [],
-  }, readAigcAgentLimits(process.env));
+  }, aigcAgentLimits, aigcSubmissionLocks);
+  const aigcMcpService = new AigcMcpService({
+    database: applicationDatabase, interfaces: aigcInterfaces, connections: aigcConnections,
+    workflows: aigcWorkflows, tasks: aigcTasks, assets: aigcAssets,
+    publicFiles: aigcPublicFiles, publicOrigin: aigcPublicOrigin,
+  }, aigcSubmissionLocks, aigcAgentLimits);
   const aigcMediaProjects = new AigcMediaProjectService({
     filePath: join(paths.appDir, "aigc-media-editor.json"),
     outputRoot: join(paths.appDir, "aigc-media-renders"),
@@ -709,6 +718,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     comfyuiInputs: aigcComfyUiInputs,
     mediaProjects: aigcMediaProjects,
   });
+  registerAigcMcpRoutes(app, { authService, service: aigcMcpService });
   registerBrowserPreviewRoutes(app, browserPreview);
   registerBrowserAutomationRoutes(app, {
     authService,

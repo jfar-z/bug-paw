@@ -108,7 +108,7 @@ export class AigcTaskRepository {
     // 进程重启后不能假设上游没有执行，更不能自动重试计费任务。
     let changed = false;
     for (const task of this.tasks.values()) {
-      if (task.agentOrigin && ["queued", "running"].includes(task.status)) {
+      if ((task.agentOrigin || task.mcpOrigin) && ["queued", "running"].includes(task.status)) {
         task.status = "failed";
         task.error = { code: "AIGC_INTERRUPTED", message: "服务重启，无法确认上游结果；请人工核对后再提交新任务" };
         task.updatedAt = task.finishedAt = new Date().toISOString();

@@ -1,4 +1,4 @@
-import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Download, File, Film, GitFork, Image as ImageIcon, Play, Plus, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Copy, Download, File, Film, GitFork, Image as ImageIcon, Play, Plus, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type {
   AigcChannelSummary,
@@ -10,6 +10,8 @@ import type {
   AigcOpenAiParameterType,
   AigcOpenAiParameterValue,
   AigcInterfaceRecord,
+  AigcMcpClient,
+  AigcMcpOperation,
   AigcInterfaceProtocol,
   AigcPublicFileSummary,
   AigcRunInputValue,
@@ -1233,6 +1235,7 @@ function interfaceInputFromRecord(item: AigcInterfaceRecord): AigcInterfaceInput
     channelId: item.channelId,
     enabled: item.enabled,
     toolPublishEnabled: item.toolPublishEnabled,
+    mcpPublishEnabled: item.mcpPublishEnabled === true,
     config: item.config as AigcInterfaceInput["config"],
   };
 }
@@ -1387,6 +1390,7 @@ function AigcInterfacesPage() {
       channelId: item.channelId,
       enabled: item.enabled,
       toolPublishEnabled: item.toolPublishEnabled,
+      mcpPublishEnabled: item.mcpPublishEnabled === true,
       config: item.config as AigcInterfaceInput["config"],
     };
     setSelected(item);
@@ -1548,6 +1552,7 @@ function AigcInterfacesPage() {
         <div className="aigc-fieldset aigc-fieldset--checks">
           <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用接口</span></label>
           <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>发布为 Agent 工具</span></label>
+          <label className="configuration-check-line"><input type="checkbox" checked={draft.mcpPublishEnabled} onChange={(event) => setDraft({ ...draft, mcpPublishEnabled: event.target.checked })} /><span>开放给外部 MCP</span></label>
         </div>
 
         <div className="configuration-save-bar">
@@ -1556,10 +1561,69 @@ function AigcInterfacesPage() {
         </div>
       </section>
       </div>
+      <AigcMcpClientManager interfaces={document?.interfaces ?? []} />
       {pendingAction ? <ConfirmationDialog title="放弃未保存修改？" description="当前接口表单还有未保存内容。继续后，这些修改将丢失。" confirmLabel="放弃修改" destructive={false} onCancel={() => setPendingAction(undefined)} onConfirm={() => { const action = pendingAction; setPendingAction(undefined); action(); }} /> : null}
       {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="当前接口表单还有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
       {deleteTarget ? <ConfirmationDialog title={`删除接口“${deleteTarget.name}”？`} description="删除后无法恢复，引用该接口的创作入口将立即失效，历史任务仍会保留。" confirmLabel="删除接口" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
     </div>
+  );
+}
+
+const MCP_OPERATION_LABELS: Record<AigcMcpOperation, string> = {
+  list: "发现接口", run: "提交任务", get: "查询任务", cancel: "取消任务", upload: "上传输入", download: "下载产物",
+};
+
+/** 在接口页管理外部调用授权，令牌明文只在创建后当前页面保留。 */
+function AigcMcpClientManager({ interfaces }: { interfaces: AigcInterfaceRecord[] }) {
+  const { runApiTask } = useApiTask();
+  const [open, setOpen] = useState(false);
+  const [clients, setClients] = useState<AigcMcpClient[]>([]);
+  const [name, setName] = useState("");
+  const [interfaceIds, setInterfaceIds] = useState<string[]>([]);
+  const [operations, setOperations] = useState<AigcMcpOperation[]>(Object.keys(MCP_OPERATION_LABELS) as AigcMcpOperation[]);
+  const [issuedToken, setIssuedToken] = useState("");
+  const [revokeTarget, setRevokeTarget] = useState<AigcMcpClient>();
+  const available = interfaces.filter((item) => item.enabled && item.mcpPublishEnabled);
+
+  useEffect(() => {
+    if (!open) return;
+    void runApiTask(() => api.getAigcMcpClients(), { operation: "加载 MCP 客户端" }).then((result) => {
+      if (result.status === "success") setClients(result.data.clients);
+    });
+  }, [open, runApiTask]);
+
+  async function create() {
+    const result = await runApiTask(() => api.createAigcMcpClient({ name: name.trim(), interfaceIds, operations }), { operation: "创建 MCP 客户端" });
+    if (result.status !== "success") return;
+    setClients((current) => [result.data.client, ...current]);
+    setIssuedToken(result.data.token);
+    setName("");
+    setInterfaceIds([]);
+  }
+
+  async function revoke() {
+    if (!revokeTarget) return;
+    const result = await runApiTask(() => api.revokeAigcMcpClient(revokeTarget.id), { operation: "撤销 MCP 客户端" });
+    if (result.status === "success") setClients((current) => current.map((item) => item.id === revokeTarget.id ? { ...item, revokedAt: new Date().toISOString() } : item));
+    setRevokeTarget(undefined);
+  }
+
+  return (
+    <section className="configuration-form-card" style={{ marginTop: 32 }} aria-label="外部 MCP 客户端">
+      <div className="configuration-section__heading"><div><h2>外部 MCP 客户端</h2></div><button type="button" className="configuration-secondary-action" aria-expanded={open} onClick={() => { setOpen(!open); setIssuedToken(""); }}>{open ? "收起" : "管理客户端"}</button></div>
+      {open ? <div>
+        <p className="configuration-help">MCP 地址：<code style={{ overflowWrap: "anywhere" }}>{`${window.location.origin}/api/v1/aigc/mcp`}</code></p>
+        <div>
+          <label><span>客户端名称</span><input aria-label="MCP 客户端名称" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <div className="aigc-fieldset"><strong>可访问接口</strong><div className="aigc-fieldset--checks">{available.length ? available.map((item) => <label key={item.id} className="configuration-check-line"><input type="checkbox" checked={interfaceIds.includes(item.id)} onChange={(event) => setInterfaceIds(event.target.checked ? [...interfaceIds, item.id] : interfaceIds.filter((id) => id !== item.id))} /><span>{item.name}</span></label>) : <p className="configuration-help">先在接口编辑区开放至少一个 MCP 接口。</p>}</div></div>
+          <div className="aigc-fieldset"><strong>允许操作</strong><div className="aigc-fieldset--checks">{(Object.entries(MCP_OPERATION_LABELS) as [AigcMcpOperation, string][]).map(([operation, label]) => <label key={operation} className="configuration-check-line"><input type="checkbox" checked={operations.includes(operation)} onChange={(event) => setOperations(event.target.checked ? [...operations, operation] : operations.filter((item) => item !== operation))} /><span>{label}</span></label>)}</div></div>
+          <button type="button" className="configuration-primary-action" disabled={!name.trim() || !interfaceIds.length || !operations.length} onClick={() => void create()}><Plus size={15} />创建令牌</button>
+        </div>
+        {issuedToken ? <div role="status"><strong>新令牌仅显示一次</strong><code style={{ overflowWrap: "anywhere" }}>{issuedToken}</code><button type="button" className="icon-button" title="复制令牌" aria-label="复制 MCP 令牌" onClick={() => void runApiTask(() => navigator.clipboard.writeText(issuedToken), { operation: "复制 MCP 令牌" })}><Copy size={16} /></button></div> : null}
+        <div>{clients.map((client) => <div key={client.id} className="aigc-task-row"><div><strong>{client.name}</strong><small>{client.revokedAt ? "已撤销" : `${client.interfaceIds.length} 个接口 · ${client.operations.length} 项操作`}</small></div>{!client.revokedAt ? <button type="button" className="icon-button" title="撤销令牌" aria-label={`撤销 ${client.name}`} onClick={() => setRevokeTarget(client)}><Trash2 size={15} /></button> : null}</div>)}</div>
+      </div> : null}
+      {revokeTarget ? <ConfirmationDialog title={`撤销“${revokeTarget.name}”？`} description="撤销后该客户端无法继续调用 MCP 或下载产物。" confirmLabel="撤销令牌" onCancel={() => setRevokeTarget(undefined)} onConfirm={() => void revoke()} /> : null}
+    </section>
   );
 }
 
@@ -1591,6 +1655,7 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
         channelId: found.channelId,
         enabled: found.enabled,
         toolPublishEnabled: found.toolPublishEnabled,
+        mcpPublishEnabled: found.mcpPublishEnabled === true,
         config: found.config as AigcInterfaceInput["config"],
       });
       return found;
@@ -1620,6 +1685,7 @@ function AigcInterfaceDetail({ interfaceId }: { interfaceId: string }) {
         <p className="configuration-help">协议、渠道与能力已在接口列表中创建；如需变更协议，请删除后重新创建。</p>
         {draft.protocol === "comfyui" ? <p className="configuration-help">工作流：{workflows.find((item) => item.id === (draft.config as { workflowId?: string }).workflowId)?.name ?? "未找到"}</p> : null}
         <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>发布为 Agent 工具</span></label>
+        <label className="configuration-check-line"><input type="checkbox" checked={draft.mcpPublishEnabled} onChange={(event) => setDraft({ ...draft, mcpPublishEnabled: event.target.checked })} /><span>开放给外部 MCP</span></label>
         <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={() => void save()}><Save size={16} />保存接口</button></div>
       </section>
       {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="接口详情仍有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
@@ -2108,6 +2174,7 @@ const emptyInterface: AigcInterfaceInput = {
   channelId: "",
   enabled: true,
   toolPublishEnabled: false,
+  mcpPublishEnabled: false,
   config: { model: "", parameters: createDefaultOpenAiParameters() },
 };
 

@@ -44,8 +44,6 @@ export class AigcAgentError extends Error {
 
 /** 统一处理 AIGC 发布权限、任务归属、配额、幂等和产物交付。 */
 export class AigcAgentService {
-  /** 提交在全局配额锁内串行化，查询按任务串行化交付。 */
-  private readonly locks = new KeyedMutex();
   /** 查询限频只保留最近使用的有界条目。 */
   private readonly lastQueries = new Map<string, number>();
 
@@ -53,6 +51,7 @@ export class AigcAgentService {
   constructor(
     private readonly dependencies: AigcAgentDependencies,
     private readonly limits: Readonly<AigcAgentLimits> = DEFAULT_AIGC_AGENT_LIMITS,
+    private readonly locks: KeyedMutex = new KeyedMutex(),
   ) {}
 
   /** 每次调用读取最新 Agent 权限，旧 Runtime 不能绕过撤销授权。 */
@@ -136,7 +135,7 @@ export class AigcAgentService {
         if (previous.agentOrigin?.requestHash !== requestHash) throw new AigcAgentError("AIGC_IDEMPOTENCY_CONFLICT", "相同 requestKey 的参数已改变，不能重复提交");
         return this.summary(previous);
       }
-      const active = records.filter((task) => task.agentOrigin && ["queued", "running"].includes(task.status));
+      const active = records.filter((task) => (task.agentOrigin || task.mcpOrigin) && ["queued", "running"].includes(task.status));
       if (active.length >= this.limits.maxActiveTasks
         || active.filter((task) => task.agentOrigin?.agentId === context.agentId).length >= this.limits.maxActiveTasksPerAgent) {
         throw new AigcAgentError(

@@ -358,6 +358,8 @@ export interface AigcInterfaceRecord {
   enabled: boolean;
   /** 允许已授权的 Agent 发现并调用此接口。 */
   toolPublishEnabled: boolean;
+  /** 允许持有专用令牌的外部 MCP 客户端调用。 */
+  mcpPublishEnabled?: boolean;
   config: AigcOpenAiInterfaceConfig | AigcGrokInterfaceConfig | AigcComfyUiInterfaceConfig;
   createdAt: string;
   updatedAt: string;
@@ -380,7 +382,21 @@ export interface AigcInterfaceInput {
   channelId: string;
   enabled: boolean;
   toolPublishEnabled: boolean;
+  mcpPublishEnabled?: boolean;
   config: AigcOpenAiInterfaceConfig | AigcGrokInterfaceConfig | AigcComfyUiInterfaceConfig;
+}
+
+/** 外部 MCP 令牌的可授权操作。 */
+export type AigcMcpOperation = "list" | "run" | "get" | "cancel" | "upload" | "download";
+
+/** 管理界面只读取客户端元数据，令牌明文仅在签发响应出现。 */
+export interface AigcMcpClient {
+  id: string;
+  name: string;
+  interfaceIds: string[];
+  operations: AigcMcpOperation[];
+  createdAt: string;
+  revokedAt?: string;
 }
 
 /** AIGC 任务状态。 */
@@ -431,6 +447,12 @@ export interface AigcTaskRecord {
   agentOrigin?: {
     agentId: string;
     sessionId: string;
+    requestKey: string;
+    requestHash: string;
+  };
+  /** 外部 MCP 任务只归属签发时的客户端，不继承内部 Agent 权限。 */
+  mcpOrigin?: {
+    clientId: string;
     requestKey: string;
     requestHash: string;
   };

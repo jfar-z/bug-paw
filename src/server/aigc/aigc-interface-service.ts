@@ -118,7 +118,7 @@ export class AigcInterfaceService {
     const protocol = input.protocol;
     const capability = input.capability;
     if (!["openai", "grok", "comfyui"].includes(protocol)) throw new TypeError("AIGC 接口协议无效");
-    if (typeof input.enabled !== "boolean" || typeof input.toolPublishEnabled !== "boolean") {
+    if (typeof input.enabled !== "boolean" || typeof input.toolPublishEnabled !== "boolean" || (input.mcpPublishEnabled !== undefined && typeof input.mcpPublishEnabled !== "boolean")) {
       throw new TypeError("AIGC 接口启用状态无效");
     }
     assertProtocolCapability(protocol, capability);
@@ -133,6 +133,7 @@ export class AigcInterfaceService {
       channelId: normalizeText(input.channelId, "渠道标识", 120),
       enabled: input.enabled,
       toolPublishEnabled: input.toolPublishEnabled,
+      mcpPublishEnabled: input.mcpPublishEnabled === true,
       config,
       createdAt,
       updatedAt: previousUpdatedAt ?? createdAt,
@@ -281,6 +282,7 @@ function copyInterface(item: AigcInterfaceRecord): AigcInterfaceRecord {
   return {
     ...item,
     toolDescription: typeof item.toolDescription === "string" ? item.toolDescription : item.description,
+    mcpPublishEnabled: item.mcpPublishEnabled === true,
     config,
   };
 }
@@ -301,6 +303,7 @@ function isStoredInterface(value: unknown): value is AigcInterfaceRecord {
     && typeof value.channelId === "string"
     && typeof value.enabled === "boolean"
     && typeof value.toolPublishEnabled === "boolean"
+    && (value.mcpPublishEnabled === undefined || typeof value.mcpPublishEnabled === "boolean")
     && isRecord(value.config)
     && typeof value.createdAt === "string"
     && typeof value.updatedAt === "string";
