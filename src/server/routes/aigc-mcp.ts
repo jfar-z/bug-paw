@@ -114,11 +114,11 @@ function createMcpServer(client: AigcMcpClient, service: AigcMcpService): McpSer
     }
     throw new TypeError("list 传 interfaceId=null 与 offset；get 传真实 interfaceId 与 offset=null");
   });
-  register("run", "aigc_run", "异步提交 AIGC 任务。媒体参数传已上传的 inputId；同一次重试复用 requestKey。", {
+  register("run", "aigc_run", "异步提交 AIGC 任务。图片编辑 image 可传有序 inputId 数组，其他媒体传单个 inputId；同一次重试复用 requestKey。", {
     interfaceId: z.string().min(1).max(120), requestKey: z.string().regex(/^[A-Za-z0-9_-]{1,80}$/),
     parameters: z.array(z.object({ name: z.string().min(1).max(80),
-      value: z.union([z.string().max(20_000), z.number(), z.boolean(), z.null()]) }).strict()).max(100),
-  }, async (args) => service.run(client, args as { interfaceId: string; requestKey: string; parameters: { name: string; value: string | number | boolean | null }[] }));
+      value: z.union([z.string().max(20_000), z.number(), z.boolean(), z.array(z.string().min(1).max(1_024)).min(1).max(16), z.null()]) }).strict()).max(100),
+  }, async (args) => service.run(client, args as { interfaceId: string; requestKey: string; parameters: { name: string; value: string | number | boolean | string[] | null }[] }));
   register("get", "aigc_get_task", "查询当前客户端任务；成功后返回经 Bearer 认证下载的文件路径。请遵守返回的 pollAfterMs。", {
     taskId: z.string().min(1).max(120),
   }, async (args) => service.get(client, args.taskId as string));

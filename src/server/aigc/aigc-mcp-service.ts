@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
-import type { AigcTaskRecord } from "../../shared/aigc-contracts";
+import type { AigcRunInputValue, AigcSingleRunInputValue, AigcTaskRecord } from "../../shared/aigc-contracts";
 import type { Database } from "../database/database";
 import { KeyedMutex } from "../core/keyed-mutex";
 import { toSafePublicMessage } from "../core/errors";
@@ -209,33 +209,37 @@ export class AigcMcpService {
       if (records.filter((task) => task.mcpOrigin?.clientId === client.id && Date.now() - Date.parse(task.createdAt) < 3_600_000).length >= this.limits.maxHourlyTasksPerAgent) {
         throw new AigcMcpError("MCP_RATE_LIMIT", `每个客户端每小时最多提交 ${this.limits.maxHourlyTasksPerAgent} 个任务`);
       }
-      const prepared: Record<string, string | number | boolean | { assetId: string; name: string; mediaType: string }> = Object.create(null);
+      const prepared: Record<string, AigcRunInputValue> = Object.create(null);
       const publicUploads: string[] = [];
       try {
         let mediaBytes = 0;
         for (const field of fields) {
           const value = values[field.name];
           if (value === undefined) continue;
-          if (!field.source) { prepared[field.name] = value; continue; }
-          const upload = this.dependencies.database.readOne<UploadRow>(
-            "SELECT id,client_id,name,media_type,size,created_at FROM aigc_mcp_uploads WHERE id = ? AND client_id = ?",
-            [String(value), client.id],
-          );
-          if (!upload || Date.now() - Date.parse(upload.created_at) >= 24 * 60 * 60_000
-            || !upload.media_type.startsWith(`${field.type}/`) || !await this.dependencies.assets.resolveInputPath(upload.id)) {
-            throw new AigcMcpError("MCP_INPUT_NOT_FOUND", `参数 ${field.name} 的 inputId 不存在或媒体类型不匹配`);
+          if (!field.source) { prepared[field.name] = value as AigcSingleRunInputValue; continue; }
+          const references: AigcSingleRunInputValue[] = [];
+          for (const inputId of Array.isArray(value) ? value : [value]) {
+            const upload = this.dependencies.database.readOne<UploadRow>(
+              "SELECT id,client_id,name,media_type,size,created_at FROM aigc_mcp_uploads WHERE id = ? AND client_id = ?",
+              [String(inputId), client.id],
+            );
+            if (!upload || Date.now() - Date.parse(upload.created_at) >= 24 * 60 * 60_000
+              || !upload.media_type.startsWith(`${field.type}/`) || !await this.dependencies.assets.resolveInputPath(upload.id)) {
+              throw new AigcMcpError("MCP_INPUT_NOT_FOUND", `参数 ${field.name} 的 inputId 不存在或媒体类型不匹配`);
+            }
+            mediaBytes += upload.size;
+            if (mediaBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参不能超过 200 MiB");
+            if (item.protocol === "grok") {
+              const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
+              if (!publicOrigin) throw new AigcMcpError("MCP_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 媒体输入需要配置 BUG_PAW_PUBLIC_ORIGIN");
+              const path = await this.dependencies.assets.resolveInputPath(upload.id);
+              const { createReadStream } = await import("node:fs");
+              const saved = await this.dependencies.publicFiles.save(createReadStream(path!), `mcp-${randomUUID()}-${upload.name}`, upload.media_type);
+              publicUploads.push(saved.id);
+              references.push(`${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`);
+            } else references.push({ assetId: upload.id, name: upload.name, mediaType: upload.media_type });
           }
-          mediaBytes += upload.size;
-          if (mediaBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参不能超过 200 MiB");
-          if (item.protocol === "grok") {
-            const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
-            if (!publicOrigin) throw new AigcMcpError("MCP_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 媒体输入需要配置 BUG_PAW_PUBLIC_ORIGIN");
-            const path = await this.dependencies.assets.resolveInputPath(upload.id);
-            const { createReadStream } = await import("node:fs");
-            const saved = await this.dependencies.publicFiles.save(createReadStream(path!), `mcp-${randomUUID()}-${upload.name}`, upload.media_type);
-            publicUploads.push(saved.id);
-            prepared[field.name] = `${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`;
-          } else prepared[field.name] = { assetId: upload.id, name: upload.name, mediaType: upload.media_type };
+          prepared[field.name] = Array.isArray(value) ? references : references[0];
         }
         this.authorize(client, "run");
         const latest = await this.published(client, item.id);
@@ -311,7 +315,8 @@ export class AigcMcpService {
   private async cleanupUploads(clientId: string, allUnused: boolean): Promise<number> {
     const records = await this.dependencies.tasks.listRecords();
     const referenced = new Set(records.flatMap((task) => Object.values(task.inputs).flatMap((value) =>
-      value && typeof value === "object" && "assetId" in value && typeof value.assetId === "string" ? [value.assetId] : [])));
+      (Array.isArray(value) ? value : [value]).flatMap((entry) =>
+        entry && typeof entry === "object" && "assetId" in entry && typeof entry.assetId === "string" ? [entry.assetId] : []))));
     const uploads = this.dependencies.database.read<UploadRow>(
       "SELECT id,client_id,name,media_type,size,created_at FROM aigc_mcp_uploads WHERE client_id = ?", [clientId],
     );

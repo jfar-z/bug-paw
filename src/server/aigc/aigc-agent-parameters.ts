@@ -13,6 +13,8 @@ export interface AigcAgentField {
   min?: number;
   max?: number;
   source?: "workspace";
+  multiple?: boolean;
+  maxItems?: number;
 }
 
 /** Agent 可见出参定义，用稳定标识关联任务交付文件。 */
@@ -27,7 +29,7 @@ export interface AigcAgentOutput {
 /** 固定形状的参数项，避免模型为多种可选值字段补齐无效默认值。 */
 export interface AigcAgentParameter {
   name: string;
-  value: string | number | boolean | null;
+  value: string | number | boolean | string[] | null;
 }
 
 /** 从既有接口定义提取稳定字段，并保留真实默认值及数值约束。 */
@@ -54,7 +56,8 @@ export function agentFields(item: AigcInterfaceRecord, workflow?: AigcWorkflowDe
   const fields: AigcAgentField[] = [{ name: "prompt", type: "string", required: item.capability !== "video-extend" }];
   if (["image-edit", "image-to-video"].includes(item.capability)) {
     // OpenAI 图片编辑接口未提供参考图时会自动回退到文生图端点。
-    fields.push({ name: "image", type: "image", required: item.protocol !== "openai", source: "workspace" });
+    fields.push({ name: "image", type: "image", required: item.protocol !== "openai", source: "workspace",
+      ...(item.capability === "image-edit" ? { multiple: true, maxItems: item.protocol === "grok" ? 5 : 16 } : {}) });
   }
   if (["video-edit", "video-extend"].includes(item.capability)) {
     fields.push({ name: "video", type: "video", required: true, source: "workspace" });
@@ -96,11 +99,11 @@ export function agentOutputs(item: AigcInterfaceRecord, workflow?: AigcWorkflowD
 }
 
 /** 校验所有参数后才允许上传文件或创建计费任务。 */
-export function validateAgentParameters(fields: AigcAgentField[], parameters: AigcAgentParameter[]): Record<string, string | number | boolean> {
+export function validateAgentParameters(fields: AigcAgentField[], parameters: AigcAgentParameter[]): Record<string, string | number | boolean | string[]> {
   if (!Array.isArray(parameters) || parameters.length > 100 || Buffer.byteLength(JSON.stringify(parameters), "utf8") > 128 * 1024) {
     throw new TypeError("AIGC 参数最多 100 项且不能超过 128 KiB");
   }
-  const values: Record<string, string | number | boolean> = Object.create(null);
+  const values: Record<string, string | number | boolean | string[]> = Object.create(null);
   const fieldsByName = new Map(fields.map((field) => [field.name, field]));
   for (const parameter of parameters) {
     if (!parameter || typeof parameter !== "object" || Array.isArray(parameter)) throw new TypeError("参数必须为字段项");
@@ -123,7 +126,12 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
       continue;
     }
     if (field.source) {
-      if (typeof value !== "string" || !value.trim() || value.length > 1_024) throw new TypeError(`参数 ${field.name} 工作区路径无效`);
+      // 图片编辑允许有序列表；其他媒体字段继续要求单个路径或上传 ID。
+      const entries = field.multiple && Array.isArray(value) ? value : [value];
+      if (entries.length < 1 || entries.length > (field.maxItems ?? 1)
+        || entries.some((entry) => typeof entry !== "string" || !entry.trim() || entry.length > 1_024)) {
+        throw new TypeError(`参数 ${field.name} 媒体引用无效`);
+      }
     } else if (field.type === "string") {
       if (typeof value !== "string" || value.length > 20_000 || (field.required && !value.trim())) throw new TypeError(`参数 ${field.name} 文本无效`);
     } else if (field.type === "enum") {
@@ -135,7 +143,7 @@ export function validateAgentParameters(fields: AigcAgentField[], parameters: Ai
       || (field.min !== undefined && value < field.min) || (field.max !== undefined && value > field.max)) {
       throw new TypeError(`参数 ${field.name} 数值或范围无效`);
     }
-    if (field.enumValues?.length && !field.enumValues.includes(value)) throw new TypeError(`参数 ${field.name} 不在枚举范围内`);
+    if (field.enumValues?.length && (Array.isArray(value) || !field.enumValues.includes(value))) throw new TypeError(`参数 ${field.name} 不在枚举范围内`);
   }
   return values;
 }
