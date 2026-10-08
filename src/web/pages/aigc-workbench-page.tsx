@@ -1,3 +1,4 @@
+import "../media-lightbox.css";
 import { Activity, AlertTriangle, AudioLines, Boxes, CheckCircle2, Copy, Download, File, Film, GitFork, Image as ImageIcon, Play, Plus, RefreshCw, Save, TestTube2, Trash2, Upload, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type {

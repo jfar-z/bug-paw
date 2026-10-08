@@ -1,3 +1,4 @@
+import "../media-lightbox.css";
 import { ChevronLeft, ChevronRight, Minus, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { WorkspaceFileSummary } from "../../shared/contracts";
