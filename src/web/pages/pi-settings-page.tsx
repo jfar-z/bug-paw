@@ -1,11 +1,14 @@
 import { Check, Save, ShieldAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentProfileDocument } from "../../shared/agent-contracts";
 import type { ScopedConfigDocument, WebPiSettings } from "../../shared/configuration-contracts";
-import { api, type ModelSummary } from "../api";
+import { api, ApiClientError, type ModelSummary } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
-import { ConflictDialog, type ConfigurationDifference } from "../components/configuration/conflict-dialog";
-import { InheritedField } from "../components/configuration/inherited-field";
+import type { ConfigurationDifference } from "../components/configuration/conflict-dialog";
+import { useErrorToast } from "../error-toast-provider";
+import { toUnexpectedErrorNotice } from "../api-error-policy";
+import { navigateTo } from "../router";
+import { ConfigurationEditorDialog } from "../components/configuration/configuration-editor-dialog";
 import { SettingsSection } from "../components/configuration/settings-section";
 import { useOnlineStatus } from "../use-online-status";
 import { useUnsavedChanges } from "../components/configuration/unsaved-changes";
@@ -13,7 +16,7 @@ import { ConfigurationEffectNotice, recordConfigurationSave } from "../component
 import "../configuration.css";
 import "../pi-settings.css";
 
-type FieldKind = "text" | "number" | "boolean" | "select" | "csv";
+type FieldKind = "text" | "number" | "boolean" | "select" | "csv" | "json";
 interface SettingField {
   path: string;
   label: string;
@@ -23,38 +26,46 @@ interface SettingField {
   risk?: string;
   globalOnly?: boolean;
 }
-interface SettingGroup { title: string; description: string; fields: SettingField[] }
+interface SettingGroup { category: SettingsCategory; title: string; description: string; fields: SettingField[] }
+
+/** 页面内分区只改变展示，全部分区共享同一份作用域草稿。 */
+const categories = [
+  { id: "common", label: "常用设置" },
+  { id: "policy", label: "执行策略" },
+  { id: "advanced", label: "高级设置" },
+] as const;
+type SettingsCategory = typeof categories[number]["id"];
 
 const groups: SettingGroup[] = [
-  { title: "模型与推理", description: "默认模型和思考策略", fields: [
+  { category: "common", title: "模型与推理", description: "默认模型和思考策略", fields: [
     { path: "defaultThinkingLevel", label: "默认思考等级", kind: "select", options: ["off", "minimal", "low", "medium", "high", "xhigh", "max"] },
     { path: "hideThinkingBlock", label: "隐藏思考块", kind: "boolean" },
   ] },
-  { title: "压缩", description: "上下文压缩与分支摘要", fields: [
+  { category: "policy", title: "压缩", description: "上下文压缩与分支摘要", fields: [
     { path: "compaction.enabled", label: "启用压缩", kind: "boolean" }, { path: "compaction.reserveTokens", label: "压缩保留 Token", kind: "number", unit: "tokens" },
     { path: "compaction.keepRecentTokens", label: "保留最近 Token", kind: "number", unit: "tokens" }, { path: "branchSummary.reserveTokens", label: "分支摘要保留 Token", kind: "number", unit: "tokens" },
   ] },
-  { title: "重试", description: "失败恢复和 Provider 超时", fields: [
+  { category: "policy", title: "重试", description: "失败恢复和 Provider 超时", fields: [
     { path: "retry.enabled", label: "启用重试", kind: "boolean" }, { path: "retry.maxRetries", label: "最大重试次数", kind: "number", unit: "次" },
     { path: "retry.baseDelayMs", label: "基础退避", kind: "number", unit: "ms" }, { path: "retry.provider.timeoutMs", label: "Provider 超时", kind: "number", unit: "ms" },
     { path: "retry.provider.maxRetries", label: "Provider 最大重试", kind: "number", unit: "次" }, { path: "retry.provider.maxRetryDelayMs", label: "Provider 最大退避", kind: "number", unit: "ms" },
   ] },
-  { title: "消息传输", description: "流式通道和队列行为", fields: [
+  { category: "policy", title: "消息传输", description: "流式通道和队列行为", fields: [
     { path: "transport", label: "传输方式", kind: "select", options: ["auto", "sse", "websocket", "websocket-cached"] },
     { path: "steeringMode", label: "引导消息模式", kind: "select", options: ["all", "one-at-a-time"] }, { path: "followUpMode", label: "后续消息模式", kind: "select", options: ["all", "one-at-a-time"] },
     { path: "httpIdleTimeoutMs", label: "HTTP 空闲超时", kind: "number", unit: "ms" }, { path: "websocketConnectTimeoutMs", label: "WebSocket 连接超时", kind: "number", unit: "ms" },
   ] },
-  { title: "图片", description: "输入图片处理", fields: [
+  { category: "common", title: "图片", description: "输入图片处理", fields: [
     { path: "images.autoResize", label: "自动缩放图片", kind: "boolean" }, { path: "images.blockImages", label: "阻止图片输入", kind: "boolean" },
   ] },
-  { title: "Shell 与网络", description: "高风险运行环境选项", fields: [
+  { category: "advanced", title: "Shell 与网络", description: "高风险运行环境选项", fields: [
     { path: "shellPath", label: "Shell 路径", kind: "text", risk: "改变 Agent 执行命令所用的 Shell。" },
     { path: "shellCommandPrefix", label: "Shell 命令前缀", kind: "text", risk: "会添加到每条 Shell 命令前，请确认内容可信。" },
     { path: "npmCommand", label: "npm 命令", kind: "csv", risk: "以逗号分隔命令及参数。" },
     { path: "httpProxy", label: "HTTP 代理", kind: "text", globalOnly: true, risk: "仅全局可改，会影响模型网络请求。" },
   ] },
-  { title: "资源路径", description: "Packages、Skills 与扩展来源", fields: [
-    { path: "packages", label: "Packages", kind: "csv" }, { path: "extensions", label: "Extensions", kind: "csv" }, { path: "skills", label: "Skills", kind: "csv" }, { path: "prompts", label: "Prompts", kind: "csv" },
+  { category: "advanced", title: "资源路径", description: "Packages、Skills 与扩展来源", fields: [
+    { path: "packages", label: "Packages", kind: "json", risk: "JSON 数组保留字符串及结构化资源对象。" }, { path: "extensions", label: "Extensions", kind: "csv" }, { path: "skills", label: "Skills", kind: "csv" }, { path: "prompts", label: "Prompts", kind: "csv" },
   ] },
 ];
 
@@ -110,8 +121,9 @@ function displayValue(value: unknown, kind: FieldKind): string | number {
 }
 
 function inheritedLabel(value: unknown): string {
-  if (value === undefined) return "核心默认值";
-  if (Array.isArray(value)) return value.join(", ") || "空列表";
+  if (value === undefined) return "核心默认值（未声明具体值）";
+  if (typeof value === "boolean") return value ? "开启" : "关闭";
+  if (Array.isArray(value)) return value.map((item) => typeof item === "object" ? JSON.stringify(item) : String(item)).join(", ") || "空列表";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
@@ -167,10 +179,23 @@ function settingsExpected(setError: (message: string) => void): ApiTaskPolicy["e
   };
 }
 
-/** 复用七组设置表单编辑全局值与 Agent 覆盖，并展示最终有效配置。 */
+/** 按作用域及使用频率组织运行设置，分别展示草稿、声明来源和保存生效结果。 */
 export function PiSettingsPage() {
-  const { runApiTask, runOptionalApiTask } = useApiTask();
+  const { runApiTask } = useApiTask();
+  const toast = useErrorToast();
+  // 应用主题或在线状态变化会更新任务函数；读取只由目标和显式重试触发，避免重置草稿。
+  const readTask = useRef(runApiTask);
+  readTask.current = runApiTask;
   const online = useOnlineStatus();
+  const [category, setCategory] = useState<SettingsCategory>("common");
+  const [rawInputs, setRawInputs] = useState<Record<string, string>>({});
+  const [directoryState, setDirectoryState] = useState<"loading" | "ready" | "error">("loading");
+  const [modelState, setModelState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [directoryReload, setDirectoryReload] = useState(0);
+  const [modelReload, setModelReload] = useState(0);
+  const [settingsReload, setSettingsReload] = useState(0);
+  const submitLock = useRef(false);
   const [scope, setScope] = useState<"global" | "agent">("global");
   const [agents, setAgents] = useState<AgentProfileDocument[]>([]);
   const [models, setModels] = useState<ModelSummary[]>([]);
@@ -183,22 +208,63 @@ export function PiSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<{ latest: ScopedConfigDocument<WebPiSettings>; differences: ConfigurationDifference[] }>();
 
-  const dirty = Boolean(document) && JSON.stringify(draft) !== JSON.stringify(document?.own);
+  const rawChanged = (path: string): boolean => {
+    if (rawInputs[path] === undefined) return false;
+    const field = groups.flatMap((group) => group.fields).find((item) => item.path === path);
+    const own = getPath(document?.own, path);
+    if (field?.kind === "number") return !rawInputs[path].trim() || Number(rawInputs[path]) !== own;
+    try { return JSON.stringify(JSON.parse(rawInputs[path])) !== JSON.stringify(own); }
+    catch { return true; }
+  };
+  const dirty = Boolean(document) && (JSON.stringify(draft) !== JSON.stringify(document?.own) || Object.keys(rawInputs).some(rawChanged));
   const configKey = scope === "global" ? "settings:global" : `settings:agent:${agentId}`;
+  // 全局读取不依赖异步选中的 Agent，避免目录加载完成时重置正在编辑的草稿。
+  const settingsTarget = scope === "global" ? "global" : agentId;
   const guard = useUnsavedChanges({ dirty, busy: saving, label: scope === "global" ? "全局运行设置" : `Agent 运行设置 · ${agents.find((item) => item.profile.id === agentId)?.profile.name ?? agentId}`,
-    save, canSave: online && Boolean(document) && !conflict });
+    save, canSave: online && Boolean(document) && !conflict && (scope === "global" || directoryState === "ready") });
 
-  useEffect(() => { void runOptionalApiTask(api.listAgents, { operation: "加载 Agent 目录", fallbackReason: "Agent 目录不可用", fallback: () => ({ agents: [] }) }).then((result) => { if (result.status === "success" || result.status === "fallback") { setAgents(result.data.agents); setAgentId((current) => current || result.data.agents[0]?.profile.id || ""); } }); }, [runOptionalApiTask]);
-  useEffect(() => { void runOptionalApiTask(api.listModels, { operation: "加载模型目录", fallbackReason: "模型目录不可用", fallback: () => ({ models: [] }) }).then((result) => { if (result.status === "success" || result.status === "fallback") setModels(result.data.models); }); }, [runOptionalApiTask]);
   useEffect(() => {
     let active = true;
-    setDocument(undefined); setError(""); setNotice(""); setInherit([]);
-    const request = scope === "global" ? api.getGlobalSettings() : agentId ? api.getAgentSettings(agentId) : undefined;
-    if (request) void runApiTask(() => request, { operation: "加载运行设置" }).then((result) => {
-      if (active && result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); }
+    setDirectoryState("loading");
+    void readTask.current(api.listAgents, { operation: "加载 Agent 目录" }).then((result) => {
+      if (!active) return;
+      if (result.status === "success") {
+        setAgents(result.data.agents);
+        setAgentId((current) => result.data.agents.some((item) => item.profile.id === current) ? current : result.data.agents[0]?.profile.id || "");
+        setDirectoryState("ready");
+      } else setDirectoryState("error");
     });
     return () => { active = false; };
-  }, [scope, agentId, runApiTask]);
+  }, [directoryReload]);
+  useEffect(() => {
+    let active = true;
+    setModelState("loading");
+    void readTask.current(api.listModels, { operation: "加载模型目录" }).then((result) => {
+      if (!active) return;
+      if (result.status === "success") { setModels(result.data.models); setModelState("ready"); }
+      else setModelState("error");
+    });
+    return () => { active = false; };
+  }, [modelReload]);
+  useEffect(() => {
+    let active = true;
+    setDocument(undefined); setError(""); setNotice(""); setInherit([]); setRawInputs({}); setConflict(undefined); setLoadState("loading");
+    if (scope === "agent" && !agentId) return;
+    void readTask.current(() => scope === "global" ? api.getGlobalSettings() : api.getAgentSettings(agentId), { operation: "加载运行设置" }).then((result) => {
+      if (!active) return;
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setLoadState("ready"); }
+      else setLoadState("error");
+    });
+    return () => { active = false; };
+  }, [scope, settingsTarget, settingsReload]);
+
+  /** 恢复缺省必须随保存显式删除已持久化字段，不能只从草稿中移除。 */
+  function reset(path: string) {
+    setDraft((current) => deletePath(current, path));
+    setInherit((current) => [...new Set([...current, path])]);
+    setRawInputs((current) => { const next = { ...current }; delete next[path]; return next; });
+    setNotice("");
+  }
 
   function update(path: string, value: unknown) {
     setDraft((current) => setPath(current, path, value));
@@ -206,8 +272,12 @@ export function PiSettingsPage() {
   }
 
   function toggleInherited(path: string, inherited: boolean) {
-    if (inherited) { setDraft((current) => deletePath(current, path)); setInherit((current) => [...new Set([...current, path])]); }
-    else { update(path, getPath(document?.effective, path)); }
+    if (inherited) reset(path);
+    else {
+      // 取消继承使用全局声明，不能复制已保存 effective 中的旧 Agent 覆盖。
+      const field = groups.flatMap((group) => group.fields).find((item) => item.path === path);
+      update(path, getPath(document?.inherited, path) ?? (field?.kind === "json" || field?.kind === "csv" ? [] : ""));
+    }
   }
 
   /**
@@ -222,7 +292,7 @@ export function PiSettingsPage() {
       }
       return next;
     });
-    setInherit((current) => current.filter((item) => item !== "defaultProvider" && item !== "defaultModel"));
+    setInherit((current) => choice ? current.filter((item) => item !== "defaultProvider" && item !== "defaultModel") : [...new Set([...current, "defaultProvider", "defaultModel"])]);
     setNotice("");
   }
 
@@ -231,8 +301,9 @@ export function PiSettingsPage() {
    */
   function toggleDefaultModelInherited(inherited: boolean) {
     if (!inherited) {
-      const effectiveChoice = readDefaultModelChoice(document?.effective);
+      const effectiveChoice = readDefaultModelChoice(document?.inherited);
       if (effectiveChoice) updateDefaultModel(effectiveChoice);
+      else update("defaultModel", "");
       return;
     }
     setDraft((current) => deletePath(deletePath(current, "defaultProvider"), "defaultModel"));
@@ -240,74 +311,197 @@ export function PiSettingsPage() {
     setNotice("");
   }
 
+  /** 校验失败同时保留具体字段信息及全局错误通知，方便用户定位。 */
+  function reportValidation(message: string) {
+    setError(message);
+    toast.push(toUnexpectedErrorNotice(new ApiClientError("INVALID_SETTINGS_REQUEST", message, 400), "保存运行设置"));
+  }
+
+  /** 原始数值与 JSON 单独保存，清空数字不能成为 0，解析失败不能丢失输入。 */
+  function prepareDraft(): SettingsRecord | undefined {
+    let candidate = structuredClone(draft);
+    for (const field of groups.flatMap((group) => group.fields)) {
+      const raw = rawInputs[field.path];
+      if (raw === undefined) {
+        if (field.kind === "number" && getPath(candidate, field.path) === "") {
+          reportValidation(`${field.label}必须填写有效数字；清空输入不会作为 0 保存。`); return;
+        }
+        if ((field.kind === "boolean" || field.kind === "select") && getPath(candidate, field.path) === "") {
+          reportValidation(`${field.label}尚未选择覆盖值，请选择明确值或恢复继承。`); return;
+        }
+        continue;
+      }
+      let value: unknown;
+      if (field.kind === "number") {
+        if (!raw.trim() || !Number.isFinite(Number(raw))) { reportValidation(`${field.label}必须填写有效数字；清空输入不会作为 0 保存。`); return; }
+        value = Number(raw);
+      } else {
+        try { value = JSON.parse(raw); }
+        catch { reportValidation(`${field.label} JSON 解析未通过，请填写有效数组。`); return; }
+        if (!Array.isArray(value)) { reportValidation(`${field.label}必须为 JSON 数组，不能替换为其他类型。`); return; }
+      }
+      candidate = setPath(candidate, field.path, value);
+    }
+    if (scope === "agent") {
+      if ((getPath(candidate, "defaultProvider") !== undefined || getPath(candidate, "defaultModel") !== undefined) && !readDefaultModelChoice(candidate)) {
+        reportValidation("默认模型必须同时选择 Provider 和模型，或恢复全局继承。"); return;
+      }
+      // 兼容历史 Agent 文件中的全局专属字段，只读展示且不回传修改。
+      candidate = deletePath(candidate, "httpProxy");
+    }
+    return candidate;
+  }
+
   function control(field: SettingField, value: unknown, disabled = false) {
-    if (field.kind === "boolean") return <input aria-label={field.label} type="checkbox" disabled={disabled} checked={value === true} onChange={(event) => update(field.path, event.target.checked)} />;
-    if (field.kind === "select") return <select aria-label={field.label} disabled={disabled} value={displayValue(value, field.kind)} onChange={(event) => update(field.path, event.target.value)}><option value="">核心默认值</option>{field.options?.map((option) => <option key={option} value={option}>{option}</option>)}</select>;
-    return <input aria-label={field.label} disabled={disabled} type={field.kind === "number" ? "number" : "text"} value={displayValue(value, field.kind)} onChange={(event) => update(field.path, field.kind === "number" ? Number(event.target.value) : field.kind === "csv" ? event.target.value.split(",").map((item) => item.trim()).filter(Boolean) : event.target.value)} />;
+    if (field.kind === "boolean" || field.kind === "select") return <select aria-label={field.label} disabled={disabled} value={value === undefined ? "" : String(value)} onChange={(event) => {
+      if (!event.target.value) {
+        if (scope === "global") reset(field.path);
+        else update(field.path, "");
+      } else update(field.path, field.kind === "boolean" ? event.target.value === "true" : event.target.value);
+    }}><option value="">{scope === "agent" && !disabled ? "请选择覆盖值" : "核心默认值"}</option>{field.kind === "boolean" ? <><option value="true">开启</option><option value="false">关闭</option></> : field.options?.map((option) => <option key={option} value={option}>{option}</option>)}</select>;
+    if (field.kind === "json") return <textarea aria-label={`${field.label} JSON`} disabled={disabled} spellCheck={false} rows={6} value={rawInputs[field.path] ?? (value === undefined ? "" : JSON.stringify(value, null, 2))} onChange={(event) => { const raw = event.target.value; setRawInputs((current) => ({ ...current, [field.path]: raw })); setNotice(""); }} />;
+    return <input aria-label={field.label} disabled={disabled} type={field.kind === "number" ? "number" : "text"} value={rawInputs[field.path] ?? displayValue(value, field.kind)} onChange={(event) => {
+      if (field.kind === "number") { const raw = event.target.value; setRawInputs((current) => ({ ...current, [field.path]: raw })); setNotice(""); }
+      else update(field.path, field.kind === "csv" ? event.target.value.split(",").map((item) => item.trim()).filter(Boolean) : event.target.value);
+    }} />;
+  }
+
+  /** 继承值来自全局声明，草稿恢复继承后立即显示正确来源。 */
+  function inheritedField(label: string, path: string, own: boolean, child: ReactNode, help?: string) {
+    return <fieldset className="pi-setting-inheritance"><legend>{label}</legend><label className="pi-setting-inheritance__switch"><input type="checkbox" aria-label={`${label}继承全局设置`} checked={!own} onChange={(event) => path === "defaultModel" ? toggleDefaultModelInherited(event.target.checked) : toggleInherited(path, event.target.checked)} />继承全局设置</label>
+      <p>全局声明：{path === "defaultModel" ? (() => { const choice = readDefaultModelChoice(document?.inherited); return choice ? `${choice.provider} / ${choice.model}` : "核心默认值（未声明具体值）"; })() : inheritedLabel(getPath(document?.inherited, path))} · {own ? "Agent 覆盖" : "当前继承"}</p>{child}{help ? <small>{help}</small> : null}</fieldset>;
   }
 
   async function save(): Promise<boolean> {
-    if (!document || saving || !online || conflict) return false;
+    if (!document || submitLock.current || !online || conflict || (scope === "agent" && directoryState !== "ready")) return false;
+    const candidate = prepareDraft();
+    if (!candidate) return false;
+    submitLock.current = true;
     setSaving(true); setError(""); setNotice("");
     try {
       const result = await runApiTask(
-        () => scope === "global" ? api.updateGlobalSettings(document.revision, draft, []) : api.updateAgentSettings(agentId, document.revision, draft, inherit),
+        () => scope === "global" ? api.updateGlobalSettings(document.revision, candidate, inherit) : api.updateAgentSettings(agentId, document.revision, candidate, inherit),
         {
           operation: "保存运行设置",
           expected: {
             ...settingsExpected(setError),
             VERSION_CONFLICT: async () => {
-          const latest = scope === "global" ? await api.getGlobalSettings() : await api.getAgentSettings(agentId);
-          setConflict({ latest, differences: collectDifferences(draft, latest.own as SettingsRecord) });
-          setError("");
+              const latest = scope === "global" ? await api.getGlobalSettings() : await api.getAgentSettings(agentId);
+              setConflict({ latest, differences: collectDifferences(candidate, latest.own as SettingsRecord) });
+              setError("");
             },
           },
         },
       );
-      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); recordConfigurationSave(configKey, result.data.runtimeRefreshRequired !== false); setNotice("设置已保存"); return true; }
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setRawInputs({}); recordConfigurationSave(configKey, result.data.runtimeRefreshRequired !== false); setNotice("设置已保存"); return true; }
       return false;
     }
-    finally { setSaving(false); }
+    finally { submitLock.current = false; setSaving(false); }
   }
 
   async function reapplyConflict() {
-    if (!conflict) return;
+    if (!conflict || submitLock.current || !online) return;
+    const candidate = prepareDraft();
+    if (!candidate) return;
+    submitLock.current = true;
     setSaving(true);
     try {
       const result = await runApiTask(
-        () => scope === "global" ? api.updateGlobalSettings(conflict.latest.revision, draft, []) : api.updateAgentSettings(agentId, conflict.latest.revision, draft, inherit),
-        { operation: "重新应用运行设置", expected: settingsExpected(setError) },
+        () => scope === "global" ? api.updateGlobalSettings(conflict.latest.revision, candidate, inherit) : api.updateAgentSettings(agentId, conflict.latest.revision, candidate, inherit),
+        { operation: "重新应用运行设置", expected: {
+          ...settingsExpected(setError),
+          VERSION_CONFLICT: async () => {
+            const latest = scope === "global" ? await api.getGlobalSettings() : await api.getAgentSettings(agentId);
+            setConflict({ latest, differences: collectDifferences(candidate, latest.own as SettingsRecord) });
+          },
+        } },
       );
-      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setConflict(undefined); recordConfigurationSave(configKey, result.data.runtimeRefreshRequired !== false); setNotice("设置已在最新版本上重新应用"); }
-      else if (result.status !== "handled") setConflict(undefined);
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setRawInputs({}); setConflict(undefined); recordConfigurationSave(configKey, result.data.runtimeRefreshRequired !== false); setNotice("设置已在最新版本上重新应用"); }
+
     }
-    finally { setSaving(false); }
+    finally { submitLock.current = false; setSaving(false); }
+  }
+
+  /** 分区计数只包含本页字段；默认 Provider 与模型作为一项组合。 */
+  function categorySummary(id: SettingsCategory): string {
+    const fields = groups.filter((group) => group.category === id).flatMap((group) => group.fields);
+    const changed = fields.some((field) => JSON.stringify(getPath(draft, field.path)) !== JSON.stringify(getPath(document?.own, field.path)) || rawChanged(field.path))
+      || (id === "common" && ["defaultProvider", "defaultModel"].some((path) => getPath(draft, path) !== getPath(document?.own, path)));
+    const count = fields.filter((field) => !field.globalOnly && getPath(draft, field.path) !== undefined).length + (id === "common" && getPath(draft, "defaultModel") !== undefined ? 1 : 0);
+    return `${scope === "agent" ? ` · ${count} 项覆盖` : ""}${changed ? " · 未保存" : ""}`;
+  }
+
+  function renderDefaultModel() {
+    const ownChoice = readDefaultModelChoice(draft);
+    const inheritedChoice = readDefaultModelChoice(document?.inherited);
+    const hasOverride = getPath(draft, "defaultModel") !== undefined || getPath(draft, "defaultProvider") !== undefined;
+    const currentChoice = scope === "agent" && !hasOverride ? inheritedChoice : ownChoice;
+    const options = defaultModelOptions(models, currentChoice);
+    const selector = <select aria-label="默认模型" disabled={scope === "agent" && !hasOverride} value={currentChoice ? defaultModelChoiceKey(currentChoice) : ""} onChange={(event) => {
+      if (scope === "agent" && !event.target.value) update("defaultModel", "");
+      else updateDefaultModel(parseDefaultModelChoice(event.target.value));
+    }}><option value="">{scope === "agent" && hasOverride ? "请选择覆盖模型" : "核心默认值"}</option>{options.map((model) => <option key={defaultModelChoiceKey({ provider: model.provider, model: model.id })} value={defaultModelChoiceKey({ provider: model.provider, model: model.id })}>{model.provider} / {model.name || model.id}</option>)}</select>;
+    if (scope === "agent") return inheritedField("默认模型", "defaultModel", hasOverride, selector, "同时覆盖 Provider 与模型。");
+    return <label><span>默认模型<small>选择已配置的 Provider 与模型</small></span>{selector}</label>;
   }
 
   return (
     <div className="configuration-page pi-settings-page configuration-quick-wins-page">
       {guard.dialog}
-      {conflict && !guard.pending ? <ConflictDialog differences={conflict.differences} onReload={() => { setDocument(conflict.latest); setDraft(structuredClone(conflict.latest.own) as SettingsRecord); setInherit([]); setConflict(undefined); }} onReapply={() => void reapplyConflict()} /> : null}
-      <header className="configuration-page__heading"><span className="configuration-eyebrow">RUNTIME SETTINGS</span><h1>运行设置</h1><p>统一管理默认模型与运行策略；Agent 覆盖会在全局规则上生效。</p></header>
+      {conflict && !guard.pending ? <ConfigurationEditorDialog variant="confirmation" title="配置已在磁盘上发生变化" description="请重新加载，或把本地字段应用到最新 revision 后再次校验。" busy={saving} returnFocusSelector=".pi-settings-save-bar button" onClose={() => setConflict(undefined)} footer={<>
+        <button type="button" className="configuration-secondary-action" disabled={saving} onClick={() => setConflict(undefined)}>继续编辑</button>
+        <button type="button" className="configuration-secondary-action" disabled={saving} onClick={() => { setDocument(conflict.latest); setDraft(structuredClone(conflict.latest.own) as SettingsRecord); setInherit([]); setRawInputs({}); setConflict(undefined); }}>放弃修改并重新加载</button>
+        <button type="button" className="configuration-primary-action" disabled={saving || !online} onClick={() => void reapplyConflict()}>在新版本上重新应用</button>
+      </>}><div className="conflict-differences"><div className="conflict-difference conflict-difference--heading"><strong>字段</strong><strong>本地修改</strong><strong>磁盘值</strong></div>{conflict.differences.map((difference) => <div className="conflict-difference" key={difference.field}><code>{difference.field}</code><span>{inheritedLabel(difference.local)}</span><span>{inheritedLabel(difference.disk)}</span></div>)}</div>{error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}</ConfigurationEditorDialog> : null}
+      <header className="configuration-page__heading"><span className="configuration-eyebrow">RUNTIME SETTINGS</span><h1>运行设置</h1><p>管理默认模型和运行策略，按需为 Agent 设置独立覆盖。</p></header>
+      <section className="settings-scope-bar" aria-label="设置作用域">
+        <div className="settings-scope-actions"><button type="button" aria-pressed={scope === "global"} disabled={saving} onClick={() => { if (scope !== "global") guard.request(() => setScope("global")); }}>全局设置</button><button type="button" aria-pressed={scope === "agent"} disabled={saving} onClick={() => { if (scope !== "agent") guard.request(() => setScope("agent")); }}>Agent 覆盖</button></div>
+        {scope === "agent" && agents.length > 0 ? <label>当前 Agent<select aria-label="选择 Agent" value={agentId} disabled={saving || directoryState !== "ready"} onChange={(event) => { const next = event.target.value; guard.request(() => setAgentId(next)); }}>{agents.map(({ profile }) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label> : null}
+        <p>{scope === "global" ? "全局声明提供基础配置；Agent 可以覆盖部分字段。" : `当前对象：${agents.find((item) => item.profile.id === agentId)?.profile.name ?? "尚未选择"}。仅覆盖明确声明的字段；恢复继承需保存后才会移除覆盖。`}</p>
+        {directoryState === "error" ? <div className="pi-settings-load-error" role="alert">Agent 目录未能加载，错误详情已通过通知展示。<button type="button" disabled={saving} onClick={() => guard.request(() => setDirectoryReload((value) => value + 1))}>重新加载 Agent 目录</button></div> : null}
+      </section>
       <ConfigurationEffectNotice configKey={configKey} dirty={dirty} />
-      <div className="settings-scope-bar"><label>设置作用域<select aria-label="设置作用域" value={scope} disabled={saving} onChange={(event) => { const next = event.target.value as "global" | "agent"; guard.request(() => setScope(next)); }}><option value="global">全局</option><option value="agent">Agent 覆盖</option></select></label>{scope === "agent" ? <label>Agent<select aria-label="选择 Agent" value={agentId} disabled={saving} onChange={(event) => { const next = event.target.value; guard.request(() => setAgentId(next)); }}>{agents.map(({ profile }) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label> : null}</div>
-      {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}{notice ? <p className="configuration-save-notice" role="status"><Check size={14} aria-hidden="true" />{notice}</p> : null}
-      {!document ? <div className="configuration-state"><p>{error || "正在加载设置…"}</p></div> : <>
-        <fieldset className="configuration-interaction-fields" disabled={saving}><div className="settings-groups">{groups.map((group, index) => <SettingsSection key={group.title} index={index + 1} title={group.title} description={group.description}>{index === 0 ? (() => {
-          const ownChoice = readDefaultModelChoice(draft);
-          const effectiveChoice = readDefaultModelChoice(document.effective);
-          const currentChoice = scope === "agent" ? ownChoice ?? effectiveChoice : ownChoice;
-          const options = defaultModelOptions(models, currentChoice);
-          const selector = <select aria-label="默认模型" disabled={scope === "agent" && !ownChoice} value={currentChoice ? defaultModelChoiceKey(currentChoice) : ""} onChange={(event) => updateDefaultModel(parseDefaultModelChoice(event.target.value))}><option value="">核心默认值</option>{options.map((model) => <option key={defaultModelChoiceKey({ provider: model.provider, model: model.id })} value={defaultModelChoiceKey({ provider: model.provider, model: model.id })}>{model.provider} / {model.name || model.id}</option>)}</select>;
-          if (scope === "agent") return <InheritedField label="默认模型" inherited={!ownChoice} inheritedValue={effectiveChoice ? `${effectiveChoice.provider} / ${effectiveChoice.model}` : "核心默认值"} onInheritedChange={toggleDefaultModelInherited} help="同时覆盖 Provider 与模型。">{selector}</InheritedField>;
-          return <label><span>默认模型<small>选择已配置的 Provider 与模型</small></span>{selector}</label>;
-        })() : null}{group.fields.map((field) => {
-          const ownValue = getPath(draft, field.path); const effectiveValue = getPath(document.effective, field.path); const inheritedValue = getPath(document.inherited, field.path);
-          if (scope === "agent" && !field.globalOnly) return <InheritedField key={field.path} label={field.label} inherited={ownValue === undefined} inheritedValue={inheritedLabel(inheritedValue ?? effectiveValue)} onInheritedChange={(value) => toggleInherited(field.path, value)} help={field.risk || (field.unit ? `单位：${field.unit}` : undefined)}>{control(field, ownValue ?? effectiveValue)}</InheritedField>;
-          return <label key={field.path}><span>{field.label}<small>{field.risk ? <><ShieldAlert size={12} aria-hidden="true" />{field.risk}</> : field.globalOnly && scope === "agent" ? "仅全局可修改" : field.unit ? `单位：${field.unit}` : "使用核心默认值"}</small></span>{control(field, scope === "agent" ? effectiveValue : ownValue, scope === "agent" && field.globalOnly)}</label>;
-        })}</SettingsSection>)}</div></fieldset>
-        <section className="effective-settings"><header><h2>最终有效值</h2><small>{scope === "global" ? "全局" : "全局 + Agent 覆盖"}</small></header><pre>{JSON.stringify(document.effective, null, 2)}</pre></section>
-        <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={save} disabled={saving || !online} title={!online ? "离线时不能保存配置" : undefined}><Save size={16} aria-hidden="true" />{saving ? "保存中…" : "保存设置"}</button></div>
+      {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
+      {notice ? <p className="configuration-save-notice" role="status"><Check size={14} aria-hidden="true" />{notice}</p> : null}
+      {scope === "agent" && directoryState === "loading" ? <div className="configuration-state"><p>正在加载 Agent 目录…</p></div>
+        : scope === "agent" && directoryState === "error" ? null
+        : scope === "agent" && agents.length === 0 ? <div className="configuration-state"><h2>还没有 Agent</h2><p>先创建 Agent，再设置独立运行覆盖。</p><button type="button" onClick={() => navigateTo({ page: "agents" })}>前往 Agents</button></div>
+        : !document ? <div className="configuration-state"><p>{loadState === "error" ? "运行设置未能加载，错误详情已通过通知展示。" : "正在加载设置…"}</p>{loadState === "error" ? <button type="button" onClick={() => setSettingsReload((value) => value + 1)}>重新加载运行设置</button> : null}</div> : <>
+        {modelState === "error" ? <div className="pi-settings-load-error" role="alert">模型目录未能加载；保留当前配置的模型，错误详情已通过通知展示。<button type="button" disabled={saving} onClick={() => setModelReload((value) => value + 1)}>重新加载模型目录</button></div> : null}
+        <div className="pi-settings-tabs" role="tablist" aria-label="运行设置分类">{categories.map((item, index) => <button type="button" key={item.id} id={`pi-settings-tab-${item.id}`} role="tab" aria-controls={`pi-settings-panel-${item.id}`} aria-selected={category === item.id} tabIndex={category === item.id ? 0 : -1} disabled={saving} onClick={() => setCategory(item.id)} onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? categories[0] : event.key === "End" ? categories[2] : categories[(index + (event.key === "ArrowRight" ? 1 : 2)) % categories.length];
+          setCategory(next.id);
+          window.document.getElementById(`pi-settings-tab-${next.id}`)?.focus();
+        }}>{item.label}<small>{categorySummary(item.id)}</small></button>)}</div>
+        {categories.map((item) => <section key={item.id} role="tabpanel" tabIndex={0} hidden={category !== item.id} id={`pi-settings-panel-${item.id}`} aria-labelledby={`pi-settings-tab-${item.id}`}>
+          <fieldset className="configuration-interaction-fields" disabled={saving || (scope === "agent" && directoryState !== "ready")}><div className="settings-groups">{groups.filter((group) => group.category === item.id).map((group) => <SettingsSection key={group.title} index={groups.indexOf(group) + 1} title={group.title} description={group.description}>
+            {group.title === "模型与推理" ? renderDefaultModel() : null}
+            {group.fields.map((field) => {
+              const ownValue = getPath(draft, field.path);
+              const inheritedValue = getPath(document.inherited, field.path);
+              const help = field.risk || (field.unit ? `单位：${field.unit}` : undefined);
+              if (scope === "agent" && !field.globalOnly) return <div key={field.path}>{inheritedField(field.label, field.path, ownValue !== undefined, control(field, ownValue === undefined ? inheritedValue : ownValue, ownValue === undefined), help)}</div>;
+              return <label key={field.path}><span>{field.label}<small>{field.risk ? <><ShieldAlert size={12} aria-hidden="true" />{field.risk}</> : field.unit ? `单位：${field.unit}` : ownValue === undefined ? "未声明 · 核心默认值" : "全局声明"}</small></span>{control(field, scope === "agent" ? inheritedValue : ownValue, scope === "agent" && field.globalOnly)}</label>;
+            })}
+          </SettingsSection>)}</div></fieldset>
+        </section>)}
+        <details className="effective-settings"><summary><strong>已保存配置与来源</strong><small>声明合并结果，不代表运行中快照</small></summary>
+          <p>{dirty ? "当前有未保存草稿，下列摘要与 JSON 未包含这些修改。" : "仅展示已保存声明；未声明的核心默认值不在此推测。"}</p>
+          <dl className="pi-settings-sources">{[
+            { path: "defaultModel", label: "默认模型" },
+            ...groups.flatMap((group) => group.fields).filter((field) => ["defaultThinkingLevel", "compaction.enabled", "retry.enabled", "transport", "httpProxy"].includes(field.path)),
+          ].map((field) => {
+            const own = getPath(document.own, field.path);
+            const global = scope === "global" ? own : getPath(document.inherited, field.path);
+            const value = scope === "agent" && field.path !== "httpProxy" ? own ?? global : global;
+            const choice = field.path === "defaultModel" ? readDefaultModelChoice(scope === "agent" ? document.effective : document.own) : undefined;
+            return <div key={field.path}><dt>{field.label}</dt><dd>{choice ? `${choice.provider} / ${choice.model}` : inheritedLabel(value)}<small>{scope === "agent" && field.path !== "httpProxy" && own !== undefined ? "Agent 覆盖" : global !== undefined ? "全局声明" : "核心默认值"}</small></dd></div>;
+          })}</dl>
+          <details><summary>查看已保存合并 JSON</summary><pre>{JSON.stringify(document.effective, null, 2)}</pre></details>
+        </details>
+        <div className="configuration-save-bar pi-settings-save-bar"><div><strong>{dirty ? "有未保存的修改" : "当前没有未保存修改"}</strong><small>保存当前作用域所有页签的修改</small></div><button type="button" className="configuration-primary-action" onClick={() => void save()} disabled={saving || !online || !dirty || Boolean(conflict) || (scope === "agent" && directoryState !== "ready")} title={!online ? "离线时不能保存配置" : undefined}><Save size={16} aria-hidden="true" />{saving ? "保存中…" : scope === "global" ? "保存全局设置" : "保存 Agent 覆盖"}</button></div>
       </>}
     </div>
   );

@@ -3,7 +3,7 @@
   "lazyChunkGzipBytes": 153600,
   "css": {
     "entryGzipBytes": 24576,
-    "totalGzipBytes": 71680,
+    "totalGzipBytes": 72704,
     "routes": {
       "src/web/pages/chat-page.tsx": {
         "label": "聊天工作台",
@@ -71,7 +71,7 @@
       },
       "src/web/pages/pi-settings-page.tsx": {
         "label": "Pi 运行设置",
-        "gzipBytes": 4608
+        "gzipBytes": 6144
       },
       "src/web/pages/resources-page.tsx": {
         "label": "资源目录",

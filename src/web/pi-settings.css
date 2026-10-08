@@ -1,105 +1,119 @@
-/* Pi 运行设置页专属样式，由 Pi 设置页面按需加载。 */
-
+/* 运行设置页按需加载，分区、来源与表单共用现有主题令牌。 */
 .settings-scope-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 30px;
-  padding: 14px;
+  display: grid;
+  gap: 20px;
+  margin-bottom: 24px;
+  padding: 24px;
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 12px;
   background: var(--panel);
 }
-
-.settings-scope-bar label {
+.settings-scope-actions {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--text-secondary);
-  font-size: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-
-.settings-scope-bar select {
-  min-height: 38px;
-  padding: 0 30px 0 10px;
+.settings-scope-actions button, .pi-settings-tabs button, .pi-settings-load-error button {
+  min-height: 44px;
+  padding: 10px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-primary);
-  background: var(--surface-soft);
+  background: var(--surface);
+  cursor: pointer;
 }
-
-.settings-groups {
-  display: grid;
-  gap: 34px;
+.settings-scope-actions button[aria-pressed="true"], .pi-settings-tabs button[aria-selected="true"] {
+  color: var(--fg);
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
 }
-
-.settings-section > div:last-child {
-  display: grid;
-  padding-inline: 16px;
+.settings-scope-actions button:hover, .pi-settings-tabs button:hover, .pi-settings-load-error button:hover {
+  background: var(--surface-hover);
 }
-
-/* 运行设置沿用硬边分组时，标题也要与字段保持相同的安全内缩。 */
-
-.settings-section .configuration-section__heading {
-  padding-inline: 16px;
-}
-
-.settings-section .configuration-section__heading > small {
-  max-width: 220px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  text-align: right;
-}
-
-.settings-section label small svg {
-  flex: 0 0 auto;
-  color: var(--danger);
-}
-
-.settings-section label small:has(svg) {
-  display: flex;
-  align-items: flex-start;
-  gap: 5px;
-}
-
-.settings-section input[type="checkbox"] {
-  width: 18px;
-  justify-self: start;
-}
-
-.effective-settings {
-  margin-top: 38px;
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: var(--panel);
-}
-
-.effective-settings header {
+.settings-scope-bar label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-}
-
-.effective-settings h2 {
-  margin: 0;
-  font-size: 13px;
-}
-
-.effective-settings small {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-
-.effective-settings pre {
-  max-height: 360px;
-  margin: 0;
-  padding: 16px;
+  gap: 16px;
+  font-size: 12px;
   color: var(--text-secondary);
-  background: var(--surface-soft);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.65;
-  overflow: auto;
+}
+.settings-scope-bar select { max-width: 360px; }
+.settings-scope-bar select, .pi-settings-page .settings-section :is(input:not([type="checkbox"]),select,textarea) {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--surface);
+}
+.settings-scope-bar p, .pi-settings-load-error, .effective-settings > p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+.pi-settings-load-error { margin-bottom: 24px; }
+.pi-settings-load-error button { margin: 8px 0 0 16px; }
+.pi-settings-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+.pi-settings-tabs button { flex: 1; font-size: 13px; }
+.pi-settings-tabs small { display: block; font-size: 11px; margin-top: 4px; }
+.settings-groups { display: grid; gap: 24px; }
+.settings-section > div:last-child { display: grid; padding-inline: 24px; }
+.settings-section .configuration-section__heading { padding-inline: 24px; }
+.settings-section .configuration-section__heading > small { max-width: 240px; font-size: 12px; text-align: right; }
+.settings-section label small:has(svg) { display: flex; align-items: flex-start; gap: 8px; }
+.settings-section label small svg { flex: 0 0 auto; color: var(--danger); }
+.pi-setting-inheritance {
+  margin: 0;
+  padding: 20px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.pi-setting-inheritance legend { padding: 0; font-size: 13px; font-weight: 600; }
+.pi-settings-page .pi-setting-inheritance__switch {
+  display: flex;
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+}
+.pi-setting-inheritance__switch input { width: 18px; height: 18px; margin: 0; }
+.pi-setting-inheritance p, .pi-setting-inheritance > small { font-size: 12px; color: var(--text-secondary); line-height: 1.8; overflow-wrap: anywhere; }
+.pi-setting-inheritance > small { display: block; margin-top: 8px; }
+.settings-section textarea { font-family: var(--font-mono); line-height: 1.8; resize: vertical; }
+.effective-settings { margin-top: 24px; padding: 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.effective-settings summary { min-height: 44px; cursor: pointer; font-size: 13px; }
+.effective-settings summary small { display: block; margin: 8px 0; font-size: 12px; color: var(--text-secondary); }
+.effective-settings details { margin-top: 16px; }
+.effective-settings pre { max-height: 360px; margin: 0; padding: 16px; font: 12px/1.8 var(--font-mono); color: var(--text-secondary); background: var(--surface-soft); border-radius: 8px; overflow: auto; }
+.pi-settings-sources { margin: 16px 0; }
+.pi-settings-sources > div { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.pi-settings-sources dd { margin: 0; overflow-wrap: anywhere; }
+.pi-settings-sources dd small { display: block; color: var(--text-secondary); margin-top: 8px; }
+.pi-settings-save-bar { position: sticky; bottom: 0; justify-content: space-between; gap: 16px; padding: 16px 24px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.pi-settings-save-bar strong { font-size: 12px; }
+.pi-settings-save-bar small { display: block; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+.pi-settings-page :is(button,select,input,textarea,summary,[role="tabpanel"]):focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+.pi-settings-page button:disabled { cursor: not-allowed; opacity: 0.5; }
+/* 手机表单保持单列与可触控尺寸，长声明不挤压视口。 */
+@media (max-width: 760px) {
+  .settings-scope-bar, .effective-settings { padding: 20px 16px; }
+  .settings-scope-bar label { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .settings-scope-bar select { max-width: none; }
+  .pi-settings-tabs { gap: 4px; }
+  .pi-settings-tabs button { padding: 8px 4px; font-size: 12px; }
+  .pi-settings-tabs small { font-size: 10px; }
+  .settings-section > div:last-child, .settings-section .configuration-section__heading { padding-inline: 16px; }
+  .pi-settings-sources > div { grid-template-columns: 1fr; gap: 8px; }
+  .pi-settings-save-bar { flex-wrap: wrap; padding: 16px; }
+  .pi-settings-save-bar button { width: 100%; justify-content: center; min-height: 44px; }
+  .pi-settings-load-error button { margin-left: 0; }
 }

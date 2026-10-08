@@ -153,10 +153,10 @@ describe("配置快速交互改进", () => {
     show(<PiSettingsPage />);
     await screen.findByLabelText("默认思考等级");
     fireEvent.change(screen.getByLabelText("默认思考等级"), { target: { value: "high" } });
-    fireEvent.change(screen.getByLabelText("设置作用域"), { target: { value: "agent" } });
+    fireEvent.click(screen.getByRole("button", { name: "Agent 覆盖" }));
     fireEvent.click(screen.getByRole("button", { name: "保存并切换" }));
     await screen.findByText(/尚未完成保存/);
-    expect(screen.getByLabelText("设置作用域")).toHaveValue("global");
+    expect(screen.getByRole("button", { name: "全局设置" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("默认思考等级")).toHaveValue("high");
     expect(agentRead).not.toHaveBeenCalled();
   });
