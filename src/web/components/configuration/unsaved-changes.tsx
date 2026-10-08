@@ -14,6 +14,9 @@ interface UnsavedChangesOptions {
   save: () => Promise<boolean>;
   /** 离线或无有效配置时禁用保存并切换。 */
   canSave?: boolean;
+  /** 安装等一次性操作只允许继续输入或放弃，不提供保存并切换。 */
+  discardOnly?: boolean;
+  onDiscard?: () => void;
 }
 
 /** 统一保护配置对象切换、站内导航和浏览器离开，不持久化草稿密钥。 */
@@ -80,13 +83,13 @@ export function useUnsavedChanges(options: UnsavedChangesOptions) {
     request,
     pending: Boolean(pending),
     dialog: pending ? <UnsavedChangesDialog label={options.label} error={error} busy={saving || options.busy} canSave={options.canSave !== false}
-      onCancel={() => setPending(undefined)} onDiscard={proceed} onSave={() => void saveAndProceed()} /> : null,
+      onCancel={() => setPending(undefined)} discardOnly={options.discardOnly === true} onDiscard={() => { options.onDiscard?.(); proceed(); }} onSave={() => void saveAndProceed()} /> : null,
   };
 }
 
 /** 三个明确出口与焦点约束让用户可以安全决定如何处理当前草稿。 */
-function UnsavedChangesDialog({ label, error, busy, canSave, onCancel, onDiscard, onSave }: {
-  label: string; error: string; busy: boolean; canSave: boolean;
+function UnsavedChangesDialog({ label, error, busy, canSave, discardOnly, onCancel, onDiscard, onSave }: {
+  label: string; error: string; busy: boolean; canSave: boolean; discardOnly: boolean;
   onCancel: () => void; onDiscard: () => void; onSave: () => void;
 }) {
   const id = useId();
@@ -110,8 +113,8 @@ function UnsavedChangesDialog({ label, error, busy, canSave, onCancel, onDiscard
     return () => { document.removeEventListener("keydown", keydown); document.body.style.overflow = overflow; if (trigger?.isConnected) trigger.focus(); };
   }, []);
   return createPortal(<div className="configuration-dialog-backdrop" role="presentation"><section ref={root} tabIndex={-1} className="configuration-dialog provider-rename-dialog" role="dialog" aria-modal="true" aria-labelledby={id} aria-describedby={`${id}-description`} aria-busy={busy}>
-    <header><div><h2 id={id}>还有未保存的修改</h2><p id={`${id}-description`}>“{label}”尚未保存。切换前，请选择如何处理当前修改。</p></div></header>
+    <header><div><h2 id={id}>{discardOnly ? "还有未提交的安装输入" : "还有未保存的修改"}</h2><p id={`${id}-description`}>{discardOnly ? `“${label}”尚未提交安装；放弃输入不会启动后台任务。` : `“${label}”尚未保存。切换前，请选择如何处理当前修改。`}</p></div></header>
     {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
-    <footer><button type="button" className="configuration-secondary-action" disabled={busy} onClick={onCancel}>继续编辑</button><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={busy} onClick={onDiscard}>放弃并切换</button><button type="button" className="configuration-primary-action" disabled={busy || !canSave} onClick={onSave}>{busy ? "保存中…" : "保存并切换"}</button></footer>
+    <footer><button type="button" className="configuration-secondary-action" disabled={busy} onClick={onCancel}>继续编辑</button><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={busy} onClick={onDiscard}>放弃并切换</button>{!discardOnly ? <button type="button" className="configuration-primary-action" disabled={busy || !canSave} onClick={onSave}>{busy ? "保存中…" : "保存并切换"}</button> : null}</footer>
   </section></div>, document.body);
 }

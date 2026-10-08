@@ -2,11 +2,12 @@ import type { FastifyInstance } from "fastify";
 import type { AgentStore } from "../agents/agent-store";
 import type { DataPaths } from "../paths";
 import { createPackageInstallAction, createPackageRemoveAction, ResourceService, ResourceTaskManager, type ConfigurationTaskEvent } from "../resources/resource-service";
-import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AuthService } from "./auth";
 import { sendApiError } from "./http";
 import { requireAuthentication } from "./protected";
 import { SseConnection } from "../http/sse-connection";
+import { DomainError, toSafePublicMessage } from "../core/errors";
 import { SYSTEM_LIMITS } from "../core/limits";
 
 interface ResourceRouteDependencies {
@@ -31,7 +32,10 @@ export function registerResourceRoutes(app: FastifyInstance, dependencies: Resou
     const service = await serviceFor(request.query.agentId, dependencies);
     if (!service) return sendApiError(reply, 404, "AGENT_NOT_FOUND", "Agent 不存在");
     try { return reply.send({ content: await service.readContent(request.query.id) }); }
-    catch (error) { return sendApiError(reply, 404, "RESOURCE_NOT_FOUND", error instanceof Error ? error.message : "资源不存在"); }
+    catch (error) {
+      if (error instanceof DomainError && error.code === "RESOURCE_NOT_FOUND") return sendApiError(reply, 404, error.code, error.message);
+      return sendApiError(reply, 500, "INTERNAL_ERROR", `读取资源内容时发生异常：${toSafePublicMessage(error, "资源内容读取器捕获到非 Error 异常")}`);
+    }
   });
   app.patch<{ Params: { id: string } }>("/api/resources/:id", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
@@ -70,9 +74,15 @@ export function registerResourceRoutes(app: FastifyInstance, dependencies: Resou
     const agent = local && typeof body.agentId === "string" ? await dependencies.agents.get(body.agentId) : undefined;
     if (local && !agent) return sendApiError(reply, 404, "AGENT_NOT_FOUND", "Agent 不存在");
     if (!local) {
+      const globalSettings = SettingsManager.create(dependencies.paths.workspaceDir, dependencies.paths.piDir);
+      const globalManager = new DefaultPackageManager({ cwd: dependencies.paths.workspaceDir, agentDir: dependencies.paths.piDir, settingsManager: globalSettings });
+      const installedPath = globalManager.getInstalledPath(source, "user");
       for (const document of await dependencies.agents.list()) {
-        const projectPackages = SettingsManager.create(document.profile.cwd, dependencies.paths.piDir).getProjectSettings().packages ?? [];
-        if (projectPackages.some((item) => (typeof item === "string" ? item : item.source) === source)) return sendApiError(reply, 409, "PACKAGE_IN_USE", `Package 仍被 Agent ${document.profile.name} 引用`);
+        const settings = SettingsManager.create(document.profile.cwd, dependencies.paths.piDir);
+        const manager = new DefaultPackageManager({ cwd: document.profile.cwd, agentDir: dependencies.paths.piDir, settingsManager: settings });
+        // Agent 模式过滤可以复用全局安装目录；路径引用同样阻止全局卸载。
+        const referenced = manager.listConfiguredPackages().some((item) => item.scope === "project" && (item.source === source || installedPath && item.installedPath === installedPath));
+        if (referenced) return sendApiError(reply, 409, "PACKAGE_IN_USE", `Package 仍被 Agent ${document.profile.name} 引用`);
       }
     }
     const factory = dependencies.removeAction ?? createPackageRemoveAction;
@@ -83,6 +93,13 @@ export function registerResourceRoutes(app: FastifyInstance, dependencies: Resou
         : factory({ agentDir: dependencies.paths.piDir, cwd: dependencies.paths.workspaceDir, source, local }),
     );
     return reply.code(202).send({ taskId });
+  });
+  app.get<{ Params: { id: string } }>("/api/configuration/tasks/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const history = dependencies.tasks.history(request.params.id);
+    if (!history) return sendApiError(reply, 404, "TASK_NOT_FOUND", "资源任务日志已过期或服务已重启，无法确认该任务结果；请检查实际资源目录");
+    const terminal = history.find((event) => event.type === "completed" || event.type === "failed");
+    return reply.send({ status: terminal?.type ?? "running" });
   });
   app.get<{ Params: { id: string } }>("/api/configuration/tasks/:id/events", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
@@ -128,7 +145,7 @@ export function registerResourceRoutes(app: FastifyInstance, dependencies: Resou
 async function serviceFor(agentId: string | undefined, dependencies: ResourceRouteDependencies) {
   if (!agentId) return new ResourceService({ agentDir: dependencies.paths.piDir, cwd: dependencies.paths.workspaceDir });
   const agent = await dependencies.agents.get(agentId);
-  return agent ? new ResourceService({ agentDir: dependencies.paths.piDir, cwd: agent.profile.cwd }) : undefined;
+  return agent ? new ResourceService({ agentDir: dependencies.paths.piDir, cwd: agent.profile.cwd, target: "agent" }) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }

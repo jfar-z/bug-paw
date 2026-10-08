@@ -1,9 +1,9 @@
 import { open } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { DefaultPackageManager, DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { DefaultPackageManager, DefaultResourceLoader, SettingsManager, type PackageSource } from "@earendil-works/pi-coding-agent";
 import { SYSTEM_LIMITS } from "../core/limits";
-import { DomainError } from "../core/errors";
+import { DomainError, toSafePublicMessage } from "../core/errors";
 
 export type ResourceType = "skill" | "prompt" | "extension" | "theme";
 export interface ResourceCatalogItem {
@@ -17,6 +17,8 @@ export interface ResourceCatalogItem {
   origin: "package" | "top-level";
   enabled: boolean;
   inherited: boolean;
+  /** 当前操作目标的精确声明；default 表示由原生发现或过滤规则决定。 */
+  mode: "enabled" | "disabled" | "inherit" | "default";
 }
 export interface ResourceToolItem { name: string; description: string; extensionPath: string; highRisk: boolean }
 export interface ResourceCatalog {
@@ -185,7 +187,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
  * 使用 Pi DefaultResourceLoader 构建不重复保存状态的资源目录。
  */
 export class ResourceService {
-  constructor(private readonly options: { agentDir: string; cwd: string }) {}
+  constructor(private readonly options: { agentDir: string; cwd: string; target?: "global" | "agent" }) {}
 
   async catalog(): Promise<ResourceCatalog> {
     const loader = new DefaultResourceLoader(this.options);
@@ -193,7 +195,7 @@ export class ResourceService {
     const skills = loader.getSkills(); const prompts = loader.getPrompts(); const extensions = loader.getExtensions(); const themes = loader.getThemes();
     const resources: ResourceCatalogItem[] = [];
     const add = (type: ResourceType, name: string, description: string, path: string, sourceInfo: { source: string; scope: string; origin: "package" | "top-level" }) => {
-      resources.push({ id: `${type}:${path}`, type, name, description, path, source: sourceInfo.source, scope: sourceInfo.scope === "project" ? "agent" : "global", origin: sourceInfo.origin, enabled: true, inherited: sourceInfo.scope === "user" });
+      resources.push({ id: `${type}:${path}`, type, name, description, path, source: sourceInfo.source, scope: sourceInfo.scope === "project" ? "agent" : "global", origin: sourceInfo.origin, enabled: true, inherited: false, mode: "default" });
     };
     for (const skill of skills.skills) add("skill", skill.name, skill.description, skill.filePath, skill.sourceInfo);
     for (const prompt of prompts.prompts) add("prompt", prompt.name, prompt.description, prompt.filePath, prompt.sourceInfo);
@@ -204,23 +206,44 @@ export class ResourceService {
       if (sourceInfo && path) add("theme", (theme as unknown as { name?: string }).name ?? basename(path), "主题", path, sourceInfo);
     }
     const settings = SettingsManager.create(this.options.cwd, this.options.agentDir);
+    if (settings.drainErrors().length) throw new DomainError("INTERNAL_ERROR", "读取资源目录的 Pi 配置失败");
     const packageManager = new DefaultPackageManager({ ...this.options, settingsManager: settings });
     const resolved = await packageManager.resolve(async () => "skip");
+    // 全局基线仅解析路径，不再次执行扩展，用于识别被 Agent 显式路径覆盖的全局来源。
+    const globalManager = new DefaultPackageManager({ ...this.options, settingsManager: SettingsManager.inMemory(settings.getGlobalSettings()) });
+    const globalResolved = await globalManager.resolve(async () => "skip");
     for (const [type, entries] of Object.entries(resolved) as Array<[ResourceType extends infer _ ? string : never, typeof resolved.skills]>) {
       const resourceType = type === "skills" ? "skill" : type === "prompts" ? "prompt" : type === "extensions" ? "extension" : "theme";
       for (const entry of entries) {
         const existing = resources.find((item) => item.path === entry.path && item.type === resourceType);
         if (existing) existing.enabled = entry.enabled;
-        else resources.push({ id: `${resourceType}:${entry.path}`, type: resourceType, name: basename(entry.path), description: "已配置但当前未加载", path: entry.path, source: entry.metadata.source, scope: entry.metadata.scope === "project" ? "agent" : "global", origin: entry.metadata.origin, enabled: entry.enabled, inherited: entry.metadata.scope === "user" });
+        else resources.push({ id: `${resourceType}:${entry.path}`, type: resourceType, name: basename(entry.path), description: "已配置但当前未加载", path: entry.path, source: entry.metadata.source, scope: entry.metadata.scope === "project" ? "agent" : "global", origin: entry.metadata.origin, enabled: entry.enabled, inherited: false, mode: "default" });
       }
     }
+    for (const item of resources) {
+      const key = `${item.type}s` as ResourcePathKey;
+      const globalEntry = globalResolved[key].find((entry) => entry.path === item.path);
+      if (globalEntry?.metadata.scope === "user") {
+        item.scope = "global";
+        item.source = globalEntry.metadata.source;
+        item.origin = globalEntry.metadata.origin;
+      }
+      const targetSettings = this.options.target === "agent" ? settings.getProjectSettings() : settings.getGlobalSettings();
+      const baseDir = this.options.target === "agent" ? join(this.options.cwd, ".pi") : this.options.agentDir;
+      const exactMode = resourcePathMode(targetSettings[key] ?? [], item.path, baseDir);
+      const pkg = packageManager.listConfiguredPackages().find((entry) => entry.scope === (this.options.target === "agent" ? "project" : "user") && entry.installedPath && isWithin(item.path, entry.installedPath));
+      const configuredPackage = pkg && (targetSettings.packages ?? []).find((entry) => packageSource(entry) === pkg.source);
+      const packageMode = configuredPackage && typeof configuredPackage !== "string" ? resourcePathMode(configuredPackage[key] ?? [], item.path, pkg!.installedPath!) : undefined;
+      item.mode = packageMode ?? exactMode ?? (this.options.target === "agent" && item.scope === "global" && !configuredPackage ? "inherit" : "default");
+      item.inherited = item.mode === "inherit";
+    }
     const tools = extensions.extensions.flatMap((extension) => [...extension.tools.values()].map((tool) => ({ name: tool.definition.name, description: tool.definition.description ?? "", extensionPath: extension.path, highRisk: true })));
-    return { resources, tools, packages: packageManager.listConfiguredPackages(), diagnostics: [...skills.diagnostics, ...prompts.diagnostics, ...themes.diagnostics, ...extensions.errors.map((error) => ({ type: "error", message: error.error, path: error.path }))] };
+    return { resources, tools, packages: packageManager.listConfiguredPackages(), diagnostics: [...skills.diagnostics, ...prompts.diagnostics, ...themes.diagnostics, ...extensions.errors.map((error) => ({ type: "error", message: error.error, path: error.path }))].map((item) => ({ ...item, message: toSafePublicMessage(item.message, "资源目录诊断未提供可公开消息") })) };
   }
 
   async readContent(resourceId: string): Promise<string> {
     const item = (await this.catalog()).resources.find((resource) => resource.id === resourceId);
-    if (!item) throw new Error("资源不存在");
+    if (!item) throw new DomainError("RESOURCE_NOT_FOUND", "指定资源不在当前目录中");
     return readUtf8Prefix(item.path, 256 * 1024);
   }
 
@@ -229,14 +252,57 @@ export class ResourceService {
    */
   async setMode(resourceId: string, mode: "enabled" | "disabled" | "inherit", target: "global" | "agent"): Promise<ResourceCatalog> {
     const item = (await this.catalog()).resources.find((resource) => resource.id === resourceId);
-    if (!item) throw new Error("资源不存在");
+    if (!item) throw new DomainError("RESOURCE_NOT_FOUND", "指定资源不在当前目录中");
     const settings = SettingsManager.create(this.options.cwd, this.options.agentDir);
-    const key = `${item.type}s` as "extensions" | "skills" | "prompts" | "themes";
+    const key = `${item.type}s` as ResourcePathKey;
     const currentSettings = target === "agent" ? settings.getProjectSettings() : settings.getGlobalSettings();
-    const current = [...((currentSettings[key] as string[] | undefined) ?? [])];
-    const normalized = current.filter((entry) => entry.replace(/^[+!-]/u, "") !== item.path);
-    if (mode !== "inherit") normalized.push(item.path, `${mode === "enabled" ? "+" : "-"}${item.path}`);
-    if (target === "agent") setProjectPaths(settings, key, normalized); else setGlobalPaths(settings, key, normalized);
+    const baseDir = target === "agent" ? join(this.options.cwd, ".pi") : this.options.agentDir;
+    const manager = new DefaultPackageManager({ ...this.options, settingsManager: settings });
+    const packages = manager.listConfiguredPackages();
+    const pkg = packages.find((entry) => entry.scope === (target === "agent" ? "project" : "user") && entry.installedPath && isWithin(item.path, entry.installedPath))
+      ?? packages.find((entry) => entry.source === item.source && entry.installedPath && isWithin(item.path, entry.installedPath));
+    if (pkg?.installedPath) {
+      // 包资源先于普通路径解析，必须修改原生包过滤规则，不能仅写 +path/-path。
+      const current = [...(currentSettings.packages ?? [])];
+      const packageIdentity = target === "agent" && pkg.scope === "user" ? pkg.installedPath : pkg.source;
+      const index = current.findIndex((entry) => packageSource(entry) === packageIdentity);
+      const globalPackage = (settings.getGlobalSettings().packages ?? []).find((entry) => packageSource(entry) === item.source);
+      const previous = current[index] ?? globalPackage ?? pkg.source;
+      const next = typeof previous === "string" ? { source: previous } : { ...previous };
+      // Agent 复用已安装的全局目录，不能把 npm 来源复制为需要重新安装的项目包。
+      next.source = packageIdentity;
+      const patterns = next[key];
+      const normalized = (patterns ?? []).filter((entry) => !isExactResourceEntry(entry, item.path, pkg.installedPath!));
+      if (mode !== "inherit") {
+        // 未设过滤默认加载全部；显式空数组表示全部屏蔽，二者不得混同。
+        if (patterns === undefined && next.autoload !== false) normalized.push("**/*");
+        if (patterns?.length === 0 && next.autoload !== false) normalized.push("!**/*");
+        normalized.push(`${mode === "enabled" ? "+" : "-"}${item.path}`);
+      }
+      if (mode === "inherit" && globalPackage && target === "agent") {
+        const globalPatterns = typeof globalPackage === "string" ? undefined : globalPackage[key];
+        const inheritedExact = (globalPatterns ?? []).filter((entry) => isExactResourceEntry(entry, item.path, pkg.installedPath!));
+        normalized.push(...inheritedExact);
+        if (globalPatterns === undefined && normalized.length === 1 && normalized[0] === "**/*") delete next[key];
+        else next[key] = normalized;
+        const globalObject = { ...(typeof globalPackage === "string" ? { source: globalPackage } : globalPackage), source: packageIdentity };
+        if (JSON.stringify(next) === JSON.stringify(globalObject)) {
+          if (index >= 0) current.splice(index, 1);
+        } else if (index < 0) current.push(next); else current[index] = next;
+      } else {
+        next[key] = normalized;
+        if (index < 0) current.push(next); else current[index] = next;
+      }
+      if (target === "agent") settings.setProjectPackages(current); else settings.setPackages(current);
+    } else {
+      const current = [...(currentSettings[key] ?? [])];
+      const normalized = current.filter((entry) => !isExactResourceEntry(entry, item.path, baseDir));
+      if (mode !== "inherit") normalized.push(item.path, `${mode === "enabled" ? "+" : "-"}${item.path}`);
+      if (target === "agent") setProjectPaths(settings, key, normalized); else setGlobalPaths(settings, key, normalized);
+    }
+    await settings.flush();
+    const errors = settings.drainErrors();
+    if (errors.length) throw new DomainError("INTERNAL_ERROR", "保存资源模式时 Pi 配置持久化失败");
     return this.catalog();
   }
 }
@@ -273,3 +339,29 @@ function setGlobalPaths(settings: SettingsManager, key: "extensions" | "skills" 
 function setProjectPaths(settings: SettingsManager, key: "extensions" | "skills" | "prompts" | "themes", paths: string[]) {
   if (key === "extensions") settings.setProjectExtensionPaths(paths); else if (key === "skills") settings.setProjectSkillPaths(paths); else if (key === "prompts") settings.setProjectPromptTemplatePaths(paths); else settings.setProjectThemePaths(paths);
 }
+
+/** 资源路径字段与 Pi 原生复数键保持一致。 */
+type ResourcePathKey = "extensions" | "skills" | "prompts" | "themes";
+
+/** 只识别该资源的精确声明，不把通配过滤误标为显式模式。 */
+function resourcePathMode(entries: string[], path: string, baseDir: string): "enabled" | "disabled" | undefined {
+  if (entries.some((entry) => entry.startsWith("-") && isExactResourceEntry(entry, path, baseDir))) return "disabled";
+  if (entries.some((entry) => entry.startsWith("+") && isExactResourceEntry(entry, path, baseDir))) return "enabled";
+  return undefined;
+}
+
+/** 支持相对路径和 Skill 目录声明，保留不相关路径及通配规则。 */
+function isExactResourceEntry(entry: string, path: string, baseDir: string): boolean {
+  const raw = entry.replace(/^[+!-]/u, "");
+  if (/[?*{}[\]]/u.test(raw)) return false;
+  const absolute = resolve(baseDir, raw);
+  return absolute === path || (basename(path) === "SKILL.md" && absolute === dirname(path));
+}
+
+/** 仅在安装目录边界内关联资源与包，防止前缀相似路径误匹配。 */
+function isWithin(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
+
+/** 保留结构化包过滤字段，来源字符串仅用于确切身份比较。 */
+function packageSource(item: PackageSource): string { return typeof item === "string" ? item : item.source; }

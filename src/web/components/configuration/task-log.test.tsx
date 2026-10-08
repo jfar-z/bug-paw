@@ -34,4 +34,14 @@ describe("资源任务生效边界", () => {
     expect(completed).not.toHaveBeenCalled();
     expect(await screen.findAllByText(/示例扩展下载中断/)).not.toHaveLength(0);
   });
+  it("认证回调变化不重订阅已完成任务或重置终态", () => {
+    vi.stubGlobal("EventSource", TestEventSource);
+    const completed = vi.fn(), status = vi.fn();
+    const view = render(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><TaskLog taskId="stable-task" onCompleted={completed} onStatus={status} /></ApiTaskProvider></ErrorToastProvider>);
+    const first = TestEventSource.latest;
+    act(() => first.send({ type: "completed" }));
+    view.rerender(<ErrorToastProvider><ApiTaskProvider onAuthenticationRequired={vi.fn()}><TaskLog taskId="stable-task" onCompleted={completed} onStatus={status} /></ApiTaskProvider></ErrorToastProvider>);
+    expect(TestEventSource.latest).toBe(first); expect(status.mock.calls.map(([value]) => value)).toEqual(["running", "completed"]); expect(completed).toHaveBeenCalledTimes(1);
+  });
+
 });

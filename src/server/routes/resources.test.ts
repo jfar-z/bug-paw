@@ -48,4 +48,34 @@ it("全局资源安装成功后只落盘，等待用户手动刷新 Pi 配置", 
     expect(refreshAll).not.toHaveBeenCalled();
     await app.close();
   });
+  it("任务查询只读返回终态，失效日志明确无法确认", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-resource-task-")); roots.push(root);
+    const paths = await createDataPaths(root), agents = new AgentStore(paths), tasks = new ResourceTaskManager();
+    const app = Fastify(); await app.register(cookie);
+    registerResourceRoutes(app, { authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService, paths, agents, tasks });
+    const id = tasks.start("示例任务", async () => undefined);
+    await tasks.stopAndDrain();
+    expect((await app.inject({ method: "GET", url: `/api/configuration/tasks/${id}` })).json()).toEqual({ status: "completed" });
+    const missing = await app.inject({ method: "GET", url: "/api/configuration/tasks/missing" });
+    expect(missing.statusCode).toBe(404); expect(missing.json().error).toMatchObject({ code: "TASK_NOT_FOUND", message: expect.stringContaining("无法确认") });
+    await app.close();
+  });
+
+  it("Agent 复用全局包目录的过滤引用也阻止全局卸载", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-resource-reference-")); roots.push(root);
+    const paths = await createDataPaths(root), agents = new AgentStore(paths), tasks = new ResourceTaskManager();
+    const agent = await agents.createDefault();
+    const installed = join(paths.piDir, "npm", "node_modules", "example-package");
+    await mkdir(installed, { recursive: true });
+    await mkdir(join(agent.profile.cwd, ".pi"), { recursive: true });
+    await writeFile(join(paths.piDir, "settings.json"), JSON.stringify({ packages: ["npm:example-package"] }), "utf8");
+    await writeFile(join(agent.profile.cwd, ".pi", "settings.json"), JSON.stringify({ packages: [{ source: installed, prompts: ["**/*", "-prompts/demo.md"] }] }), "utf8");
+    const remove = vi.fn(async () => undefined);
+    const app = Fastify(); await app.register(cookie);
+    registerResourceRoutes(app, { authService: { isAuthenticated: vi.fn(async () => true) } as unknown as AuthService, paths, agents, tasks, removeAction: () => remove });
+    const response = await app.inject({ method: "POST", url: "/api/resources/remove", payload: { confirmed: true, scope: "global", source: "npm:example-package" } });
+    expect(response.statusCode).toBe(409); expect(response.json().error.code).toBe("PACKAGE_IN_USE"); expect(remove).not.toHaveBeenCalled();
+    await app.close();
+  });
+
 });

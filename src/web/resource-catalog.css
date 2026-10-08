@@ -1,0 +1,56 @@
+/* 配置资源目录独立懒加载，不影响工作区文件浏览器的共享样式。 */
+.resources-page .configuration-page__heading h1 { font-size:clamp(26px,3vw,30px); }
+.resource-scope,.resource-catalog-list,.resource-task { border:1px solid var(--border);border-radius:12px;background:var(--panel); }
+.resource-scope,.resource-task { padding:20px;margin:20px 0; }
+.resource-segments,.resource-tabs,.resource-task-actions { display:flex;flex-wrap:wrap;gap:8px; }
+.resource-segments button,.resource-tabs button { min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:8px;color:var(--text-secondary);background:var(--surface);font-size:12px;cursor:pointer; }
+.resource-segments [aria-pressed="true"],.resource-tabs [aria-selected="true"] { color:var(--fg);border-color:var(--fg);background:var(--accent-soft); }
+.resource-scope label,.resource-detail-field { display:grid;gap:8px;margin-top:20px;font-size:12px;color:var(--text-secondary); }
+.resource-scope select,.resource-detail-field select,.resource-detail-field input,.resource-catalog-filters input,.resource-catalog-filters select { min-height:44px;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:8px;color:var(--text-primary);background:var(--surface);font:inherit; }
+.resource-scope select { max-width:360px; }
+.resource-scope p,.resource-catalog-row p,.resource-task p,.resource-diagnostics p { color:var(--text-secondary);font-size:12px;line-height:1.8;overflow-wrap:anywhere; }
+.resource-tabs { margin:24px 0 16px; }
+.resource-catalog-filters { display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;font-size:12px; }
+.resource-catalog-filters input { flex:1;min-width:180px; }
+.resource-catalog-list>header { display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px;border-bottom:1px solid var(--border); }
+.resource-catalog-list h2,.resource-task h2 { margin:0;font-size:16px;overflow-wrap:anywhere; }
+.resource-catalog-list small,.resource-catalog-list>header>span { font-size:11px;color:var(--text-secondary);font-weight:400; }
+.resource-catalog-row { display:flex;align-items:center;justify-content:space-between;gap:20px;padding:20px; }
+.resource-catalog-row+.resource-catalog-row { border-top:1px solid var(--border); }
+.resource-catalog-row>div { min-width:0; }
+.resource-catalog-row h3 { margin:0;font-size:15px;overflow-wrap:anywhere; }
+.resource-catalog-row p { margin:8px 0; }
+.resource-catalog-row button { flex-shrink:0;min-height:44px; }
+.resource-catalog-badges { display:flex;flex-wrap:wrap;gap:8px; }
+.resource-catalog-badges>span { display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;background:var(--surface-soft);color:var(--text-secondary);font-size:11px;overflow-wrap:anywhere; }
+.resource-catalog-empty { padding:36px 20px;text-align:center; }
+.resource-catalog-empty h2,.resource-catalog-empty h3 { font-size:16px; }
+.resource-catalog-empty p { font-size:12px;color:var(--text-secondary);line-height:1.8; }
+.resource-diagnostics { margin-top:24px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--panel); }
+.resources-page summary,.resource-drawer summary { min-height:44px;cursor:pointer;font-size:13px; }
+.resource-diagnostics article { margin-top:16px; }
+.resource-diagnostics strong { font-size:12px;overflow-wrap:anywhere; }
+.resource-drawer code { font:12px var(--font-mono);overflow-wrap:anywhere; }
+.resource-drawer details,.resource-content-view { margin-top:24px;padding-top:20px;border-top:1px solid var(--border); }
+.resource-content-view h3 { font-size:15px; }
+.resource-content-view pre,.resource-task .task-log { padding:16px;border:1px solid var(--border);border-radius:8px;background:var(--surface-soft);color:var(--text-secondary);font:12px/1.8 var(--font-mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto; }
+.resource-task .task-log { padding-left:32px; }
+.resource-task li[data-status="failed"],.resource-risk { color:var(--danger); }
+.resource-task li[data-status="completed"] { color:var(--ok); }
+.resource-task-actions { margin-top:16px; }
+.resource-risk { margin:20px 0;padding:16px;border-radius:8px;background:var(--surface-soft);font-size:12px;line-height:1.8; }
+.resource-confirm-line { display:flex;align-items:flex-start;gap:12px;font-size:12px;line-height:1.8; }
+.resource-confirm-line input { width:18px;height:18px;flex:0 0 18px;margin-top:2px; }
+.resources-page button:focus-visible,.resources-page input:focus-visible,.resources-page select:focus-visible { outline:2px solid var(--focus);outline-offset:3px; }
+.resources-page button:disabled { cursor:not-allowed;opacity:.5; }
+.resources-page .danger-button { min-height:44px; }
+@media(max-width:760px) {
+ .resource-scope,.resource-task,.resource-catalog-row,.resource-catalog-list>header { padding:16px; }
+ .resource-catalog-row { align-items:flex-start;flex-direction:column;gap:12px; }
+ .resource-catalog-row button { align-self:flex-end; }
+ .resource-tabs button { flex:1;padding:0 8px; }
+ .resource-catalog-filters input { flex-basis:100%; }
+ .resource-catalog-filters select { flex:1;min-width:100px;max-width:100%; }
+ .resource-catalog-list>header>span { display:none; }
+ .resource-scope select { width:100%;max-width:none; }
+}

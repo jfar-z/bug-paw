@@ -183,7 +183,7 @@ describe("配置快速交互改进", () => {
     vi.spyOn(api, "listAgents").mockResolvedValue({ agents: [] });
     vi.spyOn(api, "listResources").mockResolvedValue({ resources: [], tools: [], packages: [], diagnostics: [] });
     show(<ResourcesPage />);
-    await screen.findByText("BUG 还在等第一项扩展");
+    await screen.findByText("当前没有资源");
     expect(screen.getByText("配置生效方式")).toBeInTheDocument();
     expect(screen.queryByText("配置已保存，等待应用")).not.toBeInTheDocument();
   });

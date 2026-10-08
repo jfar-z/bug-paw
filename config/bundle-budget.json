@@ -75,7 +75,7 @@
       },
       "src/web/pages/resources-page.tsx": {
         "label": "资源目录",
-        "gzipBytes": 7168
+        "gzipBytes": 6144
       },
       "src/web/pages/workspace-resources-page.tsx": {
         "label": "工作区资源",

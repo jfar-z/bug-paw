@@ -154,7 +154,7 @@ export interface DiscoverModelsResult {
   models: DiscoveredModel[];
 }
 
-export interface ResourceCatalogItem { id: string; type: "skill" | "prompt" | "extension" | "theme"; name: string; description: string; path: string; source: string; scope: "global" | "agent"; origin: "package" | "top-level"; enabled: boolean; inherited: boolean }
+export interface ResourceCatalogItem { id: string; type: "skill" | "prompt" | "extension" | "theme"; name: string; description: string; path: string; source: string; scope: "global" | "agent"; origin: "package" | "top-level"; enabled: boolean; inherited: boolean; mode?: "enabled" | "disabled" | "inherit" | "default" }
 export interface ResourceCatalog { resources: ResourceCatalogItem[]; tools: Array<{ name: string; description: string; extensionPath: string; highRisk: boolean }>; diagnostics: Array<{ type: string; message: string; path?: string }>; packages?: Array<{ source: string; scope: "user" | "project"; filtered: boolean; installedPath?: string }> }
 export type AgentPromptFile = "role" | "behavior" | "rules" | "user" | "bootsharp";
 export interface DiagnosticsReport { generatedAt: string; version: { app: string; node: string; pi: string }; mounts: Array<{ source: string; target: string; writable: boolean }>; diagnostics: Array<{ source: string; severity: "info" | "warning" | "error"; code: string; message: string; field?: string }>; backgroundErrors?: { total: number; latestCode?: string; latestAt?: string }; operational?: { database: { quickCheck: string; journalMode: string }; runtime: { activeLeases: number; trackedAgents: number }; limits: Record<string, number> } }
@@ -609,6 +609,7 @@ export const api = {
   getAgentSettings: (agentId: string) => request<ScopedConfigDocument<WebPiSettings>>(`/api/agents/${encodeURIComponent(agentId)}/settings`),
   updateAgentSettings: (agentId: string, revision: string, set: Record<string, unknown>, inherit: string[]) =>
     request<ScopedConfigDocument<WebPiSettings>>(`/api/agents/${encodeURIComponent(agentId)}/settings`, { method: "PATCH", body: JSON.stringify({ revision, set, inherit }) }),
+  getResourceTask: (taskId: string) => request<{ status: "running" | "completed" | "failed" }>(`/api/configuration/tasks/${encodeURIComponent(taskId)}`),
   listResources: (agentId?: string) => request<ResourceCatalog>(`/api/resources${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ""}`),
   getResourceContent: (resourceId: string, agentId?: string) => request<{ content: string }>(`/api/resources/content?id=${encodeURIComponent(resourceId)}${agentId ? `&agentId=${encodeURIComponent(agentId)}` : ""}`),
   setResourceMode: (resourceId: string, mode: "enabled" | "disabled" | "inherit", target: "global" | "agent", agentId?: string) => request<ResourceCatalog>(`/api/resources/${encodeURIComponent(resourceId)}`, { method: "PATCH", body: JSON.stringify({ mode, target, agentId }) }),
