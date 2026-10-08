@@ -1,3 +1,4 @@
+import "../media-lightbox.css";
 import { ChevronLeft, ChevronRight, Download, File, FileAudio, Image as ImageIcon, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { AigcOutputItem, AigcOutputKind, AigcOutputPage } from "../../shared/aigc-contracts";

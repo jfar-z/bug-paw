@@ -561,6 +561,9 @@ audio.aigc-media-input-preview {
 
 .aigc-run-preview-stage {
   display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   padding: 12px;
   place-items: center;
@@ -570,6 +573,8 @@ audio.aigc-media-input-preview {
 
 .aigc-run-preview-image {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   width: 100%;
@@ -586,11 +591,9 @@ audio.aigc-media-input-preview {
 .aigc-run-preview-stage img,
 .aigc-run-preview-stage video {
   display: block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: scale-down;
 }
 
 .aigc-run-output-switcher {
@@ -730,7 +733,9 @@ audio.aigc-media-input-preview {
 
 .aigc-asset-card__preview {
   display: grid;
-  min-height: 180px;
+  height: clamp(180px, 40dvh, 320px);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   background: var(--surface-soft);
   overflow: hidden;
@@ -739,6 +744,11 @@ audio.aigc-media-input-preview {
 .aigc-asset-card__open {
   display: grid;
   width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   padding: 0;
   border: 0;
   background: transparent;
@@ -748,11 +758,9 @@ audio.aigc-media-input-preview {
 
 .aigc-asset-card__preview :is(img, video) {
   display: block;
-  width: auto;
-  height: auto;
-  max-width: 100%;
-  max-height: 320px;
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: scale-down;
 }
 
 .aigc-asset-card__preview audio {
@@ -896,9 +904,13 @@ audio.aigc-media-input-preview {
     border-bottom: 1px solid var(--border);
   }
 
-  .aigc-run-parameters,
-  .aigc-run-preview {
+  .aigc-run-parameters {
     min-height: 460px;
+  }
+
+  /* 单列布局也需确定预览高度，避免长图的固有尺寸决定面板高度。 */
+  .aigc-run-preview {
+    height: clamp(320px, 70dvh, 640px);
   }
 }
 
