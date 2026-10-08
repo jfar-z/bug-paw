@@ -3,7 +3,7 @@
   "lazyChunkGzipBytes": 153600,
   "css": {
     "entryGzipBytes": 24576,
-    "totalGzipBytes": 69632,
+    "totalGzipBytes": 70656,
     "routes": {
       "src/web/pages/chat-page.tsx": {
         "label": "聊天工作台",
@@ -59,7 +59,7 @@
       },
       "src/web/pages/tts-page.tsx": {
         "label": "语音合成",
-        "gzipBytes": 4096
+        "gzipBytes": 5120
       },
       "src/web/pages/knowledge-retrieval-page.tsx": {
         "label": "语义检索",
