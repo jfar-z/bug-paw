@@ -1,0 +1,43 @@
+/* 渠道专属摘要与表单只在本页加载，抽屉布局由共享弹层组件提供。 */
+.aigc-channels-page .configuration-page__heading { margin-bottom: 32px; }
+.aigc-channel-list { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.aigc-channel-list__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px; border-bottom: 1px solid var(--border); }
+.aigc-channel-list__heading h2 { margin: 0; font-size: 17px; }
+.aigc-channel-list__heading small, .aigc-channel-list__heading > span { color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.aigc-channel-list__heading small { margin-left: 8px; }
+.aigc-channel-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 24px; }
+.aigc-channel-row + .aigc-channel-row { border-top: 1px solid var(--border); }
+.aigc-channel-row h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.aigc-channel-row dl, .aigc-channel-row dl > div { display: flex; flex-wrap: wrap; gap: 10px; }
+.aigc-channel-row dl { gap: 12px 24px; margin: 12px 0; font-size: 12px; }
+.aigc-channel-row dt, .aigc-channel-row > div > small { color: var(--text-secondary); }
+.aigc-channel-row dd { margin: 0; font-family: var(--font-mono); overflow-wrap: anywhere; }
+.aigc-channel-row > div > small { display: block; font-size: 11px; overflow-wrap: anywhere; }
+.aigc-channel-state { display: inline-flex; margin: 12px 8px 0 0; padding: 5px 9px; border-radius: 6px; background: var(--surface-soft); color: var(--text-secondary); font-size: 11px; }
+.aigc-channel-empty { padding: 48px 24px; text-align: center; }
+.aigc-channel-empty h3 { margin: 0; font-size: 15px; }
+.aigc-channel-protocols { display: grid; gap: 16px; }
+.aigc-channel-protocol { display: grid; gap: 8px; min-height: 108px; padding: 20px; text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text-primary); cursor: pointer; }
+.aigc-channel-protocol:hover { background: var(--surface-soft); }
+.aigc-channel-protocol strong { font-size: 17px; }
+.aigc-channel-protocol span { font-family: var(--font-mono); font-size: 11px; }
+.aigc-channel-protocol small { color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.aigc-channel-fields { display: grid; gap: 24px; margin-top: 24px; }
+.aigc-channel-fields label { display: grid; gap: 8px; min-width: 0; font-size: 12px; }
+.aigc-channel-fields .configuration-help { margin: 0; }
+.aigc-channel-fields .aigc-channel-check { display: flex; align-items: center; gap: 12px; }
+.aigc-channel-check input { width: 18px; min-height: 18px; }
+.aigc-channel-test { margin: 24px 0; padding-top: 24px; border-top: 1px solid var(--border); }
+.aigc-channel-danger { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 24px; border-top: 1px solid var(--border); }
+.aigc-channel-danger button { flex: none; }
+.aigc-channel-danger .configuration-help { margin-bottom: 0; }
+.aigc-channels-page button, .aigc-channel-drawer button { min-height: 44px; }
+@media (max-width: 760px) {
+  .aigc-channels-page .configuration-page__heading { align-items: start; flex-direction: column; gap: 16px; }
+  .aigc-channel-list__heading, .aigc-channel-row { padding: 20px 16px; }
+  .aigc-channel-list__heading > span { display: none; }
+  .aigc-channel-row { align-items: start; }
+  .aigc-channel-danger { align-items: start; flex-direction: column; }
+  .aigc-channel-fields { gap: 20px; }
+  .aigc-channel-drawer .configuration-editor-drawer__footer > div { flex-wrap: wrap; }
+}

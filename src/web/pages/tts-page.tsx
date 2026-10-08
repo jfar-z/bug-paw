@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { TtsProfileInput, TtsProfileSummary } from "../../shared/tts-contracts";
 import { api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
-import { TtsDialog } from "../components/configuration/tts-dialog";
+import { ConfigurationEditorDialog as TtsDialog } from "../components/configuration/configuration-editor-dialog";
 import { useUnsavedChanges } from "../components/configuration/unsaved-changes";
 import "../configuration-interactions.css";
 import { SecretInput } from "../components/secret-input";

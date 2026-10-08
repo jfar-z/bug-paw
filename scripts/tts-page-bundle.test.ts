@@ -13,7 +13,7 @@ describe("语音配置样式边界", () => {
     expect(app).toContain('lazy(() => import("./pages/tts-page")');
     expect(source).toContain('import "../tts.css"');
     expect(source).not.toContain("aigc-interface-config.css");
-    for (const selector of [".tts-profile-list", ".tts-drawer-backdrop", ".tts-editor-fields"]) {
+    for (const selector of [".tts-profile-list", ".tts-editor-fields"]) {
       expect(css).toContain(selector);
       expect(global).not.toContain(selector);
     }

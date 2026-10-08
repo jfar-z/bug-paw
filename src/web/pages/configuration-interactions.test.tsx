@@ -157,18 +157,20 @@ describe("配置快速交互改进", () => {
     expect(agentRead).not.toHaveBeenCalled();
   });
 
-  it("AIGC 渠道切换保护凭证且使用更新响应直接完成切换", async () => {
+  it("AIGC 渠道关闭保护凭证且使用更新响应直接完成保存", async () => {
     const channel = { id: "channel-a", name: "渠道 A", type: "openai" as const, baseUrl: "https://a.example.test", enabled: true, timeoutMs: 30000, hasApiKey: true };
     const other = { ...channel, id: "channel-b", name: "渠道 B" };
     const doc: AigcSettingsDocument = { revision: "r1", credentialRevision: "c1", channels: [channel, other], channelTemplates: [], credentials: [] };
     const list = vi.spyOn(api, "getAigcChannels").mockResolvedValue(doc);
     const update = vi.spyOn(api, "updateAigcChannel").mockResolvedValue({ ...doc, revision: "r2" });
     show(<AigcChannelsPage />);
-    await screen.findByDisplayValue("渠道 A");
+    fireEvent.click(await screen.findByRole("button", { name: "编辑渠道 A" }));
     fireEvent.change(screen.getByLabelText("AIGC API Key"), { target: { value: "fictional-channel-key" } });
-    fireEvent.click(screen.getByRole("button", { name: /渠道 B/ }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭渠道编辑" }));
     fireEvent.click(screen.getByRole("button", { name: "保存并切换" }));
-    await screen.findByDisplayValue("渠道 B");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "编辑渠道 B" }));
+    expect(screen.getByLabelText("AIGC 渠道名称")).toHaveValue("渠道 B");
     expect(update).toHaveBeenCalledWith("channel-a", expect.objectContaining({ credential: { action: "replace", apiKey: "fictional-channel-key" } }));
     expect(list).toHaveBeenCalledTimes(1);
   });

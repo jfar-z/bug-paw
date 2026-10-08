@@ -1,14 +1,19 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import "../../configuration-editor-dialog.css";
 
 /** 弹层共享滚动锁，防止同一次提交关闭抽屉和确认框后遗留 hidden。 */
 let scrollLocks = 0;
 let originalOverflow = "";
 
-interface TtsDialogProps {
+interface ConfigurationEditorDialogProps {
   /** 抽屉与删除确认共享焦点管理，但使用各自的页面样式。 */
   variant: "drawer" | "confirmation";
+  /** 保留页面选择器和各自的可访问关闭名称，样式统一按弹层加载。 */
+  closeLabel?: string;
+  returnFocusSelector?: string;
+  classPrefix?: string;
   title: string;
   description: string;
   busy: boolean;
@@ -18,8 +23,8 @@ interface TtsDialogProps {
   footer: ReactNode;
 }
 
-/** 管理语音配置弹层的焦点、滚动与返回焦点，避免关闭确认和抽屉争抢键盘。 */
-export function TtsDialog({ variant, title, description, busy, suspended = false, onClose, children, footer }: TtsDialogProps) {
+/** 管理配置编辑弹层的焦点、滚动与返回焦点，避免关闭确认和抽屉争抢键盘。 */
+export function ConfigurationEditorDialog({ variant, title, description, busy, suspended = false, closeLabel = "关闭语音配置编辑", returnFocusSelector = "[data-tts-create]", classPrefix = "tts", onClose, children, footer }: ConfigurationEditorDialogProps) {
   const id = useId();
   const root = useRef<HTMLElement>(null);
   const latest = useRef({ busy, suspended, onClose });
@@ -59,21 +64,21 @@ export function TtsDialog({ variant, title, description, busy, suspended = false
       window.queueMicrotask(() => {
         if (scrollLocks === 0 && !document.querySelector(".configuration-dialog-backdrop")) document.body.style.overflow = restoreOverflow;
       });
-      // 保存或删除后原列表按钮可能已替换，返回语音页稳定的新建入口。
+      // 保存或删除后原列表按钮可能已替换，返回当前配置页稳定的新建入口。
       if (previous?.isConnected) previous.focus();
-      else document.querySelector<HTMLButtonElement>("[data-tts-create]")?.focus();
+      else document.querySelector<HTMLButtonElement>(returnFocusSelector)?.focus();
     };
-  }, [variant]);
+  }, [variant, returnFocusSelector]);
 
-  return createPortal(<div className={variant === "drawer" ? "tts-drawer-backdrop" : "configuration-dialog-backdrop"}
+  return createPortal(<div className={variant === "drawer" ? `configuration-editor-backdrop ${classPrefix}-drawer-backdrop` : "configuration-dialog-backdrop"}
     onMouseDown={(event) => { if (variant === "drawer" && event.target === event.currentTarget && !busy && !suspended) onClose(); }}>
-    <section ref={root} tabIndex={-1} className={variant === "drawer" ? "tts-drawer" : "configuration-dialog provider-rename-dialog"}
+    <section ref={root} tabIndex={-1} className={variant === "drawer" ? `configuration-editor-drawer ${classPrefix}-drawer` : "configuration-dialog provider-rename-dialog"}
       role="dialog" aria-modal={!suspended} aria-hidden={suspended || undefined} inert={suspended || undefined}
       aria-labelledby={id} aria-describedby={`${id}-description`} aria-busy={busy}>
-      <header className={variant === "drawer" ? "tts-drawer__header" : undefined}><div><h2 id={id}>{title}</h2><p id={`${id}-description`}>{description}</p></div>
-        {variant === "drawer" ? <button type="button" className="icon-button" aria-label="关闭语音配置编辑" disabled={busy} onClick={onClose}><X size={19} /></button> : null}</header>
-      <div className={variant === "drawer" ? "tts-drawer__content" : undefined}>{children}</div>
-      <footer className={variant === "drawer" ? "tts-drawer__footer" : undefined}>{footer}</footer>
+      <header className={variant === "drawer" ? "configuration-editor-drawer__header" : undefined}><div><h2 id={id}>{title}</h2><p id={`${id}-description`}>{description}</p></div>
+        {variant === "drawer" ? <button type="button" className="icon-button" aria-label={closeLabel} disabled={busy} onClick={onClose}><X size={19} /></button> : null}</header>
+      <div className={variant === "drawer" ? "configuration-editor-drawer__content" : undefined}>{children}</div>
+      <footer className={variant === "drawer" ? "configuration-editor-drawer__footer" : undefined}>{footer}</footer>
     </section>
   </div>, document.body);
 }
