@@ -35,6 +35,21 @@ export function registerAigcMcpRoutes(app: FastifyInstance, dependencies: Depend
     } catch (error) { return sendMcpError(reply, error); }
   });
 
+  app.patch<{ Params: { id: string } }>("/api/aigc/mcp/clients/:id", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = request.body as Record<string, unknown> | undefined;
+    if (!body || typeof body.name !== "string" || !Array.isArray(body.interfaceIds)
+      || !body.interfaceIds.every((id) => typeof id === "string") || !Array.isArray(body.operations)
+      || !body.operations.every((operation) => typeof operation === "string" && MCP_OPERATIONS.includes(operation as McpOperation))) {
+      return sendApiError(reply, 400, "MCP_CLIENT_INPUT_INVALID", "请提供客户端名称、接口和操作范围");
+    }
+    try {
+      return reply.header("Cache-Control", "no-store").send({ client: await dependencies.service.update(request.params.id, {
+        name: body.name, interfaceIds: body.interfaceIds as string[], operations: body.operations as McpOperation[],
+      }) });
+    } catch (error) { return sendMcpError(reply, error); }
+  });
+
   app.delete<{ Params: { id: string } }>("/api/aigc/mcp/clients/:id", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     try { await dependencies.service.revoke(request.params.id); return reply.code(204).send(); }

@@ -24,6 +24,27 @@ describe("AIGC MCP 路由", () => {
     await app.close();
   });
 
+  it("只有登录管理员能编辑授权，响应不包含令牌且错误携带请求标识", async () => {
+    const update = vi.fn(async (_id, input) => ({ id: "client-1", ...input, createdAt: "2026-10-08T00:00:00.000Z" }));
+    let authenticated = false;
+    const app = Fastify();
+    registerAigcMcpRoutes(app, { authService: { isAuthenticated: async () => authenticated } as never, service: { update } as never });
+    const payload = { name: "新名称", interfaceIds: ["interface-2"], operations: ["list"] };
+    try {
+      expect((await app.inject({ method: "PATCH", url: "/api/aigc/mcp/clients/client-1", payload })).statusCode).toBe(401);
+      expect(update).not.toHaveBeenCalled();
+      authenticated = true;
+      const invalid = await app.inject({ method: "PATCH", url: "/api/aigc/mcp/clients/client-1", payload: { ...payload, operations: ["invalid"] } });
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.json().error).toMatchObject({ code: "MCP_CLIENT_INPUT_INVALID", message: "请提供客户端名称、接口和操作范围", requestId: expect.any(String) });
+      const response = await app.inject({ method: "PATCH", url: "/api/aigc/mcp/clients/client-1", payload });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({ client: { id: "client-1", ...payload, createdAt: "2026-10-08T00:00:00.000Z" } });
+      expect(update).toHaveBeenCalledWith("client-1", payload);
+    } finally { await app.close(); }
+  });
+
   it("发现获授权工具并执行调用", async () => {
     const list = vi.fn(async () => ({ interfaces: [{ id: "interface-1", name: "图片" }], total: 1 }));
     const upload = vi.fn(async () => ({ inputId: "input-1", mediaType: "image/png" }));

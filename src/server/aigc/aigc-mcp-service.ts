@@ -63,6 +63,32 @@ export class AigcMcpService {
 
   /** 管理员创建指定接口和操作范围的令牌。 */
   async create(input: { name: string; interfaceIds: string[]; operations: McpOperation[] }) {
+    const name = await this.validateScope(input);
+    const token = `bpmcp_${randomBytes(32).toString("base64url")}`;
+    const client: AigcMcpClient = {
+      id: randomUUID(), name, interfaceIds: input.interfaceIds,
+      operations: input.operations, createdAt: new Date().toISOString(),
+    };
+    this.dependencies.database.write(
+      "INSERT INTO aigc_mcp_clients(id,name,token_hash,interface_ids_json,operations_json,created_at) VALUES (?,?,?,?,?,?)",
+      [client.id, name, hash(token), JSON.stringify(client.interfaceIds), JSON.stringify(client.operations), client.createdAt],
+    );
+    return { client, token };
+  }
+
+  /** 修改授权范围时保留原令牌，禁止恢复已撤销的客户端。 */
+  async update(id: string, input: { name: string; interfaceIds: string[]; operations: McpOperation[] }): Promise<AigcMcpClient> {
+    const name = await this.validateScope(input);
+    const result = this.dependencies.database.write(
+      "UPDATE aigc_mcp_clients SET name = ?, interface_ids_json = ?, operations_json = ? WHERE id = ? AND revoked_at IS NULL",
+      [name, JSON.stringify(input.interfaceIds), JSON.stringify(input.operations), id],
+    );
+    if (!result.changes) throw new AigcMcpError("MCP_CLIENT_NOT_FOUND", "MCP 客户端不存在或已撤销");
+    return this.currentClient(id);
+  }
+
+  /** 签发与编辑共用校验；未开放的历史接口可移除，但不可重新授权。 */
+  private async validateScope(input: { name: string; interfaceIds: string[]; operations: McpOperation[] }): Promise<string> {
     const name = input.name?.trim();
     if (!name || name.length > 80 || !Array.isArray(input.interfaceIds) || input.interfaceIds.length < 1
       || input.interfaceIds.length > 100 || new Set(input.interfaceIds).size !== input.interfaceIds.length
@@ -75,16 +101,16 @@ export class AigcMcpService {
       const item = await this.dependencies.interfaces.get(id);
       if (!item?.mcpPublishEnabled) throw new AigcMcpError("MCP_INTERFACE_UNAVAILABLE", "所选接口尚未开放给外部 MCP");
     }
-    const token = `bpmcp_${randomBytes(32).toString("base64url")}`;
-    const client: AigcMcpClient = {
-      id: randomUUID(), name, interfaceIds: input.interfaceIds,
-      operations: input.operations, createdAt: new Date().toISOString(),
-    };
-    this.dependencies.database.write(
-      "INSERT INTO aigc_mcp_clients(id,name,token_hash,interface_ids_json,operations_json,created_at) VALUES (?,?,?,?,?,?)",
-      [client.id, name, hash(token), JSON.stringify(client.interfaceIds), JSON.stringify(client.operations), client.createdAt],
+    return name;
+  }
+
+  /** 每次操作读取最新权限，避免请求准备期间继续使用已移除的授权。 */
+  private currentClient(id: string): AigcMcpClient {
+    const row = this.dependencies.database.readOne<ClientRow>(
+      "SELECT id,name,interface_ids_json,operations_json,created_at,revoked_at FROM aigc_mcp_clients WHERE id = ? AND revoked_at IS NULL", [id],
     );
-    return { client, token };
+    if (!row) throw new AigcMcpError("MCP_ACCESS_DENIED", "MCP 客户端未获授权或令牌已撤销");
+    return toClient(row);
   }
 
   /** 列表绝不包含令牌明文或哈希。 */
@@ -116,17 +142,18 @@ export class AigcMcpService {
 
   /** 工具执行时再次核验客户端撤销状态及操作范围。 */
   private authorize(client: AigcMcpClient, operation: McpOperation): void {
-    const current = this.dependencies.database.readOne<{ revoked_at: string | null }>(
-      "SELECT revoked_at FROM aigc_mcp_clients WHERE id = ?", [client.id],
-    );
-    if (!current || current.revoked_at || !client.operations.includes(operation)) {
+    const current = this.currentClient(client.id);
+    if (!current.operations.includes(operation)) {
       throw new AigcMcpError("MCP_ACCESS_DENIED", "MCP 客户端未获授权或令牌已撤销");
     }
+    // 同步已认证请求的权限快照，后续接口检查只使用最新范围。
+    client.interfaceIds = current.interfaceIds;
+    client.operations = current.operations;
   }
 
   /** 同时检查令牌范围、接口开关及渠道状态。 */
   private async published(client: AigcMcpClient, interfaceId: string) {
-    if (!client.interfaceIds.includes(interfaceId)) throw new AigcMcpError("MCP_INTERFACE_UNAVAILABLE", "接口不在当前客户端授权范围内");
+    if (!this.currentClient(client.id).interfaceIds.includes(interfaceId)) throw new AigcMcpError("MCP_INTERFACE_UNAVAILABLE", "接口不在当前客户端授权范围内");
     const item = await this.dependencies.interfaces.get(interfaceId);
     const channel = item && (await this.dependencies.connections.read()).channels.find((candidate) => candidate.id === item.channelId);
     if (!item?.enabled || !item.mcpPublishEnabled || !channel?.enabled || channel.type !== item.protocol) {
@@ -134,6 +161,10 @@ export class AigcMcpService {
     }
     const workflow = item.protocol === "comfyui"
       ? (await this.dependencies.workflows.get((item.config as { workflowId: string }).workflowId)).workflow : undefined;
+    // 异步读取配置期间授权可能变化，返回接口前再次核验范围。
+    if (!this.currentClient(client.id).interfaceIds.includes(interfaceId)) {
+      throw new AigcMcpError("MCP_INTERFACE_UNAVAILABLE", "接口不在当前客户端授权范围内");
+    }
     return { item, fields: agentFields(item, workflow), outputs: agentOutputs(item, workflow) };
   }
 
@@ -148,7 +179,7 @@ export class AigcMcpService {
     const offset = input.offset ?? 0;
     if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError("分页起点无效");
     const available = [];
-    for (const id of client.interfaceIds) {
+    for (const id of this.currentClient(client.id).interfaceIds) {
       try {
         const { item } = await this.published(client, id);
         available.push({ id: item.id, name: item.name, description: item.toolDescription || item.description, capability: item.capability });
@@ -244,6 +275,8 @@ export class AigcMcpService {
         this.authorize(client, "run");
         const latest = await this.published(client, item.id);
         if (JSON.stringify(latest.item) !== JSON.stringify(item)) throw new AigcMcpError("MCP_INTERFACE_CHANGED", "文件准备期间接口配置已变化");
+        // 发布配置读取完成后再检查操作权限，避免使用异步等待前的授权。
+        this.authorize(client, "run");
         const task = await this.dependencies.tasks.createRun({ interfaceId: item.id, inputs: prepared }, undefined,
           { clientId: client.id, requestKey: input.requestKey, requestHash });
         return summary(task);

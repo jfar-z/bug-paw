@@ -10,8 +10,6 @@ import type {
   AigcOpenAiParameterType,
   AigcOpenAiParameterValue,
   AigcInterfaceRecord,
-  AigcMcpClient,
-  AigcMcpOperation,
   AigcInterfaceProtocol,
   AigcPublicFileSummary,
   AigcRunInputValue,
@@ -45,6 +43,11 @@ import "../configuration.css";
 import "../aigc.css";
 import "../aigc-run-reference-groups.css";
 
+const AigcInterfacesPage = lazy(async () => {
+  const module = await import("./aigc-interfaces-page");
+  return { default: module.AigcInterfacesPage };
+});
+
 const AigcWorkflowComposer = lazy(async () => {
   const module = await import("./aigc-workflow-composer");
   return { default: module.AigcWorkflowComposer };
@@ -56,7 +59,7 @@ interface AigcWorkbenchPageProps {
 
 /** AIGC 工作台页面，按二级路由呈现概览、接口、任务与工作流。 */
 export function AigcWorkbenchPage({ route }: AigcWorkbenchPageProps) {
-  if (route.page === "aigc-interfaces") return <AigcInterfacesPage />;
+  if (route.page === "aigc-interfaces") return <Suspense fallback={<p className="configuration-help">正在加载接口配置…</p>}><AigcInterfacesPage /></Suspense>;
   if (route.page === "aigc-interface-detail") return <AigcInterfaceDetail interfaceId={route.interfaceId} />;
   if (route.page === "aigc-run") return <AigcRunPage preferredInterfaceId={route.interfaceId} />;
   if (route.page === "aigc-tasks") return <AigcTasksPage />;
@@ -165,7 +168,7 @@ function ReadinessItem({ ok, pending = false, label, detail }: { ok: boolean; pe
 }
 
 /** 在 AIGC 编辑表单仍有改动时阻止站内导航与浏览器关闭。 */
-function useAigcUnsavedNavigation(isDirty: boolean) {
+export function useAigcUnsavedNavigation(isDirty: boolean) {
   const [pendingRoute, setPendingRoute] = useState<AppRoute>();
   const allowNavigation = useRef(false);
 
@@ -1206,19 +1209,19 @@ function coerceRunValue(field: AigcRunFieldDefinition, value: AigcRunInputValue 
 }
 
 /** 返回接口能力的展示文案。 */
-function capabilityLabel(protocol: AigcInterfaceProtocol, capability: AigcInterfaceCapability): string {
+export function capabilityLabel(protocol: AigcInterfaceProtocol, capability: AigcInterfaceCapability): string {
   return capabilityOptions(protocol).find((option) => option.value === capability)?.label ?? capability;
 }
 
 /** 接口页协议卡的展示名称。 */
-function interfaceProtocolName(protocol: AigcInterfaceProtocol): string {
+export function interfaceProtocolName(protocol: AigcInterfaceProtocol): string {
   if (protocol === "openai") return "OpenAI";
   if (protocol === "grok") return "Grok";
   return "ComfyUI";
 }
 
 /** 接口页协议卡的简短能力说明。 */
-function interfaceProtocolDescription(protocol: AigcInterfaceProtocol): string {
+export function interfaceProtocolDescription(protocol: AigcInterfaceProtocol): string {
   if (protocol === "openai") return "图片生成与编辑";
   if (protocol === "grok") return "图片与视频全流程";
   return "工作流节点编排";
@@ -1241,7 +1244,7 @@ function interfaceInputFromRecord(item: AigcInterfaceRecord): AigcInterfaceInput
 }
 
 /** 编辑 OpenAI 兼容渠道的参数名、类型、枚举、默认值与说明。 */
-function OpenAiParameterEditor({ config, onChange }: {
+export function OpenAiParameterEditor({ config, onChange }: {
   config: AigcOpenAiInterfaceConfig;
   onChange: (config: AigcOpenAiInterfaceConfig) => void;
 }) {
@@ -1335,296 +1338,6 @@ function parseOpenAiEnumValues(text: string, type: AigcOpenAiParameterType): Aig
     if (Number.isFinite(number) && (type !== "integer" || Number.isInteger(number))) values.push(number);
   }
   return values.length ? values : undefined;
-}
-
-/** 接口列表与编辑。 */
-function AigcInterfacesPage() {
-  const { runApiTask } = useApiTask();
-  const online = useOnlineStatus();
-  const [document, setDocument] = useState<{ revision: string; interfaces: AigcInterfaceRecord[] }>();
-  const [channels, setChannels] = useState<AigcChannelSummary[]>([]);
-  const [workflows, setWorkflows] = useState<{ id: string; name: string }[]>([]);
-  const [selected, setSelected] = useState<AigcInterfaceRecord>();
-  const [draft, setDraft] = useState<AigcInterfaceInput>(emptyInterface);
-  const [savedDraft, setSavedDraft] = useState<AigcInterfaceInput>(emptyInterface);
-  const [message, setMessage] = useState("");
-  const [pendingAction, setPendingAction] = useState<(() => void) | undefined>();
-  const [deleteTarget, setDeleteTarget] = useState<AigcInterfaceRecord>();
-  const isDirty = JSON.stringify(draft) !== JSON.stringify(savedDraft);
-  const navigationGuard = useAigcUnsavedNavigation(isDirty);
-
-  async function refresh() {
-    const [next, channelDocument, workflowDocument] = await Promise.all([
-      api.getAigcInterfaces(),
-      api.getAigcChannels(),
-      api.getAigcWorkflows(),
-    ]);
-    setDocument(next);
-    setChannels(channelDocument.channels);
-    setWorkflows(workflowDocument.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name })));
-    return next;
-  }
-
-  useEffect(() => {
-    void runApiTask(refresh, { operation: "加载 AIGC 接口" }).then((result) => {
-      if (result.status !== "success") return;
-      if (result.data.interfaces[0]) select(result.data.interfaces[0]);
-    });
-  }, [runApiTask]);
-
-  function select(item: AigcInterfaceRecord) {
-    if (isDirty) {
-      setPendingAction(() => () => selectImmediately(item));
-      return;
-    }
-    selectImmediately(item);
-  }
-
-  function selectImmediately(item: AigcInterfaceRecord) {
-    const nextDraft: AigcInterfaceInput = {
-      name: item.name,
-      description: item.description,
-      toolDescription: item.toolDescription ?? item.description,
-      protocol: item.protocol,
-      capability: item.capability,
-      channelId: item.channelId,
-      enabled: item.enabled,
-      toolPublishEnabled: item.toolPublishEnabled,
-      mcpPublishEnabled: item.mcpPublishEnabled === true,
-      config: item.config as AigcInterfaceInput["config"],
-    };
-    setSelected(item);
-    setDraft(nextDraft);
-    setSavedDraft(nextDraft);
-  }
-
-  function createDraft() {
-    if (isDirty) {
-      setPendingAction(() => createImmediately);
-      return;
-    }
-    createImmediately();
-  }
-
-  function createImmediately() {
-    const nextDraft = { ...emptyInterface, channelId: channels.find((channel) => channel.enabled)?.id ?? "" };
-    setSelected(undefined);
-    setDraft(nextDraft);
-    setSavedDraft(nextDraft);
-  }
-
-  function changeProtocol(protocol: AigcInterfaceProtocol) {
-    setDraft((current) => ({
-      ...current,
-      protocol,
-      capability: defaultCapability(protocol),
-      channelId: channels.find((channel) => channel.type === protocol && channel.enabled)?.id ?? "",
-      config: protocol === "comfyui"
-        ? { workflowId: "" }
-        : protocol === "openai"
-          ? { model: "", parameters: createDefaultOpenAiParameters() }
-          : { model: "" },
-    }));
-  }
-
-  async function save() {
-    if (!online) return;
-    setMessage("");
-    try {
-      const result = selected
-        ? await runApiTask(() => api.updateAigcInterface(selected.id, document?.revision ?? "", draft), { operation: "保存 AIGC 接口", expected: aigcExpected(setMessage) })
-        : await runApiTask(() => api.createAigcInterface(draft), { operation: "保存 AIGC 接口", expected: aigcExpected(setMessage) });
-      if (result.status !== "success") return;
-      const next = await refresh();
-      const current = next.interfaces.find((item) => item.id === selected?.id) ?? next.interfaces.at(-1);
-      if (current) selectImmediately(current);
-      setMessage("已保存 AIGC 接口");
-    } catch {
-      setMessage("刷新 AIGC 接口失败");
-    }
-  }
-
-  async function remove() {
-    if (!deleteTarget || !document || !online) return;
-    setMessage("");
-    const result = await runApiTask(() => api.deleteAigcInterface(deleteTarget.id, document.revision), { operation: "删除 AIGC 接口", expected: aigcExpected(setMessage) });
-    if (result.status !== "success") return;
-    await refresh();
-    setSelected(undefined);
-    setDraft(emptyInterface);
-    setSavedDraft(emptyInterface);
-    setDeleteTarget(undefined);
-    setMessage("已删除 AIGC 接口");
-  }
-
-  return (
-    <div className="aigc-workbench-page">
-      <header className="aigc-page-heading"><h1>接口</h1><p>把渠道、能力与 ComfyUI 工作流组合成可手动试运行的 AIGC 接口。</p></header>
-      {message ? <p className="configuration-help" role="status">{message}</p> : null}
-      <div className="aigc-interface-workspace">
-      <section className="configuration-section aigc-section">
-        <div className="configuration-section__heading"><div><span>01</span><h2>接口列表</h2></div><button type="button" className="configuration-primary-action" onClick={createDraft} disabled={!online}><Boxes size={15} />新增接口</button></div>
-        {(document?.interfaces ?? []).length ? (
-          <div className="aigc-entity-list">
-            {(document?.interfaces ?? []).map((item) => (
-              <article key={item.id} className={selected?.id === item.id ? "aigc-task-row aigc-entity-row is-selected" : "aigc-task-row aigc-entity-row"}>
-                <button type="button" className="aigc-entity-row__main" onClick={() => select(item)}>
-                  <span className="aigc-entity-row__name">{item.name}</span>
-                  <span className="aigc-entity-row__meta">{interfaceProtocolName(item.protocol)} · {capabilityLabel(item.protocol, item.capability)}</span>
-                  <span className={item.enabled ? "aigc-status-badge is-enabled" : "aigc-status-badge"}>{item.enabled ? "已启用" : "已停用"}</span>
-                </button>
-              </article>
-            ))}
-          </div>
-        ) : <p className="configuration-help">尚未创建 AIGC 接口。</p>}
-      </section>
-
-      <section className="configuration-form-card aigc-config-section">
-        <div className="configuration-section__heading"><div><span>02</span><h2>{selected ? "编辑接口" : "新增接口"}</h2></div><small>{selected ? selected.name : "定义协议、能力和执行目标"}</small></div>
-        <div className="aigc-form-stack">
-          <label><span>接口名称</span><input aria-label="AIGC 接口名称" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-          <label><span>描述</span><textarea aria-label="AIGC 接口描述" rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-          <label><span>接口说明（Agent）</span><textarea aria-label="AIGC Agent 接口说明" rows={4} value={draft.toolDescription ?? ""} onChange={(event) => setDraft({ ...draft, toolDescription: event.target.value })} /><small>说明适用场景、调用约束和结果含义，Agent 查询接口明细时会读取此内容。</small></label>
-        </div>
-
-        <div className="aigc-fieldset">
-          <div className="aigc-fieldset__heading"><strong>协议</strong><small>选择接口使用的第三方协议，能力会随协议变化</small></div>
-          <div className="aigc-protocol-grid aigc-protocol-grid--compact">
-            {(["openai", "grok", "comfyui"] as const).map((protocol) => (
-              <button
-                type="button"
-                key={protocol}
-                className={draft.protocol === protocol ? "aigc-overview-card aigc-protocol-card is-selected" : "aigc-overview-card aigc-protocol-card"}
-                onClick={() => changeProtocol(protocol)}
-              >
-                <span className="aigc-protocol-card__name">{interfaceProtocolName(protocol)}</span>
-                <span className="aigc-protocol-card__type">{protocol}</span>
-                <small>{interfaceProtocolDescription(protocol)}</small>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="aigc-fieldset">
-          <div className="aigc-fieldset__heading"><strong>执行目标</strong><small>能力、渠道及模型或工作流共同决定最终调用方式</small></div>
-          <div className="configuration-field-row">
-            <label><span>能力</span><select aria-label="AIGC 接口能力" value={draft.capability} onChange={(event) => setDraft({ ...draft, capability: event.target.value as AigcInterfaceCapability })}>
-              {capabilityOptions(draft.protocol).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select></label>
-            <div className="aigc-config-field"><span>渠道</span><ConfigurationSelect
-              ariaLabel="AIGC 渠道"
-              options={channels.filter((channel) => channel.type === draft.protocol).map((channel) => ({ value: channel.id, label: channel.name, description: channel.enabled ? "已启用" : "已停用" }))}
-              value={draft.channelId || undefined}
-              placeholder="请选择渠道"
-              onChange={(channelId) => setDraft({ ...draft, channelId })}
-            /></div>
-          </div>
-          {!channels.some((channel) => channel.type === draft.protocol) ? <p className="configuration-help">当前协议还没有可用渠道，请先到配置中心创建 {interfaceProtocolName(draft.protocol)} 渠道。</p> : null}
-          <label><span>{draft.protocol === "comfyui" ? "工作流" : "模型"}</span>
-            {draft.protocol === "comfyui" ? (
-              <select aria-label="ComfyUI 工作流" value={(draft.config as { workflowId?: string }).workflowId ?? ""} onChange={(event) => setDraft({ ...draft, config: { workflowId: event.target.value } })}>
-                <option value="">请选择工作流</option>
-                {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}
-              </select>
-            ) : (
-              <input aria-label="AIGC 模型" value={(draft.config as { model?: string }).model ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, model: event.target.value } })} />
-            )}
-          </label>
-        </div>
-
-        {draft.protocol === "openai" ? (
-          <OpenAiParameterEditor
-            config={draft.config as AigcOpenAiInterfaceConfig}
-            onChange={(config) => setDraft({ ...draft, config })}
-          />
-        ) : null}
-
-        {draft.protocol === "grok" ? (
-          <div className="aigc-fieldset">
-            <div className="aigc-fieldset__heading"><strong>协议参数</strong><small>按需补充生成默认值；留空时由调用方传入</small></div>
-            <div className="configuration-field-row">
-              <label><span>默认尺寸</span><input aria-label="Grok 默认尺寸" placeholder="1024x1024" value={(draft.config as { size?: string }).size ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, size: event.target.value } })} /></label>
-              <label><span>默认时长（秒）</span><input type="number" min={1} max={300} aria-label="Grok 默认时长" value={(draft.config as { duration?: number }).duration ?? ""} onChange={(event) => setDraft({ ...draft, config: { ...draft.config, duration: Number.isFinite(event.target.valueAsNumber) ? event.target.valueAsNumber : undefined } })} /></label>
-            </div>
-          </div>
-        ) : null}
-
-        <div className="aigc-fieldset aigc-fieldset--checks">
-          <label className="configuration-check-line"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /><span>启用接口</span></label>
-          <label className="configuration-check-line"><input type="checkbox" checked={draft.toolPublishEnabled} onChange={(event) => setDraft({ ...draft, toolPublishEnabled: event.target.checked })} /><span>发布为 Agent 工具</span></label>
-          <label className="configuration-check-line"><input type="checkbox" checked={draft.mcpPublishEnabled} onChange={(event) => setDraft({ ...draft, mcpPublishEnabled: event.target.checked })} /><span>开放给外部 MCP</span></label>
-        </div>
-
-        <div className="configuration-save-bar">
-          <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!selected || !online} onClick={() => selected && setDeleteTarget(selected)}><Trash2 size={15} />删除</button>
-          <button type="button" className="configuration-primary-action" disabled={!online || !isDirty} onClick={() => void save()}><Save size={16} />{isDirty ? "保存接口" : "已保存"}</button>
-        </div>
-      </section>
-      </div>
-      <AigcMcpClientManager interfaces={document?.interfaces ?? []} />
-      {pendingAction ? <ConfirmationDialog title="放弃未保存修改？" description="当前接口表单还有未保存内容。继续后，这些修改将丢失。" confirmLabel="放弃修改" destructive={false} onCancel={() => setPendingAction(undefined)} onConfirm={() => { const action = pendingAction; setPendingAction(undefined); action(); }} /> : null}
-      {navigationGuard.pendingRoute ? <ConfirmationDialog title="离开并放弃修改？" description="当前接口表单还有未保存内容。离开页面后，这些修改将丢失。" confirmLabel="离开页面" destructive={false} onCancel={navigationGuard.cancel} onConfirm={navigationGuard.confirm} /> : null}
-      {deleteTarget ? <ConfirmationDialog title={`删除接口“${deleteTarget.name}”？`} description="删除后无法恢复，引用该接口的创作入口将立即失效，历史任务仍会保留。" confirmLabel="删除接口" onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
-    </div>
-  );
-}
-
-const MCP_OPERATION_LABELS: Record<AigcMcpOperation, string> = {
-  list: "发现接口", run: "提交任务", get: "查询任务", cancel: "取消任务", upload: "上传输入", download: "下载产物",
-};
-
-/** 在接口页管理外部调用授权，令牌明文只在创建后当前页面保留。 */
-function AigcMcpClientManager({ interfaces }: { interfaces: AigcInterfaceRecord[] }) {
-  const { runApiTask } = useApiTask();
-  const [open, setOpen] = useState(false);
-  const [clients, setClients] = useState<AigcMcpClient[]>([]);
-  const [name, setName] = useState("");
-  const [interfaceIds, setInterfaceIds] = useState<string[]>([]);
-  const [operations, setOperations] = useState<AigcMcpOperation[]>(Object.keys(MCP_OPERATION_LABELS) as AigcMcpOperation[]);
-  const [issuedToken, setIssuedToken] = useState("");
-  const [revokeTarget, setRevokeTarget] = useState<AigcMcpClient>();
-  const available = interfaces.filter((item) => item.enabled && item.mcpPublishEnabled);
-
-  useEffect(() => {
-    if (!open) return;
-    void runApiTask(() => api.getAigcMcpClients(), { operation: "加载 MCP 客户端" }).then((result) => {
-      if (result.status === "success") setClients(result.data.clients);
-    });
-  }, [open, runApiTask]);
-
-  async function create() {
-    const result = await runApiTask(() => api.createAigcMcpClient({ name: name.trim(), interfaceIds, operations }), { operation: "创建 MCP 客户端" });
-    if (result.status !== "success") return;
-    setClients((current) => [result.data.client, ...current]);
-    setIssuedToken(result.data.token);
-    setName("");
-    setInterfaceIds([]);
-  }
-
-  async function revoke() {
-    if (!revokeTarget) return;
-    const result = await runApiTask(() => api.revokeAigcMcpClient(revokeTarget.id), { operation: "撤销 MCP 客户端" });
-    if (result.status === "success") setClients((current) => current.map((item) => item.id === revokeTarget.id ? { ...item, revokedAt: new Date().toISOString() } : item));
-    setRevokeTarget(undefined);
-  }
-
-  return (
-    <section className="configuration-form-card" style={{ marginTop: 32 }} aria-label="外部 MCP 客户端">
-      <div className="configuration-section__heading"><div><h2>外部 MCP 客户端</h2></div><button type="button" className="configuration-secondary-action" aria-expanded={open} onClick={() => { setOpen(!open); setIssuedToken(""); }}>{open ? "收起" : "管理客户端"}</button></div>
-      {open ? <div>
-        <p className="configuration-help">MCP 地址：<code style={{ overflowWrap: "anywhere" }}>{`${window.location.origin}/api/v1/aigc/mcp`}</code></p>
-        <div>
-          <label><span>客户端名称</span><input aria-label="MCP 客户端名称" maxLength={80} value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <div className="aigc-fieldset"><strong>可访问接口</strong><div className="aigc-fieldset--checks">{available.length ? available.map((item) => <label key={item.id} className="configuration-check-line"><input type="checkbox" checked={interfaceIds.includes(item.id)} onChange={(event) => setInterfaceIds(event.target.checked ? [...interfaceIds, item.id] : interfaceIds.filter((id) => id !== item.id))} /><span>{item.name}</span></label>) : <p className="configuration-help">先在接口编辑区开放至少一个 MCP 接口。</p>}</div></div>
-          <div className="aigc-fieldset"><strong>允许操作</strong><div className="aigc-fieldset--checks">{(Object.entries(MCP_OPERATION_LABELS) as [AigcMcpOperation, string][]).map(([operation, label]) => <label key={operation} className="configuration-check-line"><input type="checkbox" checked={operations.includes(operation)} onChange={(event) => setOperations(event.target.checked ? [...operations, operation] : operations.filter((item) => item !== operation))} /><span>{label}</span></label>)}</div></div>
-          <button type="button" className="configuration-primary-action" disabled={!name.trim() || !interfaceIds.length || !operations.length} onClick={() => void create()}><Plus size={15} />创建令牌</button>
-        </div>
-        {issuedToken ? <div role="status"><strong>新令牌仅显示一次</strong><code style={{ overflowWrap: "anywhere" }}>{issuedToken}</code><button type="button" className="icon-button" title="复制令牌" aria-label="复制 MCP 令牌" onClick={() => void runApiTask(() => navigator.clipboard.writeText(issuedToken), { operation: "复制 MCP 令牌" })}><Copy size={16} /></button></div> : null}
-        <div>{clients.map((client) => <div key={client.id} className="aigc-task-row"><div><strong>{client.name}</strong><small>{client.revokedAt ? "已撤销" : `${client.interfaceIds.length} 个接口 · ${client.operations.length} 项操作`}</small></div>{!client.revokedAt ? <button type="button" className="icon-button" title="撤销令牌" aria-label={`撤销 ${client.name}`} onClick={() => setRevokeTarget(client)}><Trash2 size={15} /></button> : null}</div>)}</div>
-      </div> : null}
-      {revokeTarget ? <ConfirmationDialog title={`撤销“${revokeTarget.name}”？`} description="撤销后该客户端无法继续调用 MCP 或下载产物。" confirmLabel="撤销令牌" onCancel={() => setRevokeTarget(undefined)} onConfirm={() => void revoke()} /> : null}
-    </section>
-  );
 }
 
 /** 接口详情页复用编辑表单。 */
@@ -2165,7 +1878,7 @@ function AigcWorkflowDetail({ workflowId }: { workflowId: string }) {
   );
 }
 
-const emptyInterface: AigcInterfaceInput = {
+export const emptyInterface: AigcInterfaceInput = {
   name: "",
   description: "",
   toolDescription: "",
@@ -2178,13 +1891,13 @@ const emptyInterface: AigcInterfaceInput = {
   config: { model: "", parameters: createDefaultOpenAiParameters() },
 };
 
-function defaultCapability(protocol: AigcInterfaceProtocol): AigcInterfaceCapability {
+export function defaultCapability(protocol: AigcInterfaceProtocol): AigcInterfaceCapability {
   if (protocol === "grok") return "text-to-video";
   if (protocol === "comfyui") return "text-to-image";
   return "text-to-image";
 }
 
-function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ value: AigcInterfaceCapability; label: string }> {
+export function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ value: AigcInterfaceCapability; label: string }> {
   if (protocol === "openai") return [{ value: "text-to-image", label: "文生图" }, { value: "image-edit", label: "图片生成与编辑" }];
   if (protocol === "grok") return [
     { value: "text-to-image", label: "文生图" },
@@ -2219,7 +1932,7 @@ function formatFileSize(size: number): string {
 }
 
 /** 将可恢复业务错误保留在当前页面。 */
-function aigcExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
+export function aigcExpected(setMessage: (message: string) => void): ApiTaskPolicy["expected"] {
   const show = (error: { message: string }) => setMessage(error.message);
   return {
     VERSION_CONFLICT: show,

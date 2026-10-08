@@ -441,6 +441,7 @@ export const api = {
   getAigcInterfaces: () => request<AigcInterfaceDocument>("/api/aigc/interfaces"),
   getAigcMcpClients: () => request<{ clients: AigcMcpClient[] }>("/api/aigc/mcp/clients"),
   createAigcMcpClient: (input: { name: string; interfaceIds: string[]; operations: AigcMcpOperation[] }) => request<{ client: AigcMcpClient; token: string }>("/api/aigc/mcp/clients", { method: "POST", body: JSON.stringify(input) }),
+  updateAigcMcpClient: (id: string, input: { name: string; interfaceIds: string[]; operations: AigcMcpOperation[] }) => request<{ client: AigcMcpClient }>(`/api/aigc/mcp/clients/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
   revokeAigcMcpClient: (id: string) => request<void>(`/api/aigc/mcp/clients/${encodeURIComponent(id)}`, { method: "DELETE" }),
   createAigcInterface: (input: AigcInterfaceInput) => request<AigcInterfaceRecord>("/api/aigc/interfaces", { method: "POST", body: JSON.stringify(input) }),
   updateAigcInterface: (id: string, revision: string, input: AigcInterfaceInput) => request<AigcInterfaceRecord>(`/api/aigc/interfaces/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),

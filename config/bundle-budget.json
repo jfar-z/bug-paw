@@ -3,7 +3,7 @@
   "lazyChunkGzipBytes": 153600,
   "css": {
     "entryGzipBytes": 24576,
-    "totalGzipBytes": 65536,
+    "totalGzipBytes": 69632,
     "routes": {
       "src/web/pages/chat-page.tsx": {
         "label": "聊天工作台",
@@ -95,6 +95,10 @@
       },
       "src/web/pages/scheduled-tasks-page.tsx": {
         "label": "定时任务",
+        "gzipBytes": 10240
+      },
+      "src/web/pages/aigc-interfaces-page.tsx": {
+        "label": "AIGC 接口配置与授权",
         "gzipBytes": 10240
       }
     }

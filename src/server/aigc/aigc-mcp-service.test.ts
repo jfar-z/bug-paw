@@ -30,6 +30,56 @@ describe("AIGC MCP 服务", () => {
     } finally { fixture.close(); }
   });
 
+  it("编辑授权保留原令牌，并对已认证请求即时应用接口及操作变更", async () => {
+    const fixture = await createFixture();
+    try {
+      fixture.getInterface.mockImplementation(async (id: string) => ["interface-1", "interface-2"].includes(id) ? { ...fixture.item, id } : undefined);
+      const issued = await fixture.service.create({ name: "原客户端", interfaceIds: ["interface-1"], operations: ["list", "run"] });
+      const hashBefore = fixture.database.readOne<{ token_hash: string }>("SELECT token_hash FROM aigc_mcp_clients WHERE id = ?", [issued.client.id])?.token_hash;
+      const staleClient = { ...issued.client };
+      const updated = await fixture.service.update(issued.client.id, { name: "新名称", interfaceIds: ["interface-2"], operations: ["list"] });
+      expect(updated).toMatchObject({ id: issued.client.id, name: "新名称", createdAt: issued.client.createdAt });
+      expect(updated).not.toHaveProperty("token");
+      expect(fixture.service.authenticate(issued.token)).toEqual(updated);
+      expect(fixture.database.readOne<{ token_hash: string }>("SELECT token_hash FROM aigc_mcp_clients WHERE id = ?", [issued.client.id])?.token_hash).toBe(hashBefore);
+      expect((await fixture.service.list(staleClient, {})).interfaces.map((item) => item.id)).toEqual(["interface-2"]);
+      await expect(fixture.service.list(staleClient, { interfaceId: "interface-1" })).rejects.toMatchObject({ code: "MCP_INTERFACE_UNAVAILABLE" });
+      await expect(fixture.service.run(staleClient, { interfaceId: "interface-2", requestKey: "removed-run", parameters: [{ name: "prompt", value: "图片" }] }))
+        .rejects.toMatchObject({ code: "MCP_ACCESS_DENIED" });
+      await fixture.service.update(issued.client.id, { name: "新名称", interfaceIds: ["interface-2"], operations: ["list", "run"] });
+      expect((await fixture.service.run(staleClient, { interfaceId: "interface-2", requestKey: "restored-run", parameters: [{ name: "prompt", value: "图片" }] })).status).toBe("queued");
+    } finally { fixture.close(); }
+  });
+
+  it("任务提交前的异步配置检查期间撤除 run 权限也会阻止提交", async () => {
+    const fixture = await createFixture();
+    try {
+      const issued = await fixture.service.create({ name: "客户端", interfaceIds: ["interface-1"], operations: ["run", "list"] });
+      fixture.getInterface.mockImplementationOnce(async () => fixture.item).mockImplementationOnce(async () => {
+        await fixture.service.update(issued.client.id, { name: "客户端", interfaceIds: ["interface-1"], operations: ["list"] });
+        return fixture.item;
+      });
+      await expect(fixture.service.run(issued.client, { interfaceId: "interface-1", requestKey: "permission-race", parameters: [{ name: "prompt", value: "图片" }] }))
+        .rejects.toMatchObject({ code: "MCP_ACCESS_DENIED" });
+      expect(fixture.createRun).not.toHaveBeenCalled();
+    } finally { fixture.close(); }
+  });
+
+  it("拒绝未开放接口、重复范围及已撤销客户端的授权编辑", async () => {
+    const fixture = await createFixture();
+    try {
+      const issued = await fixture.service.create({ name: "客户端", interfaceIds: ["interface-1"], operations: ["list"] });
+      await expect(fixture.service.update(issued.client.id, { name: "客户端", interfaceIds: ["missing"], operations: ["list"] }))
+        .rejects.toMatchObject({ code: "MCP_INTERFACE_UNAVAILABLE" });
+      await expect(fixture.service.update(issued.client.id, { name: "客户端", interfaceIds: ["interface-1", "interface-1"], operations: ["list"] })).rejects.toBeInstanceOf(TypeError);
+      expect(fixture.service.authenticate(issued.token)?.interfaceIds).toEqual(["interface-1"]);
+      await fixture.service.revoke(issued.client.id);
+      await expect(fixture.service.update(issued.client.id, { name: "客户端", interfaceIds: ["interface-1"], operations: ["list"] }))
+        .rejects.toMatchObject({ code: "MCP_CLIENT_NOT_FOUND" });
+      expect(fixture.service.authenticate(issued.token)).toBeUndefined();
+    } finally { fixture.close(); }
+  });
+
   it("重复请求不会重复创建任务，其他客户端不能读取任务", async () => {
     const fixture = await createFixture();
     try {
@@ -103,6 +153,7 @@ async function createFixture() {
   const item = { id: "interface-1", name: "图片", description: "图片生成", protocol: "openai", capability: "image-edit",
     channelId: "channel-1", enabled: true, toolPublishEnabled: false, mcpPublishEnabled: true, config: { model: "gpt-image" },
     createdAt: "2026-10-03T00:00:00.000Z", updatedAt: "2026-10-03T00:00:00.000Z" };
+  const getInterface = vi.fn(async (id: string) => id === item.id ? item : undefined);
   const records: AigcTaskRecord[] = [];
   const removeInput = vi.fn(async () => undefined);
   const createRun = vi.fn(async (request: { inputs: AigcTaskRecord["inputs"] }, _agentOrigin: unknown, mcpOrigin: AigcTaskRecord["mcpOrigin"]) => {
@@ -113,7 +164,7 @@ async function createFixture() {
     return task;
   });
   const service = new AigcMcpService({ database,
-    interfaces: { get: async (id: string) => id === item.id ? item : undefined } as never,
+    interfaces: { get: getInterface } as never,
     connections: { read: async () => ({ channels: [{ id: "channel-1", enabled: true, type: "openai" }] }) } as never,
     workflows: {} as never,
     assets: { saveInput: vi.fn().mockImplementationOnce(async () => ({ id: "input-1", name: "reference.png", mediaType: "image/png", size: 5 }))
@@ -125,5 +176,5 @@ async function createFixture() {
     publicFiles: {} as never,
     tasks: { listRecords: async () => records, createRun, get: async (id: string) => records.find((task) => task.id === id) } as never,
   });
-  return { service, createRun, records, removeInput, close: () => database.close() };
+  return { service, database, item, getInterface, createRun, records, removeInput, close: () => database.close() };
 }
