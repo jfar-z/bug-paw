@@ -1,0 +1,117 @@
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useApiTask } from "../../api-task-provider";
+import { NAVIGATION_BEFORE_EVENT, navigateTo, type AppRoute, type NavigationBeforeEvent } from "../../router";
+
+interface UnsavedChangesOptions {
+  /** 草稿是否偏离最近一次保存的值，包含凭证及高级参数。 */
+  dirty: boolean;
+  /** 页面保存期间不允许切换，避免异步响应写回其他对象。 */
+  busy: boolean;
+  /** 当前配置对象的可读名称，不包含凭证。 */
+  label: string;
+  /** 只有全部待保存项成功提交才返回 true。 */
+  save: () => Promise<boolean>;
+  /** 离线或无有效配置时禁用保存并切换。 */
+  canSave?: boolean;
+}
+
+/** 统一保护配置对象切换、站内导航和浏览器离开，不持久化草稿密钥。 */
+export function useUnsavedChanges(options: UnsavedChangesOptions) {
+  const latest = useRef(options);
+  latest.current = options;
+  const bypass = useRef(false);
+  const [pending, setPending] = useState<(() => void)>();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const { runApiTask } = useApiTask();
+
+  function request(action: () => void) {
+    if (latest.current.busy || saving) return;
+    if (!latest.current.dirty) { action(); return; }
+    setError("");
+    setPending(() => action);
+  }
+
+  useEffect(() => {
+    const beforeNavigation = (event: Event) => {
+      if (bypass.current) return;
+      if (!latest.current.dirty && !latest.current.busy) return;
+      event.preventDefault();
+      if (latest.current.busy) return;
+      const navigation = event as NavigationBeforeEvent;
+      setError("");
+      setPending(() => navigation.resume ?? (() => navigateTo((event as CustomEvent<AppRoute>).detail)));
+    };
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!latest.current.dirty && !latest.current.busy) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener(NAVIGATION_BEFORE_EVENT, beforeNavigation);
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => {
+      window.removeEventListener(NAVIGATION_BEFORE_EVENT, beforeNavigation);
+      window.removeEventListener("beforeunload", beforeUnload);
+    };
+  }, []);
+
+  function proceed() {
+    if (!pending) return;
+    bypass.current = true;
+    const action = pending;
+    setPending(undefined);
+    action();
+    window.queueMicrotask(() => { bypass.current = false; });
+  }
+
+  async function saveAndProceed() {
+    if (saving || latest.current.busy) return;
+    setSaving(true);
+    setError("");
+    try {
+      const result = await runApiTask(latest.current.save, { operation: `切换前保存${latest.current.label}` });
+      if (result.status === "success" && result.data) proceed();
+      else setError(`“${latest.current.label}”尚未完成保存，修改已保留。请处理页面中的校验或错误提示后重试。`);
+    } finally { setSaving(false); }
+  }
+
+  return {
+    request,
+    pending: Boolean(pending),
+    dialog: pending ? <UnsavedChangesDialog label={options.label} error={error} busy={saving || options.busy} canSave={options.canSave !== false}
+      onCancel={() => setPending(undefined)} onDiscard={proceed} onSave={() => void saveAndProceed()} /> : null,
+  };
+}
+
+/** 三个明确出口与焦点约束让用户可以安全决定如何处理当前草稿。 */
+function UnsavedChangesDialog({ label, error, busy, canSave, onCancel, onDiscard, onSave }: {
+  label: string; error: string; busy: boolean; canSave: boolean;
+  onCancel: () => void; onDiscard: () => void; onSave: () => void;
+}) {
+  const id = useId();
+  const root = useRef<HTMLElement>(null);
+  const current = useRef({ busy, onCancel });
+  current.current = { busy, onCancel };
+  useEffect(() => {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    root.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); if (!current.current.busy) current.current.onCancel(); }
+      if (event.key !== "Tab") return;
+      const controls = [...(root.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+      if (!controls.length) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
+      else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0].focus(); }
+    };
+    document.addEventListener("keydown", keydown);
+    return () => { document.removeEventListener("keydown", keydown); document.body.style.overflow = overflow; if (trigger?.isConnected) trigger.focus(); };
+  }, []);
+  return createPortal(<div className="configuration-dialog-backdrop" role="presentation"><section ref={root} tabIndex={-1} className="configuration-dialog provider-rename-dialog" role="dialog" aria-modal="true" aria-labelledby={id} aria-describedby={`${id}-description`} aria-busy={busy}>
+    <header><div><h2 id={id}>还有未保存的修改</h2><p id={`${id}-description`}>“{label}”尚未保存。切换前，请选择如何处理当前修改。</p></div></header>
+    {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
+    <footer><button type="button" className="configuration-secondary-action" disabled={busy} onClick={onCancel}>继续编辑</button><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={busy} onClick={onDiscard}>放弃并切换</button><button type="button" className="configuration-primary-action" disabled={busy || !canSave} onClick={onSave}>{busy ? "保存中…" : "保存并切换"}</button></footer>
+  </section></div>, document.body);
+}

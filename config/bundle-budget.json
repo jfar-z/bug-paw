@@ -31,7 +31,7 @@
       },
       "src/web/pages/aigc-channels-page.tsx": {
         "label": "AIGC 渠道",
-        "gzipBytes": 6144
+        "gzipBytes": 7168
       },
       "src/web/pages/agent-detail-page.tsx": {
         "label": "Agent 详情",

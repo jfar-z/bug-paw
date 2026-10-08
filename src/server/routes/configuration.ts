@@ -228,16 +228,20 @@ async function updateSettings(
     if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
     return sendApiError(reply, 400, "SETTINGS_INVALID", error instanceof Error ? error.message : "运行设置更新阶段捕获到非 Error 异常");
   }
+  let runtimeRefreshRequired = true;
   try {
     const historyId = randomUUID();
     const restorable = previous.value !== undefined && !containsSensitiveSetting(previous.value);
     if (restorable) await history.recordSnapshot({ id: historyId, scope, targetId: agentId, revision: previous.revision, value: previous.value! });
     await history.record({ id: historyId, createdAt: new Date().toISOString(), scope, targetId: agentId, summary: scope === "global" ? "更新全局 Pi 设置" : "更新 Agent Pi 设置", outcome: "success", restorable });
-    if (scope === "agent" && agentId) await dependencies.refreshAgent?.(agentId);
+    if (scope === "agent" && agentId && dependencies.refreshAgent) {
+      await dependencies.refreshAgent(agentId);
+      runtimeRefreshRequired = false;
+    }
   } catch {
     // settings.json 已 durable 提交；历史快照或 Runtime 刷新属于提交后维护，不能让客户端误以为可重试写入。
   }
-  return reply.send(updated);
+  return reply.send({ ...updated, runtimeRefreshRequired });
 }
 
 function runAgentMutation<T>(dependencies: ConfigurationRouteDependencies, agentId: string, operation: () => Promise<T>): Promise<T> {

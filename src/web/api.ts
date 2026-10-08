@@ -9,7 +9,7 @@ import type {
   WebResearchGlobalConfig,
   WebResearchSettingsDocument,
 } from "../shared/web-research-contracts";
-import type { TtsProfileInput, TtsSettingsDocument } from "../shared/tts-contracts";
+import type { TtsProfileInput, TtsProfileSummary, TtsSettingsDocument } from "../shared/tts-contracts";
 import type { EmbeddingConfigInput, EmbeddingSettingsDocument } from "../shared/knowledge-retrieval-contracts";
 import type { SessionBulkAction, SessionBulkPreview, SessionBulkResult, SessionBulkTarget } from "../shared/session-bulk-contracts";
 import type { SessionHistoryPage, SessionHistoryResult } from "../shared/session-history-contracts";
@@ -421,8 +421,8 @@ export const api = {
   rebuildKnowledgeRetrieval: () => request<{ totalBases: number; rebuiltBases: number; failedBases: string[] }>("/api/capabilities/knowledge-retrieval/rebuild", { method: "POST" }),
   getTtsProfiles: () => request<TtsSettingsDocument>("/api/capabilities/tts"),
   getTtsProfileCredential: (profileId: string) => request<{ apiKey: string }>(`/api/capabilities/tts/${encodeURIComponent(profileId)}/credential`),
-  createTtsProfile: (input: TtsProfileInput) => request<{ revision: string }>("/api/capabilities/tts", { method: "POST", body: JSON.stringify(input) }),
-  updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
+  createTtsProfile: (input: TtsProfileInput) => request<{ revision: string; profile: TtsProfileSummary }>("/api/capabilities/tts", { method: "POST", body: JSON.stringify(input) }),
+  updateTtsProfile: (id: string, revision: string, input: TtsProfileInput) => request<{ revision: string; profile: TtsProfileSummary }>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ revision, ...input }) }),
   deleteTtsProfile: (id: string, revision: string) => request<void>(`/api/capabilities/tts/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   getAigcChannels: () => request<AigcSettingsDocument>("/api/capabilities/aigc/channels"),
   getAigcRuntimeChannels: () => request<{ channels: AigcRuntimeChannelSummary[] }>("/api/aigc/runtime-channels"),
@@ -617,7 +617,7 @@ export const api = {
   getDiagnostics: () => request<DiagnosticsReport>("/api/configuration/diagnostics"),
   refreshPiRuntime: () => request<{ abortedSessions: number }>("/api/configuration/refresh-runtime", { method: "POST" }),
   previewConfigurationImport: (value: unknown) => request<ConfigurationImportPreview>("/api/configuration/import/preview", { method: "POST", body: JSON.stringify(value) }),
-  applyConfigurationImport: (previewId: string) => request<{ applied: true }>("/api/configuration/import/apply", { method: "POST", body: JSON.stringify({ previewId, confirmed: true }) }),
+  applyConfigurationImport: (previewId: string) => request<{ applied: true; runtimeRefreshRequired: boolean }>("/api/configuration/import/apply", { method: "POST", body: JSON.stringify({ previewId, confirmed: true }) }),
   listConfigurationHistory: () => request<{ entries: ConfigurationHistoryEntry[] }>("/api/configuration/history"),
   restoreConfigurationHistory: (id: string, revision: string) => request<ScopedConfigDocument<WebPiSettings>>(`/api/configuration/history/${encodeURIComponent(id)}/restore`, { method: "POST", body: JSON.stringify({ revision }) }),
   listModels: () => request<{ models: ModelSummary[] }>("/api/models"),

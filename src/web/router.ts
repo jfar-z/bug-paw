@@ -31,6 +31,15 @@ export type AppRoute =
   | { page: "diagnostics" }
   | { page: "agent-detail"; agentId: string };
 
+/** 导航守卫可恢复原始导航意图，包括浏览器返回与 replace 导航。 */
+export type NavigationBeforeEvent = CustomEvent<AppRoute> & { resume?: () => void };
+const HISTORY_INDEX = "pi-agent-route-index";
+
+/** 保留移动端已有 History 元数据，仅补充站内位置。 */
+function historyState(index: number): Record<string, unknown> {
+  return { ...(typeof window.history.state === "object" && window.history.state !== null ? window.history.state : {}), [HISTORY_INDEX]: index };
+}
+
 const NAVIGATION_EVENT = "pi-agent:navigate";
 export const NAVIGATION_BEFORE_EVENT = "pi-agent:before-navigate";
 export const WORKBENCH_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-workbench-navigation";
@@ -185,10 +194,12 @@ export function routePath(route: AppRoute): string {
  * 使用 History API 导航，并通知当前页面内的路由订阅者。
  */
 export function navigateTo(route: AppRoute, replace = false): void {
-  const beforeEvent = new CustomEvent<AppRoute>(NAVIGATION_BEFORE_EVENT, { cancelable: true, detail: route });
+  const beforeEvent: NavigationBeforeEvent = new CustomEvent<AppRoute>(NAVIGATION_BEFORE_EVENT, { cancelable: true, detail: route });
+  beforeEvent.resume = () => navigateTo(route, replace);
   if (!window.dispatchEvent(beforeEvent)) return;
   const method = replace ? "replaceState" : "pushState";
-  window.history[method]({}, "", routePath(route));
+  const index = typeof window.history.state?.[HISTORY_INDEX] === "number" ? window.history.state[HISTORY_INDEX] : 0;
+  window.history[method](historyState(index + (replace ? 0 : 1)), "", routePath(route));
   window.dispatchEvent(new Event(NAVIGATION_EVENT));
 }
 
@@ -199,11 +210,55 @@ export function useBrowserRoute(): AppRoute {
   const [route, setRoute] = useState<AppRoute>(() => parseRoute(window.location.pathname, window.location.search));
 
   useEffect(() => {
-    const refresh = () => setRoute(parseRoute(window.location.pathname, window.location.search));
-    window.addEventListener("popstate", refresh);
+    let currentIndex: number = window.history.state?.[HISTORY_INDEX] ?? 0;
+    let currentUrl = `${window.location.pathname}${window.location.search}`;
+    window.history.replaceState(historyState(currentIndex), "", window.location.href);
+    let restoring = false;
+    let replayRequested = false;
+    let replayDelta = 0;
+    let replaying = false;
+    const refresh = () => {
+      currentIndex = window.history.state?.[HISTORY_INDEX] ?? currentIndex;
+      currentUrl = `${window.location.pathname}${window.location.search}`;
+      setRoute(parseRoute(window.location.pathname, window.location.search));
+    };
+    const onPopState = (event: PopStateEvent) => {
+      if (restoring) {
+        // 恢复被取消的 History 位置时不发布路由，也不触发移动端退出逻辑。
+        event.stopImmediatePropagation();
+        restoring = false;
+        if (replayRequested) { replaying = true; window.history.go(replayDelta); }
+        return;
+      }
+      if (replaying) { replaying = false; replayRequested = false; refresh(); return; }
+      const targetUrl = `${window.location.pathname}${window.location.search}`;
+      if (targetUrl === currentUrl) { refresh(); return; }
+      const target = parseRoute(window.location.pathname, window.location.search);
+      const targetIndex = event.state?.[HISTORY_INDEX];
+      const known = typeof targetIndex === "number" && targetIndex !== currentIndex;
+      const delta = known ? currentIndex - targetIndex : 0;
+      const before: NavigationBeforeEvent = new CustomEvent<AppRoute>(NAVIGATION_BEFORE_EVENT, { cancelable: true, detail: target });
+      before.resume = () => {
+        if (!known) { navigateTo(target, true); return; }
+        replayRequested = true;
+        replayDelta = -delta;
+        if (!restoring) { replaying = true; window.history.go(replayDelta); }
+      };
+      if (!window.dispatchEvent(before)) {
+        event.stopImmediatePropagation();
+        if (known) { restoring = true; window.history.go(delta); }
+        else {
+          // 刷新前或外部创建的 History 条目无位置标识，保留草稿并恢复当前地址。
+          window.history.pushState(historyState(currentIndex), "", currentUrl);
+        }
+        return;
+      }
+      refresh();
+    };
+    window.addEventListener("popstate", onPopState, true);
     window.addEventListener(NAVIGATION_EVENT, refresh);
     return () => {
-      window.removeEventListener("popstate", refresh);
+      window.removeEventListener("popstate", onPopState, true);
       window.removeEventListener(NAVIGATION_EVENT, refresh);
     };
   }, []);

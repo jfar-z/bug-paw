@@ -1,5 +1,5 @@
 import { Save, TestTube2, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AigcChannelInput,
   AigcChannelSummary,
@@ -10,10 +10,12 @@ import type {
 import { api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { SecretInput } from "../components/secret-input";
+import { useUnsavedChanges } from "../components/configuration/unsaved-changes";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
 import "../configuration.css";
 import "../aigc.css";
+import "../configuration-interactions.css";
 
 const CACHE_KEY = "pi-agent:aigc-channels-cache";
 
@@ -30,6 +32,11 @@ export function AigcChannelsPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<false | "saving" | "testing">(false);
   const [deleteTarget, setDeleteTarget] = useState<AigcChannelSummary>();
+  const editingStarted = useRef(false);
+  const [savedDraft, setSavedDraft] = useState<AigcChannelInput>(emptyDraft);
+  const [revealedKey, setRevealedKey] = useState("");
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedDraft) || Boolean(apiKey && apiKey !== revealedKey);
+  const guard = useUnsavedChanges({ dirty, busy: busy !== false, label: selected ? `AIGC 渠道 · ${selected.name}` : "新增 AIGC 渠道", save, canSave: online && Boolean(document) });
 
   useEffect(() => {
     const cached = readCache();
@@ -47,6 +54,7 @@ export function AigcChannelsPage() {
         : await runApiTask(api.getAigcChannels, { operation: "加载 AIGC 渠道" });
       if (result.status === "success" || result.status === "fallback") {
         const next = result.data;
+        if (editingStarted.current) return;
         setDocument(next);
         if (next.channels[0]) select(next, next.channels[0]);
         if (result.status === "success") window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
@@ -62,31 +70,38 @@ export function AigcChannelsPage() {
   function select(documentValue: AigcSettingsDocument, channel: AigcChannelSummary) {
     setDocument(documentValue);
     setSelected(channel);
-    setDraft({ name: channel.name, type: channel.type, baseUrl: channel.baseUrl, enabled: channel.enabled, timeoutMs: channel.timeoutMs });
+    const next = { name: channel.name, type: channel.type, baseUrl: channel.baseUrl, enabled: channel.enabled, timeoutMs: channel.timeoutMs };
+    setDraft(next); setSavedDraft(next);
     setDraftId(channel.id);
     setApiKey("");
+    setRevealedKey("");
     setApiKeyVisible(false);
   }
 
   function createDraft(template?: AigcChannelTemplate) {
+    editingStarted.current = true;
     setSelected(undefined);
     setDraftId(crypto.randomUUID());
-    setDraft({
+    const next: AigcChannelInput = {
       name: "",
       type: template?.type ?? "openai",
       baseUrl: template?.defaultBaseUrl ?? "",
       enabled: true,
       timeoutMs: template?.type === "comfyui" ? undefined : 30_000,
-    });
+    };
+    setDraft(next); setSavedDraft(next);
     setApiKey("");
+    setRevealedKey("");
     setApiKeyVisible(false);
   }
 
   function updateDraft<K extends keyof AigcChannelInput>(key: K, value: AigcChannelInput[K]) {
+    editingStarted.current = true;
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
   async function toggleApiKeyVisibility() {
+    if (busy !== false) return;
     if (apiKeyVisible) {
       setApiKeyVisible(false);
       return;
@@ -95,18 +110,15 @@ export function AigcChannelsPage() {
       setApiKeyVisible(true);
       return;
     }
-    const result = await runApiTask(() => api.getAigcChannelCredential(selected.id), {
-      operation: "读取 AIGC 渠道 API Key",
-      expected: aigcExpected(setMessage),
-    });
-    if (result.status === "success") {
-      setApiKey(result.data.apiKey);
-      setApiKeyVisible(true);
-    }
+    setBusy("saving");
+    try {
+      const result = await runApiTask(() => api.getAigcChannelCredential(selected.id), { operation: "读取 AIGC 渠道 API Key", expected: aigcExpected(setMessage) });
+      if (result.status === "success") { setApiKey(result.data.apiKey); setRevealedKey(result.data.apiKey); setApiKeyVisible(true); }
+    } finally { setBusy(false); }
   }
 
-  async function save() {
-    if (!online || !document) return;
+  async function save(): Promise<boolean> {
+    if (!online || !document || busy !== false) return false;
     setBusy("saving");
     setMessage("");
     try {
@@ -124,13 +136,14 @@ export function AigcChannelsPage() {
             channel: { ...input, id: draftId },
             ...(apiKey ? { apiKey } : {}),
           }), { operation: "保存 AIGC 渠道", expected: aigcExpected(setMessage) });
-      if (result.status !== "success") return;
-      const next = await api.getAigcChannels();
+      if (result.status !== "success") return false;
+      const next = result.data;
       setDocument(next);
-      window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
-      const current = next.channels.find((channel) => channel.id === selected?.id) ?? next.channels.at(-1);
+      const current = next.channels.find((channel) => channel.id === (selected?.id ?? draftId));
       if (current) select(next, current);
+      await runApiTask(async () => window.localStorage.setItem(CACHE_KEY, JSON.stringify(next)), { operation: "更新已保存 AIGC 渠道的离线摘要" });
       setMessage("已保存 AIGC 渠道");
+      return Boolean(current);
     } finally {
       setBusy(false);
     }
@@ -151,7 +164,7 @@ export function AigcChannelsPage() {
       window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
       setSelected(undefined);
       setDeleteTarget(undefined);
-      setDraft(emptyDraft);
+      setDraft(emptyDraft); setSavedDraft(emptyDraft); setApiKey(""); setRevealedKey("");
       setDraftId("");
       setMessage("已删除 AIGC 渠道");
     } finally {
@@ -183,6 +196,7 @@ export function AigcChannelsPage() {
         <h1>AIGC 渠道</h1>
         <p>先选择协议新建渠道，再从已配置渠道进入编辑。协议决定请求格式，配置只负责连接参数与凭证。</p>
       </header>
+      {guard.dialog}
       {message ? <p className="configuration-help" role="status">{message}</p> : null}
 
       <section className="configuration-section aigc-section">
@@ -196,7 +210,7 @@ export function AigcChannelsPage() {
               type="button"
               key={template.id}
               className={draft.type === template.type ? "aigc-overview-card aigc-protocol-card is-selected" : "aigc-overview-card aigc-protocol-card"}
-              onClick={() => createDraft(template)}
+              onClick={() => guard.request(() => createDraft(template))}
               disabled={!online}
             >
               <span className="aigc-protocol-card__name">{template.name}</span>
@@ -217,7 +231,7 @@ export function AigcChannelsPage() {
           <div className="aigc-channel-list">
             {channels.map((channel) => (
               <article key={channel.id} className={selected?.id === channel.id ? "aigc-task-row aigc-entity-row is-selected" : "aigc-task-row aigc-entity-row"}>
-                <button type="button" className="aigc-entity-row__main" onClick={() => document && select(document, channel)}>
+                <button type="button" className="aigc-entity-row__main" onClick={() => { if (document && selected?.id !== channel.id) guard.request(() => { editingStarted.current = true; select(document, channel); }); }}>
                   <span className="aigc-entity-row__name">{channel.name}</span>
                   <span className="aigc-entity-row__meta">{channel.type} · {channel.baseUrl || "未配置地址"}</span>
                   <span className={channel.enabled ? "aigc-status-badge is-enabled" : "aigc-status-badge"}>{channel.enabled ? "已启用" : "已停用"}</span>
@@ -229,10 +243,10 @@ export function AigcChannelsPage() {
       </section>
 
       {hasConfigTarget ? (
-        <section className="configuration-form-card aigc-config-section">
+        <section className="configuration-form-card aigc-config-section"><fieldset className="configuration-interaction-fields" disabled={busy !== false}>
           <div className="configuration-section__heading">
             <div><span>03</span><h2>{isEditing ? "编辑渠道" : "新增渠道"}</h2></div>
-            <small>{isEditing ? selected?.name : "填写连接参数"}</small>
+            <small>{isEditing ? selected?.name : "填写连接参数"}{dirty ? " · 未保存" : ""}</small>
           </div>
           <label><span>协议</span><input aria-label="AIGC 渠道协议" value={draft.type} readOnly /></label>
           <p className="configuration-help">协议由新建时确定，编辑阶段不可切换；如需更换请新建渠道。</p>
@@ -254,13 +268,13 @@ export function AigcChannelsPage() {
           {selectedTemplate?.credentialOptional ? (
             <p className="configuration-help">ComfyUI 通常在内网匿名运行；如上游启用了认证，可在这里填写 API Key。</p>
           ) : <p className="configuration-help">OpenAI 与 Grok 渠道必须配置 API Key，密钥仅保存在服务端。</p>}
-          <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="AIGC API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => setApiKey(event.target.value)} /></label>
+          <label><span>API Key<small>{selected?.hasApiKey ? "留空则保留已配置密钥" : "仅保存到服务端"}</small></span><SecretInput aria-label="AIGC API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => { editingStarted.current = true; setApiKey(event.target.value); }} /></label>
           <div className="configuration-save-bar aigc-config-actions">
             {isEditing ? <button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={!online || busy !== false} onClick={() => selected && setDeleteTarget(selected)}><Trash2 size={15} />删除</button> : null}
             {isEditing ? <button type="button" className="configuration-secondary-action" disabled={!online || busy !== false} onClick={() => void test()}><TestTube2 size={15} />{busy === "testing" ? "测试中…" : "测试连接"}</button> : null}
             <button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => void save()}><Save size={16} />{busy === "saving" ? "保存中…" : isEditing ? "保存配置" : "创建渠道"}</button>
           </div>
-        </section>
+        </fieldset></section>
       ) : null}
       {deleteTarget ? <ConfirmationDialog title={`删除渠道“${deleteTarget.name}”？`} description="删除后无法恢复，保存的渠道凭证也会一并删除；引用该渠道的 AIGC 接口将不能继续运行。" confirmLabel="删除渠道" busy={busy === "saving"} onCancel={() => setDeleteTarget(undefined)} onConfirm={() => void remove()} /> : null}
     </main>

@@ -1,0 +1,9 @@
+/* 语音配置专属字段布局，随页面按需加载。 */
+.tts-editor-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; }
+.tts-editor-fields > label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.tts-editor-fields > p, .tts-editor-fields > details { grid-column: 1 / -1; }
+.tts-editor-fields > details { padding: 18px 0; }
+.tts-editor-fields summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+@media (max-width: 760px) {
+  .tts-editor-fields { grid-template-columns: minmax(0, 1fr); }
+}

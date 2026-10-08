@@ -1,0 +1,20 @@
+/* 配置交互的提示层按配置页面加载，颜色全部继承既有主题。 */
+.configuration-effect-notice { display: flex; align-items: center; gap: 16px; margin: 0 0 24px; padding: 16px 20px; border: 1px solid var(--border); border-left: 3px solid var(--fg); border-radius: 10px; background: var(--accent-soft); }
+.configuration-effect-notice > svg { flex: none; color: var(--fg); }
+.configuration-effect-notice > div { min-width: 0; }
+.configuration-effect-notice strong { font-size: 12px; }
+.configuration-effect-notice p { margin: 6px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.configuration-effect-notice > button { margin-left: auto; flex: none; }
+.configuration-effect-notice.is-applied { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 7%, var(--surface)); }
+.configuration-effect-notice.is-applied > svg { color: var(--ok); }
+.configuration-editing-state { color: var(--text-secondary); font-size: 11px; }
+.configuration-quick-wins-page .configuration-page__heading { margin-bottom: 24px; }
+.configuration-quick-wins-page .configuration-page__heading h1 { font-size: 30px; }
+@media (max-width: 760px) {
+  .configuration-effect-notice { flex-wrap: wrap; padding: 16px; }
+  .configuration-effect-notice > div { flex: 1; }
+  .configuration-effect-notice > button { margin-left: 36px; }
+  .configuration-quick-wins-page .configuration-page__heading h1 { font-size: 26px; }
+}
+
+.configuration-interaction-fields { min-width: 0; margin: 0; padding: 0; border: 0; }

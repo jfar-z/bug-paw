@@ -5,6 +5,7 @@ import { api, type ConfigurationHistoryEntry, type ConfigurationImportPreview } 
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
 import { useOnlineStatus } from "../use-online-status";
+import { ConfigurationEffectNotice, recordConfigurationSave, configurationRefreshGeneration, confirmConfigurationRefresh } from "../components/configuration/configuration-effect-notice";
 import "../configuration.css";
 
 /**
@@ -38,13 +39,14 @@ export function ConfigurationOperationsPage() {
   };
   const apply = async () => {
     if (!preview) return;
+    const refreshGeneration = configurationRefreshGeneration();
     setBusy(true);
     try {
       const result = await runApiTask(
         () => api.applyConfigurationImport(preview.previewId),
         { operation: "应用配置导入", expected: configurationOperationExpected(setMessage) },
       );
-      if (result.status === "success") { setMessage("配置导入完成"); setPreview(undefined); await refreshHistory(); }
+      if (result.status === "success") { if (result.data.runtimeRefreshRequired === false) confirmConfigurationRefresh(refreshGeneration); recordConfigurationSave("operations", result.data.runtimeRefreshRequired !== false); setMessage("配置导入完成"); setPreview(undefined); await refreshHistory(); }
     }
     finally { setBusy(false); }
   };
@@ -59,6 +61,7 @@ export function ConfigurationOperationsPage() {
         return api.restoreConfigurationHistory(entry.id, current.revision);
       }, { operation: "恢复历史配置", expected: configurationOperationExpected(setMessage) });
       if (result.status !== "success") return;
+      recordConfigurationSave("operations");
       setMessage("历史设置已恢复");
       await refreshHistory();
     }
@@ -67,7 +70,8 @@ export function ConfigurationOperationsPage() {
 
   const blocked = !preview || preview.invalid.length > 0 || preview.conflicts.length > 0;
   return <div className="configuration-page configuration-operations-page">
-    <header className="configuration-page__heading"><span className="configuration-eyebrow">IMPORT · EXPORT · HISTORY</span><h1>导入与变更</h1><p>导出默认排除 auth.json、应用密码和 Header 敏感值；导入必须先预览，再明确确认。</p><p className="configuration-help">导入或恢复只保存文件；请到系统诊断刷新核心配置后生效。</p></header>
+    <header className="configuration-page__heading"><span className="configuration-eyebrow">IMPORT · EXPORT · HISTORY</span><h1>导入与变更</h1><p>导出默认排除 auth.json、应用密码和 Header 敏感值；导入必须先预览，再明确确认。</p></header>
+    <ConfigurationEffectNotice configKey="operations" />
     {message ? <div className="configuration-inline-message" role="status">{message}</div> : null}
     <section className="configuration-form-card operations-export"><div><h2><Download size={18} aria-hidden="true" />安全导出</h2><p>生成可审阅的 JSON 配置包，不包含凭证明文。</p></div><a className="secondary-button" href="/api/v1/configuration/export" download aria-disabled={!online}>下载配置包</a></section>
     <section className="configuration-form-card"><h2><Upload size={18} aria-hidden="true" />导入预览</h2><label className="configuration-field"><span>配置包或标准模型配置文件</span><textarea value={source} onChange={(event) => { setSource(event.target.value); setPreview(undefined); }} rows={10} spellCheck={false} placeholder="粘贴 JSON 内容" /></label><div className="configuration-actions"><button type="button" className="secondary-button" onClick={() => void createPreview()} disabled={!source.trim() || busy || !online}>生成预览</button><button type="button" className="primary-button" onClick={() => void apply()} disabled={blocked || busy || !online}>确认并应用</button></div>

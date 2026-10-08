@@ -6,6 +6,8 @@ import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { KeyValueEditor, type KeyValueRow } from "../components/configuration/key-value-editor";
 import { ProviderCreateDialog } from "../components/configuration/provider-create-dialog";
 import { ProviderRenameDialog } from "../components/configuration/provider-rename-dialog";
+import { useUnsavedChanges } from "../components/configuration/unsaved-changes";
+import { ConfigurationEffectNotice, recordConfigurationSave } from "../components/configuration/configuration-effect-notice";
 import { SecretInput } from "../components/secret-input";
 import { ThinkingLevelMapEditor } from "../components/configuration/thinking-level-map-editor";
 import { getThinkingProtocolPreview, thinkingProtocolOptions } from "../components/configuration/thinking-protocol-preview";
@@ -171,6 +173,8 @@ export function ProvidersPage() {
   const [busy, setBusy] = useState<false | "saving" | "testing" | "discovering">(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [revealedKey, setRevealedKey] = useState("");
+  const [advancedText, setAdvancedText] = useState<string>();
   const [draggingProviderId, setDraggingProviderId] = useState<string>();
   const [draggingModelId, setDraggingModelId] = useState<string>();
 
@@ -184,8 +188,7 @@ export function ProvidersPage() {
   const credential = document?.credentials.find((item) => item.providerId === selectedId);
   const providerDraft = useMemo(() => savedProviderDraft(draft, headers), [draft, headers]);
   const savedProvider = providers[selectedId];
-  const isDirty = !savedProvider
-    || stableJson(comparableProvider(savedProvider)) !== stableJson(comparableProvider(providerDraft));
+  const isDirty = Boolean(savedProvider) && (stableJson(comparableProvider(savedProvider)) !== stableJson(comparableProvider(providerDraft)));
   const testing = busy === "testing";
   const testDisabled = !online || busy !== false || isDirty;
   const canTestCurrent = !testDisabled && Boolean(selectedModel?.id);
@@ -198,6 +201,19 @@ export function ProvidersPage() {
     && discoveryApis.has(draft.api ?? "");
   const advancedJson = useMemo(() => JSON.stringify({ ...draft, headers: headersFromRows(headers) }, null, 2), [draft, headers]);
 
+  const credentialDirty = Boolean(apiKey && apiKey !== revealedKey);
+  const advancedDirty = advancedText !== undefined && advancedText !== advancedJson;
+  const guard = useUnsavedChanges({ dirty: isDirty || credentialDirty || advancedDirty, busy: busy !== false,
+    label: `Provider · ${savedProvider?.name || selectedId}`, save: saveAllChanges, canSave: online });
+
+  /** 切换前分别保存 Provider 与凭证；任何一项失败都保留当前对象与剩余草稿。 */
+  async function saveAllChanges(): Promise<boolean> {
+    const key = credentialDirty ? apiKey : "";
+    if ((isDirty || advancedDirty) && !await saveProvider()) return false;
+    if (key && !await saveCredential(key)) { setApiKey(key); return false; }
+    return true;
+  }
+
   function selectProvider(id: string, source = providers) {
     const node = structuredClone(source[id] ?? {});
     setSelectedId(id);
@@ -208,6 +224,8 @@ export function ProvidersPage() {
     setDiscoveredModels([]);
     setSelectedDiscoveredIds(new Set());
     setApiKey("");
+    setRevealedKey("");
+    setAdvancedText(undefined);
     setApiKeyVisible(false);
     setNotice("");
   }
@@ -226,6 +244,7 @@ export function ProvidersPage() {
     setDocument(nextDocument);
     selectProvider(providerId, providerMap(nextDocument));
     setCreateOpen(false);
+    recordConfigurationSave("providers");
     setNotice("Provider 已创建，请继续配置 API Key");
   }
 
@@ -315,54 +334,67 @@ export function ProvidersPage() {
       setDocument({ ...document, ...updated });
       const updatedProviders = providerMap({ ...document, ...updated });
       selectProvider(selectedId, updatedProviders);
-      setNotice("模型已删除");
+      recordConfigurationSave("providers"); setNotice("模型已删除");
     } finally {
       setBusy(false);
     }
   }
 
-  async function saveProvider() {
-    if (!document || !selectedId || !savedProvider) return;
+  async function saveProvider(): Promise<boolean> {
+    if (!document || !selectedId || !savedProvider || !online || busy !== false) return false;
+    let nextProviderDraft = providerDraft;
+    if (advancedText !== undefined) {
+      try {
+        const parsed: unknown = JSON.parse(advancedText);
+        if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Provider 节点必须是 JSON 对象");
+        nextProviderDraft = parsed as ProviderNode;
+      } catch { setError("高级 JSON 格式无效，尚未保存；请修正 JSON 后重试。"); return false; }
+    }
     if (!validProviderId(selectedId)) {
       setError("Provider ID 只能使用字母、数字、点、下划线或连字符，且不能以符号开头或结尾。");
-      return;
+      return false;
     }
-    const invalidCapacity = (draft.models ?? []).some((model) => model.contextWindow !== undefined
+    const invalidCapacity = (nextProviderDraft.models ?? []).some((model) => model.contextWindow !== undefined
       && model.maxTokens !== undefined
       && model.contextWindow < model.maxTokens);
     if (invalidCapacity) {
       setError("上下文窗口不能小于最大返回 Token。");
-      return;
+      return false;
     }
     setBusy("saving"); setError(""); setNotice("");
     try {
       const result = await runApiTask(
-        () => api.saveProvider(selectedId, document.revision, providerDraft),
+        () => api.saveProvider(selectedId, document.revision, nextProviderDraft),
         { operation: "保存 Provider", expected: providerExpected(setError) },
       );
-      if (result.status !== "success") return;
+      if (result.status !== "success") return false;
       const updated = result.data;
       setDocument({ ...document, ...updated });
       const updatedProviders = providerMap({ ...document, ...updated });
+      const pendingKey = credentialDirty ? apiKey : "";
       selectProvider(selectedId, updatedProviders);
+      if (pendingKey) setApiKey(pendingKey);
       setDiscoveredModels([]);
       setSelectedDiscoveredIds(new Set());
-      setNotice("Provider 已保存；请到系统诊断刷新核心配置后生效。");
+      recordConfigurationSave("providers");
+      setNotice("Provider 已保存");
+      return true;
     } finally { setBusy(false); }
   }
 
-  async function saveCredential() {
-    if (!document || !selectedId || !apiKey) return;
+  async function saveCredential(key = apiKey): Promise<boolean> {
+    if (!document || !selectedId || !key || !online) return false;
     setBusy("saving"); setError("");
     try {
       const task = await runApiTask(
-        () => api.saveProviderCredential(selectedId, document.credentialRevision, apiKey),
+        () => api.saveProviderCredential(selectedId, document.credentialRevision, key),
         { operation: "保存 Provider 凭证", expected: providerCredentialExpected(setError) },
       );
-      if (task.status !== "success") return;
+      if (task.status !== "success") return false;
       const result = task.data;
-      setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: [...document.credentials.filter((item) => item.providerId !== selectedId), result.status] });
-      setApiKey(""); setApiKeyVisible(false); setNotice("凭证已替换，可点击小眼睛查看");
+      setDocument((current) => current ? { ...current, credentialRevision: result.credentialRevision, credentials: [...current.credentials.filter((item) => item.providerId !== selectedId), result.status] } : current);
+      setApiKey(""); setApiKeyVisible(false); setRevealedKey(""); recordConfigurationSave("providers"); setNotice("凭证已替换，可点击小眼睛查看");
+      return true;
     } finally { setBusy(false); }
   }
 
@@ -379,7 +411,7 @@ export function ProvidersPage() {
       setDocument({ ...document, credentialRevision: result.credentialRevision, credentials: document.credentials.filter((item) => item.providerId !== selectedId) });
       setApiKey("");
       setApiKeyVisible(false);
-      setNotice("凭证已删除");
+      recordConfigurationSave("providers"); setNotice("凭证已删除");
     } finally {
       setBusy(false);
     }
@@ -392,14 +424,13 @@ export function ProvidersPage() {
       return;
     }
     if (credential?.configured && !apiKey) {
-      const result = await runApiTask(
-        () => api.getProviderCredential(selectedId),
-        { operation: "读取 Provider API Key", expected: providerCredentialExpected(setError) },
-      );
-      if (result.status === "success") {
-        const value = result.data;
-        setApiKey(value.apiKey);
-      } else return;
+      setBusy("saving");
+      try {
+        const result = await runApiTask(() => api.getProviderCredential(selectedId),
+          { operation: "读取 Provider API Key", expected: providerCredentialExpected(setError) });
+        if (result.status !== "success") return;
+        setApiKey(result.data.apiKey); setRevealedKey(result.data.apiKey);
+      } finally { setBusy(false); }
     }
     setApiKeyVisible(true);
   }
@@ -421,7 +452,7 @@ export function ProvidersPage() {
       setDocument({ ...document, ...updated });
       selectProvider(targetId, providerMap({ ...document, ...updated }));
       setRenameOpen(false);
-      setNotice("Provider 已改名，引用已迁移；请到系统诊断刷新核心配置后生效。");
+      recordConfigurationSave("providers"); setNotice("Provider 已改名，引用已迁移");
     } finally {
       setBusy(false);
     }
@@ -505,7 +536,7 @@ export function ProvidersPage() {
       const nextDocument = { ...document, ...updated };
       setDocument(nextDocument);
       selectProvider(selectedId, providerMap(nextDocument));
-      setNotice("Provider 排序已保存；请到系统诊断刷新核心配置后生效。");
+      recordConfigurationSave("providers"); setNotice("Provider 排序已保存");
     } finally {
       setDraggingProviderId(undefined);
     }
@@ -534,7 +565,7 @@ export function ProvidersPage() {
       const nextDocument = { ...document, ...updated };
       setDocument(nextDocument);
       selectProvider(selectedId, providerMap(nextDocument));
-      setNotice("模型排序已保存；请到系统诊断刷新核心配置后生效。");
+      recordConfigurationSave("providers"); setNotice("模型排序已保存");
     } finally {
       setDraggingModelId(undefined);
     }
@@ -543,14 +574,16 @@ export function ProvidersPage() {
   if (!document) return <div className="configuration-page configuration-state"><p>{error || "正在加载 Provider…"}</p></div>;
 
   return (
-    <div className="configuration-page providers-page">
+    <div className="configuration-page providers-page configuration-quick-wins-page">
+      {guard.dialog}
       {createOpen ? <ProviderCreateDialog revision={document.revision} online={online} onCreated={acceptCreatedProvider} onClose={() => setCreateOpen(false)} /> : null}
       {renameOpen && selectedId && savedProvider ? <ProviderRenameDialog currentId={selectedId} busy={busy === "saving"} onCancel={() => setRenameOpen(false)} onConfirm={(targetId) => void renameProvider(targetId)} /> : null}
-      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">MODEL RUNTIME</span><h1>模型与凭证</h1><p>整理 Provider、模型与凭证，让 BUG 始终知道该用什么能力；凭证默认隐藏，点击小眼睛可按需查看。</p><p className="configuration-help">所有配置仅保存到磁盘。请到系统诊断刷新核心配置后，才会应用到运行中的 Agent。</p></div><button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => { setCreateOpen(true); setNotice(""); setError(""); }}><Plus size={16} aria-hidden="true" />新建 Provider</button></header>
+      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">MODEL RUNTIME</span><h1>模型与凭证</h1><p>整理 Provider、模型与凭证，让 BUG 始终知道该用什么能力；凭证默认隐藏，点击小眼睛可按需查看。</p></div><button type="button" className="configuration-primary-action" disabled={!online || busy !== false} onClick={() => guard.request(() => { setCreateOpen(true); setNotice(""); setError(""); })}><Plus size={16} aria-hidden="true" />新建 Provider</button></header>
       {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
       {notice ? <p className="configuration-save-notice" role="status"><Check size={14} aria-hidden="true" />{notice}</p> : null}
-      <div className="provider-workspace">
-        <aside className="provider-list" aria-label="Provider 列表">{ids.map((id) => <button type="button" key={id} className={selectedId === id ? "is-active provider-list__item" : "provider-list__item"} aria-label={`选择或拖动 Provider ${providers[id].name || id} 排序`} draggable={!isDirty && busy === false} onDragStart={() => setDraggingProviderId(id)} onDragEnd={() => setDraggingProviderId(undefined)} onDragOver={(event) => event.preventDefault()} onDrop={() => void moveProvider(id)} onClick={() => selectProvider(id)}><GripVertical className="configuration-sort-handle" size={15} aria-hidden="true" /><span><strong>{providers[id].name || id}</strong><small>{id}</small></span></button>)}</aside>
+      <ConfigurationEffectNotice configKey="providers" dirty={isDirty || credentialDirty || advancedDirty} />
+      <fieldset className="configuration-interaction-fields" disabled={busy !== false}><div className="provider-workspace">
+        <aside className="provider-list" aria-label="Provider 列表">{ids.map((id) => <button type="button" key={id} className={selectedId === id ? "is-active provider-list__item" : "provider-list__item"} aria-label={`选择或拖动 Provider ${providers[id].name || id} 排序`} draggable={!isDirty && busy === false} onDragStart={() => setDraggingProviderId(id)} onDragEnd={() => setDraggingProviderId(undefined)} onDragOver={(event) => event.preventDefault()} onDrop={() => void moveProvider(id)} onClick={() => { if (id !== selectedId) guard.request(() => selectProvider(id)); }}><GripVertical className="configuration-sort-handle" size={15} aria-hidden="true" /><span><strong>{providers[id].name || id}</strong><small>{id}</small></span></button>)}</aside>
         {savedProvider ? <section className="provider-editor">
           <div className="configuration-form-card provider-form">
             <div className="configuration-section__heading"><div><span>01</span><h2>Provider</h2></div><small>{savedProvider ? selectedId : "未保存"}</small></div>
@@ -560,7 +593,7 @@ export function ProvidersPage() {
             <label><span>认证 Header</span><input type="checkbox" checked={draft.authHeader !== false} onChange={(event) => setDraft({ ...draft, authHeader: event.target.checked })} /></label>
             <KeyValueEditor label="Headers" rows={headers} onChange={setHeaders} />
             <label><span>API Key<small>留空不会修改现有凭证</small></span><SecretInput aria-label="API Key" autoComplete="new-password" value={apiKey} visible={apiKeyVisible} onVisibilityChange={() => void toggleApiKeyVisibility()} onChange={(event) => setApiKey(event.target.value)} placeholder={credential ? "输入新 Key 以替换" : "输入 API Key"} /></label>
-            <div className="configuration-button-row"><button type="button" disabled={!savedProvider || !apiKey || busy !== false || !online} onClick={saveCredential}>保存凭证</button>{credential ? <button type="button" className="danger-link" disabled={!online || busy !== false} onClick={() => void removeCredential()}>删除凭证</button> : null}<small>{savedProvider ? (credential ? "已配置 · 点击小眼睛查看" : "未配置") : "请先创建 Provider"}</small></div>
+            <div className="configuration-button-row"><button type="button" disabled={!savedProvider || !apiKey || busy !== false || !online} onClick={() => void saveCredential()}>保存凭证</button>{credential ? <button type="button" className="danger-link" disabled={!online || busy !== false} onClick={() => void removeCredential()}>删除凭证</button> : null}<small>{savedProvider ? (credential ? "已配置 · 点击小眼睛查看" : "未配置") : "请先创建 Provider"}</small></div>
           </div>
 
           <div className="configuration-form-card provider-form">
@@ -575,10 +608,10 @@ export function ProvidersPage() {
           </div>
 
           <div className="configuration-form-card provider-form"><div className="configuration-section__heading"><div><span>03</span><h2>连接测试</h2></div></div><div className="configuration-button-row"><button type="button" disabled={!canTestCurrent} title={isDirty ? "请先保存 Provider 后测试" : undefined} onClick={() => selectedModel?.id && void testConnection({ scope: "current", modelId: selectedModel.id })}><TestTube2 size={14} aria-hidden="true" />测试当前模型</button><button type="button" disabled={!canTestAll} title={isDirty ? "请先保存 Provider 后测试" : undefined} onClick={() => void testConnection({ scope: "all" })}><TestTube2 size={14} aria-hidden="true" />测试全部模型</button></div>{isDirty && selectedId ? <p className="configuration-help">请先保存 Provider 后测试</p> : null}{testResults.length ? <ol className="connection-logs">{testResults.map((result) => <li key={result.modelId}>{result.modelName}：{result.ok ? `成功 · ${result.durationMs} ms${result.responsePreview ? ` · ${result.responsePreview}` : ""}` : `失败 · ${result.durationMs} ms · ${result.message ?? `连接测试未返回诊断消息（${result.errorCode ?? "NO_ERROR_CODE"}）`}`}</li>)}</ol> : null}</div>
-          <details className="provider-advanced"><summary>高级 JSON</summary><p>仅编辑当前 Provider 节点；离开编辑框时解析，并仍由核心配置结构校验。</p><textarea key={`${selectedId}-${document.revision}`} aria-label="Provider 高级 JSON" rows={14} defaultValue={advancedJson} onBlur={(event) => { try { const parsed = JSON.parse(event.target.value) as ProviderNode; setDraft(parsed); setHeaders(rowsFromHeaders(parsed.headers)); setError(""); } catch { setError("高级 JSON 格式无效，尚未应用"); } }} /></details>
-          <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" disabled={busy !== false || !selectedId || !online} onClick={saveProvider}><Save size={16} aria-hidden="true" />保存 Provider</button>{savedProvider ? <button type="button" className="configuration-secondary-action" aria-label="重命名 Provider" disabled={busy !== false || !online || isDirty} title={isDirty ? "请先保存当前修改后再改名" : undefined} onClick={() => setRenameOpen(true)}><PencilLine size={15} aria-hidden="true" />重命名</button> : null}<button type="button" className="configuration-icon-action" aria-label="删除 Provider" disabled={!ids.includes(selectedId) || !online || testing} onClick={async () => { if (!document) return; const updated = await api.removeProvider(selectedId, document.revision); setDocument({ ...document, ...updated }); setSelectedId(""); }}><Trash2 size={16} aria-hidden="true" /></button></div>
+          <details className="provider-advanced"><summary>高级 JSON</summary><p>仅编辑当前 Provider 节点；离开编辑框时解析，并仍由核心配置结构校验。</p><textarea key={`${selectedId}-${document.revision}`} aria-label="Provider 高级 JSON" rows={14} value={advancedText ?? advancedJson} onChange={(event) => setAdvancedText(event.target.value)} onBlur={() => { if (advancedText === undefined) return; try { const parsed = JSON.parse(advancedText) as ProviderNode; if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Provider 节点必须是对象"); setDraft(parsed); setHeaders(rowsFromHeaders(parsed.headers)); setAdvancedText(undefined); setError(""); } catch { setError("高级 JSON 格式无效，尚未应用"); } }} /></details>
+          <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" disabled={busy !== false || !selectedId || !online} onClick={() => void saveProvider()}><Save size={16} aria-hidden="true" />保存 Provider</button>{savedProvider ? <button type="button" className="configuration-secondary-action" aria-label="重命名 Provider" disabled={busy !== false || !online || isDirty} title={isDirty ? "请先保存当前修改后再改名" : undefined} onClick={() => setRenameOpen(true)}><PencilLine size={15} aria-hidden="true" />重命名</button> : null}<button type="button" className="configuration-icon-action" aria-label="删除 Provider" disabled={!ids.includes(selectedId) || !online || testing} onClick={async () => { if (!document) return; const updated = await api.removeProvider(selectedId, document.revision); setDocument({ ...document, ...updated }); setSelectedId(""); }}><Trash2 size={16} aria-hidden="true" /></button></div>
         </section> : <section className="provider-editor" aria-label="Provider 空状态"><div className="configuration-empty-note"><span>01</span><p><strong>尚未创建 Provider</strong><small>使用页面右上角“新建 Provider”保存基础连接信息后，再配置 API Key 和模型。</small></p></div></section>}
-      </div>
+      </div></fieldset>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { api } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import type { AppRoute } from "../router";
 import { useOnlineStatus } from "../use-online-status";
+import { ConfigurationEffectNotice, recordConfigurationSave } from "../components/configuration/configuration-effect-notice";
 import "../configuration.css";
 import "../agents.css";
 
@@ -113,6 +114,7 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
         { operation: "创建 Agent", expected: agentExpected(setError) },
       );
       if (result.status === "success") {
+        recordConfigurationSave("agents");
         setAgents((current) => [...current, result.data]);
         resetCreateForm();
       }
@@ -151,7 +153,7 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
           <span className="configuration-eyebrow">AGENT PROFILES</span>
           <h1>Agents</h1>
           <p>每个 Agent 拥有独立工作目录、运行配置与会话归属。</p>
-          <p className="configuration-help">创建或修改 Agent 后，请到系统诊断刷新核心配置后生效。</p>
+
         </div>
         <button type="button" className="configuration-primary-action" onClick={() => setCreateOpen(true)} disabled={!online}>
           <Plus size={17} aria-hidden="true" />新建 Agent
@@ -187,6 +189,7 @@ export function AgentsPage({ onNavigate, openCreateOnEmpty = false }: AgentsPage
         </form>
       ) : null}
 
+      <ConfigurationEffectNotice configKey="agents" />
       <section className="agent-list" aria-label="Agent 列表">
         {agents.map(({ profile: agent }) => (
           <button

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type DiagnosticsReport } from "../api";
 import { useApiTask, type ApiTaskPolicy } from "../api-task-provider";
 import { ConfirmationDialog } from "../components/configuration/confirmation-dialog";
+import { ConfigurationEffectNotice, configurationRefreshGeneration, confirmConfigurationRefresh } from "../components/configuration/configuration-effect-notice";
 import "../configuration.css";
 
 const FRONTEND_RELOAD_DELAY_MS = 500;
@@ -39,6 +40,7 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
    * 中断活动会话后重新加载 Pi 运行时配置，并刷新当前诊断报告。
    */
   const refreshPiRuntime = async () => {
+    const refreshGeneration = configurationRefreshGeneration();
     setRefreshConfirmationOpen(false);
     setRefreshingRuntime(true);
     setError("");
@@ -49,6 +51,7 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
         { operation: "刷新核心配置", expected: runtimeRefreshExpected(setError) },
       );
       if (result.status !== "success") return;
+      confirmConfigurationRefresh(refreshGeneration);
       const { abortedSessions } = result.data;
       setNotice(`已中断 ${abortedSessions} 个活动会话并刷新核心配置，正在刷新页面…`);
       await refresh();
@@ -61,6 +64,7 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
 
   return <div className="configuration-page diagnostics-page">
     <header className="configuration-page__heading configuration-heading-actions"><div><span className="configuration-eyebrow">SYSTEM DIAGNOSTICS</span><h1>系统诊断</h1><p>检查模型、凭证、目录、挂载和资源加载状态，让 BUG 的运行环境保持就绪。</p></div><div className="configuration-button-row"><button type="button" className="secondary-button" onClick={() => void refresh()} disabled={loading || refreshingRuntime}><RefreshCw size={16} aria-hidden="true" />刷新诊断</button><button type="button" className="danger-button" onClick={() => setRefreshConfirmationOpen(true)} disabled={loading || refreshingRuntime}><RefreshCw size={16} aria-hidden="true" />刷新核心配置</button></div></header>
+    <ConfigurationEffectNotice />
     {loading && !report ? <section className="configuration-form-card">正在执行诊断…</section> : null}
     {error ? <section className="configuration-error-state" role="alert">{error}</section> : null}
     {notice ? <p className="configuration-save-notice" role="status">{notice}</p> : null}

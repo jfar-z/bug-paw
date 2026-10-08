@@ -28,6 +28,8 @@ export interface ConfigurationDiagnostic {
  * 具有继承语义的配置文档。
  */
 export interface ScopedConfigDocument<T> {
+  /** 保存接口明确报告运行时是否仍需手动刷新；读取接口不推断此状态。 */
+  runtimeRefreshRequired?: boolean;
   /**
    * 当前作用域文件版本。
    */

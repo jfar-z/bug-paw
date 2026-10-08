@@ -8,6 +8,8 @@ import { ConflictDialog, type ConfigurationDifference } from "../components/conf
 import { InheritedField } from "../components/configuration/inherited-field";
 import { SettingsSection } from "../components/configuration/settings-section";
 import { useOnlineStatus } from "../use-online-status";
+import { useUnsavedChanges } from "../components/configuration/unsaved-changes";
+import { ConfigurationEffectNotice, recordConfigurationSave } from "../components/configuration/configuration-effect-notice";
 import "../configuration.css";
 import "../pi-settings.css";
 
@@ -181,6 +183,11 @@ export function PiSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<{ latest: ScopedConfigDocument<WebPiSettings>; differences: ConfigurationDifference[] }>();
 
+  const dirty = Boolean(document) && JSON.stringify(draft) !== JSON.stringify(document?.own);
+  const configKey = scope === "global" ? "settings:global" : `settings:agent:${agentId}`;
+  const guard = useUnsavedChanges({ dirty, busy: saving, label: scope === "global" ? "全局运行设置" : `Agent 运行设置 · ${agents.find((item) => item.profile.id === agentId)?.profile.name ?? agentId}`,
+    save, canSave: online && Boolean(document) && !conflict });
+
   useEffect(() => { void runOptionalApiTask(api.listAgents, { operation: "加载 Agent 目录", fallbackReason: "Agent 目录不可用", fallback: () => ({ agents: [] }) }).then((result) => { if (result.status === "success" || result.status === "fallback") { setAgents(result.data.agents); setAgentId((current) => current || result.data.agents[0]?.profile.id || ""); } }); }, [runOptionalApiTask]);
   useEffect(() => { void runOptionalApiTask(api.listModels, { operation: "加载模型目录", fallbackReason: "模型目录不可用", fallback: () => ({ models: [] }) }).then((result) => { if (result.status === "success" || result.status === "fallback") setModels(result.data.models); }); }, [runOptionalApiTask]);
   useEffect(() => {
@@ -239,8 +246,8 @@ export function PiSettingsPage() {
     return <input aria-label={field.label} disabled={disabled} type={field.kind === "number" ? "number" : "text"} value={displayValue(value, field.kind)} onChange={(event) => update(field.path, field.kind === "number" ? Number(event.target.value) : field.kind === "csv" ? event.target.value.split(",").map((item) => item.trim()).filter(Boolean) : event.target.value)} />;
   }
 
-  async function save() {
-    if (!document) return;
+  async function save(): Promise<boolean> {
+    if (!document || saving || !online || conflict) return false;
     setSaving(true); setError(""); setNotice("");
     try {
       const result = await runApiTask(
@@ -257,7 +264,8 @@ export function PiSettingsPage() {
           },
         },
       );
-      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setNotice("设置已保存"); }
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); recordConfigurationSave(configKey, result.data.runtimeRefreshRequired !== false); setNotice("设置已保存"); return true; }
+      return false;
     }
     finally { setSaving(false); }
   }
@@ -270,20 +278,22 @@ export function PiSettingsPage() {
         () => scope === "global" ? api.updateGlobalSettings(conflict.latest.revision, draft, []) : api.updateAgentSettings(agentId, conflict.latest.revision, draft, inherit),
         { operation: "重新应用运行设置", expected: settingsExpected(setError) },
       );
-      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setConflict(undefined); setNotice("设置已在最新版本上重新应用"); }
+      if (result.status === "success") { setDocument(result.data); setDraft(structuredClone(result.data.own) as SettingsRecord); setInherit([]); setConflict(undefined); recordConfigurationSave(configKey, result.data.runtimeRefreshRequired !== false); setNotice("设置已在最新版本上重新应用"); }
       else if (result.status !== "handled") setConflict(undefined);
     }
     finally { setSaving(false); }
   }
 
   return (
-    <div className="configuration-page pi-settings-page">
-      {conflict ? <ConflictDialog differences={conflict.differences} onReload={() => { setDocument(conflict.latest); setDraft(structuredClone(conflict.latest.own) as SettingsRecord); setInherit([]); setConflict(undefined); }} onReapply={() => void reapplyConflict()} /> : null}
-      <header className="configuration-page__heading"><span className="configuration-eyebrow">RUNTIME SETTINGS</span><h1>运行设置</h1><p>统一管理默认模型与运行策略；Agent 覆盖会在全局规则上生效。</p><p className="configuration-help">保存到配置文件后，请到系统诊断刷新核心配置。</p></header>
-      <div className="settings-scope-bar"><label>设置作用域<select aria-label="设置作用域" value={scope} onChange={(event) => setScope(event.target.value as "global" | "agent")}><option value="global">全局</option><option value="agent">Agent 覆盖</option></select></label>{scope === "agent" ? <label>Agent<select aria-label="选择 Agent" value={agentId} onChange={(event) => setAgentId(event.target.value)}>{agents.map(({ profile }) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label> : null}</div>
+    <div className="configuration-page pi-settings-page configuration-quick-wins-page">
+      {guard.dialog}
+      {conflict && !guard.pending ? <ConflictDialog differences={conflict.differences} onReload={() => { setDocument(conflict.latest); setDraft(structuredClone(conflict.latest.own) as SettingsRecord); setInherit([]); setConflict(undefined); }} onReapply={() => void reapplyConflict()} /> : null}
+      <header className="configuration-page__heading"><span className="configuration-eyebrow">RUNTIME SETTINGS</span><h1>运行设置</h1><p>统一管理默认模型与运行策略；Agent 覆盖会在全局规则上生效。</p></header>
+      <ConfigurationEffectNotice configKey={configKey} dirty={dirty} />
+      <div className="settings-scope-bar"><label>设置作用域<select aria-label="设置作用域" value={scope} disabled={saving} onChange={(event) => { const next = event.target.value as "global" | "agent"; guard.request(() => setScope(next)); }}><option value="global">全局</option><option value="agent">Agent 覆盖</option></select></label>{scope === "agent" ? <label>Agent<select aria-label="选择 Agent" value={agentId} disabled={saving} onChange={(event) => { const next = event.target.value; guard.request(() => setAgentId(next)); }}>{agents.map(({ profile }) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label> : null}</div>
       {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}{notice ? <p className="configuration-save-notice" role="status"><Check size={14} aria-hidden="true" />{notice}</p> : null}
       {!document ? <div className="configuration-state"><p>{error || "正在加载设置…"}</p></div> : <>
-        <div className="settings-groups">{groups.map((group, index) => <SettingsSection key={group.title} index={index + 1} title={group.title} description={group.description}>{index === 0 ? (() => {
+        <fieldset className="configuration-interaction-fields" disabled={saving}><div className="settings-groups">{groups.map((group, index) => <SettingsSection key={group.title} index={index + 1} title={group.title} description={group.description}>{index === 0 ? (() => {
           const ownChoice = readDefaultModelChoice(draft);
           const effectiveChoice = readDefaultModelChoice(document.effective);
           const currentChoice = scope === "agent" ? ownChoice ?? effectiveChoice : ownChoice;
@@ -295,7 +305,7 @@ export function PiSettingsPage() {
           const ownValue = getPath(draft, field.path); const effectiveValue = getPath(document.effective, field.path); const inheritedValue = getPath(document.inherited, field.path);
           if (scope === "agent" && !field.globalOnly) return <InheritedField key={field.path} label={field.label} inherited={ownValue === undefined} inheritedValue={inheritedLabel(inheritedValue ?? effectiveValue)} onInheritedChange={(value) => toggleInherited(field.path, value)} help={field.risk || (field.unit ? `单位：${field.unit}` : undefined)}>{control(field, ownValue ?? effectiveValue)}</InheritedField>;
           return <label key={field.path}><span>{field.label}<small>{field.risk ? <><ShieldAlert size={12} aria-hidden="true" />{field.risk}</> : field.globalOnly && scope === "agent" ? "仅全局可修改" : field.unit ? `单位：${field.unit}` : "使用核心默认值"}</small></span>{control(field, scope === "agent" ? effectiveValue : ownValue, scope === "agent" && field.globalOnly)}</label>;
-        })}</SettingsSection>)}</div>
+        })}</SettingsSection>)}</div></fieldset>
         <section className="effective-settings"><header><h2>最终有效值</h2><small>{scope === "global" ? "全局" : "全局 + Agent 覆盖"}</small></header><pre>{JSON.stringify(document.effective, null, 2)}</pre></section>
         <div className="configuration-save-bar"><button type="button" className="configuration-primary-action" onClick={save} disabled={saving || !online} title={!online ? "离线时不能保存配置" : undefined}><Save size={16} aria-hidden="true" />{saving ? "保存中…" : "保存设置"}</button></div>
       </>}

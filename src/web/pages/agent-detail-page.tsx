@@ -12,6 +12,7 @@ import { InheritedField } from "../components/configuration/inherited-field";
 import type { AppRoute } from "../router";
 import { formatTtsCustomParameters, parseTtsCustomParametersText } from "../tts-custom-parameters-form";
 import { useOnlineStatus } from "../use-online-status";
+import { ConfigurationEffectNotice, recordConfigurationSave } from "../components/configuration/configuration-effect-notice";
 import "../configuration.css";
 import "../agents.css";
 
@@ -161,7 +162,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
           () => Promise.all(instructionFields.map((field) => api.replaceAgentPrompt(agentId, field.key, document.profile.instructions[field.key]))),
           { operation: "保存 Agent 提示词", expected: agentDetailExpected(setError) },
         );
-        if (promptResult.status === "success") setNotice("已保存");
+        if (promptResult.status === "success") { recordConfigurationSave(`agent:${agentId}`); setNotice("已保存"); }
         return;
       }
       const result = await runApiTask(() => api.updateAgent(agentId, document.revision, {
@@ -181,6 +182,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
       }), { operation: "保存 Agent", expected: agentDetailExpected(setError) });
       if (result.status !== "success") return;
       setDocument(result.data);
+      recordConfigurationSave(`agent:${agentId}`);
       setNotice("已保存");
     } finally {
       setSaving(false);
@@ -197,7 +199,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
     setSaving(true);
     try {
       const result = await runApiTask(() => api.replaceAgentPrompt(agentId, "bootsharp", bootsharp), { operation: "保存 BOOTSHARP", expected: agentDetailExpected(setError) });
-      if (result.status === "success") { setBootsharpOpen(false); setNotice("BOOTSHARP 已保存"); }
+      if (result.status === "success") { setBootsharpOpen(false); recordConfigurationSave(`agent:${agentId}`); setNotice("BOOTSHARP 已保存"); }
     } finally { setSaving(false); }
   }
 
@@ -268,10 +270,11 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
             ? <img src={`/api/v1/agents/${encodeURIComponent(agent.id)}/avatar?v=${encodeURIComponent(agent.avatar.revision)}`} alt={`${agent.name} 的头像`} />
             : <span aria-hidden="true">{agent.avatar.value}</span>}
         </span>
-        <div><span className="configuration-eyebrow">AGENT · {agent.id}</span><h1>{agent.name}</h1><p>{agent.description || "尚未填写简介"}</p><p className="configuration-help">配置保存后，请到系统诊断刷新核心配置后生效。</p></div>
+        <div><span className="configuration-eyebrow">AGENT · {agent.id}</span><h1>{agent.name}</h1><p>{agent.description || "尚未填写简介"}</p></div>
         <span className="agent-detail-header__status"><i />{agent.status === "active" ? "可用" : "已归档"}</span>
       </header>
 
+      <ConfigurationEffectNotice configKey={`agent:${agentId}`} />
       <nav className="agent-tabs" aria-label="Agent 详情页签">
         {tabs.map((tab) => (
           <button key={tab.id} type="button" className={activeTab === tab.id ? "is-active" : undefined} aria-current={activeTab === tab.id ? "page" : undefined} onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
