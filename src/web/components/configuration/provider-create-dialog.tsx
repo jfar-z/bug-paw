@@ -1,7 +1,11 @@
-import { Plus, X } from "lucide-react";
-import { useState, type CSSProperties, type FormEvent } from "react";
+import { Plus } from "lucide-react";
+import { useId, useState, type CSSProperties } from "react";
 import type { ModelConfigDocument, ProviderTemplate } from "../../../shared/configuration-contracts";
-import { api } from "../../api";
+import { ConfigurationEditorDialog } from "./configuration-editor-dialog";
+import { useUnsavedChanges } from "./unsaved-changes";
+import { useErrorToast } from "../../error-toast-provider";
+import { toUnexpectedErrorNotice } from "../../api-error-policy";
+import { api, type ApiClientError } from "../../api";
 import { useApiTask, type ApiTaskPolicy } from "../../api-task-provider";
 
 interface ProviderCreateDialogProps {
@@ -53,8 +57,8 @@ function validBaseUrl(value: string): boolean {
 }
 
 /** 将创建 Provider 时可恢复的校验和并发错误保留在弹窗内。 */
-function providerCreateExpected(setError: (message: string) => void): ApiTaskPolicy["expected"] {
-  const show = (error: { message: string }) => setError(error.message);
+function providerCreateExpected(reportError: (error: ApiClientError) => void): ApiTaskPolicy["expected"] {
+  const show = reportError;
   return {
     VERSION_CONFLICT: show,
     PROVIDER_ID_EXISTS: show,
@@ -71,6 +75,8 @@ function providerCreateExpected(setError: (message: string) => void): ApiTaskPol
  */
 export function ProviderCreateDialog({ revision, online, onCreated, onClose }: ProviderCreateDialogProps) {
   const { runApiTask } = useApiTask();
+  const formId = useId();
+  const toast = useErrorToast();
   const [draft, setDraft] = useState<ProviderCreateDraft>({ id: "", name: "", template: "custom", baseUrl: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -86,10 +92,11 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
       ? "Base URL 必须是有效的 HTTP 或 HTTPS 地址，且不能内嵌凭证。"
       : "";
 
+  const guard = useUnsavedChanges({ dirty: Boolean(draft.id || draft.name || draft.baseUrl || draft.template !== "custom"), busy, label: "新建 Provider", save: submit, canSave: canSubmit });
+
   /** 根据模板生成不可见默认值，并提交不含凭证的最小 Provider。 */
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canSubmit) return;
+  async function submit(): Promise<boolean> {
+    if (!canSubmit) return false;
     const defaults = providerTemplateDefaults[draft.template];
     setBusy(true);
     setError("");
@@ -102,9 +109,10 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
           authHeader: defaults.authHeader,
           models: [],
         }),
-        { operation: "创建 Provider", expected: providerCreateExpected(setError) },
+        { operation: "创建 Provider", expected: providerCreateExpected((error) => { setError(error.message); toast.push(toUnexpectedErrorNotice(error, "创建 Provider")); }) },
       );
-      if (result.status === "success") onCreated(providerId, result.data);
+      if (result.status === "success") { onCreated(providerId, result.data); return true; }
+      return false;
     } finally {
       setBusy(false);
     }
@@ -116,18 +124,9 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
     setError("");
   }
 
-  return (
-    <div className="configuration-dialog-backdrop" role="presentation">
-      <form className="configuration-dialog configuration-form-card provider-rename-dialog provider-create-dialog" style={{ width: "min(620px, 100%)", maxHeight: "calc(100dvh - 40px)", overflowY: "auto", overscrollBehavior: "contain" }} role="dialog" aria-modal="true" aria-labelledby="provider-create-title" onSubmit={(event) => void submit(event)}>
-        <header className="configuration-heading-actions">
-          <div>
-            <span className="configuration-eyebrow">MODEL PROVIDER</span>
-            <h2 id="provider-create-title">新建 Provider</h2>
-            <p>先保存基础连接信息，创建后再配置 API Key、模型与兼容设置。</p>
-          </div>
-          <button type="button" className="icon-button" aria-label="关闭新建 Provider" disabled={busy} onClick={onClose}><X size={18} aria-hidden="true" /></button>
-        </header>
-
+  return <>
+    <ConfigurationEditorDialog variant="confirmation" classPrefix="provider" returnFocusSelector="[data-provider-create]" title="新建 Provider" description="先保存基础连接信息，创建后再配置 API Key、模型与兼容设置。" busy={busy} suspended={guard.pending} onClose={() => guard.request(onClose)} footer={<><button type="button" className="configuration-secondary-action" disabled={busy} onClick={() => guard.request(onClose)}>取消</button><button type="submit" form={formId} className="configuration-primary-action" disabled={!canSubmit}><Plus size={15} />{busy ? "创建中…" : "创建 Provider"}</button></>}>
+      <form id={formId} className="configuration-form-card provider-create-dialog" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <div className="thinking-protocol-preview">
           <label style={providerCreateFieldStyle}><span style={providerCreateFieldHeadingStyle}>Provider ID<small>创建后需要通过改名迁移引用</small></span><input aria-label="Provider ID" autoFocus value={draft.id} onChange={(event) => { setDraft((current) => ({ ...current, id: event.target.value })); setError(""); }} placeholder="例如 my-provider" /></label>
           <label style={providerCreateFieldStyle}><span style={providerCreateFieldHeadingStyle}>显示名称</span><input aria-label="显示名称" value={draft.name} onChange={(event) => { setDraft((current) => ({ ...current, name: event.target.value })); setError(""); }} placeholder="例如内部模型网关" /></label>
@@ -137,11 +136,8 @@ export function ProviderCreateDialog({ revision, online, onCreated, onClose }: P
 
         {validationError ? <p className="configuration-inline-error" role="alert">{validationError}</p> : null}
         {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
-        <footer>
-          <button type="button" className="configuration-secondary-action" disabled={busy} onClick={onClose}>取消</button>
-          <button type="submit" className="configuration-primary-action" disabled={!canSubmit}><Plus size={15} aria-hidden="true" />{busy ? "创建中…" : "创建 Provider"}</button>
-        </footer>
       </form>
-    </div>
-  );
+    </ConfigurationEditorDialog>
+    {guard.dialog}
+  </>;
 }

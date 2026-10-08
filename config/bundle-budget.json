@@ -67,7 +67,7 @@
       },
       "src/web/pages/providers-page.tsx": {
         "label": "Provider 管理",
-        "gzipBytes": 5632
+        "gzipBytes": 6656
       },
       "src/web/pages/pi-settings-page.tsx": {
         "label": "Pi 运行设置",

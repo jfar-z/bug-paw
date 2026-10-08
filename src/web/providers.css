@@ -1,71 +1,5 @@
 /* Provider 管理页专属样式，由 Provider 页面按需加载。 */
 
-.provider-workspace {
-  display: grid;
-  grid-template-columns: 190px minmax(0, 1fr);
-  align-items: start;
-  gap: 30px;
-}
-
-.provider-list {
-  position: sticky;
-  top: 24px;
-  display: grid;
-  gap: 7px;
-}
-
-.provider-list button {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 7px;
-  min-height: 58px;
-  padding: 11px 12px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  color: var(--text-secondary);
-  background: transparent;
-  text-align: left;
-}
-
-.provider-list button > span {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.configuration-sort-handle {
-  flex: 0 0 auto;
-  color: var(--text-tertiary);
-}
-
-.provider-list__item[draggable="true"],
-.model-chip-list__item[draggable="true"] {
-  cursor: grab;
-}
-
-.provider-list__item[draggable="true"]:active,
-.model-chip-list__item[draggable="true"]:active {
-  cursor: grabbing;
-}
-
-.provider-list button.is-active {
-  border-color: var(--border-strong);
-  color: var(--text-primary);
-  background: var(--panel);
-}
-
-.provider-list strong {
-  font-size: 11px;
-}
-
-.provider-list small {
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  overflow-wrap: anywhere;
-}
-
 .provider-editor,
 .provider-form {
   display: grid;
@@ -381,16 +315,55 @@
   font-size: 11px;
 }
 
+/* 摘要列表与分区管理抽屉，仅由 Provider 页面懒加载。 */
+.provider-summary-list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.provider-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px; border-bottom: 1px solid var(--border); }
+.provider-list-heading h2 { margin: 0; font-size: 18px; }
+.provider-list-heading small { margin-left: 8px; font-size: 12px; color: var(--text-secondary); font-weight: 400; }
+.provider-list-heading label { display: grid; gap: 8px; font-size: 11px; color: var(--text-secondary); }
+.provider-list-heading input { min-height: 44px; padding: 10px 12px; color: var(--text-primary); background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+.provider-summary { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px; }
+.provider-summary + .provider-summary { border-top: 1px solid var(--border); }
+.provider-summary > div:first-child { min-width: 0; }
+.provider-summary h3 { margin: 0 0 8px; font-size: 16px; overflow-wrap: anywhere; }
+.provider-summary code, .provider-summary > div > small { display: block; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.provider-summary dl { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 16px 0; font-size: 12px; }
+.provider-summary dl div { display: flex; gap: 8px; min-width: 0; }
+.provider-summary dt { color: var(--text-secondary); }
+.provider-summary dd { margin: 0; overflow-wrap: anywhere; }
+.provider-empty { padding: 32px 24px; text-align: center; }
+.provider-drawer { width: min(880px, 100%); }
+.provider-tabs { display: flex; gap: 8px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+.provider-tabs button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 1px solid transparent; border-radius: 8px; color: var(--text-secondary); background: transparent; font-size: 13px; white-space: nowrap; }
+.provider-tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--fg); border-color: var(--border); }
+.provider-tabs small { font-size: 10px; }
+.provider-drawer .configuration-form-card { padding: 0; background: transparent; border: 0; box-shadow: none; }
+.provider-drawer .configuration-section__heading { padding-bottom: 16px; }
+.provider-drawer .configuration-section__heading h3 { font-size: 15px; }
+.provider-drawer .provider-credential { margin-top: 24px; padding: 24px 0; border-top: 1px solid var(--border); }
+.provider-danger-zone { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--border); }
+.provider-model-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--border); }
+.provider-model-row > div:first-child { min-width: 0; }
+.provider-model-row strong, .provider-model-row code { overflow-wrap: anywhere; }
+.provider-model-row code { display: block; margin-top: 8px; font-size: 11px; color: var(--text-secondary); }
+.provider-model-row p, .provider-model-row small { font-size: 12px; color: var(--text-secondary); }
+.provider-model-edit-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-top: 24px; }
+.provider-model-edit-heading p { width: 100%; }
+.provider-drawer .configuration-interaction-fields > section[hidden] { display: none; }
+.provider-drawer input[type="checkbox"] { width: 18px; min-height: 18px; }
+.provider-drawer .configuration-editor-drawer__footer { flex-wrap: wrap; }
+.provider-drawer .configuration-editing-state { font-size: 11px; color: var(--text-secondary); }
+.provider-drawer .configuration-button-row button, .provider-model-edit-heading button { min-height: 44px; }
 @media (max-width: 760px) {
-
-  .provider-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .provider-list {
-    position: static;
-    grid-auto-columns: minmax(150px, 1fr);
-    grid-auto-flow: column;
-    overflow-x: auto;
-  }
+  .provider-list-heading { align-items: stretch; flex-direction: column; padding: 20px 16px; }
+  .provider-summary { flex-direction: column; align-items: stretch; padding: 20px 16px; }
+  .provider-summary > .configuration-button-row { justify-content: flex-end; }
+  .provider-tabs { gap: 4px; overflow-x: auto; }
+  .provider-tabs button { padding: 0 8px; font-size: 12px; }
+  .provider-tabs small { font-size: 9px; }
+  .provider-model-row { align-items: start; flex-direction: column; }
+  .provider-model-row > .configuration-button-row { align-self: flex-end; }
+  .provider-drawer .configuration-form-card label { grid-template-columns: 1fr; gap: 8px; }
+  .provider-drawer .configuration-editor-drawer__footer button { padding: 0 12px; font-size: 12px; }
+  .key-value-editor > div { grid-template-columns: minmax(0, .4fr) minmax(0, 1fr) 36px; }
 }

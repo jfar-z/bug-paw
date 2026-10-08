@@ -104,21 +104,24 @@ describe("配置快速交互改进", () => {
     const credential = vi.spyOn(api, "saveProviderCredential").mockRejectedValueOnce(new ApiClientError("INVALID_CREDENTIAL", "凭证格式校验未通过", 400))
       .mockResolvedValueOnce({ credentialRevision: "c2", status: { providerId: "a", type: "api_key", configured: true } });
     show(<ProvidersPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Provider Provider A" }));
     await screen.findByDisplayValue("Provider A");
     fireEvent.change(screen.getByDisplayValue("Provider A"), { target: { value: "新名称" } });
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "fictional-new-key" } });
-    fireEvent.click(screen.getByRole("button", { name: /选择或拖动 Provider Provider B/ }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Provider 管理" }));
     fireEvent.click(screen.getByRole("button", { name: "保存并切换" }));
     await screen.findByText(/尚未完成保存/);
     expect(screen.getByDisplayValue("新名称")).toBeInTheDocument();
     expect(screen.getByLabelText("API Key")).toHaveValue("fictional-new-key");
     fireEvent.click(screen.getByRole("button", { name: "保存并切换" }));
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Provider Provider B" }));
     await screen.findByDisplayValue("Provider B");
     expect(config).toHaveBeenCalledTimes(1);
     expect(credential).toHaveBeenCalledTimes(2);
-    fireEvent.click(screen.getByRole("button", { name: /选择或拖动 Provider 新名称/ }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Provider 管理" }));
+    fireEvent.click(screen.getByRole("button", { name: "管理 Provider 新名称" }));
     fireEvent.change(screen.getByDisplayValue("新名称"), { target: { value: "再改名称" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存连接与模型" }));
     await waitFor(() => expect(config).toHaveBeenLastCalledWith("a", "r2", expect.anything()));
   });
 
@@ -126,16 +129,17 @@ describe("配置快速交互改进", () => {
     vi.spyOn(api, "listProviders").mockResolvedValue(providerDocument);
     const save = vi.spyOn(api, "saveProvider").mockResolvedValue({ revision: "r2", diagnostics: [], value: providerDocument.value });
     show(<ProvidersPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "管理 Provider Provider A" }));
     await screen.findByDisplayValue("Provider A");
     fireEvent.change(screen.getByLabelText("Provider 高级 JSON"), { target: { value: '{"models":' } });
-    fireEvent.click(screen.getByRole("button", { name: /选择或拖动 Provider Provider B/ }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭 Provider 管理" }));
     fireEvent.click(screen.getByRole("button", { name: "保存并切换" }));
     await screen.findByText(/尚未完成保存/);
     expect(save).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Provider 高级 JSON")).toHaveValue('{"models":');
     fireEvent.click(screen.getByRole("button", { name: "继续编辑" }));
     fireEvent.change(screen.getByLabelText("Provider 高级 JSON"), { target: { value: JSON.stringify({ ...providerA, name: "JSON 新名称" }) } });
-    fireEvent.click(screen.getByRole("button", { name: "保存 Provider" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存连接与模型" }));
     await waitFor(() => expect(save).toHaveBeenCalledWith("a", "r1", expect.objectContaining({ name: "JSON 新名称" })));
   });
 
