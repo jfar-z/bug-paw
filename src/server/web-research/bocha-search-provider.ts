@@ -27,6 +27,7 @@ export class BochaSearchProvider implements SearchProvider {
           summary: true,
         },
         timeoutMs: this.timeoutMs,
+        signal: input.signal,
         egressProfile: this.egressProfile,
       });
       const data = isRecord(value) && isRecord(value.data) ? value.data : undefined;

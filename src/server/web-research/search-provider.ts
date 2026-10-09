@@ -36,6 +36,8 @@ export interface SearchProviderResult {
 /** 搜索供应商的通用查询参数。 */
 export interface SearchProviderInput {
   query: string;
+  /** 组合取证的总预算及用户取消信号。 */
+  signal?: AbortSignal;
   count: number;
   site?: string;
   language?: string;

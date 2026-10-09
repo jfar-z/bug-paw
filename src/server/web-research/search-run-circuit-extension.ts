@@ -46,7 +46,7 @@ export function createSearchRunCircuitExtension(state = new SearchRunState()): S
         state.reset();
       });
       pi.on("tool_result", (event) => {
-        if (event.toolName !== "web_search" || state.circuit().open) return;
+        if (!["web_search", "web_research"].includes(event.toolName) || state.circuit().open) return;
         const retryable = readProviderUnavailableRetryable(event.content);
         if (retryable === undefined) return;
         state.recordUnavailable({ provider: "route", category: "upstream_error", retryable });
@@ -54,7 +54,7 @@ export function createSearchRunCircuitExtension(state = new SearchRunState()): S
       });
       pi.on("tool_call", (event) => {
         const circuit = state.circuit();
-        if (event.toolName !== "web_search" || !circuit.open) return undefined;
+        if (!["web_search", "web_research"].includes(event.toolName) || !circuit.open) return undefined;
         return {
           block: true,
           reason: JSON.stringify(

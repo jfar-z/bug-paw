@@ -2,6 +2,8 @@ import { extractFromHtml } from "@extractus/article-extractor";
 
 import type { WebResearchConfigDocument } from "../../shared/web-research-contracts";
 import type { CredentialService } from "../configuration/credential-service";
+import { selectWebWindow } from "./web-text-window";
+import { WebEvidenceError, WebEvidenceState, waitForEvidence } from "./web-evidence-state";
 import { SafeWebClient } from "./safe-web-client";
 import { WebResearchConfigService } from "./web-research-config-service";
 import { EgressProfileRegistry } from "./egress-profile-registry";
@@ -38,6 +40,15 @@ export interface WebSearchServiceResult {
 }
 
 /** 网页正文读取服务结果。 */
+export interface WebReadInput {
+  url: string;
+  action?: "read" | "find";
+  query?: string | null;
+  startParagraph?: number | null;
+  maxCharacters?: number;
+}
+
+/** 网页的正文窗口与来源信息。 */
 export interface WebReadServiceResult {
   data: {
     requestedUrl: string;
@@ -49,6 +60,11 @@ export interface WebReadServiceResult {
     fetchedAt: string;
     contentType: "text/html" | "text/plain";
     extractionMode: "article" | "plain_text" | "html_fallback";
+    paragraphs: Array<{ paragraph: number; text: string }>;
+    totalParagraphs: number;
+    matchedParagraphs: number[];
+    totalMatches: number;
+    nextParagraph: number | null;
   };
   metadata: { truncated: boolean; contentCharacters: number; returnedCharacters: number; untrustedContent: true };
   warnings: ToolWarning[];
@@ -58,7 +74,7 @@ interface WebResearchServiceDependencies {
   readConfig(): Promise<WebResearchConfigDocument>;
   searchProviders(config: WebResearchConfigDocument["config"], input: SearchProviderInput, state: SearchRunState): Promise<SearchProviderResult>;
   testSearchProvider(config: WebResearchConfigDocument["config"]["searchProviders"][number], input: SearchProviderInput): Promise<SearchProviderResult>;
-  fetchText(url: string, config: WebResearchConfigDocument["config"]): ReturnType<SafeWebClient["fetchText"]>;
+  fetchText(url: string, config: WebResearchConfigDocument["config"], signal?: AbortSignal): ReturnType<SafeWebClient["fetchText"]>;
   extract(html: string, url: string): Promise<{ title?: string | null; content?: string | null; published?: string | null } | null>;
 }
 
@@ -76,11 +92,11 @@ export class WebResearchService {
   }
 
   /** 搜索互联网并返回带来源的规范化结果。 */
-  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string }, state = new SearchRunState()): Promise<WebSearchServiceResult> {
+  async search(input: { query: string; count?: number; site?: string; language?: string; timeRange?: string; signal?: AbortSignal }, state = new SearchRunState()): Promise<WebSearchServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
     const count = Math.min(Math.max(input.count ?? config.maxResults, 1), config.maxResults);
-    const providerResult = await this.dependencies.searchProviders(config, { ...input, count }, state);
+    const providerResult = await waitForEvidence(this.dependencies.searchProviders(config, { ...input, count }, state), input.signal);
     const rawResults = readSearchResults(providerResult.results);
     // URL 安全过滤后重新归一化健康状态，避免把仅含非法地址的故障响应误报为空结果。
     const providerHealth: SearchProviderHealth = providerResult.health === "degraded" && rawResults.length === 0
@@ -117,48 +133,35 @@ export class WebResearchService {
   }
 
   /** 读取公开网页并返回经过长度限制的正文。 */
-  async read(input: { url: string; maxCharacters?: number }): Promise<WebReadServiceResult> {
+  async read(input: WebReadInput, state = new WebEvidenceState(), signal?: AbortSignal): Promise<WebReadServiceResult> {
     const { config } = await this.dependencies.readConfig();
     assertEnabled(config.enabled);
-    const page = await this.dependencies.fetchText(input.url, config);
-    const article = page.contentType === "text/html"
-      ? await this.dependencies.extract(page.body, page.finalUrl).catch(() => null)
-      : null;
-    const articleText = article?.content?.trim();
-    const extractionMode = page.contentType === "text/plain"
-      ? "plain_text"
-      : articleText
-        ? "article"
-        : "html_fallback";
-    const fullText = extractionMode === "plain_text"
-      ? page.body.trim()
-      : extractionMode === "article"
-        ? articleText!
-        : stripHtml(page.body);
-    const maxCharacters = Math.min(Math.max(input.maxCharacters ?? config.maxTextLength, 1), config.maxTextLength);
-    const text = fullText.slice(0, maxCharacters);
-    const warnings: ToolWarning[] = extractionMode === "html_fallback"
-      ? [{ code: "ARTICLE_EXTRACTION_FALLBACK", message: "文章正文提取失败，已降级为 HTML 文本" }]
-      : [];
+    signal?.throwIfAborted();
+    const document = await state.load("html", input.url, JSON.stringify(config), async () => {
+      const page = await waitForEvidence(this.dependencies.fetchText(input.url, config, signal), signal);
+      let article = null;
+      let extractionFailed = false;
+      if (page.contentType === "text/html") {
+        try { article = await waitForEvidence(this.dependencies.extract(page.body, page.finalUrl), signal); }
+        catch { signal?.throwIfAborted(); extractionFailed = true; }
+      }
+      const articleText = article?.content?.trim();
+      const extractionMode = page.contentType === "text/plain" ? "plain_text" as const : articleText ? "article" as const : "html_fallback" as const;
+      const text = extractionMode === "plain_text" ? page.body.trim() : stripHtml(articleText || page.body);
+      if (text.length > 500_000) throw new WebEvidenceError("WEB_RESPONSE_TOO_LARGE", "网页提取后的正文超过取证缓存上限");
+      const warnings: ToolWarning[] = extractionMode === "html_fallback"
+        ? [{ code: extractionFailed ? "ARTICLE_EXTRACTION_FAILED" : "ARTICLE_EXTRACTION_FALLBACK", message: extractionFailed ? "网页正文提取器执行失败，返回清理后的 HTML 文本" : "网页未识别出文章正文，返回清理后的 HTML 文本" }]
+        : [];
+      const value = { finalUrl: page.finalUrl, title: article?.title?.trim() || page.finalUrl, text, publishedAt: normalizePublishedDate(article?.published), fetchedAt: new Date().toISOString(), contentType: page.contentType, extractionMode, warnings };
+      return { value, bytes: Buffer.byteLength(text, "utf8") };
+    });
+    signal?.throwIfAborted();
+    const maxCharacters = Math.min(Math.max(input.maxCharacters ?? 6_000, 1), config.maxTextLength);
+    const window = selectWebWindow(document.text, { ...input, maxCharacters });
     return {
-      data: {
-        requestedUrl: input.url,
-        finalUrl: page.finalUrl,
-        title: article?.title?.trim() || page.finalUrl,
-        hostname: new URL(page.finalUrl).hostname.toLowerCase(),
-        text,
-        publishedAt: normalizePublishedDate(article?.published),
-        fetchedAt: new Date().toISOString(),
-        contentType: page.contentType,
-        extractionMode,
-      },
-      metadata: {
-        truncated: text.length < fullText.length,
-        contentCharacters: fullText.length,
-        returnedCharacters: text.length,
-        untrustedContent: true,
-      },
-      warnings,
+      data: { requestedUrl: input.url, finalUrl: document.finalUrl, title: document.title, hostname: new URL(document.finalUrl).hostname.toLowerCase(), publishedAt: document.publishedAt, fetchedAt: document.fetchedAt, contentType: document.contentType, extractionMode: document.extractionMode, ...window },
+      metadata: { truncated: window.truncated, contentCharacters: document.text.length, returnedCharacters: window.text.length, untrustedContent: true },
+      warnings: document.warnings,
     };
   }
 
@@ -201,14 +204,14 @@ export function createWebResearchService(
     readConfig: () => configs.read(),
     searchProviders: (config, input, state) => router.search(config.searchProviders, input, state),
     testSearchProvider: async (provider, input) => (await factory.create(provider)).search(input),
-    fetchText: async (url, config) => client.fetchText(url, config, await egressProfiles.require(config.webRead.egressProfileId)),
+    fetchText: async (url, config, signal) => client.fetchText(url, config, await egressProfiles.require(config.webRead.egressProfileId), signal),
     extract: (html, url) => extractFromHtml(html, url),
   });
 }
 
 /** 当管理员未启用全局能力时，不允许工具执行。 */
 function assertEnabled(enabled: boolean): asserts enabled {
-  if (!enabled) throw new Error("联网搜索尚未启用，请先在能力扩展中启用");
+  if (!enabled) throw new WebEvidenceError("WEB_RESEARCH_DISABLED", "联网检索全局能力未启用");
 }
 
 /** 对供应商结果中的非法或不完整地址进行保守过滤。 */
@@ -231,7 +234,10 @@ function readSearchResults(value: SearchProviderItem[]): Array<Omit<WebSearchSer
 
 /** 将无正文提取结果的静态 HTML 降级为可读纯文本。 */
 function stripHtml(value: string): string {
-  return value.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi, " ").replace(/\s+/g, " ").trim();
+  return value.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<\/(?:p|div|section|article|h[1-6]|li|tr)>|<br\s*\/?>/gi, "\n\n")
+    .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/[^\S\n]+/g, " ").replace(/\n\s*\n/g, "\n\n").trim();
 }
 
 /** 判断搜索结果 URL 是否为可引用的 HTTP 地址。 */

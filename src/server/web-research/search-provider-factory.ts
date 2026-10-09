@@ -30,8 +30,8 @@ export class SearchProviderFactory {
         ? this.dependencies.managedProviders.resolveManagedBaseUrl(config.id)
         : config.baseUrl;
       if (!baseUrl) throw new TypeError("SearXNG 地址尚未配置");
-      return new SearxngSearchProvider(baseUrl, config.timeoutMs, async (url) => this.httpClient.requestJson({
-        url: url.toString(), method: "GET", headers: {}, timeoutMs: config.timeoutMs, egressProfile,
+      return new SearxngSearchProvider(baseUrl, config.timeoutMs, async (url, _timeout, signal) => this.httpClient.requestJson({
+        url: url.toString(), method: "GET", headers: {}, timeoutMs: config.timeoutMs, egressProfile, signal,
       }), config.id);
     }
     const apiKey = await this.dependencies.credentials.getApiKey(config.id);

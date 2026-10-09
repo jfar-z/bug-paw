@@ -1,3 +1,5 @@
+import { PdfEvidenceService } from "./web-research/pdf-evidence-service";
+import { SafeWebClient } from "./web-research/safe-web-client";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
@@ -58,7 +60,7 @@ import { EgressProfileRegistry } from "./web-research/egress-profile-registry";
 import { ManagedSearchProviderRegistry } from "./web-research/managed-search-provider-registry";
 import { WebResearchProviderManagementService } from "./web-research/web-research-provider-management-service";
 import { createWebResearchService } from "./web-research/web-research-service";
-import { createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
+import { createPdfReadTool, createWebResearchTool, createWebReadTool, createWebSearchTool } from "./web-research/web-research-tools";
 import { registerWebResearchRoutes } from "./routes/web-research";
 import { TtsConfigService } from "./tts/tts-config-service";
 import { TtsSynthesisService } from "./tts/tts-synthesis-service";
@@ -291,6 +293,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     managedSearchProviders,
     webResearchCredentials,
   );
+  const pdfClient = new SafeWebClient();
+  const pdfEvidence = new PdfEvidenceService({
+    readConfig: () => webResearchConfigs.read(),
+    fetchPdf: async (url, config, signal) => pdfClient.fetchPdf(url, config, await webResearchEgressProfiles.require(config.webRead.egressProfileId), signal),
+  });
   const browserConfigs = new BrowserConfigService(join(paths.appDir, "browser-automation.json"));
   const browserPreview = new BrowserPreviewService({
     internalOrigin: process.env.BUG_PAW_BROWSER_PREVIEW_ORIGIN ?? "http://bug-paw-web:7080",
@@ -430,7 +437,6 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
               ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
               : []),
             ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
-            ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch)] : []),
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
           createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
@@ -439,6 +445,9 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(profile.profile.allowedTools.includes("ask_user")
               ? [createAskUserTool({ agentId, sessionId, branchAnchorId, repository: sessionQuestions })]
               : []),
+            ...(retrievalCapabilities.webRead ? [createWebReadTool(webResearch, searchRunState.evidence)] : []),
+            ...(retrievalCapabilities.pdfRead ? [createPdfReadTool(pdfEvidence, searchRunState.evidence)] : []),
+            ...(retrievalCapabilities.webResearch ? [createWebResearchTool(webResearch, searchRunState)] : []),
             ...(retrievalCapabilities.webSearch
               ? [createWebSearchTool({ search: (input) => webResearch.search(input, searchRunState) })]
               : []),
