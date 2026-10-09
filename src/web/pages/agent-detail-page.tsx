@@ -252,7 +252,7 @@ export function AgentDetailPage({ agentId, onNavigate }: AgentDetailPageProps) {
   if (notFound) {
     return (
       <div className="configuration-page configuration-state">
-        <h1>Agent 不存在</h1><p>未找到 ID 为 <code>{agentId}</code> 的 Agent。</p>
+        <span className="configuration-eyebrow">AGENT PROFILE</span><h1>Agent 不存在</h1><p>未找到 ID 为 <code>{agentId}</code> 的 Agent。</p>
         <button type="button" onClick={() => onNavigate({ page: "agents" })}>返回 Agents</button>
       </div>
     );

@@ -169,7 +169,7 @@ export function TtsPage() {
   const parameterSummary = summarizeParameters(customParametersText);
   return <>
     <main className="configuration-page configuration-quick-wins-page tts-page" inert={editorOpen || undefined} aria-hidden={editorOpen || undefined}>
-      <header className="configuration-page__heading configuration-page__heading--actions"><div><h1>语音合成</h1><p>管理 OpenAI Speech 兼容接口，供 Agent 选择使用。</p></div><button type="button" data-tts-create className="configuration-primary-action" onClick={create} disabled={!writable}><Plus size={15} />新增语音配置</button></header>
+      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">TEXT TO SPEECH</span><h1>语音合成</h1><p>管理 OpenAI Speech 兼容接口，供 Agent 选择使用。</p></div><button type="button" data-tts-create className="configuration-primary-action" onClick={create} disabled={!writable}><Plus size={15} />新增语音配置</button></header>
       {!editorOpen && message ? <p className="configuration-help" role="status">{message}</p> : null}
       <section className="tts-profile-list" aria-labelledby="tts-list-title" aria-busy={loading}>
         <div className="tts-list-heading"><h2 id="tts-list-title">语音配置 <small>{revision ? `${profiles.length} 项` : "尚未加载"}</small></h2><span>{loading ? "正在加载配置…" : "选择配置进行编辑"}</span></div>

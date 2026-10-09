@@ -170,7 +170,7 @@ export function AigcChannelsPage() {
   const selectedTemplate = templates.find((template) => template.type === draft.type);
   return <>
     <main className="configuration-page configuration-quick-wins-page aigc-channels-page" inert={Boolean(editor) || undefined} aria-hidden={Boolean(editor) || undefined}>
-      <header className="configuration-page__heading configuration-page__heading--actions"><div><h1>AIGC 渠道</h1><p>管理生成服务的连接参数与凭证，供 AIGC 接口引用。</p></div><button type="button" data-aigc-channel-create className="configuration-primary-action" disabled={!writable} onClick={() => { closeEditor(); setMessage(""); setEditor("protocol"); }}><Plus size={15} />新增渠道</button></header>
+      <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">AIGC CHANNELS</span><h1>AIGC 渠道</h1><p>管理生成服务的连接参数与凭证，供 AIGC 接口引用。</p></div><button type="button" data-aigc-channel-create className="configuration-primary-action" disabled={!writable} onClick={() => { closeEditor(); setMessage(""); setEditor("protocol"); }}><Plus size={15} />新增渠道</button></header>
       {!editor && message ? <p className="configuration-help" role="status">{message}</p> : null}
       <section className="aigc-channel-list" aria-labelledby="aigc-channel-list-title" aria-busy={loading}>
         <div className="aigc-channel-list__heading"><h2 id="aigc-channel-list-title">已配置渠道 <small>{versionAvailable ? `${channels.length} 个` : "尚未同步"}</small></h2><span>{loading ? "正在加载渠道…" : "选择渠道进行编辑"}</span></div>

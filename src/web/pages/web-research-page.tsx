@@ -85,7 +85,7 @@ export function WebResearchPage() {
   };
 
   if (!document || !globalDraft) {
-    return <main className="configuration-page"><p className={globalError ? "configuration-inline-error" : "configuration-help"}>{globalError || "正在读取联网搜索配置…"}</p></main>;
+    return <main className="configuration-page"><header className="configuration-page__heading"><span className="configuration-eyebrow">WEB RESEARCH</span><h1>联网搜索</h1></header><p className={globalError ? "configuration-inline-error" : "configuration-help"}>{globalError || "正在读取联网搜索配置…"}</p></main>;
   }
 
   const enabledProviders = document.config.searchProviders.filter((provider) => provider.enabled);
@@ -100,7 +100,7 @@ export function WebResearchPage() {
       setGlobalDraft(globalConfigOf(conflict.latest.config));
       setConflict(undefined);
     }} onReapply={() => void saveGlobal(conflict.latest.revision)} /> : null}
-    <header className="configuration-page__heading"><h1>联网搜索</h1><p>统一管理服务可用性、渠道故障切换顺序，以及适用于全部渠道的检索策略。</p></header>
+    <header className="configuration-page__heading"><span className="configuration-eyebrow">WEB RESEARCH</span><h1>联网搜索</h1><p>统一管理服务可用性、渠道故障切换顺序，以及适用于全部渠道的检索策略。</p></header>
 
     <section className="configuration-form-card">
       <div className="configuration-section__heading"><div><span>01</span><h2>服务状态</h2></div><small>{enabledProviders.length} 个已启用渠道</small></div>
