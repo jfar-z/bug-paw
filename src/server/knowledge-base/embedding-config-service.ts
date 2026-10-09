@@ -44,9 +44,9 @@ export class EmbeddingConfigService {
   /** 读取当前脱敏配置；首次使用时没有配置。 */
   async read(): Promise<EmbeddingSettingsDocument> {
     const loaded = await this.store.read();
-    if (loaded.value === undefined) return { revision: loaded.revision, config: toSummary(this.managedConfig) };
+    if (loaded.value === undefined) return { revision: loaded.revision, config: toSummary(this.managedConfig), managed: this.managedOption() };
     const config = normalizeStoredConfig(loaded.value, this.managedConfig);
-    return { revision: loaded.revision, ...(config ? { config: toSummary(config) } : {}) };
+    return { revision: loaded.revision, ...(config ? { config: toSummary(config) } : {}), managed: this.managedOption() };
   }
 
   /** 读取服务端内部使用的完整配置。 */
@@ -59,7 +59,8 @@ export class EmbeddingConfigService {
   async update(input: EmbeddingConfigInput, revision: string): Promise<EmbeddingSettingsDocument> {
     const loaded = await this.store.read();
     const previous = loaded.value === undefined ? this.managedConfig : normalizeStoredConfig(loaded.value, this.managedConfig);
-    const config = isManagedInput(input, this.managedConfig) && previous?.isManaged
+    if (input.mode === "managed" && !this.managedConfig.enabled) throw new TypeError("当前部署未提供内置 Embedding 服务");
+    const config = input.mode === "managed" || (input.mode === undefined && isManagedInput(input, this.managedConfig) && previous?.isManaged)
       ? {
         ...this.managedConfig,
         batchSize: validateManagedBatchSize(input.batchSize),
@@ -67,7 +68,11 @@ export class EmbeddingConfigService {
       }
       : normalizeInput({ ...input, apiKey: input.apiKey || previous?.apiKey || "" });
     const written = await this.store.write(config, revision);
-    return { revision: written.revision, config: toSummary(config) };
+    return { revision: written.revision, config: toSummary(config), managed: this.managedOption() };
+  }
+  /** 内置默认值只由服务端提供，客户端不硬编码内部地址。 */
+  private managedOption() {
+    return { available: this.managedConfig.enabled, baseUrl: this.managedConfig.baseUrl, model: this.managedConfig.model, maxBatchSize: MANAGED_EMBEDDING_MAX_BATCH_SIZE };
   }
 }
 

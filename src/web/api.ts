@@ -1,3 +1,4 @@
+import type { ConfigurationOverviewDocument, ConfigurationRestorePreview, ConfigurationPostCommitError } from "../shared/configuration-operations-contracts";
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
 import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, ThinkingLevel, WebPiSettings } from "../shared/configuration-contracts";
 import type { ChatRunSummary, ComposerCatalog, DataFileSummary, DataFileTextPreview, WorkspaceEntry, WorkspaceFileSummary, WorkspaceTextPreview } from "../shared/contracts";
@@ -418,7 +419,7 @@ export const api = {
   getKnowledgeRetrieval: () => request<EmbeddingSettingsDocument>("/api/capabilities/knowledge-retrieval"),
   updateKnowledgeRetrieval: (revision: string, config: EmbeddingConfigInput) => request<EmbeddingSettingsDocument>("/api/capabilities/knowledge-retrieval", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   getKnowledgeRetrievalCredential: () => request<{ apiKey: string }>("/api/capabilities/knowledge-retrieval/credential"),
-  rebuildKnowledgeRetrieval: () => request<{ totalBases: number; rebuiltBases: number; failedBases: string[] }>("/api/capabilities/knowledge-retrieval/rebuild", { method: "POST" }),
+  rebuildKnowledgeRetrieval: () => request<{ totalBases: number; rebuiltBases: number; failedBases: string[]; failures?: Array<{ baseId: string; message: string }> }>("/api/capabilities/knowledge-retrieval/rebuild", { method: "POST" }),
   getTtsProfiles: () => request<TtsSettingsDocument>("/api/capabilities/tts"),
   getTtsProfileCredential: (profileId: string) => request<{ apiKey: string }>(`/api/capabilities/tts/${encodeURIComponent(profileId)}/credential`),
   createTtsProfile: (input: TtsProfileInput) => request<{ revision: string; profile: TtsProfileSummary }>("/api/capabilities/tts", { method: "POST", body: JSON.stringify(input) }),
@@ -618,7 +619,9 @@ export const api = {
   getDiagnostics: () => request<DiagnosticsReport>("/api/configuration/diagnostics"),
   refreshPiRuntime: () => request<{ abortedSessions: number }>("/api/configuration/refresh-runtime", { method: "POST" }),
   previewConfigurationImport: (value: unknown) => request<ConfigurationImportPreview>("/api/configuration/import/preview", { method: "POST", body: JSON.stringify(value) }),
-  applyConfigurationImport: (previewId: string) => request<{ applied: true; runtimeRefreshRequired: boolean }>("/api/configuration/import/apply", { method: "POST", body: JSON.stringify({ previewId, confirmed: true }) }),
+  applyConfigurationImport: (previewId: string) => request<{ applied: true; runtimeRefreshRequired: boolean; postCommitError?: ConfigurationPostCommitError }>("/api/configuration/import/apply", { method: "POST", body: JSON.stringify({ previewId, confirmed: true }) }),
+  getConfigurationOverview: () => request<ConfigurationOverviewDocument>("/api/configuration/overview"),
+  previewConfigurationRestore: (id: string) => request<ConfigurationRestorePreview>(`/api/configuration/history/${encodeURIComponent(id)}/preview`),
   listConfigurationHistory: () => request<{ entries: ConfigurationHistoryEntry[] }>("/api/configuration/history"),
   restoreConfigurationHistory: (id: string, revision: string) => request<ScopedConfigDocument<WebPiSettings>>(`/api/configuration/history/${encodeURIComponent(id)}/restore`, { method: "POST", body: JSON.stringify({ revision }) }),
   listModels: () => request<{ models: ModelSummary[] }>("/api/models"),

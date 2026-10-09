@@ -209,7 +209,7 @@ export interface KnowledgeBaseService {
   searchForAgent(agentId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchServiceResult>;
   readForAgent(agentId: string, input: KnowledgeReadInput): Promise<KnowledgeReadServiceResult>;
   getDocumentForAgent(agentId: string, documentId: string): Promise<KnowledgeDocument>;
-  rebuildSemanticIndex(): Promise<{ totalBases: number; rebuiltBases: number; failedBases: string[] }>;
+  rebuildSemanticIndex(): Promise<{ totalBases: number; rebuiltBases: number; failedBases: string[]; failures: Array<{ baseId: string; message: string }> }>;
 }
 
 /**
@@ -268,6 +268,7 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
   const rebuildSemanticIndex = async () => {
     const bases = await dependencies.store.listBases();
     const failedBases: string[] = [];
+    const failures: Array<{ baseId: string; message: string }> = [];
     let rebuiltBases = 0;
     for (const base of bases) {
       try {
@@ -289,11 +290,12 @@ export function createKnowledgeBaseService(dependencies: KnowledgeBaseServiceDep
           }
         });
         rebuiltBases += 1;
-      } catch {
+      } catch (error) {
         failedBases.push(base.id);
+        failures.push({ baseId: base.id, message: toSafePublicMessage(error, "知识库语义索引重建捕获到非 Error 异常") });
       }
     }
-    return { totalBases: bases.length, rebuiltBases, failedBases };
+    return { totalBases: bases.length, rebuiltBases, failedBases, failures };
   };
   /** 确认 Agent 对知识库拥有资料维护权限。 */
   const requireManagedBase = async (agentId: string, knowledgeBaseId: string): Promise<void> => {

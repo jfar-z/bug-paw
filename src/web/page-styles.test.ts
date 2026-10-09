@@ -19,3 +19,16 @@ describe("资源页面样式加载边界", () => {
     expect(css).not.toContain(".resource-grid");
   });
 });
+
+/** 四页维护样式不能回流应用壳，共享弹层仍按组件加载。 */
+describe("配置维护页加载边界", () => {
+  it("四页仅通过懒加载入口引入维护领域 CSS", async () => {
+    const main = await readFile("src/web/main.tsx", "utf8");
+    const app = await readFile("src/web/app.tsx", "utf8");
+    expect(main).not.toContain("configuration-maintenance.css"); expect(app).not.toContain("configuration-maintenance.css");
+    for (const page of ["browser-automation-page", "knowledge-retrieval-page", "configuration-operations-page", "configuration-overview-page"]) {
+      expect(app).toContain(`lazy(() => import("./pages/${page}")`);
+      expect(await readFile(`src/web/pages/${page}.tsx`, "utf8")).toContain('import "../configuration-maintenance.css"');
+    }
+  });
+});

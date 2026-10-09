@@ -18,9 +18,18 @@ it("读取与保存完整配置并返回部署状态", async () => {
     await app.close();
   });
 
+  it("落盘后刷新失败返回新版本和错误，避免重复写入", async () => {
+    const app = fixture(true, true);
+    const result = await app.inject({ method: "PATCH", url: "/api/capabilities/browser", payload: { revision: "r1", config: { ...DEFAULT_BROWSER_AUTOMATION_CONFIG, enabled: true } } });
+    expect(result.statusCode).toBe(200);
+    expect(result.json()).toMatchObject({ revision: "r2", runtimeRefreshRequired: true, postCommitError: { message: expect.stringContaining("组件 Runtime HTTP 503"), requestId: expect.any(String) } });
+    const current = await app.inject({ url: "/api/capabilities/browser" }); expect(current.json().config.enabled).toBe(true);
+    await app.close();
+  });
+
 });
 
-function fixture(authenticated: boolean) {
+function fixture(authenticated: boolean, failRefresh = false) {
   const app = Fastify();
   let document = { revision: "r1", config: structuredClone(DEFAULT_BROWSER_AUTOMATION_CONFIG) };
   registerBrowserAutomationRoutes(app, {
@@ -37,7 +46,7 @@ function fixture(authenticated: boolean) {
     status: vi.fn(async () => ({ workerAvailable: true, chromiumReady: true, activeContexts: 0, queuedRequests: 0 })),
     test: vi.fn(async () => ({ ok: true, message: "浏览器组件可用" })),
     audit: { list: vi.fn(() => []) },
-    onConfigUpdated: vi.fn(async () => undefined),
+    onConfigUpdated: vi.fn(async () => { if (failRefresh) throw new Error("组件 Runtime HTTP 503"); }),
   });
   return app;
 }

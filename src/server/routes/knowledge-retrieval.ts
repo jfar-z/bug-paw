@@ -3,6 +3,8 @@ import type { FastifyInstance } from "fastify";
 import type { EmbeddingConfigInput } from "../../shared/knowledge-retrieval-contracts";
 import type { EmbeddingConfigService } from "../knowledge-base/embedding-config-service";
 import type { AuthService } from "./auth";
+import { VersionConflictError } from "../configuration/versioned-json-store";
+import { toSafePublicMessage } from "../core/errors";
 import { sendApiError } from "./http";
 import { requireAuthentication } from "./protected";
 
@@ -11,6 +13,8 @@ export interface KnowledgeRebuildResult {
   totalBases: number;
   rebuiltBases: number;
   failedBases: string[];
+  /** 失败知识库的具体、安全错误，兼容旧版 ID 数组。 */
+  failures?: Array<{ baseId: string; message: string }>;
 }
 
 interface KnowledgeRetrievalRouteDependencies {
@@ -46,7 +50,8 @@ export function registerKnowledgeRetrievalRoutes(app: FastifyInstance, dependenc
       reply.header("Cache-Control", "no-store");
       return reply.send(await dependencies.configs.update(config, body.revision));
     } catch (error) {
-      return sendApiError(reply, 400, "VALIDATION_FAILED", error instanceof Error ? error.message : "Embedding 配置无效");
+      if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
+      return sendApiError(reply, 400, "VALIDATION_FAILED", toSafePublicMessage(error, "Embedding 配置校验捕获到非 Error 异常"));
     }
   });
 
@@ -62,8 +67,8 @@ export function registerKnowledgeRetrievalRoutes(app: FastifyInstance, dependenc
     try {
       reply.header("Cache-Control", "no-store");
       return reply.send(await dependencies.rebuildAll());
-    } catch {
-      return sendApiError(reply, 502, "VALIDATION_FAILED", "语义索引重建失败");
+    } catch (error) {
+      return sendApiError(reply, 502, "VALIDATION_FAILED", `语义索引重建：${toSafePublicMessage(error, "执行阶段捕获到非 Error 异常")}`);
     }
   });
 }
@@ -75,7 +80,8 @@ function readInput(value: unknown): EmbeddingConfigInput | undefined {
     || typeof value.model !== "string"
     || typeof value.batchSize !== "number"
     || typeof value.apiKey !== "string") return undefined;
-  return { baseUrl: value.baseUrl, model: value.model, batchSize: value.batchSize, apiKey: value.apiKey, enabled: value.enabled !== false };
+  if (value.mode !== undefined && value.mode !== "managed" && value.mode !== "external") return undefined;
+  return { mode: value.mode as EmbeddingConfigInput["mode"], baseUrl: value.baseUrl, model: value.model, batchSize: value.batchSize, apiKey: value.apiKey, enabled: value.enabled !== false };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

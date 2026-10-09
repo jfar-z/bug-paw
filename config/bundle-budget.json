@@ -3,7 +3,7 @@
   "lazyChunkGzipBytes": 153600,
   "css": {
     "entryGzipBytes": 24576,
-    "totalGzipBytes": 72704,
+    "totalGzipBytes": 73728,
     "routes": {
       "src/web/pages/chat-page.tsx": {
         "label": "聊天工作台",
@@ -43,7 +43,7 @@
       },
       "src/web/pages/configuration-overview-page.tsx": {
         "label": "配置概览",
-        "gzipBytes": 4096
+        "gzipBytes": 4864
       },
       "src/web/pages/capabilities-page.tsx": {
         "label": "能力扩展",
@@ -55,7 +55,7 @@
       },
       "src/web/pages/browser-automation-page.tsx": {
         "label": "浏览器执行",
-        "gzipBytes": 4096
+        "gzipBytes": 5632
       },
       "src/web/pages/tts-page.tsx": {
         "label": "语音合成",
@@ -63,7 +63,7 @@
       },
       "src/web/pages/knowledge-retrieval-page.tsx": {
         "label": "语义检索",
-        "gzipBytes": 4096
+        "gzipBytes": 5120
       },
       "src/web/pages/providers-page.tsx": {
         "label": "Provider 管理",
@@ -87,7 +87,7 @@
       },
       "src/web/pages/configuration-operations-page.tsx": {
         "label": "配置操作",
-        "gzipBytes": 4096
+        "gzipBytes": 5632
       },
       "src/web/pages/diagnostics-page.tsx": {
         "label": "系统诊断",

@@ -1,3 +1,5 @@
+import { toSafePublicMessage } from "./core/errors";
+import { createVersionedJsonStore } from "./configuration/versioned-json-store";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import fastifyStatic from "@fastify/static";
@@ -646,6 +648,27 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   registerConfigurationRoutes(app, {
     authService,
     paths,
+    overviewReaders: {
+      agents: async () => ({ summary: `${(await agentStore.list()).length} 个已配置 Agent` }),
+      providers: async () => {
+        const providers = Object.keys((await models.read()).value.providers ?? {});
+        const configured = (await credentials.list()).filter((item) => providers.includes(item.providerId) && item.configured).length;
+        return { summary: `${providers.length} 个 Provider · ${configured} 个已配置凭证`, needsConfiguration: providers.length === 0 };
+      },
+      "pi-settings": async () => {
+        const value = await createVersionedJsonStore<Record<string, unknown>>(join(paths.piDir, "settings.json")).read();
+        return { summary: value.exists ? "已保存全局设置；Agent 可独立覆盖" : "未声明全局设置，沿用核心默认值" };
+      },
+      resources: async () => {
+        const value = (await createVersionedJsonStore<Record<string, unknown>>(join(paths.piDir, "settings.json")).read()).value;
+        return { summary: `${Array.isArray(value?.packages) ? value.packages.length : 0} 个全局配置包来源 · 不代表已加载` };
+      },
+      "web-research": async () => { const { config } = await webResearchConfigs.read(); return { summary: `已保存：${config.enabled ? "启用" : "关闭"} · ${config.searchProviders.length} 个搜索渠道` }; },
+      "browser-automation": async () => { const { config } = await browserConfigs.read(); return { summary: `${deploymentCapabilities.browserAutomationAvailable ? "部署包含组件" : "未部署组件"} · 已保存：${config.enabled ? "启用" : "停用"}` }; },
+      "aigc-channels": async () => ({ summary: `${(await aigcConnections.list()).channels.length} 个已配置渠道 · 不代表测试通过` }),
+      tts: async () => ({ summary: `${(await ttsConfigs.list()).profiles.length} 个已配置语音方案` }),
+      "knowledge-retrieval": async () => { const { config } = await embeddingConfigs.read(); return { summary: config ? `${config.isManaged ? "内置服务" : "外部兼容服务"} · 已保存：${config.enabled ? "启用" : "关闭"}` : "尚未配置服务", needsConfiguration: !config }; },
+    },
     agents: agentStore,
     historyRepository: createConfigurationHistoryRepository(applicationDatabase),
     backgroundErrors: () => backgroundErrors.summary(),
@@ -730,15 +753,15 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
       try {
         await browserWorker.health();
         return { workerAvailable: true, chromiumReady: true, ...pool };
-      } catch {
-        return { workerAvailable: false, chromiumReady: false, ...pool, lastFailureAt: new Date().toISOString(), lastFailureCode: "BROWSER_WORKER_UNAVAILABLE" };
+      } catch (error) {
+        return { workerAvailable: false, chromiumReady: false, ...pool, lastFailureAt: new Date().toISOString(), lastFailureCode: "BROWSER_WORKER_UNAVAILABLE", lastFailureMessage: `Browser Worker 健康检查：${toSafePublicMessage(error, "捕获到非 Error 异常")}` };
       }
     },
     test: async () => {
       try {
         await browserWorker?.health();
         return { ok: Boolean(browserWorker), message: browserWorker ? "浏览器组件可用" : "当前部署未包含浏览器执行组件" };
-      } catch { return { ok: false, message: "浏览器组件当前不可用" }; }
+      } catch (error) { return { ok: false, message: `Browser Worker 组件测试：${toSafePublicMessage(error, "捕获到非 Error 异常")}` }; }
     },
     audit: browserAudit,
     onConfigUpdated: async (previous, current) => {

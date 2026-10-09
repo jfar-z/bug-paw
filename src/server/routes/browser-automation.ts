@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { BrowserAutomationConfig, BrowserAutomationConfigDocument, BrowserDeploymentStatus } from "../../shared/browser-automation-contracts";
 import type { BrowserAuditEvent } from "../browser-automation/browser-audit-repository";
 import type { AuthService } from "./auth";
+import { toSafePublicMessage } from "../core/errors";
 import { sendApiError } from "./http";
 import { requireAuthentication } from "./protected";
 
@@ -37,11 +38,17 @@ export function registerBrowserAutomationRoutes(app: FastifyInstance, dependenci
     try {
       const previous = await dependencies.configs.read();
       const current = await dependencies.configs.update(body.config as unknown as BrowserAutomationConfig, body.revision);
-      await dependencies.onConfigUpdated(previous.config, current.config);
-      return reply.send({ ...current, deployment: { available: dependencies.deploymentAvailable, ...await dependencies.status() } });
+      let postCommitError: { message: string; requestId: string } | undefined;
+      try { await dependencies.onConfigUpdated(previous.config, current.config); }
+      catch (error) { postCommitError = { message: `浏览器配置已保存，运行时更新：${toSafePublicMessage(error, "捕获到非 Error 异常")}`, requestId: request.id }; }
+      let deployment;
+      try { deployment = { available: dependencies.deploymentAvailable, ...await dependencies.status() }; }
+      catch (error) { postCommitError ??= { message: `浏览器配置已保存，状态读取：${toSafePublicMessage(error, "捕获到非 Error 异常")}`, requestId: request.id }; }
+      // 写入成功后返回新版本与独立维护错误，避免客户端误重试旧版本。
+      return reply.send({ ...current, deployment, runtimeRefreshRequired: Boolean(postCommitError), postCommitError });
     } catch (error) {
       if (error instanceof Error && error.name === "VersionConflictError") return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
-      return sendApiError(reply, 400, "VALIDATION_FAILED", error instanceof Error ? error.message : "浏览器能力配置无效");
+      return sendApiError(reply, 400, "VALIDATION_FAILED", error instanceof Error ? error.message : "浏览器配置保存捕获到非 Error 异常");
     }
   });
 

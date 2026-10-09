@@ -41,4 +41,23 @@ it("使用受管默认模型重建语义索引", async () => {
     await app.close();
   });
 
+  it("外部模式可安全切回部署内置，冲突保留正确分类", async () => {
+    const root = await mkdtemp(join(tmpdir(), "knowledge-retrieval-mode-")); roots.push(root);
+    const app = Fastify();
+    const configs = new EmbeddingConfigService(join(root, "embedding.json"));
+    registerKnowledgeRetrievalRoutes(app, { authService: { isAuthenticated: async () => true } as unknown as AuthService, configs, rebuildAll: async () => ({ totalBases: 0, rebuiltBases: 0, failedBases: [] }) });
+    try {
+      const initial = await configs.read();
+      const external = await configs.update({ baseUrl: "https://embedding.example/v1", model: "test", batchSize: 32, apiKey: randomUUID(), enabled: true, mode: "external" }, initial.revision);
+      const payload = { revision: external.revision, config: { baseUrl: "", model: "", batchSize: 4, apiKey: "", enabled: true, mode: "managed" } };
+      const result = await app.inject({ method: "PATCH", url: "/api/capabilities/knowledge-retrieval", payload });
+      expect(result.statusCode).toBe(200); expect(result.json().config).toMatchObject({ isManaged: true, hasApiKey: false, batchSize: 4 });
+      expect(result.json().managed.available).toBe(true);
+      const conflict = await app.inject({ method: "PATCH", url: "/api/capabilities/knowledge-retrieval", payload });
+      expect(conflict.statusCode).toBe(409); expect(conflict.json().error.code).toBe("VERSION_CONFLICT");
+      const unavailable = new EmbeddingConfigService(join(root, "disabled.json"), { managedAvailable: false });
+      await expect(unavailable.update(payload.config as never, (await unavailable.read()).revision)).rejects.toThrow("当前部署未提供");
+    } finally { await app.close(); }
+  });
+
 });

@@ -15,12 +15,16 @@ import type { DataPaths } from "../paths";
 import type { ConfigurationHistoryRepository } from "../configuration/configuration-history-repository";
 import type { DiagnosticsReport } from "../configuration/diagnostics-service";
 import type { AuthService } from "./auth";
+import { DomainError, toSafePublicMessage } from "../core/errors";
+import type { ConfigurationOverviewDocument, ConfigurationPostCommitError } from "../../shared/configuration-operations-contracts";
 import { sendApiError } from "./http";
 import { requireAuthentication } from "./protected";
 
 interface ConfigurationRouteDependencies {
   authService: AuthService;
   paths: DataPaths;
+  /** 只读脱敏摘要，不触发网络测试、目录安装或历史清理。 */
+  overviewReaders?: Record<string, () => Promise<{ summary: string; needsConfiguration?: boolean }>>;
   agents: AgentStore;
   refreshRuntime?: () => Promise<{ abortedSessions: number }>;
   historyRepository?: ConfigurationHistoryRepository;
@@ -74,6 +78,16 @@ export function registerConfigurationRoutes(app: FastifyInstance, dependencies: 
   });
   const history = new ConfigHistory(dependencies.paths.historyDir, dependencies.historyRepository);
   app.addHook("onClose", async () => operations.dispose());
+
+  app.get("/api/configuration/overview", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    reply.header("Cache-Control", "no-store");
+    const entries = await Promise.all(Object.entries(dependencies.overviewReaders ?? {}).map(async ([key, read]) => {
+      try { return { key, ...await read() }; }
+      catch (error) { return { key, error: { message: toSafePublicMessage(error, `${key} 摘要读取捕获到非 Error 异常`), requestId: request.id } }; }
+    }));
+    return reply.send({ readAt: new Date().toISOString(), entries } satisfies ConfigurationOverviewDocument);
+  });
 
   app.get("/api/configuration/global", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
@@ -138,14 +152,16 @@ export function registerConfigurationRoutes(app: FastifyInstance, dependencies: 
       return sendApiError(reply, 400, "IMPORT_CONFIRMATION_REQUIRED", "应用导入前必须确认预览结果");
     }
     try {
-      let runtimeRefreshRequired = false;
+      let runtimeRefreshRequired = !dependencies.refreshRuntime;
+      let postCommitError: ConfigurationPostCommitError | undefined;
       const apply = async () => {
         await operations.apply(body.previewId as string);
-        try { await dependencies.refreshRuntime?.(); } catch { runtimeRefreshRequired = true; }
+        try { await dependencies.refreshRuntime?.(); } catch (error) { runtimeRefreshRequired = true; postCommitError = { message: `配置已导入，运行时刷新：${toSafePublicMessage(error, "捕获到非 Error 异常")}`, requestId: request.id }; }
       };
       await (dependencies.runModelMutation?.(apply) ?? apply());
-      return reply.send({ applied: true, runtimeRefreshRequired });
+      return reply.send({ applied: true, runtimeRefreshRequired, postCommitError });
     } catch (error) {
+      if (error instanceof DomainError) return sendApiError(reply, 409, error.code, error.message);
       if (error instanceof VersionConflictError) return sendApiError(reply, 409, "VERSION_CONFLICT", error.message);
       return sendApiError(reply, 400, "IMPORT_INVALID", error instanceof Error ? error.message : "配置导入阶段捕获到非 Error 异常");
     }
@@ -155,6 +171,18 @@ export function registerConfigurationRoutes(app: FastifyInstance, dependencies: 
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     reply.header("Cache-Control", "no-store");
     return reply.send({ entries: await history.list() });
+  });
+
+  app.get<{ Params: { id: string } }>("/api/configuration/history/:id/preview", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    reply.header("Cache-Control", "no-store");
+    const snapshot = await history.getSnapshot(request.params.id);
+    if (!snapshot) return sendApiError(reply, 404, "HISTORY_NOT_RESTORABLE", "历史记录没有可恢复快照");
+    const agent = snapshot.scope === "agent" && snapshot.targetId ? await dependencies.agents.get(snapshot.targetId) : undefined;
+    if (snapshot.scope === "agent" && !agent) return sendApiError(reply, 404, "AGENT_NOT_FOUND", "恢复目标 Agent 不存在");
+    const target = snapshot.scope === "global" ? join(dependencies.paths.piDir, "settings.json") : join(agent!.profile.cwd, ".pi", "settings.json");
+    const current = await createVersionedJsonStore<Record<string, unknown>>(target).read();
+    return reply.send({ id: snapshot.id, scope: snapshot.scope, targetId: snapshot.targetId, revision: current.revision, differences: safeSettingsDifferences(current.value ?? {}, snapshot.value) });
   });
 
   app.post<{ Params: { id: string } }>("/api/configuration/history/:id/restore", async (request, reply) => {
@@ -173,13 +201,14 @@ export function registerConfigurationRoutes(app: FastifyInstance, dependencies: 
         const written = await createVersionedJsonStore<Record<string, unknown>>(target).write(snapshot.value, body.revision as string);
         try {
           if (snapshot.scope === "agent" && snapshot.targetId) await dependencies.refreshAgent?.(snapshot.targetId);
-          return reply.send(snapshot.scope === "global"
-            ? await globalService(dependencies).read("global")
-            : await agentService(dependencies, agent!.profile.cwd).read("agent"));
-        } catch {
+          const result = snapshot.scope === "global" ? await globalService(dependencies).read("global") : await agentService(dependencies, agent!.profile.cwd).read("agent");
+          return reply.send({ ...result, runtimeRefreshRequired: snapshot.scope === "global" || !dependencies.refreshAgent });
+        } catch (error) {
           // 文件恢复已经提交；Runtime 刷新或响应重读失败时返回已提交 revision，禁止客户端重试写入。
           return reply.send({
             revision: written.revision,
+            runtimeRefreshRequired: true,
+            postCommitError: { message: `设置已恢复，后续刷新或重读：${toSafePublicMessage(error, "捕获到非 Error 异常")}`, requestId: request.id },
             own: scrubSecrets(snapshot.value),
             effective: scrubSecrets(snapshot.value),
             diagnostics: [{ source: "settings", severity: "warning", code: "RUNTIME_REFRESH_REQUIRED", message: "设置已恢复，请手动刷新 Runtime" }],
@@ -336,4 +365,24 @@ function agentService(dependencies: ConfigurationRouteDependencies, cwd: string)
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 对合法设置叶子提供安全差异；未知字段保留恢复，但不公开其值。 */
+function safeSettingsDifferences(current: Record<string, unknown>, restored: Record<string, unknown>) {
+  const result: Array<{ field: string; current: string; restored: string }> = [];
+  const display = (value: unknown, path: string) => {
+    if (value === undefined) return "未声明";
+    if (!isAllowedPath(path) || containsSensitiveSetting({ [path]: value })) return "[值已隐藏]";
+    return toSafePublicMessage(JSON.stringify(scrubSecrets(value)), "[值已隐藏]", 1000);
+  };
+  const walk = (a: Record<string, unknown>, b: Record<string, unknown>, prefix = "") => {
+    for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (JSON.stringify(a[key]) === JSON.stringify(b[key])) continue;
+      if (isRecord(a[key]) && isRecord(b[key])) walk(a[key], b[key], path);
+      else result.push({ field: toSafePublicMessage(path, "[字段已隐藏]"), current: display(a[key], path), restored: display(b[key], path) });
+    }
+  };
+  walk(current, restored);
+  return result;
 }

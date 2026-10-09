@@ -113,7 +113,7 @@ function UnsavedChangesDialog({ label, error, busy, canSave, discardOnly, onCanc
     return () => { document.removeEventListener("keydown", keydown); document.body.style.overflow = overflow; if (trigger?.isConnected) trigger.focus(); };
   }, []);
   return createPortal(<div className="configuration-dialog-backdrop" role="presentation"><section ref={root} tabIndex={-1} className="configuration-dialog provider-rename-dialog" role="dialog" aria-modal="true" aria-labelledby={id} aria-describedby={`${id}-description`} aria-busy={busy}>
-    <header><div><h2 id={id}>{discardOnly ? "还有未提交的安装输入" : "还有未保存的修改"}</h2><p id={`${id}-description`}>{discardOnly ? `“${label}”尚未提交安装；放弃输入不会启动后台任务。` : `“${label}”尚未保存。切换前，请选择如何处理当前修改。`}</p></div></header>
+    <header><div><h2 id={id}>{discardOnly ? (label.includes("安装") ? "还有未提交的安装输入" : "还有未提交的输入") : "还有未保存的修改"}</h2><p id={`${id}-description`}>{discardOnly ? `“${label}”尚未提交；放弃输入不会执行操作。` : `“${label}”尚未保存。切换前，请选择如何处理当前修改。`}</p></div></header>
     {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}
     <footer><button type="button" className="configuration-secondary-action" disabled={busy} onClick={onCancel}>继续编辑</button><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" disabled={busy} onClick={onDiscard}>放弃并切换</button>{!discardOnly ? <button type="button" className="configuration-primary-action" disabled={busy || !canSave} onClick={onSave}>{busy ? "保存中…" : "保存并切换"}</button> : null}</footer>
   </section></div>, document.body);

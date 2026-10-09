@@ -30,6 +30,8 @@ export interface ConfigurationDiagnostic {
 export interface ScopedConfigDocument<T> {
   /** 保存接口明确报告运行时是否仍需手动刷新；读取接口不推断此状态。 */
   runtimeRefreshRequired?: boolean;
+  /** 配置已提交后的维护错误，不能据此重试原写入。 */
+  postCommitError?: { message: string; requestId: string };
   /**
    * 当前作用域文件版本。
    */

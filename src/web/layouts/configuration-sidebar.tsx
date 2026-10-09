@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   BrainCircuit,
+  type LucideIcon,
   Boxes,
   Cable,
   Globe2,
@@ -14,6 +15,8 @@ import {
   X,
 } from "lucide-react";
 import { SecondarySidebarHeader } from "../components/secondary-sidebar-header";
+import { Fragment } from "react";
+import { configurationGroups } from "../configuration-navigation";
 import type { AppRoute } from "../router";
 
 interface ConfigurationSidebarProps {
@@ -46,66 +49,15 @@ export function ConfigurationSidebar({ route, open, onClose, onNavigate }: Confi
 
       <nav className="configuration-nav" aria-label="配置中心导航">
         <p>工作区</p>
-        <button
-          type="button"
-          className={route.page === "configuration-overview" ? "is-active" : undefined}
-          aria-current={route.page === "configuration-overview" ? "page" : undefined}
-          onClick={() => go({ page: "configuration-overview" })}
-        >
-          <LayoutDashboard size={17} aria-hidden="true" />
-          <span>概览</span>
-        </button>
-        <button type="button" className={route.page === "pi-settings" ? "is-active" : undefined} aria-current={route.page === "pi-settings" ? "page" : undefined} onClick={() => go({ page: "pi-settings" })}>
-          <SlidersHorizontal size={17} aria-hidden="true" /><span>运行设置</span>
-        </button>
-        <button type="button" className={route.page === "resources" ? "is-active" : undefined} aria-current={route.page === "resources" ? "page" : undefined} onClick={() => go({ page: "resources" })}>
-          <Boxes size={17} aria-hidden="true" /><span>Skills 与扩展</span>
-        </button>
-        <button
-          type="button"
-          className={route.page === "providers" ? "is-active" : undefined}
-          aria-current={route.page === "providers" ? "page" : undefined}
-          onClick={() => go({ page: "providers" })}
-        >
-          <KeyRound size={17} aria-hidden="true" />
-          <span>模型与凭证</span>
-        </button>
-        <button
-          type="button"
-          className={agentActive ? "is-active" : undefined}
-          aria-current={agentActive ? "page" : undefined}
-          onClick={() => go({ page: "agents" })}
-        >
-          <Bot size={17} aria-hidden="true" />
-          <span>Agents</span>
-        </button>
-
-        <p>能力扩展</p>
-        <button
-          type="button"
-          className={route.page === "web-research" ? "is-active" : undefined}
-          aria-current={route.page === "web-research" ? "page" : undefined}
-          onClick={() => go({ page: "web-research" })}
-        >
-          <Globe2 size={17} aria-hidden="true" />
-          <span>联网搜索</span>
-        </button>
-        <button type="button" className={route.page === "browser-automation" ? "is-active" : undefined} aria-current={route.page === "browser-automation" ? "page" : undefined} onClick={() => go({ page: "browser-automation" })}>
-          <MonitorPlay size={17} aria-hidden="true" /><span>浏览器执行</span>
-        </button>
-        <button type="button" className={route.page === "aigc-channels" ? "is-active" : undefined} aria-current={route.page === "aigc-channels" ? "page" : undefined} onClick={() => go({ page: "aigc-channels" })}>
-          <Cable size={17} aria-hidden="true" /><span>AIGC 渠道</span>
-        </button>
-        <button type="button" className={route.page === "tts" ? "is-active" : undefined} aria-current={route.page === "tts" ? "page" : undefined} onClick={() => go({ page: "tts" })}>
-          <Volume2 size={17} aria-hidden="true" /><span>语音合成</span>
-        </button>
-        <button type="button" className={route.page === "knowledge-retrieval" ? "is-active" : undefined} aria-current={route.page === "knowledge-retrieval" ? "page" : undefined} onClick={() => go({ page: "knowledge-retrieval" })}>
-          <BrainCircuit size={17} aria-hidden="true" /><span>语义检索</span>
-        </button>
-
-        <p>运行环境</p>
-        <button type="button" className={route.page === "configuration-operations" ? "is-active" : undefined} aria-current={route.page === "configuration-operations" ? "page" : undefined} onClick={() => go({ page: "configuration-operations" })}><History size={17} aria-hidden="true" /><span>导入与变更</span></button>
-        <button type="button" className={route.page === "diagnostics" ? "is-active" : undefined} aria-current={route.page === "diagnostics" ? "page" : undefined} onClick={() => go({ page: "diagnostics" })}><Activity size={17} aria-hidden="true" /><span>系统诊断</span></button>
+        <button type="button" className={route.page === "configuration-overview" ? "is-active" : undefined} aria-current={route.page === "configuration-overview" ? "page" : undefined} onClick={() => go({ page: "configuration-overview" })}><LayoutDashboard size={17} aria-hidden="true" /><span>概览</span></button>
+        {configurationGroups.map((group, index) => <Fragment key={group.title}>
+          {index > 0 ? <p>{group.title}</p> : null}
+          {group.entries.map((entry) => {
+            const Icon = icons[entry.key];
+            const active = entry.key === "agents" ? agentActive : route.page === entry.route.page;
+            return <button key={entry.key} type="button" className={active ? "is-active" : undefined} aria-current={active ? "page" : undefined} onClick={() => go(entry.route)}><Icon size={17} aria-hidden="true" /><span>{entry.title}</span></button>;
+          })}
+        </Fragment>)}
       </nav>
 
       <footer className="configuration-sidebar__footer">
@@ -115,3 +67,6 @@ export function ConfigurationSidebar({ route, open, onClose, onNavigate }: Confi
     </aside>
   );
 }
+
+/** 图标沿用既有配置侧栏体系，入口顺序由共享元数据决定。 */
+const icons: Record<string, LucideIcon> = { "pi-settings": SlidersHorizontal, resources: Boxes, providers: KeyRound, agents: Bot, "web-research": Globe2, "browser-automation": MonitorPlay, "aigc-channels": Cable, tts: Volume2, "knowledge-retrieval": BrainCircuit, "configuration-operations": History, diagnostics: Activity };

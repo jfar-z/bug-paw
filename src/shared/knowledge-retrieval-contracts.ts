@@ -17,6 +17,8 @@ export interface EmbeddingConfigInput {
   batchSize: number;
   /** 空字符串表示更新时保留已保存的密钥。 */
   apiKey: string;
+  /** 显式选择服务模式；省略时兼容旧版根据配置推导。 */
+  mode?: "managed" | "external";
   /** 是否在资料上传和查询时启用语义向量检索。 */
   enabled: boolean;
 }
@@ -25,4 +27,6 @@ export interface EmbeddingConfigInput {
 export interface EmbeddingSettingsDocument {
   revision: string;
   config?: EmbeddingConfigSummary;
+  /** 部署提供的内置选项，仅供配置，不代表健康状态。 */
+  managed?: { available: boolean; baseUrl: string; model: string; maxBatchSize: number };
 }

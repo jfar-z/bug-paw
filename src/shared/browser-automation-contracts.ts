@@ -103,12 +103,17 @@ export interface BrowserDeploymentStatus {
   lastFailureAt?: string;
   /** 最近稳定故障码。 */
   lastFailureCode?: string;
+  /** 健康检查失败的脱敏阶段信息。 */
+  lastFailureMessage?: string;
 }
 
 /** 配置中心读取的完整设置文档。 */
 export interface BrowserAutomationSettingsDocument extends BrowserAutomationConfigDocument {
   /** 非敏感的部署和运行摘要。 */
-  deployment: BrowserDeploymentStatus;
+  deployment?: BrowserDeploymentStatus;
+  /** 已落盘但运行时或状态读取失败时必须禁止客户端重复提交。 */
+  runtimeRefreshRequired?: boolean;
+  postCommitError?: { message: string; requestId: string };
 }
 
 /** 第一期浏览器能力默认配置。 */
