@@ -63,7 +63,10 @@ describe("Skills 与扩展交互",()=>{
   });
   it("完成后目录重读失败保留完成事实，明确重试目录",async()=>{
     vi.spyOn(api,"installResource").mockResolvedValue({taskId:"demo-refresh"});vi.mocked(api.listResources).mockResolvedValueOnce(doc()).mockRejectedValueOnce(new ApiClientError("INTERNAL_ERROR","完成后读取目录时存储不可用",500)).mockResolvedValue(doc());
-    show();await screen.findByRole("button",{name:"查看资源 Research"});fireEvent.click(screen.getByRole("button",{name:"安装扩展包"}));fireEvent.change(screen.getByLabelText("扩展包来源"),{target:{value:"npm:example"}});fireEvent.click(screen.getByRole("checkbox"));fireEvent.click(screen.getByRole("button",{name:"开始安装"}));await screen.findByText("进行中");act(()=>ResourceStream.streams[0].send({type:"completed"}));
+    show();await screen.findByRole("button",{name:"查看资源 Research"});fireEvent.click(screen.getByRole("button",{name:"安装扩展包"}));fireEvent.change(screen.getByLabelText("扩展包来源"),{target:{value:"npm:example"}});fireEvent.click(screen.getByRole("checkbox"));fireEvent.click(screen.getByRole("button",{name:"开始安装"}));await screen.findByText("进行中");
+    // 任务状态先渲染，订阅在后续 Effect 中创建；等待订阅后再模拟完成事件。
+    await waitFor(()=>expect(ResourceStream.streams).toHaveLength(1));
+    act(()=>ResourceStream.streams[0].send({type:"completed"}));
     await screen.findByText("任务已完成，目录更新失败。请重新加载目录；不要重复提交包操作。");expect(screen.getByText("已完成")).toBeInTheDocument();fireEvent.click(screen.getByRole("button",{name:"重新加载目录"}));await screen.findByRole("button",{name:"查看资源 Research"});
   });
   it("从 Agent 卸载全局包明确全局影响，引用拒绝保留确认对象",async()=>{
