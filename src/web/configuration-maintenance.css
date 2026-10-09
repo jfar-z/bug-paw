@@ -25,10 +25,5 @@
 .maintenance-fieldset:disabled{opacity:.7}
 @media(max-width:760px){.maintenance-grid{grid-template-columns:1fr}.maintenance-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.maintenance-item-actions button{min-height:44px}.maintenance-row{align-items:flex-start}}
 
-/* 页面标题和配置表面遵循已确认预览，不改变其他配置页样式。 */
-.configuration-maintenance-page .configuration-page__heading h1{font-size:30px}
-.configuration-maintenance-page .configuration-form-card{padding:24px;margin:20px 0;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
-.configuration-maintenance-page .configuration-form-card h2{font-size:18px;margin-top:0}
 .browser-drawer .configuration-capability-toggle{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:44px;padding:16px 0;border-top:1px solid var(--border);font-size:13px}
 .browser-drawer .configuration-capability-toggle input[type=checkbox]{width:18px;height:18px;min-height:18px;flex:none;padding:0;margin:0;accent-color:var(--accent)}
-@media(max-width:760px){.configuration-maintenance-page .configuration-page__heading h1{font-size:26px}.configuration-maintenance-page .configuration-form-card{padding:20px 16px}}

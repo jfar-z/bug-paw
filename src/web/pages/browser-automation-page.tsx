@@ -111,11 +111,11 @@ export function BrowserAutomationPage() {
     setEditor({ index, value, initial: JSON.stringify(value) });
   }
   function closeEditor() { if (editorDirty) setConfirm("origin-close"); else setEditor(undefined); }
-  if (!document || !draft) return <main className="configuration-page configuration-maintenance-page"><h1>浏览器执行</h1><p role={loadState === "error" ? "alert" : "status"}>{loadState === "error" ? "配置读取未完成，请查看错误通知并重试。" : "正在读取浏览器配置…"}</p><button type="button" onClick={() => setReload((value) => value + 1)} disabled={!online || loadState === "loading"}>重新加载</button></main>;
+  if (!document || !draft) return <main className="configuration-page configuration-maintenance-page"><header className="configuration-page__heading"><h1>浏览器执行</h1></header><p role={loadState === "error" ? "alert" : "status"}>{loadState === "error" ? "配置读取未完成，请查看错误通知并重试。" : "正在读取浏览器配置…"}</p><button type="button" onClick={() => setReload((value) => value + 1)} disabled={!online || loadState === "loading"}>重新加载</button></main>;
   const deployment = cached || !online ? undefined : document.deployment;
   const busy = saving || testing || refreshing;
   return <main className="configuration-page configuration-maintenance-page browser-automation-page">
-    <header className="configuration-page configuration-maintenance-page__heading"><h1>浏览器执行</h1><p>管理浏览范围、精确 Origin 交互权限和执行资源。</p></header>
+    <header className="configuration-page__heading"><h1>浏览器执行</h1><p>管理浏览范围、精确 Origin 交互权限和执行资源。</p></header>
     {cached || !online ? <p className="configuration-save-notice" role="status">离线只读 · 配置快照不包含实时服务状态。</p> : null}
     {loadState === "error" || conflict ? <div className="configuration-inline-error" role="alert">{conflict ? "配置版本冲突，草稿已保留。重新加载会放弃当前草稿。" : "读取未完成，旧配置仅供查看。"}<button type="button" disabled={busy || !online} onClick={() => guard.request(() => { setEditor(undefined); setReload((value) => value + 1); })}>重新加载配置</button></div> : null}
     <section className="configuration-form-card"><div className="maintenance-row"><h2>服务状态</h2><div className="maintenance-item-actions"><button type="button" className="configuration-secondary-action" disabled={busy || !online || cached} onClick={() => void refreshStatus()}><RefreshCw size={16} />刷新状态</button><button type="button" className="configuration-secondary-action" disabled={busy || !online || cached || !deployment?.available} onClick={() => void test()}><ServerCog size={16} />{testing ? "测试中…" : "测试浏览器组件"}</button></div></div>

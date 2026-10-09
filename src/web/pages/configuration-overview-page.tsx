@@ -47,7 +47,7 @@ export function ConfigurationOverviewPage({ onNavigate }: { onNavigate: (route: 
   }, [reload]);
   const entries = document?.entries ?? [];
   return <main className="configuration-page configuration-maintenance-page configuration-overview-page">
-    <header className="configuration-page configuration-maintenance-page__heading"><div><h1>配置中心</h1><p>查看已保存配置，按业务任务进入设置。</p></div><img className="configuration-overview-mascot" src="/brand/bugpaw/bugpaw-mascot.png" alt="BUG 猫咪像素吉祥物" /></header>
+    <header className="configuration-page__heading"><div><h1>配置中心</h1><p>查看已保存配置，按业务任务进入设置。</p></div><img className="configuration-overview-mascot" src="/brand/bugpaw/bugpaw-mascot.png" alt="BUG 猫咪像素吉祥物" /></header>
     <ConfigurationEffectNotice />
     <p className="maintenance-muted">生效提示仅记录本次页面会话，不代表服务器全局状态。</p>
     <div className="maintenance-row"><p className="maintenance-muted">{document ? `${cached || !online ? "缓存摘要（非实时）" : "摘要读取时间"}：${new Date(document.readAt).toLocaleString()}` : "正在读取配置摘要…"}</p><button type="button" className="configuration-secondary-action" disabled={!online || state === "loading"} onClick={() => setReload((value) => value + 1)}><RefreshCw size={16} />刷新摘要</button></div>

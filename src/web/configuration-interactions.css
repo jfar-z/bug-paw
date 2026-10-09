@@ -8,13 +8,11 @@
 .configuration-effect-notice.is-applied { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 7%, var(--surface)); }
 .configuration-effect-notice.is-applied > svg { color: var(--ok); }
 .configuration-editing-state { color: var(--text-secondary); font-size: 11px; }
-.configuration-quick-wins-page .configuration-page__heading { margin-bottom: 24px; }
-.configuration-quick-wins-page .configuration-page__heading h1 { font-size: 30px; }
 @media (max-width: 760px) {
   .configuration-effect-notice { flex-wrap: wrap; padding: 16px; }
-  .configuration-effect-notice > div { flex: 1; }
+  /* 手机说明占完整一行，操作按钮换行，避免正文被压成窄列。 */
+  .configuration-effect-notice > div { flex: 1 1 calc(100% - 36px); }
   .configuration-effect-notice > button { margin-left: 36px; }
-  .configuration-quick-wins-page .configuration-page__heading h1 { font-size: 26px; }
 }
 
 .configuration-interaction-fields { min-width: 0; margin: 0; padding: 0; border: 0; }

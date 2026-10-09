@@ -63,7 +63,7 @@ export function DiagnosticsPage({ reloadPage = () => window.location.reload() }:
   };
 
   return <div className="configuration-page diagnostics-page">
-    <header className="configuration-page__heading configuration-heading-actions"><div><span className="configuration-eyebrow">SYSTEM DIAGNOSTICS</span><h1>系统诊断</h1><p>检查模型、凭证、目录、挂载和资源加载状态，让 BUG 的运行环境保持就绪。</p></div><div className="configuration-button-row"><button type="button" className="secondary-button" onClick={() => void refresh()} disabled={loading || refreshingRuntime}><RefreshCw size={16} aria-hidden="true" />刷新诊断</button><button type="button" className="danger-button" onClick={() => setRefreshConfirmationOpen(true)} disabled={loading || refreshingRuntime}><RefreshCw size={16} aria-hidden="true" />刷新核心配置</button></div></header>
+    <header className="configuration-page__heading configuration-page__heading--actions"><div><span className="configuration-eyebrow">SYSTEM DIAGNOSTICS</span><h1>系统诊断</h1><p>检查模型、凭证、目录、挂载和资源加载状态，让 BUG 的运行环境保持就绪。</p></div><div className="configuration-actions"><button type="button" className="configuration-secondary-action" onClick={() => void refresh()} disabled={loading || refreshingRuntime}><RefreshCw size={16} aria-hidden="true" />刷新诊断</button><button type="button" className="configuration-secondary-action configuration-secondary-action--danger" onClick={() => setRefreshConfirmationOpen(true)} disabled={loading || refreshingRuntime}><RefreshCw size={16} aria-hidden="true" />刷新核心配置</button></div></header>
     <ConfigurationEffectNotice />
     {loading && !report ? <section className="configuration-form-card">正在执行诊断…</section> : null}
     {error ? <section className="configuration-error-state" role="alert">{error}</section> : null}

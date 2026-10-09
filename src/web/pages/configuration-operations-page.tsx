@@ -114,7 +114,7 @@ export function ConfigurationOperationsPage() {
     } finally { lock.current = false; setBusy(false); }
   }
   const shownHistory = history.filter((entry) => (filter === "all" || (filter === "restorable" ? entry.restorable : !entry.restorable)) && (scope === "all" || entry.scope === scope) && `${entry.summary} ${entry.targetId ?? ""}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
-  return <main className="configuration-page configuration-maintenance-page configuration-operations-page"><header className="configuration-page configuration-maintenance-page__heading"><span className="configuration-eyebrow">IMPORT · EXPORT · HISTORY</span><h1>导入与变更</h1><p>先审阅，再应用；安全导出不是完整生产数据备份。</p></header><ConfigurationEffectNotice configKey="operations" />
+  return <main className="configuration-page configuration-maintenance-page configuration-operations-page"><header className="configuration-page__heading"><span className="configuration-eyebrow">IMPORT · EXPORT · HISTORY</span><h1>导入与变更</h1><p>先审阅，再应用；安全导出不是完整生产数据备份。</p></header><ConfigurationEffectNotice configKey="operations" />
     {error ? <p className="configuration-inline-error" role="alert">{error}</p> : null}{message ? <p className="configuration-inline-message" role="status">{message}</p> : null}
     {!online ? <p className="configuration-save-notice">离线只读，导入、导出与恢复暂停。</p> : null}
     <ConfigurationTabs value={category} onChange={setCategory} items={[{ value: "import", label: "导入配置" }, { value: "export", label: "安全导出" }, { value: "history", label: "变更历史" }]} />

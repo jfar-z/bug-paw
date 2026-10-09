@@ -1,5 +1,4 @@
 /* 配置资源目录独立懒加载，不影响工作区文件浏览器的共享样式。 */
-.resources-page .configuration-page__heading h1 { font-size:clamp(26px,3vw,30px); }
 .resource-scope,.resource-catalog-list,.resource-task { border:1px solid var(--border);border-radius:12px;background:var(--panel); }
 .resource-scope,.resource-task { padding:20px;margin:20px 0; }
 .resource-segments,.resource-tabs,.resource-task-actions { display:flex;flex-wrap:wrap;gap:8px; }
