@@ -7,17 +7,17 @@ import { ProxyAgent, fetch as undiciFetch } from "undici";
 import type { WebResearchConfig } from "../../shared/web-research-contracts";
 import type { WebResearchEgressProfile } from "../../shared/web-research-egress-contracts";
 
-type SecurityErrorCode = "WEB_URL_BLOCKED" | "WEB_FETCH_TIMEOUT" | "WEB_RESPONSE_TOO_LARGE" | "WEB_CONTENT_TYPE_BLOCKED" | "WEB_FETCH_FAILED";
+export type SecurityErrorCode = "WEB_URL_BLOCKED" | "WEB_FETCH_TIMEOUT" | "WEB_RESPONSE_TOO_LARGE" | "WEB_CONTENT_TYPE_BLOCKED" | "WEB_FETCH_FAILED" | "WEB_DNS_FAILED" | "WEB_CONNECTION_FAILED" | "WEB_HTTP_ERROR" | "WEB_PDF_DETECTED";
 
 interface WebResponse {
   statusCode: number;
   headers: Record<string, string | string[] | undefined>;
-  body: string;
+  body: string | Buffer;
 }
 
 interface SafeWebClientDependencies {
   resolve(hostname: string): Promise<string[]>;
-  request(url: URL, address: string, timeoutMs: number, maxResponseBytes: number): Promise<WebResponse>;
+  request(url: URL, address: string, timeoutMs: number, maxResponseBytes: number, signal?: AbortSignal): Promise<WebResponse>;
 }
 
 /**
@@ -26,13 +26,19 @@ interface SafeWebClientDependencies {
 export class WebResearchSecurityError extends Error {
   /** 供工具与接口识别的安全错误代码。 */
   readonly code: SecurityErrorCode;
+  /** 仅暴露脱敏后的阶段、状态及重试条件。 */
+  readonly details: { phase: string; httpStatus?: number; contentType?: string };
+  readonly retryable: boolean;
 
   /**
    * @param code 安全错误代码
-   * @param _detail 仅供调用处保留错误上下文，绝不回显给 Agent 或客户端
+   * @param details 经过白名单脱敏的阶段、HTTP 状态及资源类型
+   * @param retryable 是否具备重试条件；Run 仍会阻止重复失败地址
    */
-  constructor(code: SecurityErrorCode, _detail?: string) {
-    super(errorMessage(code));
+  constructor(code: SecurityErrorCode, details: { phase: string; httpStatus?: number; contentType?: string } = { phase: "fetch" }, retryable = code === "WEB_FETCH_TIMEOUT" || code === "WEB_CONNECTION_FAILED" || code === "WEB_DNS_FAILED") {
+    super(`${errorMessage(code)}${details.httpStatus ? `（HTTP ${details.httpStatus}）` : ""}`);
+    this.details = details;
+    this.retryable = retryable;
     this.name = "WebResearchSecurityError";
     this.code = code;
   }
@@ -57,47 +63,80 @@ export class SafeWebClient {
    * @param inputUrl Agent 请求的公开网页地址
    * @param policy 当前联网搜索安全策略
    */
-  async fetchText(inputUrl: string, policy: WebResearchConfig, egressProfile: WebResearchEgressProfile = { id: "direct", label: "直接访问", kind: "direct" }): Promise<{ finalUrl: string; contentType: "text/html" | "text/plain"; body: string }> {
+  async fetchText(inputUrl: string, policy: WebResearchConfig, egressProfile: WebResearchEgressProfile = { id: "direct", label: "直接访问", kind: "direct" }, signal?: AbortSignal): Promise<{ finalUrl: string; contentType: "text/html" | "text/plain"; body: string }> {
+    const page = await this.fetchResource(inputUrl, policy, egressProfile, signal);
+    if (page.contentType === "application/pdf") throw new WebResearchSecurityError("WEB_PDF_DETECTED", { phase: "content_type", contentType: "application/pdf" });
+    if ((page.contentType !== "text/html" && page.contentType !== "text/plain") || !policy.allowedContentTypes.includes(page.contentType)) {
+      throw new WebResearchSecurityError("WEB_CONTENT_TYPE_BLOCKED", { phase: "content_type", contentType: page.contentType });
+    }
+    return { ...page, contentType: page.contentType, body: page.body.toString("utf8") };
+  }
+
+  /** 下载 PDF 原始字节，共用网页的地址、重定向、出口和资源安全校验。 */
+  async fetchPdf(inputUrl: string, policy: WebResearchConfig, egressProfile: WebResearchEgressProfile = { id: "direct", label: "直接访问", kind: "direct" }, signal?: AbortSignal): Promise<{ finalUrl: string; body: Buffer }> {
+    const page = await this.fetchResource(inputUrl, policy, egressProfile, signal);
+    if (page.contentType !== "application/pdf" || !page.body.subarray(0, 1024).includes(Buffer.from("%PDF-"))) {
+      throw new WebResearchSecurityError("WEB_CONTENT_TYPE_BLOCKED", { phase: "content_type", contentType: page.contentType });
+    }
+    return { finalUrl: page.finalUrl, body: page.body };
+  }
+
+  /** 全部重定向共用一个截止时间，DNS 和响应流均受取消信号约束。 */
+  private async fetchResource(inputUrl: string, policy: WebResearchConfig, egressProfile: WebResearchEgressProfile, externalSignal?: AbortSignal): Promise<{ finalUrl: string; contentType: string; body: Buffer }> {
+    const signal = externalSignal ? AbortSignal.any([externalSignal, AbortSignal.timeout(policy.webRead.timeoutMs)]) : AbortSignal.timeout(policy.webRead.timeoutMs);
     let current = parseTarget(inputUrl, policy);
     for (let redirects = 0; redirects <= policy.maxRedirects; redirects += 1) {
+      signal.throwIfAborted();
       assertAllowedDomain(current.hostname, policy.allowedDomains);
-      const addresses = await this.dependencies.resolve(current.hostname).catch(() => { throw new WebResearchSecurityError("WEB_FETCH_FAILED"); });
+      const addresses = await withAbort(this.dependencies.resolve(current.hostname), signal).catch(() => {
+        throw new WebResearchSecurityError(signal.aborted ? "WEB_FETCH_TIMEOUT" : "WEB_DNS_FAILED", { phase: "dns" });
+      });
       const address = addresses.find((candidate) => isPublicAddress(candidate))
         ?? (egressProfile.kind === "fake-ip" ? addresses.find((candidate) => isTrustedFakeIp(candidate, egressProfile.fakeIpCidrs)) : undefined);
-      if (!address) throw new WebResearchSecurityError("WEB_URL_BLOCKED");
-      const response = await (egressProfile.kind === "http-proxy"
-        ? requestThroughProxy(current, egressProfile.proxyUrl, policy.webRead.timeoutMs, policy.maxResponseBytes)
-        : this.dependencies.request(current, address, policy.webRead.timeoutMs, policy.maxResponseBytes)).catch((error: unknown) => {
+      if (!address) throw new WebResearchSecurityError("WEB_URL_BLOCKED", { phase: "address" });
+      const response = await withAbort(egressProfile.kind === "http-proxy"
+        ? requestThroughProxy(current, egressProfile.proxyUrl, policy.maxResponseBytes, signal)
+        : this.dependencies.request(current, address, policy.webRead.timeoutMs, policy.maxResponseBytes, signal), signal).catch((error: unknown) => {
         if (error instanceof WebResearchSecurityError) throw error;
-        throw new WebResearchSecurityError("WEB_FETCH_FAILED");
+        throw new WebResearchSecurityError(signal.aborted ? "WEB_FETCH_TIMEOUT" : "WEB_CONNECTION_FAILED", { phase: "connection" });
       });
       if (response.statusCode >= 300 && response.statusCode < 400) {
         const location = header(response.headers, "location");
-        if (!location) throw new WebResearchSecurityError("WEB_FETCH_FAILED");
-        current = parseTarget(new URL(location, current).toString(), policy);
+        if (!location) throw new WebResearchSecurityError("WEB_FETCH_FAILED", { phase: "redirect" });
+        try { current = parseTarget(new URL(location, current).toString(), policy); }
+        catch { throw new WebResearchSecurityError("WEB_URL_BLOCKED", { phase: "redirect" }); }
         continue;
       }
-      if (response.statusCode < 200 || response.statusCode >= 300) throw new WebResearchSecurityError("WEB_FETCH_FAILED");
-      const declaredLength = Number(header(response.headers, "content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > policy.maxResponseBytes) throw new WebResearchSecurityError("WEB_RESPONSE_TOO_LARGE");
-      const contentType = normalizeContentType(header(response.headers, "content-type"));
-      if (contentType === "other" || !policy.allowedContentTypes.includes(contentType)) throw new WebResearchSecurityError("WEB_CONTENT_TYPE_BLOCKED");
-      if (Buffer.byteLength(response.body, "utf8") > policy.maxResponseBytes) throw new WebResearchSecurityError("WEB_RESPONSE_TOO_LARGE");
-      return { finalUrl: current.toString(), contentType, body: response.body };
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw new WebResearchSecurityError("WEB_HTTP_ERROR", { phase: "http", httpStatus: response.statusCode }, response.statusCode === 408 || response.statusCode === 429 || response.statusCode >= 500);
+      }
+      const body = Buffer.isBuffer(response.body) ? response.body : Buffer.from(response.body, "utf8");
+      if (Number(header(response.headers, "content-length")) > policy.maxResponseBytes || body.length > policy.maxResponseBytes) {
+        throw new WebResearchSecurityError("WEB_RESPONSE_TOO_LARGE", { phase: "response" });
+      }
+      const declaredType = header(response.headers, "content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "unknown";
+      const contentType = ["text/html", "text/plain", "application/pdf"].includes(declaredType) ? declaredType : "other";
+      return { finalUrl: current.toString(), contentType, body };
     }
-    throw new WebResearchSecurityError("WEB_FETCH_FAILED");
+    throw new WebResearchSecurityError("WEB_FETCH_FAILED", { phase: "redirect_limit" });
   }
 }
 
 /** 经部署侧代理读取网页；代理凭证只由 Undici 在服务端连接时使用。 */
-async function requestThroughProxy(url: URL, proxyUrl: string, timeoutMs: number, maxResponseBytes: number): Promise<WebResponse> {
+async function requestThroughProxy(url: URL, proxyUrl: string, maxResponseBytes: number, signal: AbortSignal): Promise<WebResponse> {
   const agent = new ProxyAgent(proxyUrl);
   try {
-    const response = await undiciFetch(url, { dispatcher: agent, headers: { accept: "text/html, text/plain;q=0.9" }, signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
+    const response = await undiciFetch(url, { dispatcher: agent, headers: { accept: "text/html, text/plain;q=0.9, application/pdf;q=0.8" }, signal, redirect: "manual" });
     const contentLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(contentLength) && contentLength > maxResponseBytes) throw new WebResearchSecurityError("WEB_RESPONSE_TOO_LARGE");
-    const body = await response.text();
-    if (Buffer.byteLength(body, "utf8") > maxResponseBytes) throw new WebResearchSecurityError("WEB_RESPONSE_TOO_LARGE");
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    if (response.body) for await (const chunk of response.body) {
+      bytes += chunk.length;
+      if (bytes > maxResponseBytes) throw new WebResearchSecurityError("WEB_RESPONSE_TOO_LARGE", { phase: "response" });
+      chunks.push(Buffer.from(chunk));
+    }
+    const body = Buffer.concat(chunks);
     return { statusCode: response.status, headers: Object.fromEntries(response.headers.entries()), body };
   } finally {
     await agent.close();
@@ -151,11 +190,12 @@ async function resolvePublicAddresses(hostname: string): Promise<string[]> {
 }
 
 /** 使用已通过校验的 DNS 地址建连，避免默认 resolver 重新解析。 */
-function requestBoundedText(url: URL, address: string, timeoutMs: number, maxResponseBytes: number): Promise<WebResponse> {
+function requestBoundedText(url: URL, address: string, timeoutMs: number, maxResponseBytes: number, signal?: AbortSignal): Promise<WebResponse> {
   const transport = url.protocol === "https:" ? httpsRequest : httpRequest;
   return new Promise((resolve, reject) => {
     const request = transport(url, {
-      headers: { accept: "text/html, text/plain;q=0.9" },
+      headers: { accept: "text/html, text/plain;q=0.9, application/pdf;q=0.8" },
+      signal,
       lookup: createPinnedLookup(address),
     }, (response) => {
       const contentLength = Number(header(response.headers, "content-length"));
@@ -174,7 +214,7 @@ function requestBoundedText(url: URL, address: string, timeoutMs: number, maxRes
         }
         chunks.push(chunk);
       });
-      response.on("end", () => resolve({ statusCode: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
+      response.on("end", () => resolve({ statusCode: response.statusCode ?? 0, headers: response.headers, body: Buffer.concat(chunks) }));
       response.on("error", reject);
     });
     request.setTimeout(timeoutMs, () => request.destroy(new WebResearchSecurityError("WEB_FETCH_TIMEOUT")));
@@ -204,12 +244,6 @@ function header(headers: WebResponse["headers"], name: string): string | undefin
   return Array.isArray(value) ? value[0] : value;
 }
 
-/** 归一化允许的媒体类型。 */
-function normalizeContentType(value: string | undefined): "text/html" | "text/plain" | "other" {
-  const type = value?.split(";", 1)[0]?.trim().toLowerCase();
-  return type === "text/html" || type === "text/plain" ? type : "other";
-}
-
 /** 判断 IPv4、IPv6 或 IPv4-mapped IPv6 地址是否可公开访问。 */
 function isPublicAddress(address: string): boolean {
   const normalized = address.toLowerCase();
@@ -235,9 +269,23 @@ function isPublicAddress(address: string): boolean {
 function errorMessage(code: SecurityErrorCode): string {
   switch (code) {
     case "WEB_URL_BLOCKED": return "该网页地址不符合当前安全策略";
-    case "WEB_FETCH_TIMEOUT": return "联网页面请求超时，请稍后重试";
+    case "WEB_FETCH_TIMEOUT": return "读取公开资源超出请求时间预算";
+    case "WEB_DNS_FAILED": return "读取公开资源时域名解析失败";
+    case "WEB_CONNECTION_FAILED": return "读取公开资源时连接建立或响应传输失败";
+    case "WEB_HTTP_ERROR": return "公开资源服务器返回非成功状态";
+    case "WEB_PDF_DETECTED": return "目标资源是 PDF，网页正文工具不支持该格式";
     case "WEB_RESPONSE_TOO_LARGE": return "网页内容超过当前大小限制";
     case "WEB_CONTENT_TYPE_BLOCKED": return "该网页内容类型不在允许范围内";
-    default: return "无法读取该公开网页，请稍后重试";
+    default: return "读取公开资源时重定向或响应处理失败";
   }
+}
+
+/** 使 DNS 等不支持 AbortSignal 的依赖也遵守同一截止时间。 */
+function withAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    if (signal.aborted) { reject(signal.reason); return; }
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }

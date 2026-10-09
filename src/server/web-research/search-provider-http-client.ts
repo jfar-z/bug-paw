@@ -11,6 +11,8 @@ export interface SearchProviderHttpInput {
   headers: Record<string, string>;
   body?: unknown;
   timeoutMs: number;
+  /** 组合取证的总预算及用户取消信号。 */
+  signal?: AbortSignal;
   egressProfile: WebResearchEgressProfile;
 }
 
@@ -71,7 +73,7 @@ async function requestJsonTransport(input: SearchProviderHttpInput): Promise<Sea
       headers: { accept: "application/json", ...(input.body === undefined ? {} : { "content-type": "application/json" }), ...input.headers },
       ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
       ...(proxyAgent ? { dispatcher: proxyAgent } : {}),
-      signal: AbortSignal.timeout(input.timeoutMs),
+      signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(input.timeoutMs)]) : AbortSignal.timeout(input.timeoutMs),
       redirect: "error",
     });
     const declaredLength = Number(response.headers.get("content-length"));

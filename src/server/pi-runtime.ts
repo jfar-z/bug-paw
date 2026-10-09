@@ -83,7 +83,7 @@ export function createWorkspaceResourceLoader(
     agentDir,
     extensionFactories: [
       createAgentSystemPromptInjectionExtension(retrievalCapabilities, resolveAgentPromptContext),
-      ...(retrievalCapabilities.webSearch ? [createSearchRunCircuitExtension(searchRunState)] : []),
+      ...((retrievalCapabilities.webSearch || retrievalCapabilities.webRead || retrievalCapabilities.pdfRead || retrievalCapabilities.webResearch) ? [createSearchRunCircuitExtension(searchRunState)] : []),
       ...extensionFactories,
     ],
     // 显式指定源，保持 Web 原有行为：不意外读取工作目录里的 APPEND_SYSTEM.md。

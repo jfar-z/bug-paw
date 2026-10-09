@@ -7,13 +7,13 @@ import type {
   SearchProviderResult,
 } from "./search-provider";
 
-type SearchRequest = (url: URL, timeoutMs: number) => Promise<unknown>;
+type SearchRequest = (url: URL, timeoutMs: number, signal?: AbortSignal) => Promise<unknown>;
 
 /** 使用宿主 fetch 请求 SearXNG JSON 接口。 */
-async function requestSearxng(url: URL, timeoutMs: number): Promise<unknown> {
+async function requestSearxng(url: URL, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
   const response = await fetch(url, {
     headers: { accept: "application/json" },
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
@@ -114,7 +114,7 @@ export class SearxngSearchProvider implements SearchProvider {
     }
 
     try {
-      return mapSearxngSearchResponse(await this.request(url, this.timeoutMs));
+      return mapSearxngSearchResponse(await this.request(url, this.timeoutMs, input.signal));
     } catch (error) {
       const reason = error instanceof Error ? `${error.name} ${error.message}` : "unknown upstream error";
       return {

@@ -19,6 +19,7 @@ export class SearchProviderRouter {
   /** 搜索所有可用候选；健康空结果和带结果的降级响应均视为有效终点。 */
   async search(configs: SearchProviderConfig[], input: SearchProviderInput, state = new SearchRunState()): Promise<SearchProviderResult> {
     for (const config of configs) {
+      input.signal?.throwIfAborted();
       if (!config.enabled || state.shouldSkip(config.id)) continue;
       const cooldown = this.cooldowns.get(config.id);
       if (cooldown && cooldown.until > this.now()) {
@@ -27,6 +28,7 @@ export class SearchProviderRouter {
       }
       if (cooldown) this.cooldowns.delete(config.id);
       const providerResult = await this.searchOne(config, input);
+      input.signal?.throwIfAborted();
       if (providerResult.health === "unavailable" || (providerResult.health === "degraded" && providerResult.results.length === 0)) {
         const failures = providerResult.failures.length > 0
           ? providerResult.failures

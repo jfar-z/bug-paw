@@ -31,6 +31,7 @@ export class TavilySearchProvider implements SearchProvider {
           ...(input.timeRange ? { time_range: input.timeRange } : {}),
         },
         timeoutMs: this.timeoutMs,
+        signal: input.signal,
         egressProfile: this.egressProfile,
       });
       if (!isRecord(value) || !Array.isArray(value.results)) throw new Error("搜索服务返回格式无效");

@@ -1,14 +1,18 @@
+import { WebEvidenceState } from "./web-evidence-state";
 import type { SearchProviderFailure } from "./search-provider";
 
 /** 保存单个 Agent Run 内的搜索故障隔离与断路事实。 */
 export class SearchRunState {
   private readonly unavailableByProvider = new Map<string, SearchProviderFailure>();
   private circuitOpen = false;
+  /** 搜索、网页和 PDF 在同一 Run 内共享取证状态。 */
+  readonly evidence = new WebEvidenceState();
 
   /** 新 Run 开始时清除上一轮状态。 */
   reset(): void {
     this.unavailableByProvider.clear();
     this.circuitOpen = false;
+    this.evidence.reset();
   }
 
   /** 同一 Run 不再请求已经明确不可用的实例。 */

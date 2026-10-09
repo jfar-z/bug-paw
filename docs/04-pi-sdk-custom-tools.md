@@ -99,3 +99,7 @@ const tool = defineTool({
 - 浏览器服务仍必须独立执行 URL、网络地址、重定向、文件大小和内容类型校验；Agent Profile 的 `allowedTools` 不能替代服务端安全边界。
 
 更完整的出口、隔离、审计和生命周期约束见 [`08-browser-automation-security-boundaries.md`](08-browser-automation-security-boundaries.md)。
+
+## 联网取证工具
+
+`web_read` 使用显式 read/find 与 nullable 条件参数，失败和重试阻止进入 Pi 错误事件。`web_research` 独立授权且要求同时具备搜索/读取权限，20 秒内进行有限并发取证；失败保留成功证据的 partial 协议并标记错误事件。`pdf_read` 独立授权，inspect/read/find/render 按物理页码处理公网 PDF；render 返回原生 image 内容，不将 base64 图片塞入文本 JSON。三者共享当前 Session 的 Run 状态，在 `before_agent_start` 重置，不使用全局或其他 Agent 缓存。详细边界与参数见 [联网检索集成与安全边界](06-web-research-security-boundaries.md)。存量 Agent 不自动授权新工具。
