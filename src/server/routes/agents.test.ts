@@ -29,6 +29,7 @@ describe("Agent 配置路由", () => {
     const store = new AgentStore(paths, { stageSessions });
     await store.createDefault();
     const authService: AuthService = {
+      twoFactor: {} as AuthService["twoFactor"],
       login: vi.fn(async () => ({ status: "invalid" as const })),
       logout: vi.fn(async () => undefined),
       isAuthenticated: vi.fn(async () => authenticated),

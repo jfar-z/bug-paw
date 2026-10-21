@@ -587,6 +587,40 @@ p {
   line-height: 1.5;
 }
 
+/* 第二因素的替代操作沿用登录主题，并为移动设备保留完整触控区域。 */
+.login-factor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 12px;
+}
+
+.login-factor-actions button {
+  min-height: 44px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.login-factor-actions button:hover:not(:disabled) {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.login-factor-actions button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.login-factor-actions button:disabled {
+  opacity: .5;
+  cursor: wait;
+}
+
 .login-security {
   display: flex;
   gap: 10px;

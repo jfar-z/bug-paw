@@ -1,9 +1,9 @@
-import { createSessionToken, hashSessionToken, verifyPassword } from "../auth";
+import type { TwoFactorService } from "./two-factor-service";
+import { hashSessionToken, verifyPassword } from "../auth";
 import type { IdentityRepository, IdentityUser } from "./identity-repository";
 import { SYSTEM_LIMITS } from "../core/limits";
 
 const OWNER_ID = "owner";
-const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
 const LOGIN_WINDOW_MS = 60 * 1_000;
 const MAX_LOGIN_FAILURES = 5;
 
@@ -14,13 +14,17 @@ interface LoginFailureState {
 
 export interface IdentityServiceOptions {
   now?: () => Date;
+  twoFactor: TwoFactorService;
 }
 
 export interface IdentityService {
   isInitialized(): Promise<boolean>;
-  login(password: string, clientKey: string): Promise<
+  login(password: string, clientKey: string, remember?: boolean): Promise<
     | { status: "authenticated"; token: string }
-    | { status: "invalid" | "rate_limited" | "not_initialized" }
+    | { status: "second_factor_required"; challenge: string; expiresAt: string }
+    | { status: "invalid" }
+    | { status: "rate_limited" }
+    | { status: "not_initialized" }
   >;
   logout(token: string | undefined): Promise<void>;
   authenticateToken(token: string | undefined): Promise<boolean>;
@@ -34,7 +38,7 @@ export interface IdentityService {
 /** 单用户登录策略，Repository 只接收密码摘要和 Session Token 摘要。 */
 export function createIdentityService(
   repository: IdentityRepository,
-  options: IdentityServiceOptions = {},
+  options: IdentityServiceOptions,
 ): IdentityService {
   const now = options.now ?? (() => new Date());
   const failures = new LoginFailureTracker();
@@ -43,11 +47,12 @@ export function createIdentityService(
     async isInitialized() {
       return Boolean(await repository.getUser(OWNER_ID));
     },
-    async login(password, clientKey) {
+    async login(password, clientKey, remember = true) {
       const currentTime = now();
       if (failures.isRateLimited(clientKey, currentTime.getTime())) {
         return { status: "rate_limited" };
       }
+      repository.security.attempt("password", currentTime.getTime());
       const owner = await repository.getUser(OWNER_ID);
       if (!owner) return { status: "not_initialized" };
       if (!(await verifyPassword(password, owner.password))) {
@@ -56,15 +61,7 @@ export function createIdentityService(
       }
 
       failures.clear(clientKey);
-      await repository.deleteExpiredWebSessions(currentTime.toISOString());
-      const token = createSessionToken();
-      await repository.createWebSession({
-        tokenHash: hashSessionToken(token),
-        userId: owner.id,
-        createdAt: currentTime.toISOString(),
-        expiresAt: new Date(currentTime.getTime() + SESSION_DURATION_MS).toISOString(),
-      });
-      return { status: "authenticated", token };
+      return options.twoFactor.passwordLogin(remember);
     },
     async logout(token) {
       if (!token) return;

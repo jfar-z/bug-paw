@@ -32,3 +32,13 @@ describe("配置维护页加载边界", () => {
     }
   });
 });
+
+/** 身份二维码在服务端生成，安全页及其 CSS 不应进入首屏。 */
+it("安全设置按页面加载且不扩大首屏样式依赖", async () => {
+  const [app, main, page] = await Promise.all(["src/web/app.tsx", "src/web/main.tsx", "src/web/pages/security-page.tsx"].map((path) => readFile(path, "utf8")));
+  expect(app).toContain('lazy(() => import("./pages/security-page")');
+  expect(page).toContain('import "../security.css"');
+  expect(app).not.toContain('import "./security.css"');
+  expect(main).not.toContain("security.css");
+  expect(page).not.toMatch(/localStorage|sessionStorage/);
+});

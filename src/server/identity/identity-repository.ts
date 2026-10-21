@@ -1,3 +1,4 @@
+import { SecurityRepository } from "./security-repository";
 import type { PasswordRecord } from "../auth";
 import { DomainError } from "../core/errors";
 import type { Database } from "../database/database";
@@ -20,6 +21,7 @@ export interface WebSessionRecord {
 }
 
 export interface IdentityRepository {
+  security: SecurityRepository;
   initializeUser(input: { id: string; password: PasswordRecord; displayName: string; now: string }): Promise<IdentityUser>;
   getUser(id: string): Promise<IdentityUser | undefined>;
   updateProfile(
@@ -40,6 +42,7 @@ export interface IdentityRepository {
 /** 创建只管理身份和浏览器会话摘要的 Repository。 */
 export function createIdentityRepository(database: Database): IdentityRepository {
   return {
+    security: new SecurityRepository(database),
     async initializeUser(input) {
       return database.transaction(() => {
         const existing = database.readOne<{ count: number }>("SELECT COUNT(*) AS count FROM users");

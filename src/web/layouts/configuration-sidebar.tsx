@@ -1,4 +1,5 @@
 import {
+  ShieldCheck,
   Activity,
   Bot,
   BrainCircuit,
@@ -69,4 +70,4 @@ export function ConfigurationSidebar({ route, open, onClose, onNavigate }: Confi
 }
 
 /** 图标沿用既有配置侧栏体系，入口顺序由共享元数据决定。 */
-const icons: Record<string, LucideIcon> = { "pi-settings": SlidersHorizontal, resources: Boxes, providers: KeyRound, agents: Bot, "web-research": Globe2, "browser-automation": MonitorPlay, "aigc-channels": Cable, tts: Volume2, "knowledge-retrieval": BrainCircuit, "configuration-operations": History, diagnostics: Activity };
+const icons: Record<string, LucideIcon> = { security: ShieldCheck, "pi-settings": SlidersHorizontal, resources: Boxes, providers: KeyRound, agents: Bot, "web-research": Globe2, "browser-automation": MonitorPlay, "aigc-channels": Cable, tts: Volume2, "knowledge-retrieval": BrainCircuit, "configuration-operations": History, diagnostics: Activity };

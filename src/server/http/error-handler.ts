@@ -3,8 +3,14 @@ import type { ApiErrorCode } from "../../shared/api/common";
 import { DomainError } from "../core/errors";
 
 const STATUS_BY_ERROR_CODE: Partial<Record<ApiErrorCode, number>> = {
+  TOTP_INVALID_CODE: 400,
+  TOTP_CHALLENGE_EXPIRED: 410,
+  TOTP_RATE_LIMITED: 429,
+  TOTP_STATE_CONFLICT: 409,
+  SECURITY_STORAGE_FAILED: 500,
   VALIDATION_FAILED: 400,
   UNAUTHENTICATED: 401,
+  AUTH_REQUIRED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   AGENT_NOT_FOUND: 404,

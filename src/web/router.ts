@@ -28,6 +28,7 @@ export type AppRoute =
   | { page: "pi-settings" }
   | { page: "resources" }
   | { page: "configuration-operations" }
+  | { page: "security" }
   | { page: "diagnostics" }
   | { page: "agent-detail"; agentId: string };
 
@@ -112,6 +113,7 @@ export function parseRoute(pathname: string, search = ""): AppRoute {
     return { page: "resources" };
   }
   if (normalized === "/settings/operations") return { page: "configuration-operations" };
+  if (normalized === "/settings/security") return { page: "security" };
   if (normalized === "/settings/diagnostics") return { page: "diagnostics" };
   const match = normalized.match(/^\/settings\/agents\/([^/]+)$/);
   if (match) {
@@ -181,6 +183,8 @@ export function routePath(route: AppRoute): string {
       return "/settings/resources";
     case "configuration-operations":
       return "/settings/operations";
+    case "security":
+      return "/settings/security";
     case "diagnostics":
       return "/settings/diagnostics";
     case "agent-detail":

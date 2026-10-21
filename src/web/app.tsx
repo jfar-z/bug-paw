@@ -42,6 +42,7 @@ const ResourcesPage = lazy(() => import("./pages/resources-page").then((module) 
 const WorkspaceResourcesPage = lazy(() => import("./pages/workspace-resources-page").then((module) => ({ default: module.WorkspaceResourcesPage })));
 const KnowledgeBasePage = lazy(() => import("./pages/knowledge-base-page").then((module) => ({ default: module.KnowledgeBasePage })));
 const ConfigurationOperationsPage = lazy(() => import("./pages/configuration-operations-page").then((module) => ({ default: module.ConfigurationOperationsPage })));
+const SecurityPage = lazy(() => import("./pages/security-page").then((module) => ({ default: module.SecurityPage })));
 const DiagnosticsPage = lazy(() => import("./pages/diagnostics-page").then((module) => ({ default: module.DiagnosticsPage })));
 const ScheduledTasksPage = lazy(() => import("./pages/scheduled-tasks-page").then((module) => ({ default: module.ScheduledTasksPage })));
 
@@ -119,7 +120,14 @@ export function App() {
   };
 
   const login = async (password: string, remember: boolean) => {
-    await api.login(password, remember);
+    const result = await api.login(password, remember);
+    if (result?.authenticated === false) return result;
+    navigateTo({ page: "chat" }, true);
+    setPage("workbench");
+  };
+
+  const verifyTotp = async (code: string, recovery: boolean) => {
+    await api.verifyLoginTotp(code, recovery);
     navigateTo({ page: "chat" }, true);
     setPage("workbench");
   };
@@ -184,6 +192,8 @@ export function App() {
         return <ResourcesPage />;
       case "configuration-operations":
         return <ConfigurationOperationsPage />;
+      case "security":
+        return <SecurityPage />;
       case "diagnostics":
         return <DiagnosticsPage />;
       default:
@@ -204,7 +214,7 @@ export function App() {
           <SetupPage theme={theme} onThemeChange={changeTheme} onComplete={previewPage ? undefined : completeSetup} />
         )}
         {page === "login" && (
-          <LoginPage onLogin={previewPage ? undefined : login} />
+          <LoginPage onLogin={previewPage ? undefined : login} onVerify={previewPage ? undefined : verifyTotp} />
         )}
         {page === "workbench" && (
           previewPage ? (

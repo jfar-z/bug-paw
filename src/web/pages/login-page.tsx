@@ -1,16 +1,29 @@
 import { ArrowRight, BookOpen, Eye, EyeOff, HardDrive, LockKeyhole, Wifi, Wrench } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { LoginResponse } from "../../shared/security-contracts";
+import { useOnlineStatus } from "../use-online-status";
 import { useApiTask } from "../api-task-provider";
 import { ProductMark } from "../components/product-mark";
 
 interface LoginPageProps {
-  onLogin?: (password: string, remember: boolean) => Promise<void>;
+  onLogin?: (password: string, remember: boolean) => Promise<LoginResponse | void>;
+  onVerify?: (code: string, recovery: boolean) => Promise<void>;
 }
 
 /**
- * 展示 BugPaw 品牌登录入口，并提交单密码认证请求。
+ * 展示 BugPaw 品牌登录入口，只有完整通过第二因素才进入工作台。
  */
-export function LoginPage({ onLogin }: LoginPageProps) {
+export function LoginPage({ onLogin, onVerify }: LoginPageProps) {
+  const online = useOnlineStatus();
+  const lock = useRef(false);
+  const [challenge, setChallenge] = useState<string>();
+  const [recovery, setRecovery] = useState(false);
+  const [code, setCode] = useState("");
+  useEffect(() => {
+    if (!challenge) return;
+    const timer = window.setTimeout(() => { setChallenge(undefined); setCode(""); setError("登录验证已过期，请重新输入访问密码。"); }, Math.max(0, Date.parse(challenge) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [challenge]);
   const { runApiTask } = useApiTask();
   const [passwordVisible, setPasswordVisible] = useState(false);
   const [remember, setRemember] = useState(true);
@@ -19,24 +32,40 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   const submitLogin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!onLogin || submitting) return;
+    if (!onLogin || lock.current || !online) return;
     const data = new FormData(event.currentTarget);
     setError("");
+    lock.current = true;
     setSubmitting(true);
     try {
-      await runApiTask(
-        () => onLogin(String(data.get("password") ?? ""), remember),
+      const result = await runApiTask(
+        async () => {
+          if (challenge) {
+            if (!onVerify) return;
+            await onVerify(code, recovery);
+            return;
+          }
+          return onLogin(String(data.get("password") ?? ""), remember);
+        },
         {
-          operation: "登录 BugPaw",
+          operation: challenge ? "验证登录第二因素" : "登录 BugPaw",
           expected: {
             INVALID_CREDENTIALS: (reason) => setError(reason.message),
             LOGIN_RATE_LIMITED: (reason) => setError(reason.message),
+            TOTP_RATE_LIMITED: (reason) => setError(reason.message),
+            TOTP_INVALID_CODE: (reason) => { setCode(""); setError(reason.message); },
+            TOTP_CHALLENGE_EXPIRED: (reason) => { setChallenge(undefined); setCode(""); setError(reason.message); },
+            TOTP_STATE_CONFLICT: (reason) => { setChallenge(undefined); setCode(""); setError(reason.message); },
             NOT_INITIALIZED: (reason) => setError(reason.message),
             INVALID_LOGIN_REQUEST: (reason) => setError(reason.message),
           },
         },
       );
+      if (result.status === "success" && result.data?.authenticated === false) {
+        setChallenge(result.data.expiresAt); setCode(""); setRecovery(false);
+      }
     } finally {
+      lock.current = false;
       setSubmitting(false);
     }
   };
@@ -84,11 +113,17 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
           <div className="login-heading">
             <span>Welcome back</span>
-            <h2 id="login-title">回到你的工作区</h2>
-            <p className="login-intro">输入访问密码，继续和 BugPaw 一起工作。</p>
+            <h2 id="login-title">{challenge ? (recovery ? "使用恢复码登录" : "验证你的身份") : "回到你的工作区"}</h2>
+            <p className="login-intro">{challenge ? "访问密码已验证，请完成第二步验证。" : "输入访问密码，继续和 BugPaw 一起工作。"}</p>
           </div>
 
-          <form className="login-form" onSubmit={submitLogin}>
+          {!online ? <p role="status">当前离线，连接服务后才能登录。</p> : null}
+          <form className="login-form" onSubmit={submitLogin} aria-busy={submitting}>
+            {challenge ? <label className="login-field" key={recovery ? "recovery" : "totp"}>
+              <span>{recovery ? "一次性恢复码" : "6 位验证码"}</span>
+              <input name="code" aria-label={recovery ? "一次性恢复码" : "6 位验证码"} value={code} onChange={(event) => setCode(event.target.value)} type="text" inputMode={recovery ? "text" : "numeric"} autoComplete="one-time-code" pattern={recovery ? undefined : "[0-9]{6}"} maxLength={recovery ? 64 : 6} required autoFocus disabled={submitting} />
+            </label> : <>
+
             <label className="login-field">
               <span>访问密码</span>
               <span className="password-field">
@@ -120,11 +155,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               </label>
             </div>
 
-            <button className="login-submit" type="submit" disabled={submitting}>
-              {submitting ? "正在进入…" : "进入 BugPaw"}
+            </>}
+
+            <button className="login-submit" type="submit" disabled={submitting || !online}>
+              {submitting ? "正在验证…" : challenge ? "验证并登录" : "进入 BugPaw"}
               <ArrowRight size={18} aria-hidden="true" />
             </button>
           </form>
+          {challenge ? <div className="login-factor-actions"><button type="button" className="text-button" disabled={submitting} onClick={() => { setRecovery(!recovery); setCode(""); setError(""); }}>{recovery ? "使用验证器验证码" : "无法使用验证器？使用恢复码"}</button><button type="button" className="text-button" disabled={submitting} onClick={() => { setChallenge(undefined); setCode(""); setError(""); }}>返回密码登录</button></div> : null}
 
           {error ? <p className="login-error" role="alert">{error}</p> : null}
 

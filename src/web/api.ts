@@ -1,3 +1,4 @@
+import type { LoginResponse, SecurityProof, SecurityStatus, TotpSetup } from "../shared/security-contracts";
 import type { ConfigurationOverviewDocument, ConfigurationRestorePreview, ConfigurationPostCommitError } from "../shared/configuration-operations-contracts";
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
 import type { CredentialStatus, ModelConfigDocument, ScopedConfigDocument, ThinkingLevel, WebPiSettings } from "../shared/configuration-contracts";
@@ -502,7 +503,13 @@ export const api = {
   setup: (input: SetupRequest) =>
     request<SetupResponse>("/api/setup", { method: "POST", body: JSON.stringify(input) }),
   login: (password: string, remember: boolean) =>
-    request<{ authenticated: true }>("/api/login", { method: "POST", body: JSON.stringify({ password, remember }) }),
+    request<LoginResponse>("/api/login", { method: "POST", cache: "no-store", body: JSON.stringify({ password, remember }) }),
+  verifyLoginTotp: (code: string, recovery: boolean) => request<{ authenticated: true }>("/api/login/totp", { method: "POST", cache: "no-store", body: JSON.stringify({ code, recovery }) }),
+  getSecurityStatus: () => request<SecurityStatus>("/api/security/totp", { cache: "no-store" }),
+  beginTotpSetup: (password: string) => request<TotpSetup>("/api/security/totp/setup", { method: "POST", cache: "no-store", body: JSON.stringify({ password }) }),
+  cancelTotpSetup: () => request<void>("/api/security/totp/setup", { method: "DELETE", cache: "no-store" }),
+  confirmTotpSetup: (code: string) => request<{ recoveryCodes: string[] }>("/api/security/totp/confirm", { method: "POST", cache: "no-store", body: JSON.stringify({ code }) }),
+  manageTotp: (action: "disable" | "recovery", proof: SecurityProof) => request<{ recoveryCodes: string[] }>(`/api/security/totp/${action}`, { method: "POST", cache: "no-store", body: JSON.stringify(proof) }),
   logout: () => request<void>("/api/logout", { method: "POST" }),
   getProfile: () => request<UserProfileDocument>("/api/profile"),
   updateProfile: (revision: string, displayName: string) =>

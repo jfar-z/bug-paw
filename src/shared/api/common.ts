@@ -2,6 +2,12 @@ import { Type, type Static } from "typebox";
 
 /** API 使用的稳定错误码，客户端不得依赖展示文案判断流程。 */
 export const ApiErrorCodeSchema = Type.Union([
+  Type.Literal("TOTP_INVALID_CODE"),
+  Type.Literal("TOTP_CHALLENGE_EXPIRED"),
+  Type.Literal("TOTP_RATE_LIMITED"),
+  Type.Literal("TOTP_STATE_CONFLICT"),
+  Type.Literal("SECURITY_STORAGE_FAILED"),
+
   Type.Literal("MCP_CLIENT_INPUT_INVALID"),
   Type.Literal("MCP_AUTH_REQUIRED"),
   Type.Literal("MCP_UPLOAD_REQUIRED"),

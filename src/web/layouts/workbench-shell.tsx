@@ -220,6 +220,7 @@ function isConfigurationRoute(route: AppRoute): boolean {
     "knowledge-retrieval",
     "aigc-channels",
     "configuration-operations",
+    "security",
     "diagnostics",
     "agent-detail",
   ].includes(route.page);

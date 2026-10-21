@@ -16,6 +16,7 @@ export const configurationGroups: Array<{ title: string; entries: Array<{ key: s
     { key: "knowledge-retrieval", title: "语义检索", description: "Embedding 服务与索引维护。", route: { page: "knowledge-retrieval" } },
   ] },
   { title: "运行环境", entries: [
+    { key: "security", title: "安全设置", description: "双因素认证、验证器绑定与一次性恢复码。", route: { page: "security" } },
     { key: "configuration-operations", title: "导入与变更", description: "安全导出、导入预览与历史恢复。", route: { page: "configuration-operations" } },
     { key: "diagnostics", title: "系统诊断", description: "检查具体异常与核心刷新影响。", route: { page: "diagnostics" } },
   ] },

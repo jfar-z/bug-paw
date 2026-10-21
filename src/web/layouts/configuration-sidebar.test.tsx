@@ -15,7 +15,7 @@ describe("配置导航共享入口", () => {
       fireEvent.click(nav.getByRole("button", { name: entry.title }));
       expect(go).toHaveBeenLastCalledWith(entry.route);
     }
-    expect(close).toHaveBeenCalledTimes(11);
+    expect(close).toHaveBeenCalledTimes(12);
   });
   it("Agent 详情仍归属 Agents 入口", () => {
     render(<ConfigurationSidebar route={{ page: "agent-detail", agentId: "example" }} open={false} onClose={() => undefined} onNavigate={() => undefined} />);

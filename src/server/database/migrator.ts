@@ -1,3 +1,4 @@
+import { totpMigration } from "./migrations/007-totp";
 import type { Database } from "./database";
 import { initialMigration } from "./migrations/001-initial";
 import { retrievalToolNamesMigration } from "./migrations/002-retrieval-tool-names";
@@ -13,6 +14,7 @@ const MIGRATIONS = [
   sessionPinningMigration,
   sessionQuestionsMigration,
   aigcMcpMigration,
+  totpMigration,
 ] as const;
 
 /** 按版本顺序执行未应用的数据库 Migration。 */
