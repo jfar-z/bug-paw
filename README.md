@@ -228,6 +228,8 @@ docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /w
 docker run --rm -e ONNXRUNTIME_NODE_INSTALL_CUDA=skip -v "$PWD:/workspace" -w /workspace node:24.19.0-bookworm-slim npm run verify
 ```
 
+DAG 工作流支持模型、Agent、AIGC、判断、选择和 JS 节点编排，以及实时运行观测。使用方法与工具授权见 [工作流文档](docs/13-dag-workflows.md)。
+
 更多架构与安全边界见 `docs/`。贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ### 目录结构

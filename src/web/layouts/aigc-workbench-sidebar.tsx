@@ -110,7 +110,7 @@ export function AigcWorkbenchSidebar({ route, open, onClose, onNavigate }: AigcW
           onClick={() => go({ page: "aigc-workflows" })}
         >
           <GitFork size={17} aria-hidden="true" />
-          <span>工作流</span>
+          <span>ComfyUI 工作流</span>
         </button>
       </nav>
 

@@ -1,4 +1,5 @@
-import { CalendarClock, ChevronDown, FolderOpen, GitFork, LibraryBig, LogOut, Menu, MessageSquare, Settings2, WandSparkles, X } from "lucide-react";
+import { WorkflowSidebar } from "./workflow-sidebar";
+import { Workflow, CalendarClock, ChevronDown, FolderOpen, GitFork, LibraryBig, LogOut, Menu, MessageSquare, Settings2, WandSparkles, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { ProductMark } from "../components/product-mark";
 import { ThemeSwitcher } from "../components/theme-switcher";
@@ -32,12 +33,14 @@ export function WorkbenchShell({
   const [configurationOpen, setConfigurationOpen] = useState(false);
   const [aigcNavigationOpen, setAigcNavigationOpen] = useState(false);
   const configurationRoute = isConfigurationRoute(route);
-  const aigcRoute = isAigcRoute(route);
+  const workflowRoute = route.page === "workflows" || route.page.startsWith("workflow-");
+  const aigcRoute = isAigcRoute(route) || workflowRoute;
   const agentNavigationRoute = route.page === "workspace-resources" || route.page === "knowledge-base" || route.page === "scheduled-tasks";
   const knowledgeBaseRoute = route.page === "knowledge-base";
   const primaryNavigation = [
     { label: "会话", route: { page: "chat" } as AppRoute, icon: MessageSquare, active: route.page === "chat" },
-    { label: "AIGC 工作台", route: { page: "aigc-overview" } as AppRoute, icon: WandSparkles, active: aigcRoute },
+    { label: "AIGC 工作台", route: { page: "aigc-overview" } as AppRoute, icon: WandSparkles, active: aigcRoute && !workflowRoute },
+    { label: "工作流", route: { page: "workflows" } as AppRoute, icon: Workflow, active: workflowRoute },
     { label: "资源管理", route: { page: "workspace-resources" } as AppRoute, icon: FolderOpen, active: route.page === "workspace-resources" },
     { label: "知识库", route: { page: "knowledge-base" } as AppRoute, icon: LibraryBig, active: route.page === "knowledge-base" },
     { label: "定时任务", route: { page: "scheduled-tasks" } as AppRoute, icon: CalendarClock, active: route.page === "scheduled-tasks" },
@@ -70,7 +73,7 @@ export function WorkbenchShell({
         <button
           type="button"
           className="icon-button workbench-secondary-menu"
-          aria-label={configurationRoute ? (configurationOpen ? "关闭配置导航" : "打开配置导航") : aigcRoute ? (aigcNavigationOpen ? "关闭 AIGC 导航" : "打开 AIGC 导航") : knowledgeBaseRoute ? "打开知识库列表" : agentNavigationRoute ? "打开 Agent 列表" : "当前工作台没有二级导航"}
+          aria-label={configurationRoute ? (configurationOpen ? "关闭配置导航" : "打开配置导航") : aigcRoute ? (aigcNavigationOpen ? (workflowRoute ? "关闭工作流导航" : "关闭 AIGC 导航") : (workflowRoute ? "打开工作流导航" : "打开 AIGC 导航")) : knowledgeBaseRoute ? "打开知识库列表" : agentNavigationRoute ? "打开 Agent 列表" : "当前工作台没有二级导航"}
           aria-expanded={configurationRoute ? configurationOpen : aigcRoute ? aigcNavigationOpen : undefined}
           disabled={!configurationRoute && !aigcRoute && !agentNavigationRoute}
           onClick={() => {
@@ -164,12 +167,12 @@ export function WorkbenchShell({
           </div>
         ) : aigcRoute ? (
           <div className="aigc-workbench-shell">
-            <AigcWorkbenchSidebar
+            {workflowRoute ? <WorkflowSidebar route={route} open={aigcNavigationOpen} onClose={() => setAigcNavigationOpen(false)} onNavigate={onNavigate} /> : <AigcWorkbenchSidebar
               route={route}
               open={aigcNavigationOpen}
               onClose={() => setAigcNavigationOpen(false)}
               onNavigate={onNavigate}
-            />
+            />}
             <section className="aigc-workbench-content">
               {children}
             </section>

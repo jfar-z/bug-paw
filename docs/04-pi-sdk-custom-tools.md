@@ -103,3 +103,8 @@ const tool = defineTool({
 ## 联网取证工具
 
 `web_read` 使用显式 read/find 与 nullable 条件参数，失败和重试阻止进入 Pi 错误事件。`web_research` 独立授权且要求同时具备搜索/读取权限，20 秒内进行有限并发取证；失败保留成功证据的 partial 协议并标记错误事件。`pdf_read` 独立授权，inspect/read/find/render 按物理页码处理公网 PDF；render 返回原生 image 内容，不将 base64 图片塞入文本 JSON。三者共享当前 Session 的 Run 状态，在 `before_agent_start` 重置，不使用全局或其他 Agent 缓存。详细边界与参数见 [联网检索集成与安全边界](06-web-research-security-boundaries.md)。存量 Agent 不自动授权新工具。
+
+
+## DAG 工作流工具
+
+工作流通过会话 `customTools` 注册 `workflow_list`、`workflow_get_definition`、`workflow_run`、`workflow_run_and_wait`、`workflow_get_task`、`workflow_cancel_task`，每项独立授权，默认不启用。定义查询是相对 AIGC 工具的新增能力。发布工作流将其中已配置的子节点能力作为整体授予获调用权限的 Agent，避免将子工具白名单误认为二次授权边界。详见 [DAG 工作流](13-dag-workflows.md)，包含类型、JSON Schema、幂等、工作区文件归属、取消和脚本隔离限制。

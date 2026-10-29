@@ -38,6 +38,13 @@ export const RETIRED_AGENT_TOOL_NAMES = ["edit_own_prompts"] as const;
 
 /** 由能力扩展模块提供、可按全局开关停用的工具。 */
 export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
+  { name: "workflow_list", description: "查询已发布工作流及输入输出参数", source: "capability", highRisk: false },
+  { name: "workflow_get_definition", description: "查询工作流节点与连线定义", source: "capability", highRisk: false },
+  { name: "workflow_run", description: "异步调用工作流，可能计费", source: "capability", highRisk: true },
+  { name: "workflow_run_and_wait", description: "调用并等待工作流完成，可能计费", source: "capability", highRisk: true },
+  { name: "workflow_get_task", description: "查询所属工作流任务并交付文件", source: "capability", highRisk: false },
+  { name: "workflow_cancel_task", description: "取消所属工作流任务", source: "capability", highRisk: true },
+
   { name: "aigc_list_interfaces", description: "按明确操作查询已发布的 AIGC 接口及参数", source: "capability", highRisk: false },
   { name: "aigc_run", description: "提交可能计费的 AIGC 生成任务", source: "capability", highRisk: true },
   { name: "aigc_run_and_wait", description: "提交 AIGC 任务并等待产物，可能计费", source: "capability", highRisk: true },
@@ -61,7 +68,7 @@ export const CAPABILITY_TOOL_CATALOG: ToolCatalogItem[] = [
 /** 新建 Agent 的默认权限，保持现有开箱即用的能力。 */
 export const DEFAULT_AGENT_TOOL_NAMES = [...BUILTIN_TOOL_CATALOG, ...SYSTEM_TOOL_CATALOG, ...CAPABILITY_TOOL_CATALOG]
   .filter(({ name }) => !["browser_input", "browser_submit", "browser_upload"].includes(name))
-  .filter(({ name }) => !name.startsWith("aigc_"))
+  .filter(({ name }) => !name.startsWith("aigc_") && !name.startsWith("workflow_"))
   .map(({ name }) => name);
 
 /** 历史 Agent 升级时需要补齐的系统工具权限。 */

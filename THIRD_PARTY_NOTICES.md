@@ -19,3 +19,9 @@ Third-party software and fonts used by BugPaw remain subject to their respective
 本文件不是完整依赖许可证的替代品。再分发源码、构建产物或容器镜像时，应同时保留依赖包附带的许可证和声明。
 
 This notice does not replace the complete dependency licenses. Redistributors of source code, build artifacts, or container images should preserve the license files and notices shipped with the corresponding dependencies.
+
+
+## 工作流编排与脚本执行
+
+- `@xyflow/react`：React Flow DAG 画布，MIT License；画布保留其归属链接。
+- `quickjs-emscripten`：QuickJS WebAssembly 绑定，MIT License；QuickJS 引擎使用 MIT License。依赖包中保留相应许可证。

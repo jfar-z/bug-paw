@@ -1,3 +1,9 @@
+import { WorkflowRepository } from "./workflows/workflow-repository";
+import { WorkflowService } from "./workflows/workflow-service";
+import { WorkflowFiles } from "./workflows/workflow-files";
+import { WorkflowNodeExecutor } from "./workflows/workflow-executor";
+import { WorkflowToolService, createWorkflowTools } from "./workflows/workflow-tools";
+import { registerWorkflowRoutes } from "./routes/workflows";
 import { toSafePublicMessage } from "./core/errors";
 import { createVersionedJsonStore } from "./configuration/versioned-json-store";
 import { PdfEvidenceService } from "./web-research/pdf-evidence-service";
@@ -397,6 +403,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
   let sharedModelRuntime = await createSharedModelRuntime();
   let scheduledTasks: ReturnType<typeof createScheduledTaskService> | undefined;
+  let workflowTools: WorkflowToolService | undefined;
   const runtimeSupervisor = new RuntimeSupervisor({
       modelRuntime: sharedModelRuntime,
       resolveAgent: async (agentId) => {
@@ -442,6 +449,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
           createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...(workflowTools ? createWorkflowTools({ agentId, sessionId }, workflowTools).filter(tool => profile.profile.allowedTools.includes(tool.name)) : []),
             ...createAigcAgentTools({ agentId, sessionId }, aigcAgentService)
               .filter((tool) => profile.profile.allowedTools.includes(tool.name)),
             ...(profile.profile.allowedTools.includes("ask_user")
@@ -544,6 +552,20 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     referenceResolver,
     questions: questionService,
   });
+  const workflowFiles = new WorkflowFiles(join(paths.appDir, "workflows", "assets"), workspaceFileManager, workspaceFiles);
+  const workflowExecutor = new WorkflowNodeExecutor({
+    modelRuntime: () => sharedModelRuntime, agents: agentStore, runtimes: runtimeSupervisor, files: workflowFiles,
+    interfaces: aigcInterfaces, aigcWorkflows, aigcTasks, aigcAssets, publicFiles: aigcPublicFiles, publicOrigin: aigcPublicOrigin,
+    assignSession: (sessionId, agentId) => sessionMetadataStore.assignAgent(sessionId, agentId),
+    sessionAgent: (sessionId) => resolveSessionAgentId(sessionId, sessionMetadataStore),
+    assertSessionRunnable: (agentId, sessionId) => questionService.assertAutomationCanStart(agentId, sessionId),
+  });
+  const workflows = new WorkflowService(new WorkflowRepository(join(paths.appDir, "workflows")), workflowExecutor, error => {
+    backgroundErrors.record("REQUEST_FAILED");
+    app.log.error(error, "工作流持久化或后台执行失败");
+  });
+  await workflows.initialize();
+  workflowTools = new WorkflowToolService(workflows, workflowFiles, async agentId => (await agentStore.get(agentId))?.profile.allowedTools ?? []);
   await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);
   await agentStore.ensureSystemToolPermissions(STARTUP_ENFORCED_SYSTEM_TOOL_NAMES);
   if (scheduledTasks) await ensureScheduledTaskSkill(paths.piDir);
@@ -751,6 +773,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     mediaProjects: aigcMediaProjects,
   });
   registerAigcMcpRoutes(app, { authService, service: aigcMcpService });
+  registerWorkflowRoutes(app, { authService, service: workflows, executor: workflowExecutor, files: workflowFiles });
   registerBrowserPreviewRoutes(app, browserPreview);
   registerBrowserAutomationRoutes(app, {
     authService,
@@ -811,6 +834,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   });
 
   app.addHook("onClose", async () => {
+    await workflows.close();
     await aigcTasks.close();
     await browserPool?.close();
     const schedulerDrained = await scheduledTasks.stopAndDrain(5_000);

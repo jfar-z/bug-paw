@@ -3,7 +3,7 @@
   "lazyChunkGzipBytes": 153600,
   "css": {
     "entryGzipBytes": 24576,
-    "totalGzipBytes": 75776,
+    "totalGzipBytes": 80896,
     "routes": {
       "src/web/pages/chat-page.tsx": {
         "label": "聊天工作台",
@@ -104,6 +104,10 @@
       "src/web/pages/security-page.tsx": {
         "label": "安全设置",
         "gzipBytes": 5632
+      },
+      "src/web/pages/workflows-page.tsx": {
+        "label": "工作流编排与运行",
+        "gzipBytes": 6144
       }
     }
   }

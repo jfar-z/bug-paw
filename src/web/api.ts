@@ -1,3 +1,4 @@
+import type { WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile } from "../shared/workflow-contracts";
 import type { LoginResponse, SecurityProof, SecurityStatus, TotpSetup } from "../shared/security-contracts";
 import type { ConfigurationOverviewDocument, ConfigurationRestorePreview, ConfigurationPostCommitError } from "../shared/configuration-operations-contracts";
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
@@ -414,6 +415,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const api = {
+  listWorkflows: () => request<{ workflows: WorkflowDefinition[] }>("/api/workflows"),
+  getWorkflow: (id: string) => request<WorkflowDefinition>(`/api/workflows/${encodeURIComponent(id)}`),
+  saveWorkflow: (draft: WorkflowDraft, id?: string, revision?: number) => request<WorkflowDefinition>(id ? `/api/workflows/${encodeURIComponent(id)}` : "/api/workflows", { method: id ? "PUT" : "POST", body: JSON.stringify({ ...draft, revision }) }),
+  deleteWorkflow: (id: string, revision: number) => request<void>(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
+  validateWorkflow: (draft: WorkflowDraft) => request<{ valid: boolean }>("/api/workflows/validate", { method: "POST", body: JSON.stringify(draft) }),
+  getWorkflowCatalog: () => request<WorkflowCatalog>("/api/workflows/catalog"),
+  runWorkflow: (id: string, inputs: Record<string, unknown>, requestKey: string) => request<WorkflowRun>(`/api/workflows/${encodeURIComponent(id)}/run`, { method: "POST", body: JSON.stringify({ inputs, requestKey }) }),
+  getWorkflowRun: (id: string) => request<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(id)}`),
+  cancelWorkflowRun: (id: string) => request<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+  listWorkflowRuns: () => request<{ runs: (Pick<WorkflowRun, "id" | "workflowId" | "status" | "createdAt" | "finishedAt" | "error"> & { name: string })[] }>("/api/workflow-runs"),
+  uploadWorkflowFile: (file: File) => { const data = new FormData(); data.append("file", file); return request<WorkflowFile>("/api/workflow-files", { method: "POST", body: data }); },
+
   getBrowserAutomation: () => request<BrowserAutomationSettingsDocument>("/api/capabilities/browser"),
   updateBrowserAutomation: (revision: string, config: BrowserAutomationConfig) => request<BrowserAutomationSettingsDocument>("/api/capabilities/browser", { method: "PATCH", body: JSON.stringify({ revision, config }) }),
   testBrowserAutomation: () => request<{ ok: boolean; message: string }>("/api/capabilities/browser/test", { method: "POST" }),

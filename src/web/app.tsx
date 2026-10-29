@@ -22,6 +22,7 @@ import { clearAllQuestionDrafts } from "./question-draft-store";
 type PreviewPage = "setup" | "login" | "chat";
 type AppPage = "loading" | "setup" | "login" | "workbench" | "error";
 
+const WorkflowsPage = lazy(() => import("./pages/workflows-page").then(module => ({ default: module.WorkflowsPage })));
 const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ default: module.ChatPage })));
 const AigcWorkbenchPage = lazy(() => import("./pages/aigc-workbench-page").then((module) => ({ default: module.AigcWorkbenchPage })));
 const AigcChannelsPage = lazy(() => import("./pages/aigc-channels-page").then((module) => ({ default: module.AigcChannelsPage })));
@@ -145,6 +146,11 @@ export function App() {
 
   const renderRoute = (activeRoute: AppRoute) => {
     switch (activeRoute.page) {
+      case "workflows":
+      case "workflow-editor":
+      case "workflow-run":
+      case "workflow-history":
+        return <WorkflowsPage route={activeRoute} />;
       case "aigc-overview":
       case "aigc-run":
       case "aigc-interfaces":

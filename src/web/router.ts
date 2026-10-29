@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 
 export type AppRoute =
   | { page: "chat" }
+  | { page: "workflows" }
+  | { page: "workflow-editor"; workflowId: string }
+  | { page: "workflow-run"; workflowId?: string; runId?: string }
+  | { page: "workflow-history" }
   | { page: "aigc-overview" }
   | { page: "aigc-run"; interfaceId?: string }
   | { page: "aigc-interfaces" }
@@ -51,6 +55,11 @@ export const KNOWLEDGE_BASE_NAVIGATION_TOGGLE_EVENT = "pi-agent:toggle-knowledge
  */
 export function parseRoute(pathname: string, search = ""): AppRoute {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  if (normalized === "/workflows") return { page: "workflows" };
+  if (normalized === "/workflows/run") { const params = new URLSearchParams(search); return { page: "workflow-run", workflowId: params.get("workflow") ?? undefined, runId: params.get("run") ?? undefined }; }
+  if (normalized === "/workflows/history") return { page: "workflow-history" };
+  const workflowMatch = normalized.match(/^\/workflows\/([^/]+)\/edit$/);
+  if (workflowMatch) { try { return { page: "workflow-editor", workflowId: decodeURIComponent(workflowMatch[1]) }; } catch { return { page: "workflows" }; } }
   if (normalized === "/aigc") return { page: "aigc-overview" };
   if (normalized === "/aigc/run") {
     const interfaceId = new URLSearchParams(search).get("interface")?.trim();
@@ -131,6 +140,11 @@ export function parseRoute(pathname: string, search = ""): AppRoute {
  */
 export function routePath(route: AppRoute): string {
   switch (route.page) {
+    case "workflows": return "/workflows";
+    case "workflow-editor": return `/workflows/${encodeURIComponent(route.workflowId)}/edit`;
+    case "workflow-history": return "/workflows/history";
+    case "workflow-run": { const params = new URLSearchParams(); if (route.workflowId) params.set("workflow", route.workflowId); if (route.runId) params.set("run", route.runId); return `/workflows/run${params.size ? `?${params}` : ""}`; }
+
     case "aigc-overview":
       return "/aigc";
     case "aigc-run":
