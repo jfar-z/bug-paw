@@ -249,8 +249,11 @@
   margin-top: 0;
 }
 
-.aigc-run-page {
+.aigc-workbench-content:has(> .aigc-run-page) {
   container-type: inline-size;
+}
+
+.aigc-run-page {
   display: grid;
   width: min(100%, 1320px);
   height: 100%;
@@ -670,9 +673,6 @@ audio.aigc-media-input-preview {
 
 .aigc-readiness-actions {
   margin-top: 14px;
-}
-
-.aigc-readiness-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 9px;
@@ -885,27 +885,47 @@ audio.aigc-media-input-preview {
 }
 
 @container (max-width: 840px) {
+  /* 单列创作表单随内容展开，由工作台内容区统一滚动，避免触摸时争抢滚动。 */
+  .aigc-run-page,
+  .aigc-run-page.has-readiness {
+    height: auto;
+    grid-template-rows: none;
+    align-content: start;
+    overflow: visible;
+  }
+
   .aigc-run-toolbar,
-  .aigc-run-readiness,
   .aigc-run-workspace {
     grid-template-columns: 1fr;
+  }
+
+  .aigc-run-readiness {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .aigc-run-readiness .aigc-run-readiness-item {
     border-right: 0;
   }
 
-  .aigc-run-workspace {
-    overflow-y: auto;
+  .aigc-run-readiness-item :is(strong, small) {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .aigc-run-workspace,
+  .aigc-run-parameters,
+  .aigc-run-parameter-scroll {
+    overflow: visible;
   }
 
   .aigc-run-parameters {
+    grid-template-rows: none;
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
 
-  .aigc-run-parameters {
-    min-height: 460px;
+  .aigc-run-parameter-scroll {
+    scrollbar-gutter: auto;
   }
 
   /* 单列布局也需确定预览高度，避免长图的固有尺寸决定面板高度。 */
@@ -932,7 +952,6 @@ audio.aigc-media-input-preview {
 
   .aigc-workbench-page.aigc-run-page {
     width: 100%;
-    height: 100%;
     padding: 12px;
   }
 
