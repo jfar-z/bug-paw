@@ -1,3 +1,4 @@
+import { WorkflowValueView } from "../features/workflows/workflow-value-view";
 import { workflowClientId } from "../features/workflows/workflow-id";
 import { useErrorToast } from "../error-toast-provider";
 import {
@@ -350,11 +351,15 @@ function Editor({ id }: { id: string }) {
           <ArrowLeft size={18} />
         </button>
         <div className="wf-editor-title">
-          <input
-            aria-label="工作流名称"
-            value={draft.name}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          />
+          <label className="wf-field">
+            工作流名称
+            <input
+              maxLength={100}
+              aria-label="工作流名称"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+          </label>
           <span>
             {dirty
               ? "有未保存修改"
@@ -399,12 +404,19 @@ function Editor({ id }: { id: string }) {
         </div>
       </header>
       <div className="wf-definition-bar">
-        <input
-          aria-label="工作流说明"
-          placeholder="描述用途及参数含义，帮助你和 Agent 正确使用"
-          value={draft.description}
-          onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-        />
+        <label className="wf-field wf-description">
+          工作流说明
+          <textarea
+            rows={2}
+            maxLength={4000}
+            aria-label="工作流说明"
+            placeholder="描述用途及参数含义，帮助你和 Agent 正确使用"
+            value={draft.description}
+            onChange={(e) =>
+              setDraft({ ...draft, description: e.target.value })
+            }
+          />
+        </label>
         <label className="wf-check">
           <input
             type="checkbox"
@@ -743,36 +755,6 @@ function Status({ status }: { status: WorkflowStatus }) {
     </span>
   );
 }
-/** 文件下载使用受认证的资产地址，不把内部存储路径暴露到浏览器。 */
-function ValueView({ value }: { value: unknown }) {
-  const files: WorkflowFile[] = [];
-  const visit = (v: unknown) => {
-    if (Array.isArray(v)) v.forEach(visit);
-    else if (v && typeof v === "object") {
-      if ("assetId" in v && typeof v.assetId === "string")
-        files.push(v as WorkflowFile);
-      else Object.values(v).forEach(visit);
-    }
-  };
-  visit(value);
-  return (
-    <>
-      <pre className="wf-json-output">
-        {JSON.stringify(value ?? {}, null, 2)}
-      </pre>
-      {files.map((f, i) => (
-        <a
-          className="wf-file-link"
-          key={`${f.assetId}-${i}`}
-          href={`/api/v1/workflow-files/${encodeURIComponent(f.assetId)}`}
-          download
-        >
-          {f.name || "下载文件"}
-        </a>
-      ))}
-    </>
-  );
-}
 /** 快照中的节点名称和事件用于历史回放，不依赖当前已编辑的定义。 */
 function RunDetail({ run }: { run: WorkflowRun }) {
   return (
@@ -830,9 +812,9 @@ function RunDetail({ run }: { run: WorkflowRun }) {
                     </a>
                   )}
                   <h4>输入</h4>
-                  <ValueView value={state.inputs} />
+                  <WorkflowValueView value={state.inputs} />
                   <h4>输出</h4>
-                  <ValueView value={state.outputs} />
+                  <WorkflowValueView value={state.outputs} />
                   <h4>事件</h4>
                   <ul className="wf-events">
                     {state.events.map((event, i) => (
@@ -851,7 +833,7 @@ function RunDetail({ run }: { run: WorkflowRun }) {
       {run.status === "succeeded" && (
         <div className="wf-final-output">
           <h3>工作流输出</h3>
-          <ValueView value={run.outputs} />
+          <WorkflowValueView value={run.outputs} />
         </div>
       )}
     </>

@@ -221,6 +221,7 @@ describe("工作流 AIGC 适配", () => {
       ctx,
       controller,
       task,
+      item,
     };
   }
   it("目录包含可运行接口，执行按输出映射交付文件", async () => {
@@ -239,6 +240,64 @@ describe("工作流 AIGC 适配", () => {
       inputs: { prompt: "test" },
     });
     expect(f.upload.mock.calls[0].at(-1)).toBe("a");
+  });
+  it("枚举目录保留约束，引用按字符串转换真实值，非法值不创建任务", async () => {
+    const f = fixture();
+    f.item.config.parameters = [
+      { name: "steps", type: "enum", enumValues: [10, 20], defaultValue: 10 },
+      { name: "enabled", type: "enum", enumValues: [true, false] },
+    ] as never;
+    const fields = (await f.executor.catalog()).interfaces[0].fields;
+    expect(fields.find((field) => field.name === "steps")).toMatchObject({
+      enumValues: [10, 20],
+      defaultValue: 10,
+    });
+    f.node.inputs.steps = {
+      kind: "reference",
+      nodeId: "upstream",
+      field: "text",
+    };
+    f.node.inputs.enabled = {
+      kind: "reference",
+      nodeId: "upstream",
+      field: "flag",
+    };
+    await f.executor.execute(f.ctx, {
+      prompt: "test",
+      steps: "20",
+      enabled: "false",
+    });
+    expect(f.createRun).toHaveBeenLastCalledWith({
+      interfaceId: "image",
+      inputs: { prompt: "test", steps: 20, enabled: false },
+    });
+    f.createRun.mockClear();
+    for (const steps of ["99", {}, [20], null, " 20 "]) {
+      await expect(
+        f.executor.execute(f.ctx, { prompt: "test", steps }),
+      ).rejects.toThrow("参数 steps");
+      expect(f.createRun).not.toHaveBeenCalled();
+    }
+    f.node.inputs.steps = { kind: "literal", value: "20" };
+    await expect(
+      f.executor.execute(f.ctx, { prompt: "test", steps: "20" }),
+    ).rejects.toThrow("枚举");
+    expect(f.createRun).not.toHaveBeenCalled();
+  });
+  it("字符串化后有歧义的枚举不猜测目标类型", async () => {
+    const f = fixture();
+    f.item.config.parameters = [
+      { name: "choice", type: "enum", enumValues: [1, "1"] },
+    ] as never;
+    f.node.inputs.choice = {
+      kind: "reference",
+      nodeId: "upstream",
+      field: "value",
+    };
+    await expect(
+      f.executor.execute(f.ctx, { prompt: "test", choice: "1" }),
+    ).rejects.toThrow("无法唯一转换");
+    expect(f.createRun).not.toHaveBeenCalled();
   });
   it("缺少参数不创建任务，取消只传递到本次上游任务", async () => {
     const f = fixture();

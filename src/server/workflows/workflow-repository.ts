@@ -12,11 +12,15 @@ export class WorkflowRepository {
   private readonly lock = new KeyedMutex();
   constructor(private readonly directory: string) {}
   async definitions(): Promise<WorkflowDefinition[]> {
-    return (
+    const items =
       (await readJson<WorkflowDefinition[]>(
         join(this.directory, "definitions.json"),
-      )) ?? []
-    );
+      )) ?? [];
+    // 旧定义缺少说明时只在读取结果补齐，避免触发生产数据迁移。
+    return items.map((item) => ({
+      ...item,
+      description: item.description ?? "",
+    }));
   }
   /** 在锁内计算新版本，落盘成功后才向调用者确认。 */
   async mutateDefinitions<T>(

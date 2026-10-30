@@ -1,9 +1,9 @@
 // @vitest-environment node
 import Fastify from "fastify";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerWorkflowRoutes } from "./workflows";
 import { WorkflowService } from "../workflows/workflow-service";
 import { WorkflowRepository } from "../workflows/workflow-repository";
@@ -43,6 +43,7 @@ describe("工作流 HTTP API", () => {
         ["PUT", "/api/workflows/unknown"],
         ["DELETE", "/api/workflows/unknown"],
         ["POST", "/api/workflows/validate"],
+        ["POST", "/api/workflows/script-assist"],
         ["POST", "/api/workflows/unknown/run"],
         ["GET", "/api/workflow-runs"],
         ["GET", "/api/workflow-runs/unknown"],
@@ -102,6 +103,91 @@ describe("工作流 HTTP API", () => {
     } finally {
       await app.close();
       await service.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("媒体预览支持 Range、默认下载和安全响应头，辅助接口沿用登录保护", async () => {
+    const root = await mkdtemp(join(tmpdir(), "workflow-media-http-"));
+    const path = join(root, "fixture.mp4");
+    await writeFile(path, "0123456789", "utf8");
+    const app = Fastify();
+    let authenticated = true;
+    let mediaType = "video/mp4";
+    const assistScript = vi.fn(async () => ({ script: "return {};" }));
+    registerWorkflowRoutes(app, {
+      authService: { isAuthenticated: async () => authenticated } as never,
+      service: {} as never,
+      executor: { assistScript } as never,
+      files: {
+        resolve: async () => ({
+          file: { assetId: "fixture", name: "产物.mp4", mediaType, size: 10 },
+          path,
+        }),
+      } as never,
+    });
+    try {
+      const preview = await app.inject({
+        url: "/api/workflow-files/fixture?preview=1",
+        headers: { range: "bytes=2-5" },
+      });
+      expect(preview.statusCode).toBe(206);
+      expect(preview.body).toBe("2345");
+      expect(preview.headers["content-range"]).toBe("bytes 2-5/10");
+      expect(preview.headers["content-disposition"]).toBeUndefined();
+      expect(preview.headers["cache-control"]).toBe("no-store");
+      expect(preview.headers["x-content-type-options"]).toBe("nosniff");
+      expect(preview.headers["x-bugpaw-file-path"]).toBe("fixture");
+      const suffix = await app.inject({
+        url: "/api/workflow-files/fixture?preview=1",
+        headers: { range: "bytes=-3" },
+      });
+      expect(suffix.body).toBe("789");
+      expect(
+        (
+          await app.inject({
+            url: "/api/workflow-files/fixture?preview=1",
+            headers: { range: "bytes=99-" },
+          })
+        ).statusCode,
+      ).toBe(416);
+      const download = await app.inject("/api/workflow-files/fixture");
+      expect(download.headers["content-disposition"]).toContain("attachment;");
+      expect(download.body).toBe("0123456789");
+      mediaType = "image/svg+xml";
+      expect(
+        (await app.inject("/api/workflow-files/fixture?preview=1")).headers[
+          "content-security-policy"
+        ],
+      ).toContain("sandbox");
+      mediaType = "text/html";
+      expect(
+        (await app.inject("/api/workflow-files/fixture?preview=1")).headers[
+          "content-disposition"
+        ],
+      ).toContain("attachment;");
+      const generated = await app.inject({
+        method: "POST",
+        url: "/api/workflows/script-assist",
+        payload: { requirement: "test" },
+      });
+      expect(generated.json()).toEqual({ script: "return {};" });
+      expect(assistScript.mock.calls[0]).toHaveLength(2);
+      authenticated = false;
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/workflows/script-assist",
+            payload: {},
+          })
+        ).statusCode,
+      ).toBe(401);
+      expect(assistScript).toHaveBeenCalledTimes(1);
+      expect(
+        (await app.inject("/api/workflow-files/fixture?preview=1")).statusCode,
+      ).toBe(401);
+    } finally {
+      await app.close();
       await rm(root, { recursive: true, force: true });
     }
   });

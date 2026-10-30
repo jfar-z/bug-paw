@@ -80,6 +80,56 @@ describe("工作流 Agent 工具边界", () => {
       expect(DEFAULT_AGENT_TOOL_NAMES).not.toContain(tool.name);
     }
   });
+  it("名称与多行说明修改后在清单、详情及完整定义保持一致，旧说明可读取", async () => {
+    const f = await fixture();
+    const updated = await f.workflows.save(
+      {
+        ...f.definition,
+        name: "媒体整理",
+        description: "生成媒体\n按输入整理输出",
+      },
+      f.definition.id,
+      f.definition.revision,
+    );
+    const summary = {
+      id: updated.id,
+      name: updated.name,
+      description: updated.description,
+    };
+    expect(
+      await f.service.list(context, {
+        action: "list",
+        workflowId: null,
+        offset: 0,
+      }),
+    ).toMatchObject({ workflows: [summary] });
+    expect(
+      await f.service.list(context, {
+        action: "get",
+        workflowId: updated.id,
+        offset: null,
+      }),
+    ).toMatchObject(summary);
+    expect(await f.service.definition(context, updated.id)).toMatchObject(
+      summary,
+    );
+    await expect(
+      f.workflows.save(
+        { ...updated, name: "过期修改" },
+        updated.id,
+        f.definition.revision,
+      ),
+    ).rejects.toThrow("其他页面");
+    const legacy = { ...updated, description: undefined };
+    await writeFile(
+      join(f.root, "workflows", "definitions.json"),
+      JSON.stringify([legacy]),
+      "utf8",
+    );
+    expect(await f.service.definition(context, updated.id)).toMatchObject({
+      description: "",
+    });
+  });
   it("清单、参数和定义读取成功，拒绝条件参数错误、未发布及不存在资源", async () => {
     const f = await fixture();
     expect(

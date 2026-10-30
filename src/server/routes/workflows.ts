@@ -1,6 +1,10 @@
-import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
-import type { WorkflowDraft } from "../../shared/workflow-contracts";
+import type {
+  WorkflowDraft,
+  WorkflowScriptAssistRequest,
+} from "../../shared/workflow-contracts";
+import { sendResolvedFile } from "./attachments";
 import type { AuthService } from "./auth";
 import { requireAuthentication } from "./protected";
 import type { WorkflowService } from "../workflows/workflow-service";
@@ -32,6 +36,24 @@ export function registerWorkflowRoutes(
       workflows: await service.list(),
     }));
     router.get("/api/workflows/catalog", async () => deps.executor.catalog());
+    router.post<{ Body: WorkflowScriptAssistRequest }>(
+      "/api/workflows/script-assist",
+      async (request, reply) => {
+        const controller = new AbortController();
+        const disconnected = () => {
+          if (!reply.raw.writableEnded) controller.abort();
+        };
+        reply.raw.on("close", disconnected);
+        try {
+          return await deps.executor.assistScript(
+            request.body,
+            controller.signal,
+          );
+        } finally {
+          reply.raw.off("close", disconnected);
+        }
+      },
+    );
     router.post<{ Body: WorkflowDraft }>(
       "/api/workflows",
       async (request, reply) =>
@@ -103,18 +125,29 @@ export function registerWorkflowRoutes(
       if (!file) invalid("请选择工作流输入文件");
       return deps.files.upload(file.file, file.filename, file.mimetype);
     });
-    router.get<{ Params: { id: string } }>(
+    router.get<{ Params: { id: string }; Querystring: { preview?: string } }>(
       "/api/workflow-files/:id",
       async (request, reply) => {
         const { file, path } = await deps.files.resolve({
           assetId: request.params.id,
         });
-        reply.header(
-          "Content-Disposition",
-          `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        const info = await stat(path);
+        // 仅媒体支持内联预览，HTML 等其他文件仍以附件交付。
+        const preview =
+          request.query.preview === "1" &&
+          /^(image|video|audio)\//.test(file.mediaType);
+        return sendResolvedFile(
+          request,
+          reply,
+          {
+            ...file,
+            path: file.assetId,
+            absolutePath: path,
+            size: info.size,
+            modifiedAt: info.mtime.toISOString(),
+          },
+          !preview,
         );
-        reply.header("X-Content-Type-Options", "nosniff");
-        return reply.type(file.mediaType).send(createReadStream(path));
       },
     );
   });

@@ -8,12 +8,13 @@ export async function runWorkflowScript(
   inputs: Record<string, unknown>,
   timeoutMs: number,
   signal: AbortSignal,
+  validateOnly = false,
 ): Promise<{ output: Record<string, unknown>; logs: string[] }> {
   signal.throwIfAborted();
   checkValueSize(inputs);
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./script-worker.mjs", import.meta.url), {
-      workerData: { script, inputs, timeoutMs },
+      workerData: { script, inputs, timeoutMs, validateOnly },
       resourceLimits: { maxOldGenerationSizeMb: 64, stackSizeMb: 2 },
       execArgv: [],
     });

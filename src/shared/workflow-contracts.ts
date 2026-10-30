@@ -18,6 +18,29 @@ export interface WorkflowField {
   description?: string;
   defaultValue?: unknown;
 }
+/** 外部能力输入由接口固定类型，并保留枚举、数值及数量约束。 */
+export interface WorkflowInputField extends WorkflowField {
+  enumValues?: (string | number | boolean)[];
+  min?: number;
+  max?: number;
+  maxItems?: number;
+}
+/** 脚本辅助仅接收当前节点上下文，不携带其他节点脚本或运行数据。 */
+export interface WorkflowScriptAssistRequest {
+  provider: string;
+  modelId: string;
+  requirement: string;
+  script: string;
+  inputs: {
+    name: string;
+    type?: WorkflowValueType;
+    multiple?: boolean;
+    description?: string;
+    source: WorkflowBinding;
+  }[];
+  outputs: WorkflowField[];
+  timeoutMs: number;
+}
 /** 媒体只传递受控资产引用，不能携带宿主路径。 */
 export interface WorkflowFile {
   assetId: string;
@@ -173,7 +196,7 @@ export interface WorkflowCatalog {
   interfaces: {
     id: string;
     name: string;
-    fields: WorkflowField[];
+    fields: WorkflowInputField[];
     outputs: WorkflowField[];
   }[];
 }

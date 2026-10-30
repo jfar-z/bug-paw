@@ -11,7 +11,10 @@ try {
   runtime.setInterruptHandler(() => Date.now() >= deadline);
   const context = runtime.newContext();
   try {
-    const source = `(() => {
+    // 生成阶段只在隔离环境编译函数体，不运行模型生成的脚本。
+    const source = workerData.validateOnly
+      ? `new Function("inputs", "console", ${JSON.stringify('"use strict";\n' + workerData.script)}); JSON.stringify({ output: {}, logs: [] });`
+      : `(() => {
       "use strict";
       const logs = [];
       const console = Object.freeze({ log: (...args) => { if(logs.length < 30) logs.push(args.map(x => String(x)).join(' ').slice(0, 1000)); } });

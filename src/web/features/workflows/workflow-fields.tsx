@@ -1,9 +1,13 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { api } from "../../api";
+import { useApiTask } from "../../api-task-provider";
 import { Plus, Trash2 } from "lucide-react";
 import {
   WORKFLOW_TYPES,
   type WorkflowBinding,
   type WorkflowField,
+  type WorkflowInputField,
+  type WorkflowFile,
   type WorkflowNode,
 } from "../../../shared/workflow-contracts";
 
@@ -84,11 +88,29 @@ export function WorkflowValue({
   onChange,
   onValidity,
 }: {
-  field: WorkflowField;
+  field: WorkflowInputField;
   value: unknown;
   onChange: (value: unknown) => void;
   onValidity?: (valid: boolean) => void;
 }) {
+  if (field.enumValues?.length)
+    return (
+      <WorkflowEnumValue
+        field={field}
+        value={value}
+        onChange={onChange}
+        onValidity={onValidity}
+      />
+    );
+  if (["image", "video", "audio", "file"].includes(field.type))
+    return (
+      <WorkflowMediaValue
+        field={field}
+        value={value}
+        onChange={onChange}
+        onValidity={onValidity}
+      />
+    );
   if (field.multiple || field.type === "object")
     return (
       <WorkflowJson
@@ -115,6 +137,8 @@ export function WorkflowValue({
         aria-label={field.name}
         type="number"
         value={value === undefined || value === null ? "" : String(value)}
+        min={field.min}
+        max={field.max}
         step={field.type === "integer" ? 1 : "any"}
         onChange={(e) =>
           onChange(e.target.value === "" ? undefined : Number(e.target.value))
@@ -273,7 +297,152 @@ export function WorkflowFieldList({
   );
 }
 
-/** 引用通过稳定节点 ID 和输出名称保存，界面只展示可读标题。 */
+/** 枚举用索引表达选项，避免数字、布尔值经过 DOM 后丢失真实类型。 */
+function WorkflowEnumValue({
+  field,
+  value,
+  onChange,
+  onValidity,
+}: {
+  field: WorkflowInputField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  onValidity?: (valid: boolean) => void;
+}) {
+  const options = field.enumValues!;
+  const selected = options.findIndex((option) => option === value);
+  useEffect(() => {
+    onValidity?.(selected >= 0);
+  }, [selected, JSON.stringify(options)]);
+  useEffect(() => () => onValidity?.(true), []);
+  return (
+    <>
+      <select
+        aria-label={field.name}
+        aria-invalid={selected < 0}
+        value={selected}
+        onChange={(event) => onChange(options[Number(event.target.value)])}
+      >
+        <option value={-1} disabled>
+          {value === undefined
+            ? "请选择枚举值"
+            : "当前值已不在枚举范围内，请重新选择"}
+        </option>
+        {options.map((option, index) => (
+          <option key={index} value={index}>
+            {String(option)}
+            {options.some(
+              (other) => other !== option && String(other) === String(option),
+            )
+              ? ` · ${typeof option}`
+              : ""}
+          </option>
+        ))}
+      </select>
+      {selected < 0 && (
+        <small className="wf-error">请选择接口允许的枚举值。</small>
+      )}
+    </>
+  );
+}
+
+/** 媒体固定值上传到受控资产目录，输入中只保存文件引用。 */
+function WorkflowMediaValue({
+  field,
+  value,
+  onChange,
+  onValidity,
+}: {
+  field: WorkflowInputField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  onValidity?: (valid: boolean) => void;
+}) {
+  const { runApiTask } = useApiTask();
+  const [busy, setBusy] = useState(false);
+  const mounted = useRef(true);
+  const latest = useRef(onChange);
+  latest.current = onChange;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const entries = (
+    Array.isArray(value) ? value : value ? [value] : []
+  ) as WorkflowFile[];
+  const valid =
+    entries.length > 0 &&
+    entries.every(
+      (item) =>
+        item &&
+        typeof item.assetId === "string" &&
+        typeof item.mediaType === "string" &&
+        (field.type === "file" || item.mediaType.startsWith(`${field.type}/`)),
+    );
+  useEffect(() => {
+    onValidity?.(valid && !busy);
+  }, [valid, busy]);
+  useEffect(() => () => onValidity?.(true), []);
+  return (
+    <>
+      <input
+        aria-label={`上传 ${field.name}`}
+        type="file"
+        multiple={field.multiple}
+        disabled={busy}
+        accept={field.type === "file" ? undefined : `${field.type}/*`}
+        onChange={(event) => {
+          const selected = [...(event.target.files ?? [])];
+          if (!selected.length) return;
+          setBusy(true);
+          void runApiTask(
+            async () => {
+              if (selected.length > (field.maxItems ?? 100))
+                throw new Error(
+                  `参数 ${field.name} 最多上传 ${field.maxItems ?? 100} 个文件`,
+                );
+              const files = await Promise.all(
+                selected.map((file) => api.uploadWorkflowFile(file)),
+              );
+              // 上传期间切换来源或节点后不回写；同节点其他修改使用最新回调保留。
+              if (mounted.current)
+                latest.current(field.multiple ? files : files[0]);
+            },
+            { operation: `上传工作流参数 ${field.name}` },
+          ).finally(() => {
+            if (mounted.current) setBusy(false);
+          });
+        }}
+      />
+      <small>
+        {busy
+          ? "正在上传…"
+          : valid
+            ? entries.map((item) => item.name).join("、")
+            : "请选择媒体文件，或改用上游节点输出。"}
+      </small>
+    </>
+  );
+}
+
+/** 根据完整字段定义创建固定值，优先使用接口默认值和真实枚举选项。 */
+function initialLiteral(field: WorkflowInputField): unknown {
+  if (field.defaultValue !== undefined) return field.defaultValue;
+  if (field.enumValues?.length) return field.enumValues[0];
+  if (field.multiple) return [];
+  if (field.type === "boolean") return false;
+  if (field.type === "integer" || field.type === "float") return field.min ?? 0;
+  if (
+    field.type === "object" ||
+    ["image", "video", "audio", "file"].includes(field.type)
+  )
+    return {};
+  return "";
+}
+
+/** 引用通过稳定节点 ID 保存；有声明的输入类型只读，自由输入才允许选类型。 */
 export function WorkflowBindingEditor({
   label,
   binding,
@@ -281,6 +450,7 @@ export function WorkflowBindingEditor({
   nodeId,
   onChange,
   type = "string",
+  field,
   onValidity,
 }: {
   label: string;
@@ -289,6 +459,7 @@ export function WorkflowBindingEditor({
   nodeId: string;
   onChange: (binding: WorkflowBinding | undefined) => void;
   type?: WorkflowField["type"];
+  field?: WorkflowInputField;
   onValidity?: (valid: boolean) => void;
 }) {
   const [constantType, setConstantType] = useState<WorkflowField["type"]>(() =>
@@ -302,87 +473,117 @@ export function WorkflowBindingEditor({
             : type
       : type,
   );
+  const effective = field ?? { name: label, type: constantType };
   const selection =
     binding?.kind === "reference"
       ? `${binding.nodeId}:${binding.field}`
       : binding
         ? "literal"
         : "unset";
+  const available = nodes.filter(
+    (node) => node.id !== nodeId && node.kind !== "output",
+  );
+  const missing =
+    binding?.kind === "reference" &&
+    !available.some(
+      (node) =>
+        node.id === binding.nodeId &&
+        node.outputs.some((output) => output.name === binding.field),
+    );
   return (
-    <section className="wf-binding">
+    <section className="wf-binding" aria-label={`${label} 参数配置`}>
+      <div className="wf-parameter-heading">
+        <strong>{label}</strong>
+        {field && (
+          <span className="wf-type-badge">
+            {field.enumValues?.length ? "枚举 · " : ""}
+            {field.type}
+            {field.multiple ? "[]" : ""}
+          </span>
+        )}
+      </div>
+      {field?.description && <p className="wf-hint">{field.description}</p>}
       <label className="wf-field">
-        {label}
+        值来源
         <select
-          aria-label={label}
+          aria-label={`${label} 值来源`}
           value={selection}
-          onChange={(e) => {
-            if (e.target.value === "unset") onChange(undefined);
-            else if (e.target.value === "literal")
-              onChange({
-                kind: "literal",
-                value:
-                  constantType === "boolean"
-                    ? false
-                    : constantType === "integer" || constantType === "float"
-                      ? 0
-                      : constantType === "object"
-                        ? {}
-                        : "",
-              });
+          onChange={(event) => {
+            if (event.target.value === "unset") onChange(undefined);
+            else if (event.target.value === "literal")
+              onChange({ kind: "literal", value: initialLiteral(effective) });
             else {
-              const [source, field] = e.target.value.split(":");
-              onChange({ kind: "reference", nodeId: source, field });
+              const [source, name] = event.target.value.split(":");
+              onChange({ kind: "reference", nodeId: source, field: name });
             }
           }}
         >
-          <option value="unset">不提供</option>
+          <option value="unset">
+            {field?.defaultValue !== undefined ? "使用接口默认值" : "不提供"}
+          </option>
           <option value="literal">固定值</option>
-          {nodes
-            .filter((n) => n.id !== nodeId && n.kind !== "output")
-            .map((n) => (
-              <optgroup key={n.id} label={n.name}>
-                {n.outputs.map((f) => (
-                  <option key={f.name} value={`${n.id}:${f.name}`}>
-                    {n.name} / {f.name} · {f.type}
-                    {f.multiple ? "[]" : ""}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
+          {missing && (
+            <option value={selection} disabled>
+              引用已失效，请重新选择
+            </option>
+          )}
+          {available.map((node) => (
+            <optgroup key={node.id} label={node.name}>
+              {node.outputs.map((output) => (
+                <option key={output.name} value={`${node.id}:${output.name}`}>
+                  {node.name} / {output.name} · {output.type}
+                  {output.multiple ? "[]" : ""}
+                </option>
+              ))}
+            </optgroup>
+          ))}
         </select>
       </label>
       {binding?.kind === "literal" && (
         <>
-          <select
-            aria-label={`${label} 常量类型`}
-            value={constantType}
-            onChange={(e) => {
-              const t = e.target.value as WorkflowField["type"];
-              setConstantType(t);
-              onChange({
-                kind: "literal",
-                value:
-                  t === "boolean"
-                    ? false
-                    : t === "integer" || t === "float"
-                      ? 0
-                      : t === "object"
-                        ? {}
-                        : "",
-              });
-            }}
-          >
-            {["string", "float", "integer", "boolean", "object"].map((t) => (
-              <option key={t}>{t}</option>
-            ))}
-          </select>
-          <WorkflowValue
-            field={{ name: label, type: constantType }}
-            value={binding.value}
-            onChange={(value) => onChange({ kind: "literal", value })}
-            onValidity={onValidity}
-          />
+          {!field && (
+            <label className="wf-field">
+              数据类型
+              <select
+                aria-label={`${label} 常量类型`}
+                value={constantType}
+                onChange={(event) => {
+                  const nextType = event.target.value as WorkflowField["type"];
+                  setConstantType(nextType);
+                  onChange({
+                    kind: "literal",
+                    value: initialLiteral({ name: label, type: nextType }),
+                  });
+                }}
+              >
+                {["string", "float", "integer", "boolean", "object"].map(
+                  (t) => (
+                    <option key={t}>{t}</option>
+                  ),
+                )}
+              </select>
+            </label>
+          )}
+          <div className="wf-field">
+            <span>参数值</span>
+            <WorkflowValue
+              field={effective}
+              value={binding.value}
+              onChange={(value) => onChange({ kind: "literal", value })}
+              onValidity={onValidity}
+            />
+          </div>
         </>
+      )}
+      {binding?.kind === "reference" && field?.enumValues?.length ? (
+        <p className="wf-hint">
+          上游值按字符串匹配枚举，转换失败将停止并报错。
+        </p>
+      ) : null}
+      {field?.defaultValue !== undefined && !binding && (
+        <small className="wf-hint">
+          默认值：{JSON.stringify(field.defaultValue)}
+        </small>
       )}
     </section>
   );

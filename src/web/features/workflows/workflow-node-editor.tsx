@@ -6,7 +6,9 @@ import {
   type WorkflowCatalog,
   type WorkflowBinding,
   type WorkflowCondition,
+  type WorkflowInputField,
 } from "../../../shared/workflow-contracts";
+import { WorkflowScriptAssist } from "./workflow-script-assist";
 import { api, type SessionSummary } from "../../api";
 import { useApiTask } from "../../api-task-provider";
 import {
@@ -64,15 +66,11 @@ export function WorkflowNodeEditor({
       active = false;
     };
   }, [config.agentId, config.sessionMode, node.kind, runApiTask]);
-  const binding = (
-    name: string,
-    label: string,
-    type: "string" | "object" | "boolean" | "float" = "string",
-  ) => (
+  const binding = (name: string, label: string, field?: WorkflowInputField) => (
     <WorkflowBindingEditor
       key={name}
       label={label}
-      type={type}
+      field={field}
       binding={node.inputs[name]}
       nodes={nodes}
       nodeId={node.id}
@@ -188,7 +186,7 @@ export function WorkflowNodeEditor({
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
             <h3>输出绑定</h3>
-            {node.outputs.map((f) => binding(f.name, f.name))}
+            {node.outputs.map((f) => binding(f.name, f.name, f))}
           </>
         )}
         {node.kind === "llm" && (
@@ -236,8 +234,16 @@ export function WorkflowNodeEditor({
                 onChange={(e) => patch({ systemPrompt: e.target.value })}
               />
             </label>
-            {binding("prompt", "用户 prompt · 必填")}
-            {binding("images", "图片 · 可选")}
+            {binding("prompt", "用户 prompt · 必填", {
+              name: "prompt",
+              type: "string",
+              required: true,
+            })}
+            {binding("images", "图片 · 可选", {
+              name: "images",
+              type: "image",
+              multiple: true,
+            })}
             <h3>思考与常见超参</h3>
             <label className="wf-field">
               思考等级
@@ -338,8 +344,16 @@ export function WorkflowNodeEditor({
                 ))}
               </select>
             </label>
-            {binding("prompt", "用户 prompt · 必填")}
-            {binding("files", "文件 · 可选")}
+            {binding("prompt", "用户 prompt · 必填", {
+              name: "prompt",
+              type: "string",
+              required: true,
+            })}
+            {binding("files", "文件 · 可选", {
+              name: "files",
+              type: "file",
+              multiple: true,
+            })}
             <h3>会话行为</h3>
             <label className="wf-field">
               目标会话
@@ -415,25 +429,9 @@ export function WorkflowNodeEditor({
             </label>
             {catalog.interfaces
               .find((i) => i.id === config.interfaceId)
-              ?.fields.map((f) => (
-                <div key={f.name}>
-                  {binding(
-                    f.name,
-                    `${f.name}${f.required ? " · 必填" : ""}`,
-                    f.type === "float" || f.type === "integer"
-                      ? "float"
-                      : f.type === "boolean"
-                        ? "boolean"
-                        : "string",
-                  )}
-                  <p className="wf-hint">
-                    {f.description}
-                    {f.defaultValue !== undefined
-                      ? ` · 默认 ${JSON.stringify(f.defaultValue)}`
-                      : ""}
-                  </p>
-                </div>
-              ))}
+              ?.fields.map((f) =>
+                binding(f.name, `${f.name}${f.required ? " · 必填" : ""}`, f),
+              )}
           </>
         )}
         {node.kind === "condition" && (
@@ -617,7 +615,15 @@ export function WorkflowNodeEditor({
               <Plus size={15} />
               添加输入
             </button>
-            <h3>JavaScript</h3>
+            <div className="wf-section-heading">
+              <h3>JavaScript</h3>
+              <WorkflowScriptAssist
+                node={node}
+                nodes={nodes}
+                catalog={catalog}
+                onApply={(script) => patch({ script })}
+              />
+            </div>
             <label className="wf-field">
               函数体 · return 输出对象
               <textarea

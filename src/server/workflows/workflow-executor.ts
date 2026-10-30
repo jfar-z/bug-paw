@@ -7,6 +7,7 @@ import type {
   WorkflowField,
   WorkflowFile,
   WorkflowRun,
+  WorkflowScriptAssistRequest,
 } from "../../shared/workflow-contracts";
 import type {
   AigcRunInputValue,
@@ -33,6 +34,7 @@ import type {
   WorkflowExecutor,
 } from "./workflow-service";
 import type { WorkflowFiles } from "./workflow-files";
+import { generateWorkflowScript } from "./workflow-script-assist";
 
 interface Dependencies {
   modelRuntime(): ModelRuntime;
@@ -53,7 +55,24 @@ interface Dependencies {
 export class WorkflowNodeExecutor implements WorkflowExecutor {
   readonly workflowSessions = new Set<string>();
   private readonly sessions = new Set<string>();
+  /** 限制管理端同时生成的数量，避免重复点击耗尽模型连接。 */
+  private scriptGenerations = 0;
   constructor(private readonly dependencies: Dependencies) {}
+  /** 生成候选脚本，不创建工作流运行，也不自动应用到持久化定义。 */
+  async assistScript(input: WorkflowScriptAssistRequest, signal: AbortSignal) {
+    if (this.scriptGenerations >= 2)
+      invalid("已有两个脚本辅助请求正在生成，请完成或取消后再试");
+    this.scriptGenerations++;
+    try {
+      return await generateWorkflowScript(
+        this.dependencies.modelRuntime(),
+        input,
+        signal,
+      );
+    } finally {
+      this.scriptGenerations--;
+    }
+  }
   async catalog(): Promise<WorkflowCatalog> {
     const models = (await this.dependencies.modelRuntime().getAvailable()).map(
       (m) => ({
@@ -416,16 +435,37 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
         : undefined;
     const fields = agentFields(item, workflow),
       parameters: AigcAgentParameter[] = Object.entries(inputs).map(
-        ([name, value]) => ({
-          name,
-          value: (fields.find((f) => f.name === name)?.source
-            ? Array.isArray(value)
-              ? value.map((_, i) => `file-${i}`)
-              : value === null
-                ? null
-                : "file"
-            : value) as AigcAgentParameter["value"],
-        }),
+        ([name, original]) => {
+          const field = fields.find((f) => f.name === name);
+          let value = original;
+          // 仅引用值按字符串匹配枚举；固定值必须保持下拉选项的真实类型。
+          if (
+            field?.enumValues?.length &&
+            ctx.node.inputs[name]?.kind === "reference"
+          ) {
+            const options = field.enumValues;
+            const matches = ["string", "number", "boolean"].includes(
+              typeof value,
+            )
+              ? options.filter((option) => String(option) === String(value))
+              : [];
+            if (matches.length !== 1)
+              invalid(
+                `节点 ${ctx.node.name} 参数 ${name} 无法唯一转换为枚举；允许值：${JSON.stringify(options)}`,
+              );
+            value = matches[0];
+          }
+          return {
+            name,
+            value: (field?.source
+              ? Array.isArray(value)
+                ? value.map((_, i) => `file-${i}`)
+                : value === null
+                  ? null
+                  : "file"
+              : value) as AigcAgentParameter["value"],
+          };
+        },
       );
     const checked = validateAgentParameters(fields, parameters);
     const values: Record<string, AigcRunInputValue> = {};

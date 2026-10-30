@@ -214,6 +214,7 @@
   font-size: 12px;
   white-space: nowrap;
 }
+.wf-field .wf-error,
 .wf-error {
   color: var(--danger);
 }
@@ -254,11 +255,8 @@
   padding: 8px 20px;
   border-bottom: 1px solid var(--border);
 }
-.wf-definition-bar > input {
+.wf-description {
   flex: 1;
-  border: 0 !important;
-  background: transparent !important;
-  font-size: 12px;
 }
 .wf-definition-bar > span {
   color: var(--fg);
@@ -454,7 +452,28 @@
 }
 .wf-binding {
   display: grid;
-  gap: 7px;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.wf-binding .wf-hint {
+  margin: 0;
+}
+.wf-parameter-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.wf-type-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
 }
 .wf-fields {
   display: grid;
@@ -798,5 +817,80 @@
     scroll-behavior: auto;
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* 脚本辅助与媒体预览只随工作流页面加载，并继承当前主题。 */
+.wf-assist-drawer {
+  width: min(720px, 100vw);
+}
+.wf-assist-form {
+  display: grid;
+  gap: 18px;
+  height: auto;
+  padding: 0;
+  background: transparent;
+}
+.wf-assist-drawer .configuration-editor-drawer__footer {
+  flex-wrap: wrap;
+}
+.wf-media-list {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+.wf-media-item {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+.wf-media-item video,
+.wf-media-item audio {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+}
+.wf-media-image {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+}
+.wf-media-image img {
+  display: block;
+  width: 100%;
+  height: 240px;
+  object-fit: contain;
+}
+.wf-media-item strong {
+  overflow-wrap: anywhere;
+}
+.wf-output-data {
+  margin-top: 12px;
+}
+.configuration-dialog:has(.wf-media-large) {
+  width: min(1000px, 96vw);
+  max-width: 1000px;
+}
+.wf-media-large {
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+.wf-media-large img {
+  max-width: 100%;
+  max-height: 65dvh;
+  object-fit: contain;
+}
+@media (max-width: 720px) {
+  .wf-definition-bar {
+    flex-wrap: wrap;
+  }
+  .wf-description {
+    flex-basis: 100%;
   }
 }
