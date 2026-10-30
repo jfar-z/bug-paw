@@ -69,6 +69,29 @@ function branched(): WorkflowDraft {
   return d;
 }
 describe("工作流调度与持久化", () => {
+  it("保存和启动旧定义时拒绝未声明的输出绑定，修正后正常输出且不调用外部能力", async () => {
+    const execute = vi.fn();
+    const { service, repository } = await fixture({ execute });
+    const draft = emptyWorkflow();
+    draft.nodes[1].outputs = [{ name: "story", type: "string", required: true }];
+    draft.nodes[1].inputs.story = ref("input", "prompt");
+    await expect(service.save(draft)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED", message: expect.stringContaining("输出绑定 result 未声明"),
+    });
+    delete draft.nodes[1].inputs.result;
+    const saved = await service.save(draft);
+    const legacy = structuredClone(saved);
+    legacy.nodes[1].inputs.result = ref("input", "prompt");
+    repository.mutateDefinition(saved.id, () => ({ value: legacy, result: undefined }));
+    await expect(service.start(saved.id, { prompt: "已生成文本" }, "stale-output"))
+      .rejects.toMatchObject({ code: "VALIDATION_FAILED", message: expect.stringContaining("输出绑定 result 未声明") });
+    expect(service.listRuns()).toHaveLength(0);
+    expect(execute).not.toHaveBeenCalled();
+    await service.save(saved, saved.id, saved.revision);
+    const started = await service.start(saved.id, { prompt: "已生成文本" }, "fixed-output");
+    expect((await service.wait(started.id)).outputs).toEqual({ story: "已生成文本" });
+  });
+
   it("默认输入输出运行，幂等重试、快照和版本冲突", async () => {
     const { service, repository } = await fixture();
     const d = await service.save(emptyWorkflow());
@@ -176,6 +199,22 @@ describe("工作流调度与持久化", () => {
   });
 });
 describe("类型与 DAG 验证", () => {
+  it.each([false, true])("递归拒绝循环体未声明的输出映射（runnable=%s），不限制脚本自由输入", (runnable) => {
+    const draft = emptyWorkflow();
+    const script = newWorkflowNode("javascript", "script");
+    script.inputs.custom = { kind: "literal", value: 0 };
+    draft.nodes.splice(1, 0, script);
+    draft.edges = [
+      { id: "in", source: "input", target: "script" },
+      { id: "out", source: "script", target: "output" },
+    ];
+    expect(() => validateWorkflow(draft, runnable)).not.toThrow();
+    const loop = newWorkflowNode("loop", "loop");
+    loop.config.loop!.body.nodes[1].inputs.stale = { kind: "literal", value: undefined };
+    draft.nodes.push(loop);
+    expect(() => validateWorkflow(draft, runnable)).toThrow("输出绑定 stale 未声明");
+  });
+
   it("拒绝环路、非上游引用、悬空和输出类型不兼容", () => {
     const d = branched();
     d.edges.push({ id: "cycle", source: "select", target: "condition" });

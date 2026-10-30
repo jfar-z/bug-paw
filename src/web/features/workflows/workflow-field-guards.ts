@@ -49,6 +49,13 @@ export function workflowDraftFieldError(
       node.kind === "input" ? systemNames : [],
     ).find(Boolean);
     if (error) return `${node.name}：${error}`;
+    if (node.kind === "output") {
+      const stale = Object.keys(node.inputs).find(
+        (name) => !node.outputs.some((field) => field.name === name),
+      );
+      if (stale)
+        return `${node.name}：输出绑定 ${stale} 未声明，请打开输出节点清理旧绑定。`;
+    }
     if (node.config.loop) {
       const nested = workflowDraftFieldError(
         node.config.loop.body,
@@ -58,6 +65,18 @@ export function workflowDraftFieldError(
     }
   }
   return "";
+}
+
+/** 出参删除或改名后移除旧绑定，新名称需显式选择来源，保留同名字段的真实值。 */
+export function workflowOutputBindings(
+  node: WorkflowNode,
+  outputs: WorkflowField[] = node.outputs,
+) {
+  return Object.fromEntries(
+    Object.entries(node.inputs).filter(([name]) =>
+      outputs.some((field) => field.name === name),
+    ),
+  );
 }
 
 /** 删除或改名声明后清理旧映射，避免不可见的入参和循环变量阻止保存。 */

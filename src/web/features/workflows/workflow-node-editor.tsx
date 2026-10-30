@@ -20,6 +20,7 @@ import {
 } from "./workflow-input-tools";
 import { api, type SessionSummary } from "../../api";
 import { useApiTask } from "../../api-task-provider";
+import { workflowOutputBindings } from "./workflow-field-guards";
 import {
   WorkflowBindingEditor,
   WorkflowFieldList,
@@ -76,6 +77,9 @@ export function WorkflowNodeEditor({
     onRefreshEnums: () => void refreshEnumSources(),
   };
   const config = node.config;
+  const staleOutputs = node.kind === "output"
+    ? Object.keys(node.inputs).filter((name) => !node.outputs.some((field) => field.name === name))
+    : [];
   const connected = new Set([node.id]);
   // 枚举来源允许来自下游，只用于复制类型约束，不改变执行连线。
   for (let i = 0; i < nodes.length; i++)
@@ -299,8 +303,22 @@ export function WorkflowNodeEditor({
               fields={node.outputs}
               enumSources={enumSources}
               {...enumRefresh}
-              onChange={(outputs) => onChange({ ...node, outputs })}
+              onChange={(outputs) => onChange({ ...node, outputs, inputs: workflowOutputBindings(node, outputs) })}
             />
+            {staleOutputs.length > 0 && (
+              <div className="wf-field-item">
+                <p className="wf-error" role="alert">
+                  未声明的输出绑定：{staleOutputs.join("、")}。请清理后保存工作流。
+                </p>
+                <button
+                  type="button"
+                  className="wf-button"
+                  onClick={() => onChange({ ...node, inputs: workflowOutputBindings(node) })}
+                >
+                  清理未声明的输出绑定
+                </button>
+              </div>
+            )}
             <h3>输出绑定</h3>
             {node.outputs.map((f) => binding(f.name, f.name, f))}
           </>

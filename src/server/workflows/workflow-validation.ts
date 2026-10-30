@@ -501,6 +501,9 @@ export function validateWorkflow(
     const config = node.config as WorkflowNodeConfig;
     for (const [name, b] of Object.entries(node.inputs)) {
       if (!validName(name)) invalid("输入映射名称不合法");
+      // 输出节点直接透传绑定值，必须在保存和启动前拒绝已删除声明的旧映射。
+      if (node.kind === "output" && !node.outputs.some((field) => field.name === name))
+        invalid(`节点 ${node.name} 的输出绑定 ${name} 未声明，请在输出节点清理旧绑定`);
       checkBinding(b, node);
     }
     if (config.referenceGroups !== undefined) {

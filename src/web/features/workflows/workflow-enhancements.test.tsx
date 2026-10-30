@@ -28,7 +28,10 @@ import {
   newWorkflowNode,
   type WorkflowBinding,
   type WorkflowCatalog,
+  type WorkflowNode,
 } from "../../../shared/workflow-contracts";
+import { validateWorkflow } from "../../../server/workflows/workflow-validation";
+import { workflowDraftFieldError } from "./workflow-field-guards";
 
 /** 使用真实任务提供器验证错误可见，模型请求仅使用假响应。 */
 function Wrapper({ children }: { children: React.ReactNode }) {
@@ -57,6 +60,79 @@ const catalog: WorkflowCatalog = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("工作流编辑增强", () => {
+  /** 使用实际属性面板检查出参声明与提交结构，不以显示隐藏代替数据清理。 */
+  function OutputEditor({ initial }: { initial: WorkflowNode }) {
+    const [node, setNode] = useState(initial);
+    return (
+      <>
+        <WorkflowNodeEditor
+          node={node}
+          nodes={[emptyWorkflow().nodes[0], node]}
+          edges={emptyWorkflow().edges}
+          catalog={catalog}
+          onChange={setNode}
+          onClose={() => {}}
+          onDelete={() => {}}
+          onCopy={() => {}}
+          onValidity={() => {}}
+        />
+        <output data-testid="output-node">{JSON.stringify(node)}</output>
+      </>
+    );
+  }
+
+  it("删除、逐次改名与排序出参时只保留仍声明的绑定", () => {
+    const node = emptyWorkflow().nodes[1];
+    node.outputs.push({ name: "keep", type: "boolean" });
+    node.inputs.keep = { kind: "literal", value: false };
+    render(<Wrapper><OutputEditor initial={node} /></Wrapper>);
+    const current = () => JSON.parse(screen.getByTestId("output-node").textContent!) as WorkflowNode;
+    fireEvent.click(screen.getByRole("button", { name: "上移参数 keep" }));
+    expect(current().outputs.map((field) => field.name)).toEqual(["keep", "result"]);
+    expect(current().inputs).toEqual(node.inputs);
+    fireEvent.change(screen.getByLabelText("参数 2 名称"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("参数 2 名称"), { target: { value: "story" } });
+    expect(current().inputs).toEqual({ keep: { kind: "literal", value: false } });
+    fireEvent.click(screen.getByRole("button", { name: "删除参数 keep" }));
+    expect(current().inputs).toEqual({});
+    const draft = { ...emptyWorkflow(), nodes: [emptyWorkflow().nodes[0], current()] };
+    expect(workflowDraftFieldError(draft)).toBe("");
+    expect(() => validateWorkflow(draft, true)).toThrow("story 尚未绑定");
+  });
+
+  it("旧工作流显示隐藏的残留绑定，显式清理后保留正常出参并可执行校验", () => {
+    const node = emptyWorkflow().nodes[1];
+    node.outputs = [{ name: "story", type: "string", required: true }];
+    node.inputs.story = { kind: "reference", nodeId: "input", field: "prompt" };
+    render(<Wrapper><OutputEditor initial={node} /></Wrapper>);
+    expect(screen.getByText(/未声明的输出绑定：result/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "清理未声明的输出绑定" }));
+    const cleaned = JSON.parse(screen.getByTestId("output-node").textContent!) as WorkflowNode;
+    expect(cleaned.inputs).toEqual({ story: node.inputs.story });
+    expect(screen.queryByText(/未声明的输出绑定/)).not.toBeInTheDocument();
+    expect(() => validateWorkflow({ ...emptyWorkflow(), nodes: [emptyWorkflow().nodes[0], cleaned] }, true)).not.toThrow();
+    expect(node.inputs.result).toBeDefined();
+  });
+
+  it("已有残留映射即使未打开属性面板也阻止校验、保存和运行", async () => {
+    const definition = {
+      ...emptyWorkflow(), id: "stale-output", revision: 1, createdAt: "", updatedAt: "",
+    };
+    definition.nodes[1].outputs = [{ name: "story", type: "string" }];
+    vi.spyOn(api, "getWorkflowCatalog").mockResolvedValue(catalog);
+    vi.spyOn(api, "getWorkflow").mockResolvedValue(definition);
+    const save = vi.spyOn(api, "saveWorkflow");
+    render(<Wrapper><WorkflowsPage route={{ page: "workflow-editor", workflowId: definition.id }} /></Wrapper>);
+    await screen.findByLabelText("工作流名称");
+    expect(screen.getByText(/输出绑定 result 未声明/)).toBeVisible();
+    for (const name of ["校验", "保存", "保存并运行"])
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    expect(save).not.toHaveBeenCalled();
+    const loop = newWorkflowNode("loop", "loop");
+    loop.config.loop!.body = definition;
+    expect(workflowDraftFieldError({ ...emptyWorkflow(), nodes: [...emptyWorkflow().nodes, loop] })).toContain("输出绑定 result 未声明");
+  });
+
   it("嵌套循环的参数名错误在未打开属性面板时仍阻止校验、保存和运行", async () => {
     const loop = newWorkflowNode("loop", "loop");
     const inner = newWorkflowNode("loop", "inner");

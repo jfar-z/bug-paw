@@ -75,6 +75,22 @@ describe("工作流 HTTP API", () => {
       expect(saved.statusCode).toBe(201);
       expect(saved.headers["cache-control"]).toBe("no-store");
       const definition = saved.json();
+      // 同一未声明映射在校验、新建和更新入口均返回可追踪的具体错误。
+      const stale = emptyWorkflow();
+      stale.nodes[1].outputs = [{ name: "story", type: "string" }];
+      for (const [method, url, payload] of [
+        ["POST", "/api/workflows/validate", stale],
+        ["POST", "/api/workflows", stale],
+        ["PUT", `/api/workflows/${definition.id}`, { ...stale, revision: definition.revision }],
+      ] as const) {
+        const rejected = await app.inject({ method, url, payload });
+        expect(rejected.statusCode).toBe(400);
+        expect(rejected.json().error).toMatchObject({
+          code: "VALIDATION_FAILED",
+          message: expect.stringContaining("输出绑定 result 未声明"),
+          requestId: expect.any(String),
+        });
+      }
       const started = await app.inject({
         method: "POST",
         url: `/api/workflows/${definition.id}/run`,
