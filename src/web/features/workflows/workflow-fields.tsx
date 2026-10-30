@@ -547,11 +547,13 @@ function WorkflowMediaValue({
         accept={field.type === "file" ? undefined : `${field.type}/*`}
         onChange={(event) => {
           const selected = [...(event.target.files ?? [])];
+          event.target.value = "";
           if (!selected.length) return;
           setBusy(true);
           void runApiTask(
             async () => {
-              if (selected.length > (field.maxItems ?? 100))
+              const existing = field.multiple ? entries : [];
+              if (existing.length + selected.length > (field.maxItems ?? 100))
                 throw new Error(
                   `参数 ${field.name} 最多上传 ${field.maxItems ?? 100} 个文件`,
                 );
@@ -560,7 +562,9 @@ function WorkflowMediaValue({
               );
               // 上传期间切换来源或节点后不回写；同节点其他修改使用最新回调保留。
               if (mounted.current)
-                latest.current(field.multiple ? files : files[0]);
+                latest.current(
+                  field.multiple ? [...existing, ...files] : files[0],
+                );
             },
             { operation: `上传工作流参数 ${field.name}` },
           ).finally(() => {

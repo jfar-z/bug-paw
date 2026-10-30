@@ -646,19 +646,35 @@ function Runner({
                           accept={f.type === "file" ? undefined : `${f.type}/*`}
                           onChange={(e) => {
                             const files = [...(e.target.files ?? [])];
+                            e.target.value = "";
                             if (!files.length) return;
+                            const existing =
+                              f.multiple && Array.isArray(inputs[f.name])
+                                ? (inputs[f.name] as WorkflowFile[])
+                                : [];
                             setBusy(true);
                             void runApiTask(
-                              () =>
-                                Promise.all(
+                              async () => {
+                                if (existing.length + files.length > 100)
+                                  throw new Error(
+                                    `参数 ${f.name} 最多上传 100 个文件`,
+                                  );
+                                return Promise.all(
                                   files.map((file) =>
                                     api.uploadWorkflowFile(file),
                                   ),
-                                ),
+                                );
+                              },
                               { operation: `上传 ${f.name}` },
                             ).then((r) => {
+                              // 数组支持分批追加，单文件仍替换；失败时保留此前成功上传的值。
                               if (r.status === "success")
-                                change(f.name, f.multiple ? r.data : r.data[0]);
+                                change(
+                                  f.name,
+                                  f.multiple
+                                    ? [...existing, ...r.data]
+                                    : r.data[0],
+                                );
                               setBusy(false);
                             });
                           }}
