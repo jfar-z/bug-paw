@@ -10,6 +10,8 @@ import { Readable } from "node:stream";
 import { AIGC_TASK_BULK_DELETE_LIMIT, type AigcTaskRecord } from "../../shared/aigc-contracts";
 import { registerAigcChannelRoutes } from "./aigc-channels";
 import { registerAigcRoutes } from "./aigc";
+import { VersionConflictError } from "../configuration/versioned-json-store";
+import { DomainError } from "../core/errors";
 
 const roots: string[] = [];
 
@@ -167,12 +169,49 @@ describe("AIGC 工作流节点元数据路由", () => {
     const response = await app.inject({
       method: "POST",
       url: "/api/aigc/workflows/workflow-1/replace",
-      payload: { revision: "r1", fileName: "new.json", workflowJson },
+      payload: { revision: "r1", fileName: "new.json", workflowJson, confirmationToken: "checked" },
     });
 
     expect(response.statusCode, response.body).toBe(200);
     expect(response.json()).toMatchObject({ revision: "r2", workflow: { id: "workflow-1", fileName: "new.json" } });
-    expect(replace).toHaveBeenCalledWith("workflow-1", expect.objectContaining({ fileName: "new.json", workflowJson }), "r1");
+    expect(replace).toHaveBeenCalledWith("workflow-1", { fileName: "new.json", workflowJson, confirmationToken: "checked" }, "r1");
+    await app.close();
+  });
+
+  it.each(["正常检查", "版本冲突", "未确认", "非法摘要", "未认证"])("替换检查与确认接口：%s", async (scenario) => {
+    const preview = { revision: "r1", confirmationToken: "checked", removedMappings: [
+      { kind: "input", id: "steps", name: "步数", nodeId: "1", field: "inputs.steps", reason: "映射字段不存在" },
+    ] };
+    const previewReplacement = vi.fn(async () => {
+      if (scenario === "版本冲突") throw new VersionConflictError("r1", "r2");
+      return preview;
+    });
+    const replace = vi.fn(async () => { throw new DomainError("VALIDATION_FAILED", "工作流替换尚未确认，请重新检查映射并确认后替换"); });
+    const app = Fastify();
+    registerAigcRoutes(app, {
+      authService: { isAuthenticated: async () => scenario !== "未认证" } as never,
+      workflows: { previewReplacement, replace } as never, interfaces: {} as never, tasks: {} as never,
+      assets: {} as never, publicFiles: {} as never, comfyuiInputs: {} as never,
+    });
+    const workflowJson = { "1": { class_type: "KSampler", inputs: { seed: 1 } } };
+    const replacing = scenario === "未确认" || scenario === "非法摘要";
+    const response = await app.inject({ method: "POST", url: `/api/aigc/workflows/workflow-1/${replacing ? "replace" : "replace-preview"}`,
+      payload: { revision: "r1", fileName: "new.json", workflowJson, ...(scenario === "非法摘要" ? { confirmationToken: true } : {}) } });
+    if (scenario === "正常检查") {
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual(preview);
+      expect(previewReplacement).toHaveBeenCalledWith("workflow-1", { fileName: "new.json", workflowJson }, "r1");
+    } else {
+      const code = scenario === "版本冲突" ? "VERSION_CONFLICT" : scenario === "未认证" ? "AUTH_REQUIRED" : "VALIDATION_FAILED";
+      expect(response.statusCode).toBe(scenario === "版本冲突" ? 409 : scenario === "未认证" ? 401 : 400);
+      expect(response.json()).toMatchObject({ error: { code, requestId: expect.any(String), message: expect.any(String) } });
+      if (scenario === "未确认") expect(response.json().error.message).toContain("尚未确认");
+      if (scenario === "非法摘要" || scenario === "未认证") {
+        expect(previewReplacement).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+      }
+    }
+    if (!replacing) expect(replace).not.toHaveBeenCalled();
     await app.close();
   });
 });

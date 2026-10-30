@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type {
   AigcWorkflowCreateInput,
@@ -10,6 +10,8 @@ import type {
   AigcWorkflowInputType,
   AigcWorkflowOutputMapping,
   AigcWorkflowReplaceInput,
+  AigcWorkflowReplacementImpact,
+  AigcWorkflowReplacementPreview,
   AigcWorkflowSummary,
   AigcWorkflowUpdateInput,
   ComfyUiEdge,
@@ -22,6 +24,7 @@ import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-m
 import type { Database } from "../database/database";
 import { DefinitionRepository } from "../workflows/definition-repository";
 import { DomainError } from "../core/errors";
+import { VersionConflictError } from "../configuration/versioned-json-store";
 import { isComfyUiPrimitiveValueField, resolveComfyUiMappedField } from "./comfyui-mapped-field";
 import {
   projectComfyUiSubgraphMetadata,
@@ -96,8 +99,26 @@ export class AigcWorkflowService {
     return { revision: written, workflow: toDetail(next) };
   }
 
-  /** 替换原始工作流，保留兼容映射并移除新工作流已无法承载的映射。 */
-  async replace(id: string, input: AigcWorkflowReplaceInput, revision: string): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
+  /** 只读检查替换影响，不保存原始文件、映射或集合版本。 */
+  async previewReplacement(id: string, input: AigcWorkflowReplaceInput, revision: string): Promise<AigcWorkflowReplacementPreview> {
+    return this.prepareReplacement(id, input, revision).preview;
+  }
+
+  /** 替换原始工作流；发生映射损失时必须确认同一份预检查结果。 */
+  async replace(id: string, input: AigcWorkflowReplaceInput, revision: string): Promise<AigcWorkflowDetailDocument> {
+    const { next, preview } = this.prepareReplacement(id, input, revision);
+    if ((preview.removedMappings.length > 0 || input.confirmationToken !== undefined)
+      && input.confirmationToken !== preview.confirmationToken) {
+      throw new DomainError("VALIDATION_FAILED", "工作流替换尚未确认或检查结果已变化，请重新检查映射并确认后替换");
+    }
+    const written = this.store.save(next, revision);
+    return { revision: written, workflow: toDetail(next) };
+  }
+
+  /** 预检查与保存共用解析、兼容筛选和影响计算，防止两条路径产生不同结果。 */
+  private prepareReplacement(id: string, input: AigcWorkflowReplaceInput, revision: string): { next: StoredAigcWorkflow; preview: AigcWorkflowReplacementPreview } {
+    const currentRevision = this.store.list().revision;
+    if (revision !== currentRevision) throw new VersionConflictError(revision, currentRevision);
     const previous = this.readStored(id);
     const fileName = normalizeFileName(input.fileName);
     const raw = input.workflowJson;
@@ -133,8 +154,12 @@ export class AigcWorkflowService {
       delete next.nodeMetadata;
       delete next.nodeMetadataSyncedAt;
     }
-    const written = this.store.save(next, revision);
-    return { revision: written, workflow: toDetail(next) };
+    const removedMappings = replacementImpacts(previous, next);
+    // 摘要包含原始配置，手动修改定义文件但未变更集合版本时同样会失效。
+    const confirmationToken = createHash("sha256").update(JSON.stringify([
+      revision, previous, fileName, parsed.originalHash, removedMappings,
+    ])).digest("hex");
+    return { next, preview: { revision, confirmationToken, removedMappings } };
   }
 
   /** 原子合并当前工作流实际引用的节点元数据。 */
@@ -225,6 +250,30 @@ export class AigcWorkflowService {
     if (bytes > MAX_WORKFLOW_JSON_BYTES) throw new TypeError("ComfyUI 工作流文件不能超过 4 MiB");
     return workflowParser.parse(raw);
   }
+}
+
+/** 列出确实会被兼容筛选移除的项目，并说明原映射无法继续使用的原因。 */
+function replacementImpacts(previous: StoredAigcWorkflow, next: StoredAigcWorkflow): AigcWorkflowReplacementImpact[] {
+  const nodeIds = new Set(next.nodes.map((node) => node.id));
+  const inputIds = new Set(next.inputMappings.map((mapping) => mapping.id));
+  const outputIds = new Set(next.outputMappings.map((mapping) => mapping.id));
+  const groupIds = new Set((next.inputGroups ?? []).map((group) => group.id));
+  return [
+    ...previous.inputMappings.filter((mapping) => !inputIds.has(mapping.id)).map((mapping): AigcWorkflowReplacementImpact => ({
+      kind: "input", id: mapping.id, name: mapping.name, nodeId: mapping.nodeId, field: mapping.field,
+      reason: !nodeIds.has(mapping.nodeId) ? "映射节点不存在"
+        : mapping.activation?.nodeIds.some((nodeId) => !nodeIds.has(nodeId)) ? "条件分支包含已不存在的节点"
+          : "映射字段不存在",
+    })),
+    ...previous.outputMappings.filter((mapping) => !outputIds.has(mapping.id)).map((mapping): AigcWorkflowReplacementImpact => ({
+      kind: "output", id: mapping.id, name: mapping.name, nodeId: mapping.nodeId, field: mapping.field,
+      reason: "映射节点不存在",
+    })),
+    ...(previous.inputGroups ?? []).filter((group) => !groupIds.has(group.id)).map((group): AigcWorkflowReplacementImpact => ({
+      kind: "input-group", id: group.id, name: group.label, nodeId: group.boundaryNodeId, field: group.targetFieldPrefix,
+      reason: !nodeIds.has(group.boundaryNodeId) ? "参数组汇总节点不存在" : "参数组包含无法保留的入参",
+    })),
+  ];
 }
 
 /** 保留新工作流仍可承载的入参，并修复历史 PrimitiveNode API 字段别名。 */

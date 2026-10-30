@@ -289,6 +289,25 @@ export interface AigcWorkflowReplaceInput {
   fileName: string;
   /** 新的完整 ComfyUI 工作流 JSON，现有映射必须与其保持兼容。 */
   workflowJson: unknown;
+  /** 用户确认预检查结果后回传的摘要；存在映射损失时必须提供。 */
+  confirmationToken?: string;
+}
+
+/** 替换时无法保留的一项映射或参数组，仅包含定位和影响说明。 */
+export interface AigcWorkflowReplacementImpact {
+  kind: "input" | "output" | "input-group";
+  id: string;
+  name: string;
+  nodeId: string;
+  field: string;
+  reason: string;
+}
+
+/** 只读替换检查结果，摘要绑定原配置、新文件和集合版本。 */
+export interface AigcWorkflowReplacementPreview {
+  revision: string;
+  confirmationToken: string;
+  removedMappings: AigcWorkflowReplacementImpact[];
 }
 
 /** 工作流详情文档。 */

@@ -305,17 +305,17 @@ describe("AIGC 工作流服务", () => {
     primitive.widgets_values[0] = "4:3";
     primitive.widgets_values_named.value = "4:3";
 
-    const replaced = await service.replace(created.workflow.id, {
-      fileName: "new.json",
-      workflowJson: replacement,
-    }, created.revision);
+    const input = { fileName: "new.json", workflowJson: replacement };
+    const preview = await service.previewReplacement(created.workflow.id, input, created.revision);
+    expect(preview.removedMappings).toEqual([]);
+    const replaced = await service.replace(created.workflow.id, { ...input, confirmationToken: preview.confirmationToken }, created.revision);
 
     expect(replaced.workflow.fileName).toBe("new.json");
     expect(replaced.workflow.inputMappings[0].field).toBe("widgets_values.0");
     expect((await service.getPrivate(created.workflow.id))?.inputMappings[0].field).toBe("widgets_values.0");
   });
 
-  it("新工作流缺少已映射字段时完成替换并移除不兼容映射", async () => {
+  it("缺失映射必须先检查并确认，检查和被拒绝的替换都不改变原配置", async () => {
     const service = await fixture();
     const created = await service.create({
       name: "文生图",
@@ -325,15 +325,99 @@ describe("AIGC 工作流服务", () => {
       outputMappings: [],
     });
 
-    const replaced = await service.replace(created.workflow.id, {
+    const input = {
       fileName: "incompatible.json",
       workflowJson: { "1": { class_type: "KSampler", inputs: { seed: 1 } } },
-    }, created.revision);
+    };
+    const before = await service.getPrivate(created.workflow.id);
+    const preview = await service.previewReplacement(created.workflow.id, input, created.revision);
+    expect(preview.removedMappings).toEqual([{
+      kind: "input", id: "steps", name: "steps", nodeId: "1", field: "inputs.steps", reason: "映射字段不存在",
+    }]);
+    expect(await service.get(created.workflow.id)).toEqual(created);
+    await expect(service.replace(created.workflow.id, input, created.revision)).rejects.toThrow("尚未确认");
+    expect(await service.getPrivate(created.workflow.id)).toEqual(before);
+    const replaced = await service.replace(created.workflow.id, { ...input, confirmationToken: preview.confirmationToken }, created.revision);
 
     const current = await service.get(created.workflow.id);
     expect(replaced.workflow).toMatchObject({ fileName: "incompatible.json", inputMappings: [] });
     expect(current.workflow).toMatchObject({ fileName: "incompatible.json", inputMappings: [] });
     expect(current.workflow.originalHash).not.toBe(created.workflow.originalHash);
+  });
+
+  it("预检查列出缺失节点、条件分支、出参与参数组，并保留仍兼容的映射", async () => {
+    const service = await fixture();
+    const created = await service.create({
+      name: "参考图", fileName: "old.json",
+      workflowJson: {
+        "1": { class_type: "LoadImage", inputs: { image: "reference.png" } },
+        "2": { class_type: "ProcessImage", inputs: { image: ["1", 0] } },
+        "3": { class_type: "SaveImage", inputs: { images: ["2", 0] } },
+        "4": { class_type: "KSampler", inputs: { steps: 20 } },
+        "5": { class_type: "LoadImage", inputs: { image: "other.png" } },
+      },
+      inputMappings: [
+        { id: "reference", name: "参考图", nodeId: "1", field: "inputs.image", type: "image", required: false, activation: { when: "provided", nodeIds: ["1", "2"] } },
+        { id: "steps", name: "steps", nodeId: "4", field: "inputs.steps", type: "int", required: true },
+        { id: "other", name: "其他参考图", nodeId: "5", field: "inputs.image", type: "image", required: true },
+      ],
+      inputGroups: [{ id: "references", label: "参考素材", type: "image", mappingIds: ["reference"], boundaryNodeId: "3", targetFieldPrefix: "inputs.images" }],
+      outputMappings: [{ id: "image", name: "成品图", nodeId: "3", field: "outputs.images", mediaType: "image" }],
+    });
+    const input = { fileName: "new.json", workflowJson: {
+      "1": { class_type: "LoadImage", inputs: { image: "new.png" } },
+      "4": { class_type: "KSampler", inputs: { steps: 30 } },
+    } };
+    const preview = await service.previewReplacement(created.workflow.id, input, created.revision);
+    expect(preview.removedMappings).toEqual([
+      expect.objectContaining({ kind: "input", id: "reference", reason: "条件分支包含已不存在的节点" }),
+      expect.objectContaining({ kind: "input", id: "other", reason: "映射节点不存在" }),
+      expect.objectContaining({ kind: "output", id: "image", reason: "映射节点不存在" }),
+      expect.objectContaining({ kind: "input-group", id: "references", reason: "参数组汇总节点不存在" }),
+    ]);
+    const replaced = await service.replace(created.workflow.id, { ...input, confirmationToken: preview.confirmationToken }, created.revision);
+    expect(replaced.workflow.inputMappings.map((mapping) => mapping.id)).toEqual(["steps"]);
+    expect(replaced.workflow.outputMappings).toEqual([]);
+    expect(replaced.workflow.inputGroups).toEqual([]);
+  });
+
+  it("配置版本更新后拒绝旧检查结果且不覆盖新配置", async () => {
+    const service = await fixture();
+    const created = await service.create({ name: "原工作流", fileName: "old.json", workflowJson: { "1": { class_type: "KSampler", inputs: { steps: 20 } } },
+      inputMappings: [{ id: "steps", name: "steps", nodeId: "1", field: "inputs.steps", type: "int", required: true }], outputMappings: [] });
+    const input = { fileName: "new.json", workflowJson: { "1": { class_type: "KSampler", inputs: { seed: 1 } } } };
+    const preview = await service.previewReplacement(created.workflow.id, input, created.revision);
+    const updated = await service.update(created.workflow.id, { ...created.workflow, name: "其他用户已修改" }, created.revision);
+    await expect(service.previewReplacement(created.workflow.id, input, created.revision)).rejects.toMatchObject({ name: "VersionConflictError" });
+    await expect(service.replace(created.workflow.id, { ...input, confirmationToken: preview.confirmationToken }, created.revision)).rejects.toMatchObject({ name: "VersionConflictError" });
+    await expect(service.replace(created.workflow.id, { ...input, confirmationToken: preview.confirmationToken }, updated.revision)).rejects.toThrow("检查结果已变化");
+    expect(await service.get(created.workflow.id)).toEqual(updated);
+  });
+
+  it.each(["文件名", "工作流内容"])("%s变化后旧确认摘要失效", async (change) => {
+    const service = await fixture();
+    const created = await service.create({ name: "文生图", fileName: "old.json", workflowJson: { "1": { class_type: "KSampler", inputs: { steps: 20 } } },
+      inputMappings: [{ id: "steps", name: "steps", nodeId: "1", field: "inputs.steps", type: "int", required: true }], outputMappings: [] });
+    const input = { fileName: "new.json", workflowJson: { "1": { class_type: "KSampler", inputs: { seed: 1 } } } };
+    const preview = await service.previewReplacement(created.workflow.id, input, created.revision);
+    const changed = change === "文件名" ? { ...input, fileName: "another.json" }
+      : { ...input, workflowJson: { "1": { class_type: "KSampler", inputs: { seed: 2 } } } };
+    await expect(service.replace(created.workflow.id, { ...changed, confirmationToken: preview.confirmationToken }, created.revision)).rejects.toThrow("检查结果已变化");
+    expect(await service.get(created.workflow.id)).toEqual(created);
+  });
+
+  it("手动修改原定义但集合版本未变化时拒绝旧确认摘要", async () => {
+    const service = await fixture();
+    const created = await service.create({ name: "文生图", fileName: "old.json", workflowJson: { "1": { class_type: "KSampler", inputs: { steps: 20 } } },
+      inputMappings: [{ id: "steps", name: "steps", nodeId: "1", field: "inputs.steps", type: "int", required: true }], outputMappings: [] });
+    const input = { fileName: "new.json", workflowJson: { "1": { class_type: "KSampler", inputs: { seed: 1 } } } };
+    const preview = await service.previewReplacement(created.workflow.id, input, created.revision);
+    const stored = await service.getPrivate(created.workflow.id);
+    const root = roots.at(-1);
+    if (!stored || !root) throw new Error("测试工作流定义未创建");
+    await writeFile(join(root, "definitions", `${created.workflow.id}.json`), JSON.stringify({ ...stored, name: "手工修正" }), "utf8");
+    await expect(service.replace(created.workflow.id, { ...input, confirmationToken: preview.confirmationToken }, created.revision)).rejects.toThrow("检查结果已变化");
+    expect(await service.get(created.workflow.id)).toMatchObject({ revision: created.revision, workflow: { name: "手工修正", fileName: "old.json", inputMappings: created.workflow.inputMappings } });
   });
 
 });

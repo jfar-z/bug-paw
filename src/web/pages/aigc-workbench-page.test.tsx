@@ -55,6 +55,9 @@ describe("AigcWorkbenchPage 创作台", () => {
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.endsWith("/aigc/workflows/workflow-1/replace-preview")) {
+        return new Response(JSON.stringify({ revision: "r1", confirmationToken: "checked-compatible", removedMappings: [] }));
+      }
       if (url.endsWith("/aigc/workflows/workflow-1/replace") && init?.method === "POST") {
         return new Response(JSON.stringify({ revision: "r2", workflow: { ...workflow, fileName: "new.json", originalHash: "new-hash" } }));
       }
@@ -79,10 +82,79 @@ describe("AigcWorkbenchPage 创作台", () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/replace"))).toBe(true));
     const request = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/replace"));
-    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: "r1", fileName: "new.json" });
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: "r1", fileName: "new.json", confirmationToken: "checked-compatible" });
     expect(await screen.findByText("已替换原始工作流，现有映射和接口配置保持不变")).toBeInTheDocument();
     expect(screen.getAllByText("new.json").length).toBeGreaterThan(0);
     expect(replaceButton).toBeInTheDocument();
+  });
+
+  it("替换前列出所有缺失映射，取消不写入，再次检查并确认才替换", async () => {
+    const workflow = {
+      id: "workflow-loss", name: "文生图", fileName: "old.json", originalHash: "old-hash",
+      nodes: [{ id: "1", type: "KSampler", fields: [{ name: "inputs.steps", kind: "input", valueType: "int" }] }], edges: [],
+      inputMappings: [{ id: "steps", name: "步数", nodeId: "1", field: "inputs.steps", type: "int", required: true }],
+      outputMappings: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z",
+    };
+    const removedMappings = [
+      { kind: "input", id: "steps", name: "步数", nodeId: "1", field: "inputs.steps", reason: "映射字段不存在" },
+      { kind: "output", id: "image", name: "成品图", nodeId: "9", field: "outputs.images", reason: "映射节点不存在" },
+      { kind: "input-group", id: "refs", name: "参考素材", nodeId: "8", field: "inputs.references", reason: "参数组汇总节点不存在" },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/replace-preview")) return new Response(JSON.stringify({ revision: "r1", confirmationToken: "checked-loss", removedMappings }));
+      if (url.endsWith("/replace")) return new Response(JSON.stringify({ revision: "r2", workflow: { ...workflow, fileName: "new.json", inputMappings: [] } }));
+      if (url.endsWith("/workflows/workflow-loss")) return new Response(JSON.stringify({ revision: "r1", workflow }));
+      if (url.endsWith("/capabilities/aigc/channels")) return new Response(JSON.stringify({ channels: [] }));
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-workflow-detail", workflowId: workflow.id });
+    await waitFor(() => expect(screen.getByRole("button", { name: "替换原始工作流" })).toBeEnabled());
+    const file = { name: "new.json", text: async () => JSON.stringify({ "1": { class_type: "KSampler", inputs: { seed: 1 } } }) } as File;
+    const chooseFile = () => fireEvent.change(screen.getByLabelText("替换原始工作流文件"), { target: { files: [file] } });
+    chooseFile();
+    expect(await screen.findByRole("list", { name: "无法保留的映射与参数组" })).toBeInTheDocument();
+    for (const label of ["入参：步数", "出参：成品图", "参数组：参考素材", "节点 1 · inputs.steps", "映射字段不存在"]) expect(screen.getByText(label)).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/replace"))).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getAllByText("old.json").length).toBeGreaterThan(0);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/replace"))).toBe(false);
+    chooseFile();
+    fireEvent.click(await screen.findByRole("button", { name: "移除上述映射并替换" }));
+    expect(await screen.findByText("已替换原始工作流；已移除不兼容映射：步数、成品图、参考素材")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/replace-preview"))).toHaveLength(2);
+    const request = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/replace"));
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ revision: "r1", confirmationToken: "checked-loss" });
+  });
+
+  it.each(["检查失败", "版本冲突", "无效 JSON"])("替换%s通过全局错误展示且保留旧工作流", async (scenario) => {
+    const workflow = {
+      id: "workflow-error", name: "文生图", fileName: "old.json", originalHash: "hash", nodes: [], edges: [], inputMappings: [], outputMappings: [],
+      createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/replace-preview")) return scenario === "检查失败"
+        ? new Response(JSON.stringify({ error: { code: "VALIDATION_FAILED", message: "无法识别 ComfyUI 工作流格式", requestId: "req-preview" } }), { status: 400 })
+        : new Response(JSON.stringify({ revision: "r1", confirmationToken: "checked", removedMappings: [] }));
+      if (url.endsWith("/replace")) return new Response(JSON.stringify({ error: { code: "VERSION_CONFLICT", message: "工作流版本已变化，请重新加载后检查", requestId: "req-replace" } }), { status: 409 });
+      if (url.endsWith("/workflows/workflow-error")) return new Response(JSON.stringify({ revision: "r1", workflow }));
+      if (url.endsWith("/capabilities/aigc/channels")) return new Response(JSON.stringify({ channels: [] }));
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-workflow-detail", workflowId: workflow.id });
+    await waitFor(() => expect(screen.getByRole("button", { name: "替换原始工作流" })).toBeEnabled());
+    const file = { name: "new.json", text: async () => scenario === "无效 JSON" ? "{" : "{}" } as File;
+    fireEvent.change(screen.getByLabelText("替换原始工作流文件"), { target: { files: [file] } });
+    if (scenario === "版本冲突") fireEvent.click(await screen.findByRole("button", { name: "确认替换" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(scenario === "检查失败" ? "无法识别 ComfyUI 工作流格式" : scenario === "版本冲突" ? "工作流版本已变化" : "JSON 格式无效");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getAllByText("old.json").length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByRole("button", { name: "替换原始工作流" })).toBeEnabled());
+    if (scenario !== "版本冲突") expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/replace"))).toBe(false);
   });
 
   it("接口详情分别保存内部 Agent 与外部 MCP 发布开关", async () => {

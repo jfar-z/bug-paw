@@ -178,14 +178,34 @@ function registerWorkflowRoutes(app: FastifyInstance, dependencies: AigcRouteDep
     }
   });
 
-  app.post<{ Params: { id: string } }>("/api/aigc/workflows/:id/replace", async (request, reply) => {
+  // 预检查只返回兼容性结果，复用替换服务中的同一套校验，不写入工作流。
+  app.post<{ Params: { id: string } }>("/api/aigc/workflows/:id/replace-preview", async (request, reply) => {
     if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
     const body = isRecord(request.body) ? request.body : undefined;
     if (!body || typeof body.revision !== "string" || typeof body.fileName !== "string" || !("workflowJson" in body)) {
+      return sendApiError(reply, 400, "VALIDATION_FAILED", "工作流替换检查格式无效");
+    }
+    try {
+      return reply.send(await dependencies.workflows.previewReplacement(request.params.id, {
+        fileName: body.fileName, workflowJson: body.workflowJson,
+      }, body.revision));
+    } catch (error) {
+      return sendAigcError(reply, error);
+    }
+  });
+
+  app.post<{ Params: { id: string } }>("/api/aigc/workflows/:id/replace", async (request, reply) => {
+    if (!(await requireAuthentication(request, reply, dependencies.authService))) return;
+    const body = isRecord(request.body) ? request.body : undefined;
+    if (!body || typeof body.revision !== "string" || typeof body.fileName !== "string" || !("workflowJson" in body)
+      || (body.confirmationToken !== undefined && typeof body.confirmationToken !== "string")) {
       return sendApiError(reply, 400, "VALIDATION_FAILED", "工作流替换格式无效");
     }
     try {
-      const input: AigcWorkflowReplaceInput = { fileName: body.fileName, workflowJson: body.workflowJson };
+      const input: AigcWorkflowReplaceInput = {
+        fileName: body.fileName, workflowJson: body.workflowJson,
+        ...(typeof body.confirmationToken === "string" ? { confirmationToken: body.confirmationToken } : {}),
+      };
       return reply.send(await dependencies.workflows.replace(request.params.id, input, body.revision));
     } catch (error) {
       return sendAigcError(reply, error);
