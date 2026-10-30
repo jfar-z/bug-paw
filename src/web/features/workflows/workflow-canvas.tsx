@@ -46,6 +46,11 @@ import {
   type WorkflowCatalog,
 } from "../../../shared/workflow-contracts";
 import { WorkflowNodeEditor } from "./workflow-node-editor";
+import type { WorkflowInputToolsProps } from "./workflow-input-tools";
+import {
+  appendWorkflowInputFields,
+  importOuterWorkflowInputs,
+} from "./workflow-input-parameters";
 import { useApiTask } from "../../api-task-provider";
 import "@xyflow/react/dist/style.css";
 
@@ -201,7 +206,9 @@ function WorkflowCanvasScope({
   onValidity,
   onEditLoop,
   workflowId,
+  inputTools,
 }: {
+  inputTools: WorkflowInputToolsProps;
   onEditLoop: (nodeId: string) => void;
   workflowId?: string;
   draft: WorkflowDraft;
@@ -652,6 +659,7 @@ function WorkflowCanvasScope({
         <WorkflowNodeEditor
           key={node.id}
           workflowId={workflowId}
+          inputTools={inputTools}
           onEditLoop={() => onEditLoop(node.id)}
           node={node}
           nodes={draft.nodes}
@@ -683,9 +691,15 @@ export function WorkflowCanvas(props: {
   onValidity: (key: string, valid: boolean) => void;
 }) {
   const [path, setPath] = useState<string[]>([]);
+  const [parameterClipboard, setParameterClipboard] = useState<{
+    fields: import("../../../shared/workflow-contracts").WorkflowField[];
+    scope: string;
+  }>();
   let scope = props.draft;
+  let outerInput: WorkflowNode | undefined;
   const names = [props.draft.name];
   for (const id of path) {
+    outerInput = scope.nodes.find((node) => node.kind === "input");
     const node = scope.nodes.find((item) => item.id === id)!;
     scope = node.config.loop!.body;
     names.push(node.name);
@@ -757,6 +771,31 @@ export function WorkflowCanvas(props: {
         key={path.join("/")}
         {...props}
         draft={scope}
+        inputTools={{
+          clipboard: parameterClipboard?.fields,
+          reserved: path.length ? ["index", "item"] : [],
+          outerInput,
+          onCopy: (fields) =>
+            setParameterClipboard({
+              fields: structuredClone(fields),
+              scope: path.join("/"),
+            }),
+          onPaste: (names) => {
+            const next = appendWorkflowInputFields(
+              scope,
+              parameterClipboard?.fields ?? [],
+              names,
+              path.length ? ["index", "item"] : [],
+              parameterClipboard?.scope === path.join("/"),
+            );
+            props.onChange(replace(props.draft, path, next));
+          },
+          onImport: path.length
+            ? (names) => props.onChange(
+                importOuterWorkflowInputs(props.draft, path, names),
+              )
+            : undefined,
+        }}
         onChange={(next) => props.onChange(replace(props.draft, path, next))}
         onValidity={(key, valid) =>
           props.onValidity(`${path.join("/")}:${key}`, valid)

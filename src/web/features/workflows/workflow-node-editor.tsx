@@ -14,6 +14,10 @@ import {
   WorkflowLoopEditor,
 } from "./workflow-composition-editor";
 import { WorkflowScriptAssist } from "./workflow-script-assist";
+import {
+  WorkflowInputTools,
+  type WorkflowInputToolsProps,
+} from "./workflow-input-tools";
 import { api, type SessionSummary } from "../../api";
 import { useApiTask } from "../../api-task-provider";
 import {
@@ -35,7 +39,9 @@ export function WorkflowNodeEditor({
   onValidity,
   onEditLoop,
   workflowId,
+  inputTools,
 }: {
+  inputTools?: WorkflowInputToolsProps;
   onEditLoop?: () => void;
   workflowId?: string;
   node: WorkflowNode;
@@ -243,6 +249,7 @@ export function WorkflowNodeEditor({
         {node.kind === "input" && (
           <>
             <h3>工作流入参</h3>
+            {inputTools && <WorkflowInputTools node={node} {...inputTools} />}
             <WorkflowFieldList
               fields={node.outputs}
               enumSources={enumSources}
