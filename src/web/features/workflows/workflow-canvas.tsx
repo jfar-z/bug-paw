@@ -1,4 +1,11 @@
+import { workflowHasPath, withWorkflowNode } from "./workflow-graph";
+export { workflowHasPath, withWorkflowNode } from "./workflow-graph";
 import { workflowClientId } from "./workflow-id";
+import {
+  copyWorkflowSelection,
+  pasteWorkflowSelection,
+  type WorkflowSelection,
+} from "./workflow-copy";
 import { useWorkflowConfirm } from "./workflow-confirm";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -17,6 +24,8 @@ import {
 } from "@xyflow/react";
 import {
   Plus,
+  Copy,
+  ClipboardPaste,
   Workflow,
   Code,
   GitBranch,
@@ -33,7 +42,6 @@ import {
   type WorkflowNode,
   type WorkflowNodeKind,
   type WorkflowCatalog,
-  type WorkflowBinding,
 } from "../../../shared/workflow-contracts";
 import { WorkflowNodeEditor } from "./workflow-node-editor";
 import { useApiTask } from "../../api-task-provider";
@@ -181,58 +189,6 @@ const NodeCard = memo(function NodeCard({
   );
 });
 const nodeTypes = { workflow: NodeCard };
-/** 检查控制依赖路径，数据引用新增依赖时也复用这一判断。 */
-export function workflowHasPath(
-  draft: WorkflowDraft,
-  source: string,
-  target: string,
-  seen = new Set<string>(),
-): boolean {
-  if (source === target) return true;
-  if (seen.has(source)) return false;
-  seen.add(source);
-  return draft.edges.some(
-    (e) =>
-      e.source === source && workflowHasPath(draft, e.target, target, seen),
-  );
-}
-/** 收集配置中的引用；绑定与控制边保持一致，已有分支路径不被直连旁路覆盖。 */
-export function withWorkflowNode(
-  draft: WorkflowDraft,
-  node: WorkflowNode,
-): WorkflowDraft {
-  let next = {
-    ...draft,
-    nodes: draft.nodes.map((n) => (n.id === node.id ? node : n)),
-    edges: [...draft.edges],
-  };
-  const visit = (value: unknown) => {
-    if (!value || typeof value !== "object") return;
-    const b = value as WorkflowBinding;
-    if (b.kind === "reference") {
-      if (workflowHasPath(next, node.id, b.nodeId))
-        throw new Error("该引用会形成循环，请选择上游节点。");
-      if (!workflowHasPath(next, b.nodeId, node.id)) {
-        const source = next.nodes.find((n) => n.id === b.nodeId);
-        if (source?.kind === "condition")
-          throw new Error(
-            "请先从判断节点的 IF 或 ELSE 端口连接目标节点，再引用结果。",
-          );
-        next.edges.push({
-          id: workflowClientId(),
-          source: b.nodeId,
-          target: node.id,
-        });
-      }
-    } else for (const child of Object.values(value)) visit(child);
-  };
-  visit(node.inputs);
-  visit(node.config.referenceGroups);
-  visit(node.config.conditions);
-  visit(node.config.candidates);
-  visit(node.config.selectCondition);
-  return next;
-}
 /** 可拖动、连线和键盘操作的 DAG 编辑画布。 */
 export function WorkflowCanvas({
   draft,
@@ -255,6 +211,9 @@ export function WorkflowCanvas({
   const { runApiTask } = useApiTask();
   const [selectedEdges, setSelectedEdges] = useState<string[]>([]);
   const [nodes, setNodes] = useState(() => syncCanvasNodes([], draft.nodes));
+  const [clipboard, setClipboard] = useState<WorkflowSelection>();
+  const [notice, setNotice] = useState("");
+  const pasteCount = useRef(0);
   const flow = useRef<ReactFlowInstance<CanvasNode> | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -275,6 +234,45 @@ export function WorkflowCanvas({
     return () => document.removeEventListener("pointerdown", close);
   }, [palette]);
   const node = draft.nodes.find((n) => n.id === selected);
+  const selectedIds = nodes
+    .filter((item) => item.selected && item.deletable)
+    .map((item) => item.id);
+  const copySelection = () => {
+    if (!selectedIds.length) return;
+    const snapshot = copyWorkflowSelection(draft, selectedIds);
+    setClipboard(snapshot);
+    pasteCount.current = 0;
+    setNotice(`已复制 ${snapshot.nodes.length} 个节点`);
+    canvas.current?.focus();
+  };
+  const applyPaste = (snapshot: WorkflowSelection, offset: number) => {
+    const current = latest.current;
+    const next = pasteWorkflowSelection(current.draft, snapshot, offset);
+    const added = new Set(
+      next.nodes.slice(current.draft.nodes.length).map((item) => item.id),
+    );
+    current.onChange(next);
+    setNodes((old) =>
+      syncCanvasNodes(old, next.nodes).map((item) => ({
+        ...item,
+        selected: added.has(item.id),
+      })),
+    );
+    setSelectedEdges([]);
+    setSelected(undefined);
+    setNotice(`已粘贴 ${added.size} 个节点`);
+    canvas.current?.focus();
+  };
+  const pasteSelection = () => {
+    if (!clipboard) return;
+    void runApiTask(
+      async () => {
+        applyPaste(clipboard, (pasteCount.current + 1) * 48);
+        pasteCount.current += 1;
+      },
+      { operation: "粘贴工作流节点" },
+    );
+  };
   const changeNode = (next: WorkflowNode) =>
     void runApiTask(async () => onChange(withWorkflowNode(draft, next)), {
       operation: "更新节点依赖",
@@ -353,6 +351,31 @@ export function WorkflowCanvas({
     <div
       className="wf-editor-body"
       onKeyDown={(event) => {
+        // 只处理画布内快捷键，表单和脚本编辑仍使用浏览器的文本复制粘贴。
+        if (
+          (event.ctrlKey || event.metaKey) &&
+          !event.altKey &&
+          !event.shiftKey &&
+          !event.repeat &&
+          !palette &&
+          event.target instanceof Element &&
+          canvas.current?.contains(event.target) &&
+          !event.target.closest(
+            "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+          )
+        ) {
+          const key = event.key.toLowerCase();
+          if (
+            (key === "c" && selectedIds.length) ||
+            (key === "v" && clipboard)
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (key === "c") copySelection();
+            else pasteSelection();
+            return;
+          }
+        }
         if (event.key === "Escape" && palette) {
           event.preventDefault();
           setPalette(undefined);
@@ -380,7 +403,12 @@ export function WorkflowCanvas({
         void remove(ids, selectedEdges);
       }}
     >
-      <div className="wf-canvas" ref={canvas} tabIndex={-1}>
+      <div
+        className="wf-canvas"
+        ref={canvas}
+        tabIndex={0}
+        aria-label="工作流画布操作区"
+      >
         <div className="wf-canvas-toolbar">
           <button
             className="wf-button"
@@ -392,7 +420,25 @@ export function WorkflowCanvas({
             <Plus size={16} />
             添加节点
           </button>
-          <span>拖线到空白处添加节点 · 选中节点或连线后按 Delete 删除</span>
+          <button
+            className="wf-button"
+            disabled={!selectedIds.length}
+            onClick={copySelection}
+            title="复制所选节点（Ctrl/Cmd+C），输入和输出节点除外"
+          >
+            <Copy size={16} />
+            复制所选
+          </button>
+          <button
+            className="wf-button"
+            disabled={!clipboard}
+            onClick={pasteSelection}
+            title="粘贴节点（Ctrl/Cmd+V）"
+          >
+            <ClipboardPaste size={16} />
+            粘贴
+          </button>
+          <span>Shift 拖动框选 · Ctrl/Cmd 点击多选 · Delete 删除</span>
           {selectedEdges.length > 0 && (
             <button
               className="wf-button"
@@ -501,9 +547,13 @@ export function WorkflowCanvas({
                   : undefined,
           }))}
           nodeTypes={nodeTypes}
-          onNodeClick={(_, n) => {
+          onNodeClick={(event, n) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey) return;
             setSelected(n.id);
             setSelectedEdges([]);
+          }}
+          onSelectionChange={({ nodes: selection }) => {
+            if (selection.length > 1) setSelected(undefined);
           }}
           onPaneClick={() => {
             setSelected(undefined);
@@ -577,13 +627,17 @@ export function WorkflowCanvas({
           minZoom={0.2}
           maxZoom={1.5}
           deleteKeyCode={null}
+          multiSelectionKeyCode={["Control", "Meta"]}
+          selectionKeyCode="Shift"
           aria-label="工作流 DAG 画布"
         >
           <Background color="var(--border-strong)" gap={22} />
           <Controls showInteractive={false} />
         </ReactFlow>
-        <div className="wf-canvas-caption">
+        <div className="wf-canvas-caption" role="status" aria-live="polite">
           {draft.nodes.length} 个节点 · {draft.edges.length} 条连线
+          {selectedIds.length > 0 && ` · 已选 ${selectedIds.length} 个`}
+          {notice && ` · ${notice}`}
         </div>
       </div>
       {node && (
@@ -597,16 +651,11 @@ export function WorkflowCanvas({
           onClose={() => setSelected(undefined)}
           onDelete={() => void remove([node.id])}
           onCopy={() => {
-            const copy = structuredClone(node);
-            copy.id = `node_${workflowClientId().replaceAll("-", "")}`;
-            copy.name += " 副本";
-            copy.position = {
-              x: node.position.x + 40,
-              y: node.position.y + 170,
-            };
-            const next = { ...draft, nodes: [...draft.nodes, copy] };
-            onChange(withWorkflowNode(next, copy));
-            setSelected(copy.id);
+            void runApiTask(
+              async () =>
+                applyPaste(copyWorkflowSelection(draft, [node.id]), 48),
+              { operation: "复制工作流节点" },
+            );
           }}
           onValidity={onValidity}
         />

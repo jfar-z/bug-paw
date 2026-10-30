@@ -1,4 +1,5 @@
 import type { WorkflowSummary } from "../../shared/workflow-contracts";
+import { WorkflowCopyDialog } from "../features/workflows/workflow-copy-dialog";
 import { WorkflowValueView } from "../features/workflows/workflow-value-view";
 import { workflowClientId } from "../features/workflows/workflow-id";
 import { useErrorToast } from "../error-toast-provider";
@@ -17,6 +18,7 @@ import {
   Search,
   Trash2,
   Pencil,
+  Copy,
   Square,
   RefreshCw,
 } from "lucide-react";
@@ -84,6 +86,7 @@ export function WorkflowsPage({ route }: { route: WorkflowRoute }) {
 }
 /** 管理列表提供明确的空态、搜索和发布范围。 */
 function WorkflowList() {
+  const [copying, setCopying] = useState<WorkflowSummary>();
   const confirm = useWorkflowConfirm();
   const { runApiTask } = useApiTask(),
     online = useOnlineStatus();
@@ -214,6 +217,15 @@ function WorkflowList() {
                   </button>
                   <button
                     className="icon-button"
+                    aria-label={`复制 ${w.name}`}
+                    title="复制工作流"
+                    disabled={!online}
+                    onClick={() => setCopying(w)}
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <button
+                    className="icon-button"
                     aria-label={`删除 ${w.name}`}
                     disabled={!online}
                     onClick={async () => {
@@ -234,6 +246,16 @@ function WorkflowList() {
               </article>
             ))}
         </div>
+      )}
+      {copying && (
+        <WorkflowCopyDialog
+          workflow={copying}
+          onClose={() => setCopying(undefined)}
+          onCreated={(created) => {
+            setCopying(undefined);
+            navigateTo({ page: "workflow-editor", workflowId: created.id });
+          }}
+        />
       )}
     </>
   );
@@ -502,9 +524,13 @@ function Runner({
     // 列表只有摘要，定义单独读取并丢弃切换工作流后返回的过期响应。
     setDefinition(undefined);
     if (workflowId) {
-      void loadTask.current(() => api.getWorkflow(workflowId), { operation: "读取工作流定义" }).then((r) => {
-        if (alive && r.status === "success") setDefinition(r.data);
-      });
+      void loadTask
+        .current(() => api.getWorkflow(workflowId), {
+          operation: "读取工作流定义",
+        })
+        .then((r) => {
+          if (alive && r.status === "success") setDefinition(r.data);
+        });
     }
     return () => {
       alive = false;

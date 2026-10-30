@@ -293,9 +293,26 @@
   left: 16px;
   right: 16px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 14px;
   pointer-events: none;
+}
+
+/* 复制弹窗通过 Portal 渲染，字段仍显式继承工作流主题。 */
+.wf-copy-name {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.wf-copy-name input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-primary);
+  background: var(--surface);
 }
 .wf-canvas-toolbar > * {
   pointer-events: auto;
@@ -309,6 +326,8 @@
 .wf-canvas-caption {
   position: absolute;
   right: 16px;
+  max-width: calc(100% - 70px);
+  text-align: right;
   bottom: 18px;
   color: var(--text-secondary);
   font-family: var(--font-mono);
