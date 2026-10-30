@@ -14,7 +14,7 @@
 
 ## 名称、说明与参数编辑
 
-编排页顶部提供带标签的工作流名称和多行说明编辑区，保存后列表与 Agent 的 `workflow_list`（list/get）、`workflow_get_definition` 同步返回说明。缺少说明的旧定义在读取时按空字符串处理，不需要迁移历史数据。版本冲突仍要求重新加载，运行历史保留当时的定义快照。
+编排页顶部提供带标签的工作流名称和多行说明编辑区，保存后列表与 Agent 的 `workflow_list`（list/get）、`workflow_get_parameters`、`workflow_get_definition` 同步返回说明。缺少说明的旧定义在读取时按空字符串处理，不需要迁移历史数据。版本冲突仍要求重新加载，运行历史保留当时的定义快照。
 
 每个输入参数独立分组，显示名称、类型、说明、值来源和值控件。AIGC 参数继承完整接口类型与范围，类型只读；模型和 Agent 的 prompt、媒体输入，以及已声明的输出绑定类型也固定。脚本自由输入与条件操作数仍允许选择常量类型。媒体固定值使用上传控件，数组和 JSON 参数使用结构化编辑。
 
@@ -69,11 +69,18 @@ return { result: String(inputs.value).toUpperCase() };
 | 工具                      | 参数                                                                                                     |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `workflow_list`           | `action="list"`、`workflowId=null`、`offset=0` 分页；`action="get"`、真实 ID、`offset=null` 查询出入参。 |
+| `workflow_get_parameters` | `workflowId`；只查询名称、说明、版本和出入参，不返回节点、连线、脚本、绑定或枚举来源。 |
 | `workflow_get_definition` | `workflowId`；查询完整节点、配置、连线和绑定。                                                           |
 | `workflow_run`            | `workflowId`、稳定的 `requestKey`、`parameters:[{name,value}]`；异步调用。                               |
 | `workflow_run_and_wait`   | 同调用参数；等待并报告进度，聊天中止只结束等待。只需自身工具权限。                                       |
 | `workflow_get_task`       | `taskId`；查询所属 Agent 的任务，成功后将媒体交付到工作区。                                              |
 | `workflow_cancel_task`    | `taskId`；取消所属 Agent 的任务及活动节点。                                                              |
+
+调用前推荐先用 `workflow_list` 获取 ID，再用 `workflow_get_parameters` 查询出入参。返回参数保留声明顺序、名称、类型、`multiple`、`required`、说明、默认值和枚举选项；不会附带枚举来源节点。仅排查内部实现时使用 `workflow_get_definition`。原有 `workflow_list` 的 `get` 模式继续兼容。新工具需在 Agent 工具权限中单独启用，不自动授予已有 Agent。
+
+```json
+{"workflowId":"从工作流列表取得的真实 ID"}
+```
 
 JSON 对象与数组是输入类型本身，工具 `value` 因此支持动态 JSON 内容，服务端按工作流定义再次验证；工具根节点仍是固定 `Type.Object`，无根级组合 Schema。媒体参数传当前 Agent 工作区相对路径，数组传路径数组；禁止任意宿主路径。查询和交付检查任务归属、当前权限及发布状态。取消仍可用于已撤销发布的自有任务，避免任务无法停止。
 

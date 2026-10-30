@@ -70,6 +70,34 @@ export class WorkflowToolService {
       nextOffset: offset + 20 < items.length ? offset + 20 : null,
     };
   }
+  /** 仅公开调用所需的参数契约，不返回内部节点、绑定和枚举来源。 */
+  async parameters(context: WorkflowToolContext, id: string) {
+    await this.authorize(context, "workflow_get_parameters");
+    if (typeof id !== "string" || !id.trim() || id.length > 120)
+      invalid("workflowId 必须为非空工作流 ID，最多 120 个字符");
+    const item = await this.published(id);
+    // 明确列出公开字段，防止以后扩展节点元数据时意外增加工具上下文。
+    const fields = (values: WorkflowField[]) =>
+      values.map((field) => ({
+        name: field.name,
+        type: field.type,
+        multiple: field.multiple,
+        required: field.required,
+        description: field.description,
+        defaultValue: field.defaultValue,
+        enumValues: field.enumValues,
+      }));
+    return {
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      revision: item.revision,
+      inputs: fields(item.nodes.find((node) => node.kind === "input")!.outputs),
+      outputs: fields(
+        item.nodes.find((node) => node.kind === "output")!.outputs,
+      ),
+    };
+  }
   async definition(context: WorkflowToolContext, id: string) {
     await this.authorize(context, "workflow_get_definition");
     return this.published(id);
@@ -284,10 +312,24 @@ export function createWorkflowTools(
       execute: async (_id, p) => result(() => service.list(context, p)),
     }),
     defineTool({
+      name: "workflow_get_parameters",
+      label: "查询工作流出入参",
+      description:
+        "读取已发布工作流的名称、说明、版本和输入输出参数（名称、类型、数组、必填、说明、默认值、枚举选项）。不返回节点、连线、脚本或参数绑定。先用 workflow_list 取得真实工作流 ID。",
+      promptSnippet:
+        "调用工作流前优先用 workflow_get_parameters 查询出入参；仅需填写参数时不要读取完整定义。媒体传当前 Agent 工作区相对路径，媒体数组传路径数组。",
+      parameters: Type.Object(
+        { workflowId: id },
+        { additionalProperties: false },
+      ),
+      execute: async (_id, p) =>
+        result(() => service.parameters(context, p.workflowId)),
+    }),
+    defineTool({
       name: "workflow_get_definition",
       label: "查询工作流定义",
       description:
-        "读取已发布工作流的节点配置、连线和参数绑定。先查询清单取得真实 ID。",
+        "仅在需要检查内部实现时读取已发布工作流的完整节点配置、脚本、连线和参数绑定；只查询出入参请优先用 workflow_get_parameters，或 workflow_list 的 get 模式。先查询清单取得真实 ID。",
       parameters: Type.Object(
         { workflowId: id },
         { additionalProperties: false },
@@ -299,7 +341,7 @@ export function createWorkflowTools(
       name: "workflow_run",
       label: "调用工作流",
       description:
-        "异步启动已发布工作流，可能计费。先查询参数说明，同一次调用必须复用 requestKey；不要重复提交查询状态。",
+        "异步启动已发布工作流，可能计费。先用 workflow_get_parameters 或 workflow_list 的 get 模式查询参数，同一次调用必须复用 requestKey；不要重复提交查询状态。",
       parameters: runParameters,
       execute: async (_id, p) =>
         result(async () => {
@@ -311,7 +353,7 @@ export function createWorkflowTools(
       name: "workflow_run_and_wait",
       label: "调用并等待工作流",
       description:
-        "启动并等待工作流，可能计费。中止聊天只结束等待，取消任务请调用 workflow_cancel_task。",
+        "启动并等待工作流，可能计费。先用 workflow_get_parameters 或 workflow_list 的 get 模式查询参数。中止聊天只结束等待，取消任务请调用 workflow_cancel_task。",
       parameters: runParameters,
       execute: async (_id, p, signal, onUpdate) =>
         result(async () => {

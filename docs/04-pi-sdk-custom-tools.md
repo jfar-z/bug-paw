@@ -107,4 +107,4 @@ const tool = defineTool({
 
 ## DAG 工作流工具
 
-工作流通过会话 `customTools` 注册 `workflow_list`、`workflow_get_definition`、`workflow_run`、`workflow_run_and_wait`、`workflow_get_task`、`workflow_cancel_task`，每项独立授权，默认不启用。定义查询是相对 AIGC 工具的新增能力。发布工作流将其中已配置的子节点能力作为整体授予获调用权限的 Agent，避免将子工具白名单误认为二次授权边界。详见 [DAG 工作流](13-dag-workflows.md)，包含类型、JSON Schema、幂等、工作区文件归属、取消和脚本隔离限制。
+工作流通过会话 `customTools` 注册 `workflow_list`、`workflow_get_parameters`、`workflow_get_definition`、`workflow_run`、`workflow_run_and_wait`、`workflow_get_task`、`workflow_cancel_task`，每项独立授权，默认不启用。调用前优先使用 `workflow_get_parameters` 仅查询出入参；只有需要内部实现时才查询完整定义。发布工作流将其中已配置的子节点能力作为整体授予获调用权限的 Agent，避免将子工具白名单误认为二次授权边界。详见 [DAG 工作流](13-dag-workflows.md)，包含类型、JSON Schema、幂等、工作区文件归属、取消和脚本隔离限制。
