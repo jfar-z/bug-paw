@@ -465,6 +465,9 @@ function Runner({
     [busy, setBusy] = useState(false),
     [invalid, setInvalid] = useState<Record<string, boolean>>({}),
     [polling, setPolling] = useState(true);
+  // 移动入口或主题重渲染不重新加载定义，避免覆盖已填写参数和上传引用。
+  const loadTask = useRef(runApiTask);
+  loadTask.current = runApiTask;
   const key = useRef(workflowClientId());
   const toast = useErrorToast(),
     reportedErrors = useRef(new Set<string>());
@@ -487,18 +490,18 @@ function Runner({
   }, [run, toast]);
   useEffect(() => {
     let alive = true;
-    void runApiTask(api.listWorkflows, { operation: "读取可运行工作流" }).then(
-      (r) => {
+    void loadTask
+      .current(api.listWorkflows, { operation: "读取可运行工作流" })
+      .then((r) => {
         if (alive && r.status === "success") {
           setItems(r.data.workflows);
           setDefinition(r.data.workflows.find((w) => w.id === workflowId));
         }
-      },
-    );
+      });
     return () => {
       alive = false;
     };
-  }, [workflowId, runApiTask]);
+  }, [workflowId]);
   useEffect(() => {
     if (!definition) return;
     const fields =
@@ -818,12 +821,13 @@ function RunDetail({ run }: { run: WorkflowRun }) {
                   )}
                   <h4>输入</h4>
                   <WorkflowValueView value={state.inputs} />
-                  {state.referenceGroups && Object.keys(state.referenceGroups).length > 0 && (
-                    <>
-                      <h4>参考组数组</h4>
-                      <WorkflowValueView value={state.referenceGroups} />
-                    </>
-                  )}
+                  {state.referenceGroups &&
+                    Object.keys(state.referenceGroups).length > 0 && (
+                      <>
+                        <h4>参考组数组</h4>
+                        <WorkflowValueView value={state.referenceGroups} />
+                      </>
+                    )}
                   <h4>输出</h4>
                   <WorkflowValueView value={state.outputs} />
                   <h4>事件</h4>

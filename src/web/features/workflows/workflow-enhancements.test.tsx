@@ -57,6 +57,43 @@ const catalog: WorkflowCatalog = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("工作流编辑增强", () => {
+  it("应用层回调变化不重新加载运行表单并清空已填写参数", async () => {
+    const definition = {
+      ...emptyWorkflow(),
+      id: "runner",
+      revision: 1,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const list = vi
+      .spyOn(api, "listWorkflows")
+      .mockImplementation(async () => ({
+        workflows: [structuredClone(definition)],
+      }));
+    const { rerender } = render(
+      <Wrapper>
+        <WorkflowsPage route={{ page: "workflow-run", workflowId: "runner" }} />
+      </Wrapper>,
+    );
+    await screen.findByLabelText("prompt");
+    fireEvent.change(screen.getByLabelText("prompt"), {
+      target: { value: "应保留的运行参数" },
+    });
+    await act(async () =>
+      rerender(
+        <Wrapper>
+          <WorkflowsPage
+            route={{ page: "workflow-run", workflowId: "runner" }}
+          />
+        </Wrapper>,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("prompt")).toHaveValue("应保留的运行参数"),
+    );
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
   it("应用层回调变化不重新加载编辑器并覆盖未保存的名称说明", async () => {
     const definition = {
       ...emptyWorkflow(),

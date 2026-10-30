@@ -525,12 +525,17 @@
   background: var(--surface);
   padding: 22px;
 }
+/* 内层网格允许收缩，避免长说明、枚举或文件控件的固有宽度越过参数卡片。 */
 .wf-run-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
+  overflow-wrap: anywhere;
 }
 .wf-run-field {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 8px;
 }
 .wf-run-field p {
