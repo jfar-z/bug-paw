@@ -142,7 +142,7 @@ export function WorkflowInputTools({
           <p className="wf-hint">
             保留类型、数组标记、必填、说明、默认值及枚举选项。已有同名参数和循环内置参数不可覆盖；跨作用域不复制枚举来源节点。
           </p>
-          <div className="wf-fields">
+          <div className="wf-fields wf-import-fields">
             {source.map((field, index) => {
               const reason = conflict(field);
               return (

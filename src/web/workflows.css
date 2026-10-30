@@ -502,6 +502,15 @@
   gap: 8px;
   overflow-wrap: anywhere;
 }
+/* 参数列表在弹窗内滚动，标题和确认按钮始终留在可视区域。 */
+.configuration-dialog:has(.wf-import-fields) {
+  max-height: calc(100dvh - 40px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+.configuration-dialog:has(.wf-import-fields) > div {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
 .wf-type-badge {
   font-family: var(--font-mono);
   font-size: 10px;
