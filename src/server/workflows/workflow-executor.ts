@@ -590,15 +590,19 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
       throw error;
     }
     let terminal: AigcTaskRecord | undefined;
+    let lastProgressMessage: string | undefined;
     try {
       while (true) {
         ctx.signal.throwIfAborted();
         terminal = await this.dependencies.aigcTasks.get(task.id);
         if (!terminal) invalid("工作流关联的 AIGC 任务已被删除");
         if (!["queued", "running"].includes(terminal.status)) break;
-        await ctx.progress(
-          `AIGC ${task.id} · ${terminal.execution?.phase ?? terminal.status}${terminal.execution?.progressValue !== undefined ? ` · ${terminal.execution.progressValue}/${terminal.execution.progressMax ?? "?"}` : ""}`,
-        );
+        const message = `AIGC ${task.id} · ${terminal.execution?.phase ?? terminal.status}${terminal.execution?.progressValue !== undefined ? ` · ${terminal.execution.progressValue}/${terminal.execution.progressMax ?? "?"}` : ""}`;
+        // 仅记录本次节点执行中变化的日志正文，避免轮询时间变化导致重复事件刷屏。
+        if (message !== lastProgressMessage) {
+          await ctx.progress(message);
+          lastProgressMessage = message;
+        }
         await delay(1500, undefined, { signal: ctx.signal });
       }
     } catch (error) {
