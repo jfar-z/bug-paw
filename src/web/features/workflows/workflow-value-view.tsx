@@ -1,27 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { WorkflowFile } from "../../../shared/workflow-contracts";
 import { ApiClientError } from "../../api";
 import { useApiTask } from "../../api-task-provider";
 import { ConfigurationEditorDialog } from "../../components/configuration/configuration-editor-dialog";
 
-/** 递归收集嵌套产物并按资产去重，同一文件可通过多个输出字段返回。 */
-export function workflowOutputFiles(value: unknown): WorkflowFile[] {
-  const files = new Map<string, WorkflowFile>();
-  const visit = (item: unknown) => {
-    if (Array.isArray(item)) item.forEach(visit);
-    else if (item && typeof item === "object") {
-      if (
-        "assetId" in item &&
-        typeof item.assetId === "string" &&
-        "mediaType" in item &&
-        typeof item.mediaType === "string"
-      )
-        files.set(item.assetId, item as WorkflowFile);
-      else Object.values(item).forEach(visit);
-    }
-  };
-  visit(value);
-  return [...files.values()];
+/** 只依据受控资产标识识别文件，普通 URL 和文本不会被误判为媒体。 */
+function isWorkflowFile(value: unknown): value is WorkflowFile {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    "assetId" in value &&
+    typeof value.assetId === "string" &&
+    "mediaType" in value &&
+    typeof value.mediaType === "string"
+  );
 }
 
 /** 预览和下载复用认证资产路由，浏览器解码错误也进入统一错误弹窗。 */
@@ -114,29 +106,135 @@ function WorkflowMediaItem({ file }: { file: WorkflowFile }) {
   );
 }
 
-/** 媒体产物优先呈现预览；原始结构保留供运行排查。 */
-export function WorkflowValueView({ value }: { value: unknown }) {
-  const files = workflowOutputFiles(value);
-  const json = (
-    <pre className="wf-json-output">{JSON.stringify(value ?? {}, null, 2)}</pre>
-  );
+/** 字段保持原顺序，数组索引与对象层级均作为可见上下文保留。 */
+function WorkflowValueFields({ entries }: { entries: [string, unknown][] }) {
   return (
-    <>
-      {files.length ? (
-        <>
-          <div className="wf-media-list">
-            {files.map((file) => (
-              <WorkflowMediaItem key={file.assetId} file={file} />
-            ))}
-          </div>
-          <details className="wf-output-data">
-            <summary>查看完整输出数据</summary>
-            {json}
-          </details>
-        </>
+    <dl className="wf-value-fields">
+      {entries.map(([name, child]) => (
+        <div key={name}>
+          <dt>{name}</dt>
+          <dd>
+            <WorkflowValueNode value={child} />
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** 文件在所属字段内预览；额外业务字段直接显示，基础文件元数据可单独展开。 */
+function WorkflowValueNode({ value }: { value: unknown }) {
+  if (isWorkflowFile(value)) {
+    const metadata = new Set(["assetId", "name", "mediaType", "size"]);
+    const entries = Object.entries(value);
+    return (
+      <>
+        <WorkflowMediaItem file={value} />
+        <WorkflowValueFields
+          entries={entries.filter(([name]) => !metadata.has(name))}
+        />
+        <details className="wf-value-branch">
+          <summary>文件信息</summary>
+          <WorkflowValueFields
+            entries={entries.filter(([name]) => metadata.has(name))}
+          />
+        </details>
+      </>
+    );
+  }
+  if (value && typeof value === "object") {
+    const array = Array.isArray(value);
+    const entries = Object.entries(value).map(
+      ([name, child]): [string, unknown] => [array ? `[${name}]` : name, child],
+    );
+    if (!entries.length) return <code>{array ? "[]" : "{}"}</code>;
+    return (
+      <details className="wf-value-branch" open>
+        <summary>
+          {array ? `数组 · ${entries.length} 项` : `对象 · ${entries.length} 个字段`}
+        </summary>
+        <WorkflowValueFields entries={entries} />
+      </details>
+    );
+  }
+  return (
+    <pre className="wf-value-scalar">
+      {value === undefined
+        ? "未提供"
+        : value === ""
+          ? '""（空字符串）'
+          : typeof value === "string"
+            ? value
+            : JSON.stringify(value)}
+    </pre>
+  );
+}
+
+/** 局域网 HTTP 不提供 Clipboard API 时，兼容复制并恢复焦点；失败交给统一错误出口。 */
+async function copyWorkflowJson(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const previous = document.activeElement;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  try {
+    textarea.select();
+    if (!document.execCommand?.("copy"))
+      throw new Error("浏览器未能写入剪贴板，请展开完整数据后手动复制 JSON。");
+  } finally {
+    textarea.remove();
+    if (previous instanceof HTMLElement) previous.focus();
+  }
+}
+
+/** 参数与媒体同时展示，完整 JSON 保留原始值供复制排查。 */
+export function WorkflowValueView({
+  value,
+  label = "输出",
+}: {
+  value: unknown;
+  label?: string;
+}) {
+  const { runApiTask } = useApiTask();
+  const [copied, setCopied] = useState(false);
+  const json = JSON.stringify(value, null, 2);
+  useEffect(() => setCopied(false), [json]);
+  return (
+    <div className="wf-value-view">
+      {value && typeof value === "object" && !Array.isArray(value) && !isWorkflowFile(value) ? (
+        Object.keys(value).length ? (
+          <WorkflowValueFields entries={Object.entries(value)} />
+        ) : (
+          <code>{"{}"}</code>
+        )
       ) : (
-        json
+        <WorkflowValueNode value={value} />
       )}
-    </>
+      <details className="wf-output-data">
+        <summary>查看完整{label}数据</summary>
+        <pre className="wf-json-output">{json ?? "未提供"}</pre>
+      </details>
+      <button
+        type="button"
+        className="wf-text-button"
+        disabled={json === undefined}
+        aria-label={`复制${label} JSON`}
+        onClick={() => {
+          setCopied(false);
+          if (json === undefined) return;
+          void runApiTask(() => copyWorkflowJson(json), {
+            operation: `复制工作流${label} JSON`,
+          }).then((result) => setCopied(result.status === "success"));
+        }}
+      >
+        {copied ? "已复制" : "复制 JSON"}
+      </button>
+    </div>
   );
 }

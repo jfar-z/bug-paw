@@ -43,7 +43,10 @@ import {
 } from "../router";
 import { useOnlineStatus } from "../use-online-status";
 import { WorkflowCanvas } from "../features/workflows/workflow-canvas";
-import { WorkflowValue } from "../features/workflows/workflow-fields";
+import {
+  WorkflowSelectedFiles,
+  WorkflowValue,
+} from "../features/workflows/workflow-fields";
 import "../workflows.css";
 
 type WorkflowRoute = Extract<
@@ -712,17 +715,12 @@ function Runner({
                             });
                           }}
                         />
-                        {inputs[f.name] !== undefined && (
-                          <small>
-                            {(
-                              (Array.isArray(inputs[f.name])
-                                ? inputs[f.name]
-                                : [inputs[f.name]]) as WorkflowFile[]
-                            )
-                              .map((file) => file.name)
-                              .join("、")}
-                          </small>
-                        )}
+                        <WorkflowSelectedFiles
+                          field={f}
+                          value={inputs[f.name]}
+                          disabled={busy || !online}
+                          onChange={(value) => change(f.name, value)}
+                        />
                       </>
                     ) : (
                       <WorkflowValue
@@ -870,12 +868,12 @@ function RunDetail({ run }: { run: WorkflowRun }) {
                     </a>
                   )}
                   <h4>输入</h4>
-                  <WorkflowValueView value={state.inputs} />
+                  <WorkflowValueView value={state.inputs} label="输入" />
                   {state.referenceGroups &&
                     Object.keys(state.referenceGroups).length > 0 && (
                       <>
                         <h4>参考组数组</h4>
-                        <WorkflowValueView value={state.referenceGroups} />
+                        <WorkflowValueView value={state.referenceGroups} label="参考组" />
                       </>
                     )}
                   <h4>输出</h4>

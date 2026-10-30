@@ -462,7 +462,7 @@ describe("工作流编辑增强", () => {
     expect(screen.getAllByText(/模型连接在正文生成期间中断/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "应用到脚本" })).toBeDisabled();
   });
-  it("嵌套产物去重展示图片、音视频和下载，并显示加载异常", async () => {
+  it("嵌套产物按字段展示图片、音视频和下载，并显示加载异常", async () => {
     const image = {
       assetId: "image",
       name: "图片.png",
@@ -493,17 +493,17 @@ describe("工作流编辑增强", () => {
         />
       </Wrapper>,
     );
-    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.getAllByRole("img")).toHaveLength(2);
     expect(screen.getByLabelText("视频.mp4")).toHaveAttribute("controls");
     expect(screen.getByLabelText("音频.wav")).toHaveAttribute(
       "src",
       "/api/v1/workflow-files/audio?preview=1",
     );
-    expect(screen.getAllByRole("link", { name: "下载" })).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: "查看大图 图片.png" }));
+    expect(screen.getAllByRole("link", { name: "下载" })).toHaveLength(4);
+    fireEvent.click(screen.getAllByRole("button", { name: "查看大图 图片.png" })[0]);
     expect(screen.getByRole("dialog")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "关闭图片预览" }));
-    fireEvent.error(screen.getByRole("img"));
+    fireEvent.error(screen.getAllByRole("img")[0]);
     await waitFor(() =>
       expect(screen.getAllByText(/加载或解码失败/).length).toBeGreaterThan(0),
     );

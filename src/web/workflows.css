@@ -871,10 +871,56 @@
 .wf-assist-drawer .configuration-editor-drawer__footer {
   flex-wrap: wrap;
 }
-.wf-media-list {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+.wf-value-view,
+.wf-value-fields,
+.wf-value-fields > div {
+  min-width: 0;
+}
+.wf-value-fields,
+.wf-selected-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wf-value-fields > div {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.wf-value-fields dt {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.wf-value-fields dd {
+  margin: 4px 0 0;
+}
+.wf-value-scalar {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.wf-trace .wf-value-branch > summary,
+.wf-trace .wf-output-data > summary {
+  display: list-item;
+  padding: 6px 0;
+  list-style: disclosure-closed;
+}
+.wf-trace details[open].wf-value-branch > summary,
+.wf-trace details[open].wf-output-data > summary {
+  list-style: disclosure-open;
+}
+.wf-selected-files li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.wf-selected-files span {
+  min-width: 0;
 }
 .wf-media-item {
   min-width: 0;

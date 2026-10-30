@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiClientError } from "../../api";
 import { ApiTaskProvider } from "../../api-task-provider";
@@ -69,12 +69,14 @@ async function fixture(surface: "run" | "editor", field: WorkflowInputField) {
   )) as HTMLInputElement;
   // 运行表单在定义加载后通过 effect 填入默认值，等待其显示再模拟用户上传。
   if (Array.isArray(field.defaultValue) && field.defaultValue.length)
-    await screen.findByText(
-      field.defaultValue.map((file) => file.name).join("、"),
-    );
+    await screen.findByText(field.defaultValue[0].name);
   return {
     input,
     upload,
+    names() {
+      const list = screen.queryByRole("list", { name: "已选择的文件 media" });
+      return list ? within(list).getAllByRole("listitem").map((item) => item.querySelector("span")!.textContent) : [];
+    },
     async select(files: File[]) {
       fireEvent.change(input, { target: { files } });
       await waitFor(() => expect(input).toBeEnabled());
@@ -105,9 +107,9 @@ describe.each(["run", "editor"] as const)("%s 媒体上传", (surface) => {
       await f.select([files[0]]);
       await screen.findByText("first");
       await f.select([files[1]]);
-      await screen.findByText("first、second");
+      expect(f.names()).toEqual(["first", "second"]);
       await f.select(files.slice(2));
-      await screen.findByText("first、second、third、fourth");
+      expect(f.names()).toEqual(["first", "second", "third", "fourth"]);
       await f.select([]);
       expect(f.upload).toHaveBeenCalledTimes(4);
       expect(f.input).toHaveValue("");
@@ -153,7 +155,7 @@ describe.each(["run", "editor"] as const)("%s 媒体上传", (surface) => {
     expect(screen.getAllByText(/媒体上传存储失败/).length).toBeGreaterThan(0);
     expect(screen.getByText("first.png")).toBeInTheDocument();
     await f.select([second]);
-    await screen.findByText("first.png、second.png");
+    expect(f.names()).toEqual(["first.png", "second.png"]);
     expect(await f.value()).toMatchObject([
       { assetId: "first.png" },
       { assetId: "second.png" },
@@ -180,9 +182,59 @@ describe.each(["run", "editor"] as const)("%s 媒体上传", (surface) => {
       screen.getAllByText(new RegExp(`最多上传 ${limit} 个文件`)).length,
     ).toBeGreaterThan(0);
     expect(f.upload).not.toHaveBeenCalled();
-    expect(
-      screen.getByText(existing.map((file) => file.name).join("、")),
-    ).toBeInTheDocument();
+    expect(f.names()).toEqual(existing.map((file) => file.name));
     expect(await f.value()).toEqual(existing);
+  });
+
+  it.each(["image", "audio", "video", "file"] as const)(
+    "%s 数组移除中间文件后保留顺序，并允许重新上传同一文件",
+    async (type) => {
+      const f = await fixture(surface, { name: "media", type, multiple: true });
+      const files = ["first", "second", "third"].map((name) =>
+        new File([name], name, { type: type === "file" ? "application/pdf" : `${type}/test` }));
+      await f.select(files);
+      fireEvent.click(screen.getByRole("button", { name: "移除 second" }));
+      expect(f.names()).toEqual(["first", "third"]);
+      await f.select([files[1]]);
+      expect(f.names()).toEqual(["first", "third", "second"]);
+      expect(await f.value()).toMatchObject([
+        { assetId: "first" }, { assetId: "third" }, { assetId: "second" },
+      ]);
+    },
+  );
+
+  it("清空单文件提交 null，避免服务端重新填入默认文件", async () => {
+    const f = await fixture(surface, {
+      name: "media", type: "image",
+      defaultValue: { assetId: "default", name: "default.png", mediaType: "image/png", size: 1 },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "移除 default.png" }));
+    expect(f.names()).toEqual([]);
+    expect(await f.value()).toBeNull();
+  });
+
+  it("移除相同资产的一个引用不会同时移除其他项，全部移除提交空数组", async () => {
+    const f = await fixture(surface, { name: "media", type: "image", multiple: true });
+    const file = new File(["a"], "same.png", { type: "image/png" });
+    await f.select([file, file]);
+    fireEvent.click(screen.getAllByRole("button", { name: "移除 same.png" })[0]);
+    expect(f.names()).toEqual(["same.png"]);
+    fireEvent.click(screen.getByRole("button", { name: "移除 same.png" }));
+    expect(f.names()).toEqual([]);
+    expect(await f.value()).toEqual([]);
+  });
+
+  it("追加上传期间禁用移除，完成后恢复且不会丢失此前文件", async () => {
+    const f = await fixture(surface, { name: "media", type: "image", multiple: true });
+    await f.select([new File(["a"], "first.png", { type: "image/png" })]);
+    let resolve!: (file: { assetId: string; name: string; mediaType: string; size: number }) => void;
+    f.upload.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    fireEvent.change(f.input, { target: { files: [new File(["b"], "second.png", { type: "image/png" })] } });
+    expect(screen.getByRole("button", { name: "移除 first.png" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "移除 first.png" }));
+    resolve({ assetId: "second", name: "second.png", mediaType: "image/png", size: 1 });
+    await waitFor(() => expect(f.input).toBeEnabled());
+    expect(f.names()).toEqual(["first.png", "second.png"]);
+    expect(screen.getByRole("button", { name: "移除 first.png" })).toBeEnabled();
   });
 });

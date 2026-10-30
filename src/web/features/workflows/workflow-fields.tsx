@@ -498,6 +498,47 @@ function WorkflowEnumValue({
   );
 }
 
+/** 移除仅更新当前参数引用，保留历史运行及其他字段共用的资产。 */
+export function WorkflowSelectedFiles({
+  field,
+  value,
+  disabled,
+  onChange,
+}: {
+  field: WorkflowInputField;
+  value: unknown;
+  disabled: boolean;
+  onChange: (value: unknown) => void;
+}) {
+  const entries = (Array.isArray(value) ? value : value ? [value] : []).filter(
+    (item): item is WorkflowFile => !!item && typeof item.assetId === "string",
+  );
+  if (!entries.length) return null;
+  return (
+    <ul className="wf-selected-files" aria-label={`已选择的文件 ${field.name}`}>
+      {entries.map((file, index) => (
+        <li key={`${file.assetId}-${index}`}>
+          <span>{file.name}</span>
+          <button
+            type="button"
+            className="wf-button"
+            disabled={disabled}
+            aria-label={`移除 ${file.name}`}
+            onClick={() => {
+              // 单文件显式提交空值，防止服务端再次填回已移除的默认文件。
+              onChange(field.multiple
+                ? entries.filter((_, current) => current !== index)
+                : null);
+            }}
+          >
+            移除
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** 媒体固定值上传到受控资产目录，输入中只保存文件引用。 */
 function WorkflowMediaValue({
   field,
@@ -572,13 +613,15 @@ function WorkflowMediaValue({
           });
         }}
       />
-      <small>
-        {busy
-          ? "正在上传…"
-          : valid
-            ? entries.map((item) => item.name).join("、")
-            : "请选择媒体文件，或改用上游节点输出。"}
-      </small>
+      <WorkflowSelectedFiles
+        field={field}
+        value={value}
+        disabled={busy}
+        onChange={onChange}
+      />
+      {(busy || !valid) && (
+        <small>{busy ? "正在上传…" : "请选择媒体文件，或改用上游节点输出。"}</small>
+      )}
     </>
   );
 }
