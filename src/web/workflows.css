@@ -309,7 +309,9 @@
   z-index: 8;
   left: 16px;
   top: 62px;
-  width: 190px;
+  width: min(198px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   padding: 7px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -325,9 +327,11 @@
   border: 0;
   border-radius: 6px;
   background: transparent;
+  color: var(--text-primary);
   text-align: left;
 }
-.wf-palette button:hover {
+.wf-palette button:hover,
+.wf-palette button:focus-visible {
   background: var(--surface-hover);
 }
 .wf-node {

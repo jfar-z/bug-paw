@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { ConfigurationEditorDialog } from "../../components/configuration/configuration-editor-dialog";
+import "../../configuration-dialog.css";
 const Context = createContext<(message: string) => Promise<boolean>>(
   async () => false,
 );

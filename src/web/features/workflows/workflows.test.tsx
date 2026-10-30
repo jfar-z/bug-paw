@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseRoute, routePath } from "../../router";
 import { WorkbenchShell } from "../../layouts/workbench-shell";
 import { WorkflowValue, WorkflowJson } from "./workflow-fields";
-import { withWorkflowNode } from "./workflow-canvas";
+import {
+  withWorkflowNode,
+  syncCanvasNodes,
+  appendWorkflowNode,
+} from "./workflow-canvas";
+import { applyNodeChanges } from "@xyflow/react";
 import {
   emptyWorkflow,
   newWorkflowNode,
@@ -95,5 +100,82 @@ describe("工作流浏览器契约", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "{" } });
     expect(valid).toHaveBeenLastCalledWith(false);
     expect(screen.getByText("请输入有效 JSON。")).toBeVisible();
+  });
+});
+
+/** 回归拖动丢失尺寸导致闪烁，以及拖线创建时的落点和分支语义。 */
+describe("工作流画布状态", () => {
+  it("拖动仅更新对应节点，并保留尺寸、选择和其他节点对象", () => {
+    const draft = emptyWorkflow();
+    const original = syncCanvasNodes([], draft.nodes);
+    const measured = applyNodeChanges(
+      [
+        {
+          id: "input",
+          type: "dimensions",
+          dimensions: { width: 220, height: 130 },
+        },
+        { id: "input", type: "select", selected: true },
+        {
+          id: "input",
+          type: "position",
+          position: { x: 400, y: 200 },
+          dragging: true,
+        },
+      ],
+      original,
+    );
+    const changed = draft.nodes.map((node) =>
+      node.id === "input" ? { ...node, position: { x: 400, y: 200 } } : node,
+    );
+    const next = syncCanvasNodes(measured, changed);
+    expect(next[0]).toMatchObject({
+      measured: { width: 220, height: 130 },
+      selected: true,
+      dragging: true,
+      position: { x: 400, y: 200 },
+    });
+    expect(next[1]).toBe(measured[1]);
+    expect(syncCanvasNodes(next, changed)[0]).toBe(next[0]);
+    expect(next.every((node) => !node.deletable)).toBe(true);
+  });
+  it.each(["true", "false"])(
+    "从判断节点 %s 端口创建节点保留分支和原始松手坐标",
+    (branch) => {
+      const draft = emptyWorkflow();
+      draft.nodes.push(newWorkflowNode("condition", "condition"));
+      const position = { x: 723.5, y: -18.25 };
+      const next = appendWorkflowNode(draft, "javascript", position, {
+        nodeId: "condition",
+        type: "source",
+        handleId: branch,
+        position,
+      });
+      const added = next.nodes.at(-1)!;
+      expect(added.position).toEqual(position);
+      expect(next.edges.at(-1)).toMatchObject({
+        source: "condition",
+        target: added.id,
+        branch,
+      });
+      expect(syncCanvasNodes([], [added])[0].deletable).toBe(true);
+      expect(draft.nodes).toHaveLength(3);
+    },
+  );
+  it("从输入端口反向拖线创建上游节点，普通添加不自动连线", () => {
+    const draft = emptyWorkflow();
+    const position = { x: 80, y: 40 };
+    const next = appendWorkflowNode(draft, "agent", position, {
+      nodeId: "output",
+      type: "target",
+      position,
+    });
+    expect(next.edges.at(-1)).toMatchObject({
+      source: next.nodes.at(-1)!.id,
+      target: "output",
+    });
+    expect(appendWorkflowNode(draft, "llm", position).edges).toEqual(
+      draft.edges,
+    );
   });
 });

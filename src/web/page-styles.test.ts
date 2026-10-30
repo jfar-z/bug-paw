@@ -42,3 +42,18 @@ it("安全设置按页面加载且不扩大首屏样式依赖", async () => {
   expect(main).not.toContain("security.css");
   expect(page).not.toMatch(/localStorage|sessionStorage/);
 });
+
+/** 工作流直达时也须包含完整确认框样式，不能依赖先访问配置中心。 */
+it("共享确认弹层自行加载布局和按钮样式，配置中心复用同一份定义", async () => {
+  const [dialog, configuration, shared, main] = await Promise.all([
+    "src/web/features/workflows/workflow-confirm.tsx", "src/web/configuration.css",
+    "src/web/configuration-dialog.css", "src/web/main.tsx",
+  ].map((path) => readFile(path, "utf8")));
+  expect(dialog).toContain('import "../../configuration-dialog.css"');
+  expect(configuration).toContain('@import "./configuration-dialog.css"');
+  expect(main).not.toContain("configuration-dialog.css");
+  for (const selector of [".configuration-dialog-backdrop", ".configuration-dialog {", ".provider-rename-dialog {", ".configuration-primary-action {", ".configuration-secondary-action {"]) {
+    expect(shared).toContain(selector);
+    expect(configuration).not.toContain(selector);
+  }
+});

@@ -1,3 +1,5 @@
+@import "./configuration-dialog.css";
+
 /* 配置类页面共享样式，由各独立工作台页面按需加载。 */
 
 .configuration-form-card .configuration-field-row label {
@@ -286,26 +288,6 @@
   background: var(--surface-hover);
 }
 
-.configuration-primary-action {
-  display: inline-flex;
-  min-height: 42px;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 0 15px;
-  border: 1px solid var(--accent-strong);
-  border-radius: 9px;
-  color: var(--surface);
-  background: var(--accent-strong);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.configuration-primary-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
 .configuration-create-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -366,42 +348,6 @@
   border-radius: 9px;
   color: var(--text-secondary);
   background: transparent;
-}
-
-.configuration-secondary-action {
-  display: inline-flex;
-  min-height: 42px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 9px;
-  color: var(--text-secondary);
-  background: var(--surface);
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.configuration-secondary-action:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: var(--surface-hover);
-}
-
-/* 危险操作沿用次级按钮的尺寸，仅用颜色表达不可逆语义。 */
-
-.configuration-secondary-action--danger {
-  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-strong));
-  color: var(--danger);
-}
-
-.configuration-secondary-action--danger:hover:not(:disabled) {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
-}
-
-.configuration-secondary-action:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
 }
 
 .configuration-inline-error {
@@ -769,8 +715,7 @@
 }
 
 .configuration-heading-actions,
-.configuration-actions,
-.configuration-dialog footer {
+.configuration-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -904,46 +849,10 @@ a[aria-disabled="true"] {
   overflow-wrap: anywhere;
 }
 
-.configuration-dialog-backdrop {
-  position: fixed;
-  z-index: 80;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: color-mix(in srgb, var(--canvas) 72%, transparent);
-}
-
 /* 批量确认可能叠加在已归档窗口上，必须保持为当前顶层交互面。 */
 
 .session-bulk-dialog-backdrop {
   z-index: 110;
-}
-
-.configuration-dialog {
-  width: min(720px, 100%);
-  padding: 22px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow: var(--shadow-float);
-}
-
-.configuration-dialog > header {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.configuration-dialog h2,
-.configuration-dialog p {
-  margin: 0;
-}
-
-.provider-rename-dialog {
-  width: min(520px, 100%);
-  display: grid;
-  gap: 16px;
 }
 
 .provider-rename-dialog__field {
@@ -969,11 +878,6 @@ a[aria-disabled="true"] {
   line-height: 1.5;
 }
 
-.configuration-dialog p {
-  margin-top: 5px;
-  color: var(--text-tertiary);
-}
-
 .conflict-differences {
   margin: 20px 0;
   border-block: 1px solid var(--border);
@@ -993,8 +897,7 @@ a[aria-disabled="true"] {
 }
 
 @media (max-width: 720px) {
-  .configuration-heading-actions,
-  .configuration-dialog footer {
+  .configuration-heading-actions {
     align-items: stretch;
     flex-direction: column;
   }

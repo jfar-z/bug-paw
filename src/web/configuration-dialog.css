@@ -1,0 +1,109 @@
+/* 确认弹层及操作按钮随实际使用者加载，直接进入非配置页面也保持完整系统样式。 */
+.configuration-primary-action {
+  display: inline-flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 15px;
+  border: 1px solid var(--accent-strong);
+  border-radius: 9px;
+  color: var(--surface);
+  background: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.configuration-primary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.configuration-secondary-action {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.configuration-secondary-action:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+/* 危险操作沿用次级按钮的尺寸，仅用颜色表达不可逆语义。 */
+
+.configuration-secondary-action--danger {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--border-strong));
+  color: var(--danger);
+}
+
+.configuration-secondary-action--danger:hover:not(:disabled) {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+}
+
+.configuration-secondary-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.configuration-dialog-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--canvas) 72%, transparent);
+}
+
+.configuration-dialog {
+  width: min(720px, 100%);
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+}
+
+.configuration-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.configuration-dialog h2 {
+  margin: 0;
+}
+
+.provider-rename-dialog {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 16px;
+}
+
+.configuration-dialog p {
+  margin: 5px 0 0;
+  color: var(--text-tertiary);
+}
+
+.configuration-dialog footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+@media (max-width: 720px) {
+  .configuration-dialog footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
