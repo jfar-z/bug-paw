@@ -11,6 +11,8 @@ import {
 import { applyNodeChanges } from "@xyflow/react";
 import {
   emptyWorkflow,
+  workflowRunNodesInOrder,
+  type WorkflowRun,
   newWorkflowNode,
 } from "../../../shared/workflow-contracts";
 /** 导航与参数类型都是用户能观察到的契约，图形库实现本身不复制测试。 */
@@ -177,5 +179,62 @@ describe("工作流画布状态", () => {
     expect(appendWorkflowNode(draft, "llm", position).edges).toEqual(
       draft.edges,
     );
+  });
+});
+
+/** 展示使用运行快照的拓扑关系，保持并行节点顺序并兼容旧运行数组。 */
+describe("工作流运行节点排序", () => {
+  it("串行流程按依赖排序，创建较早的输出节点移到最后且不修改原数组", () => {
+    const draft = emptyWorkflow();
+    const script = newWorkflowNode("javascript", "script");
+    draft.nodes.push(script);
+    draft.edges = [
+      { id: "a", source: "input", target: "script" },
+      { id: "b", source: "script", target: "output" },
+    ];
+    const run = {
+      definition: draft,
+      nodes: draft.nodes.map((n) => ({
+        nodeId: n.id,
+        status: "succeeded",
+        events: [],
+      })),
+    } as unknown as WorkflowRun;
+    const original = [...run.nodes];
+    expect(workflowRunNodesInOrder(run).map((n) => n.nodeId)).toEqual([
+      "input",
+      "script",
+      "output",
+    ]);
+    expect(run.nodes).toEqual(original);
+  });
+  it("分支先于汇合，同层按定义顺序，跳过与失败状态不改变展示位置", () => {
+    const nodes = [
+      newWorkflowNode("output", "output"),
+      newWorkflowNode("javascript", "right"),
+      newWorkflowNode("input", "input"),
+      newWorkflowNode("select", "join"),
+      newWorkflowNode("javascript", "left"),
+      newWorkflowNode("condition", "condition"),
+    ];
+    const edges = [
+      { id: "1", source: "input", target: "condition" },
+      { id: "2", source: "condition", target: "left", branch: "true" },
+      { id: "3", source: "condition", target: "right", branch: "false" },
+      { id: "4", source: "left", target: "join" },
+      { id: "5", source: "right", target: "join" },
+      { id: "6", source: "join", target: "output" },
+    ];
+    const run = {
+      definition: { nodes, edges },
+      nodes: [...nodes]
+        .reverse()
+        .map((n) => ({ nodeId: n.id, status: "queued", events: [] })),
+    } as unknown as WorkflowRun;
+    const expected = ["input", "condition", "right", "left", "join", "output"];
+    expect(workflowRunNodesInOrder(run).map((n) => n.nodeId)).toEqual(expected);
+    run.nodes.find((n) => n.nodeId === "right")!.status = "skipped";
+    run.nodes.find((n) => n.nodeId === "left")!.status = "failed";
+    expect(workflowRunNodesInOrder(run).map((n) => n.nodeId)).toEqual(expected);
   });
 });

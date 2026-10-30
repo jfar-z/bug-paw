@@ -57,6 +57,64 @@ const catalog: WorkflowCatalog = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("工作流编辑增强", () => {
+  it("运行详情按历史快照拓扑显示，使用快照名称而非当前定义", async () => {
+    const definition = {
+      ...emptyWorkflow(),
+      id: "ordered",
+      revision: 1,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const script = newWorkflowNode("javascript", "script");
+    script.name = "快照脚本";
+    definition.nodes.push(script);
+    definition.edges = [
+      { id: "a", source: "input", target: "script" },
+      { id: "b", source: "script", target: "output" },
+    ];
+    const run = {
+      id: "history",
+      workflowId: definition.id,
+      definition: structuredClone(definition),
+      status: "succeeded",
+      inputs: {},
+      outputs: {},
+      nodes: definition.nodes.map((n) => ({
+        nodeId: n.id,
+        status: "succeeded",
+        events: [],
+      })),
+      createdAt: "",
+    };
+    script.name = "当前脚本";
+    vi.spyOn(api, "listWorkflows").mockResolvedValue({
+      workflows: [definition],
+    });
+    vi.spyOn(api, "getWorkflowRun").mockResolvedValue(run as never);
+    const { container } = render(
+      <Wrapper>
+        <WorkflowsPage
+          route={{
+            page: "workflow-run",
+            workflowId: definition.id,
+            runId: run.id,
+          }}
+        />
+      </Wrapper>,
+    );
+    await screen.findByText("快照脚本");
+    expect(
+      Array.from(
+        container.querySelectorAll(".wf-trace-title strong"),
+        (el) => el.textContent,
+      ),
+    ).toEqual(["输入", "快照脚本", "输出"]);
+    expect(run.nodes.map((n) => n.nodeId)).toEqual([
+      "input",
+      "output",
+      "script",
+    ]);
+  });
   it("应用层回调变化不重新加载运行表单并清空已填写参数", async () => {
     const definition = {
       ...emptyWorkflow(),

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   emptyWorkflow,
+  workflowRunNodesInOrder,
   WORKFLOW_NODE_NAMES,
   type WorkflowDefinition,
   type WorkflowDraft,
@@ -775,7 +776,7 @@ function RunDetail({ run }: { run: WorkflowRun }) {
         </div>
       )}
       <ol className="wf-trace">
-        {run.nodes.map((state, index) => {
+        {workflowRunNodesInOrder(run).map((state, index) => {
           const node = run.definition.nodes.find((n) => n.id === state.nodeId)!;
           const elapsed = state.startedAt
             ? Math.max(

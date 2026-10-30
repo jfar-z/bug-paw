@@ -122,13 +122,13 @@ export function WorkflowValue({
     );
   if (field.type === "boolean")
     return (
-      <label className="wf-check">
+      <label className="wf-check wf-boolean-value">
         <input
           type="checkbox"
           checked={value === true}
           onChange={(e) => onChange(e.target.checked)}
         />
-        {field.description || field.name}
+        <span>{field.description || field.name}</span>
       </label>
     );
   if (field.type === "integer" || field.type === "float")

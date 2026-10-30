@@ -334,3 +334,32 @@ export function emptyWorkflow(): WorkflowDraft {
     edges: [{ id: "input-output", source: "input", target: "output" }],
   };
 }
+
+/**
+ * 按运行快照的 DAG 分层展示节点，同层保留定义顺序，不受状态或时间影响。
+ * 定义在保存及启动时已验证无环；排序只创建展示副本，不修改运行状态数组。
+ */
+export function workflowRunNodesInOrder(run: WorkflowRun): WorkflowNodeRun[] {
+  const { nodes, edges } = run.definition;
+  const indegrees = new Map(nodes.map((node) => [node.id, 0]));
+  const children = new Map(nodes.map((node) => [node.id, [] as string[]]));
+  for (const edge of edges) {
+    indegrees.set(edge.target, indegrees.get(edge.target)! + 1);
+    children.get(edge.source)!.push(edge.target);
+  }
+  const order = new Map<string, number>();
+  let layer = nodes.filter((node) => indegrees.get(node.id) === 0);
+  while (layer.length) {
+    for (const node of layer) {
+      order.set(node.id, order.size);
+      for (const child of children.get(node.id)!)
+        indegrees.set(child, indegrees.get(child)! - 1);
+    }
+    layer = nodes.filter(
+      (node) => !order.has(node.id) && indegrees.get(node.id) === 0,
+    );
+  }
+  return [...run.nodes].sort(
+    (a, b) => order.get(a.nodeId)! - order.get(b.nodeId)!,
+  );
+}

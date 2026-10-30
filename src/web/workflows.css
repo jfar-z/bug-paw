@@ -214,6 +214,19 @@
   font-size: 12px;
   white-space: nowrap;
 }
+/* 布尔值说明可能很长，作为可收缩文本列换行，勾选框保持原尺寸。 */
+.wf-boolean-value {
+  align-items: flex-start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+.wf-boolean-value span {
+  min-width: 0;
+}
+.wf-boolean-value input {
+  margin-top: 3px;
+}
 .wf-field .wf-error,
 .wf-error {
   color: var(--danger);
