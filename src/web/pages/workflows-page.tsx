@@ -1,3 +1,4 @@
+import { workflowDraftFieldError } from "../features/workflows/workflow-field-guards";
 import type { WorkflowSummary } from "../../shared/workflow-contracts";
 import { WorkflowCopyDialog } from "../features/workflows/workflow-copy-dialog";
 import { WorkflowValueView } from "../features/workflows/workflow-value-view";
@@ -285,6 +286,9 @@ function Editor({ id }: { id: string }) {
   loadTask.current = runApiTask;
   const skipGuard = useRef(false);
   const dirty = JSON.stringify(draft) !== baseline;
+  const fieldError = workflowDraftFieldError(draft);
+  const cannotSave =
+    busy || !online || !!fieldError || Object.values(invalid).some(Boolean);
   useEffect(() => {
     let alive = true;
     void loadTask
@@ -345,6 +349,7 @@ function Editor({ id }: { id: string }) {
     [],
   );
   const save = async (run = false) => {
+    if (cannotSave) return;
     setBusy(true);
     setNotice("");
     const r = await runApiTask(
@@ -403,7 +408,7 @@ function Editor({ id }: { id: string }) {
         <div className="wf-actions">
           <button
             className="wf-button"
-            disabled={busy || !online || Object.values(invalid).some(Boolean)}
+            disabled={cannotSave}
             onClick={() => {
               setBusy(true);
               void runApiTask(() => api.validateWorkflow(draft, saved?.id), {
@@ -419,7 +424,7 @@ function Editor({ id }: { id: string }) {
           </button>
           <button
             className="wf-button"
-            disabled={busy || !online || Object.values(invalid).some(Boolean)}
+            disabled={cannotSave}
             onClick={() => void save()}
           >
             <Save size={16} />
@@ -427,7 +432,7 @@ function Editor({ id }: { id: string }) {
           </button>
           <button
             className="wf-button wf-primary"
-            disabled={busy || !online || Object.values(invalid).some(Boolean)}
+            disabled={cannotSave}
             onClick={() => void save(true)}
           >
             <Play size={16} />
@@ -435,6 +440,11 @@ function Editor({ id }: { id: string }) {
           </button>
         </div>
       </header>
+      {fieldError && (
+        <div className="wf-definition-bar wf-error" role="alert">
+          {fieldError}
+        </div>
+      )}
       <div className="wf-definition-bar">
         <label className="wf-field wf-description">
           工作流说明

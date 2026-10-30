@@ -10,6 +10,7 @@ import { workflowLoopOutputs } from "../../../shared/workflow-contracts";
 import { api } from "../../api";
 import { useApiTask } from "../../api-task-provider";
 import { WorkflowBindingEditor, WorkflowValue } from "./workflow-fields";
+import { workflowLoopInputBindings } from "./workflow-field-guards";
 
 interface CompositionProps {
   node: WorkflowNode;
@@ -185,6 +186,15 @@ export function WorkflowLoopEditor({
   const loop = node.config.loop!;
   const input = loop.body.nodes.find((n) => n.kind === "input")!;
   const output = loop.body.nodes.find((n) => n.kind === "output")!;
+  const cleaned = workflowLoopInputBindings(node, loop.body);
+  const stale = [
+    ...Object.keys(node.inputs).filter(
+      (name) => !Object.hasOwn(cleaned.inputs, name),
+    ),
+    ...Object.keys(loop.state).filter(
+      (name) => !Object.hasOwn(cleaned.state, name),
+    ),
+  ];
   const patch = (change: Partial<WorkflowLoop>) => {
     const next = { ...loop, ...change };
     onChange({
@@ -212,6 +222,30 @@ export function WorkflowLoopEditor({
   );
   return (
     <>
+      {stale.length > 0 && (
+        <div className="wf-field">
+          <p className="wf-error" role="alert">
+            无效的循环入参映射或变量：{[...new Set(stale)].join("、")}
+            。参数已删除、改名或属于系统参数，请清理旧配置。
+          </p>
+          <button
+            type="button"
+            className="wf-button"
+            onClick={() =>
+              onChange({
+                ...node,
+                inputs: cleaned.inputs,
+                config: {
+                  ...node.config,
+                  loop: { ...loop, state: cleaned.state },
+                },
+              })
+            }
+          >
+            清理无效映射
+          </button>
+        </div>
+      )}
       <h3>循环方式</h3>
       <label className="wf-field">
         循环模式

@@ -1,3 +1,7 @@
+import {
+  workflowFieldNameErrors,
+  workflowSystemFieldIndices,
+} from "./workflow-field-guards";
 import { useEffect, useId, useRef, useState } from "react";
 import { WorkflowFilePicker } from "./workflow-file-picker";
 import { api } from "../../api";
@@ -161,9 +165,11 @@ export function WorkflowValue({
 
 /** 参数定义供输入、输出及脚本共用；输出不设置默认值以免掩盖执行遗漏。 */
 export function WorkflowFieldList({
-  fields,
+  fields: declaredFields,
   onChange,
   defaults = false,
+  reserved = [],
+  systemFields = [],
   enumSources = [],
   onRefreshEnums,
   refreshingEnums = false,
@@ -171,6 +177,8 @@ export function WorkflowFieldList({
   fields: WorkflowField[];
   onChange: (fields: WorkflowField[]) => void;
   defaults?: boolean;
+  reserved?: string[];
+  systemFields?: string[];
   onRefreshEnums?: () => void;
   refreshingEnums?: boolean;
   enumSources?: {
@@ -179,270 +187,342 @@ export function WorkflowFieldList({
     values: string[];
   }[];
 }) {
+  const id = useId();
+  // 系统声明固定排在普通参数前，避免普通参数误用同名时取代原系统声明。
+  const declaredSystem = workflowSystemFieldIndices(
+    declaredFields,
+    systemFields,
+  );
+  const fields = systemFields.length
+    ? [
+        ...declaredFields.filter((_, index) => declaredSystem.has(index)),
+        ...declaredFields.filter((_, index) => !declaredSystem.has(index)),
+      ]
+    : declaredFields;
+  const errors = workflowFieldNameErrors(fields, reserved, systemFields);
+  const system = workflowSystemFieldIndices(fields, systemFields);
   const update = (index: number, patch: Partial<WorkflowField>) =>
     onChange(fields.map((f, i) => (i === index ? { ...f, ...patch } : f)));
   return (
     <div className="wf-fields">
       {fields.map((field, index) => (
         <section key={index} className="wf-field-item">
-          <div className="wf-row">
-            <input
-              aria-label={`参数 ${index + 1} 名称`}
-              placeholder="参数名，如 prompt"
-              value={field.name}
-              onChange={(e) => update(index, { name: e.target.value })}
-            />
-            {[-1, 1].map((direction) => (
-              <button
-                key={direction}
-                type="button"
-                className="icon-button"
-                aria-label={`${direction < 0 ? "上移" : "下移"}参数 ${field.name}`}
-                disabled={
-                  index + direction < 0 || index + direction >= fields.length
-                }
-                onClick={() => {
-                  const next = [...fields];
-                  [next[index], next[index + direction]] = [
-                    next[index + direction],
-                    next[index],
-                  ];
-                  onChange(next);
-                }}
-              >
-                {direction < 0 ? (
-                  <ArrowUp size={15} />
-                ) : (
-                  <ArrowDown size={15} />
-                )}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={`删除参数 ${field.name}`}
-              onClick={() => onChange(fields.filter((_, i) => i !== index))}
-            >
-              <Trash2 size={15} />
-            </button>
-          </div>
-          <select
-            aria-label={`${field.name} 类型`}
-            value={field.enumValues ? "enum" : field.type}
-            onChange={(e) =>
-              update(index, {
-                type:
-                  e.target.value === "enum"
-                    ? "string"
-                    : (e.target.value as WorkflowField["type"]),
-                enumValues: e.target.value === "enum" ? [] : undefined,
-                enumSource: undefined,
-                defaultValue: undefined,
-              })
-            }
-          >
-            {WORKFLOW_TYPES.map((t) => (
-              <option key={t}>{t}</option>
-            ))}
-            <option value="enum">枚举 · string</option>
-          </select>
-          {field.enumValues && (
+          {system.has(index) ? (
             <div className="wf-field">
-              <label>
-                枚举来源
-                <select
-                  aria-label={`${field.name} 枚举来源`}
-                  value={
-                    field.enumSource ? JSON.stringify(field.enumSource) : ""
+              <strong>系统参数 · {field.name}</strong>
+              <small className="wf-hint">
+                {field.name === "index"
+                  ? "integer · 当前迭代序号，从 0 开始，由循环自动提供。"
+                  : "当前数组元素，由循环自动提供；可调整元素类型。"}
+              </small>
+            </div>
+          ) : (
+            <div className="wf-row">
+              <input
+                aria-label={`参数 ${index + 1} 名称`}
+                placeholder="参数名，如 prompt"
+                value={field.name}
+                aria-invalid={!!errors[index]}
+                aria-describedby={errors[index] ? `${id}-${index}` : undefined}
+                onChange={(e) => update(index, { name: e.target.value })}
+              />
+              {[-1, 1].map((direction) => (
+                <button
+                  key={direction}
+                  type="button"
+                  className="icon-button"
+                  aria-label={`${direction < 0 ? "上移" : "下移"}参数 ${field.name}`}
+                  disabled={
+                    index + direction < 0 ||
+                    index + direction >= fields.length ||
+                    system.has(index + direction)
                   }
-                  onChange={(event) => {
-                    const choice = enumSources.find(
-                      (s) => JSON.stringify(s.source) === event.target.value,
-                    );
-                    if (choice)
-                      update(index, {
-                        enumSource: choice.source,
-                        enumValues: choice.values,
-                        defaultValue: undefined,
-                      });
+                  onClick={() => {
+                    const next = [...fields];
+                    [next[index], next[index + direction]] = [
+                      next[index + direction],
+                      next[index],
+                    ];
+                    onChange(next);
                   }}
                 >
-                  <option value="" disabled>
-                    选择已连接 AIGC、工作流或循环节点的枚举入参
-                  </option>
-                  {field.enumSource &&
-                    !enumSources.some(
-                      (s) =>
-                        JSON.stringify(s.source) ===
-                        JSON.stringify(field.enumSource),
-                    ) && (
-                      <option value={JSON.stringify(field.enumSource)} disabled>
-                        枚举来源已失效，请重新选择
-                      </option>
-                    )}
-                  {enumSources.map((source) => (
-                    <option
-                      key={JSON.stringify(source.source)}
-                      value={JSON.stringify(source.source)}
-                    >
-                      {source.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <small className="wf-hint">
-                作为字符串传递，可用于字符串参数和 AIGC 枚举参数。
-              </small>
-              {onRefreshEnums && (
-                <button
-                  type="button"
-                  className="wf-button"
-                  aria-label={`${field.name} 刷新枚举来源`}
-                  disabled={refreshingEnums}
-                  onClick={onRefreshEnums}
-                >
-                  {refreshingEnums ? "正在刷新…" : "刷新枚举来源"}
+                  {direction < 0 ? (
+                    <ArrowUp size={15} />
+                  ) : (
+                    <ArrowDown size={15} />
+                  )}
                 </button>
-              )}
-              <small>
-                {field.enumValues.length
-                  ? field.enumValues.join(" / ")
-                  : "请先连接 AIGC、工作流或循环节点，再选择其枚举入参。"}
-              </small>
-              {field.enumSource &&
-                (() => {
-                  const current = enumSources.find(
-                    (s) =>
-                      JSON.stringify(s.source) ===
-                      JSON.stringify(field.enumSource),
-                  );
-                  return current &&
-                    JSON.stringify(current.values) !==
-                      JSON.stringify(field.enumValues) ? (
-                    <button
-                      type="button"
-                      className="wf-button"
-                      onClick={() =>
-                        update(index, {
-                          enumValues: current.values,
-                          defaultValue: undefined,
-                        })
-                      }
-                    >
-                      更新枚举选项
-                    </button>
-                  ) : null;
-                })()}
+              ))}
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`删除参数 ${field.name}`}
+                onClick={() => onChange(fields.filter((_, i) => i !== index))}
+              >
+                <Trash2 size={15} />
+              </button>
             </div>
           )}
-          <div className="wf-row">
-            <label className="wf-check">
-              <input
-                type="checkbox"
-                checked={!!field.multiple}
+          {errors[index] && (
+            <small className="wf-error" id={`${id}-${index}`} role="alert">
+              {errors[index]}
+            </small>
+          )}
+          {!(system.has(index) && field.name === "index") && (
+            <>
+              <select
+                aria-label={`${field.name} 类型`}
+                value={field.enumValues ? "enum" : field.type}
                 onChange={(e) =>
                   update(index, {
-                    multiple: e.target.checked,
+                    type:
+                      e.target.value === "enum"
+                        ? "string"
+                        : (e.target.value as WorkflowField["type"]),
+                    enumValues: e.target.value === "enum" ? [] : undefined,
+                    enumSource: undefined,
                     defaultValue: undefined,
                   })
                 }
-              />
-              数组
-            </label>
-            <label className="wf-check">
-              <input
-                type="checkbox"
-                checked={!!field.required}
-                onChange={(e) => update(index, { required: e.target.checked })}
-              />
-              必填
-            </label>
-          </div>
-          <input
-            aria-label={`${field.name} 说明`}
-            placeholder="参数说明"
-            value={field.description ?? ""}
-            onChange={(e) => update(index, { description: e.target.value })}
-          />
-          {defaults && ["image", "video", "audio", "file"].includes(field.type) && <div className="wf-field"><span>默认文件</span><WorkflowValue field={field} fileDirectory="constants" value={field.defaultValue} onChange={(defaultValue) => update(index, {defaultValue})}/></div>}
-          {defaults &&
-            ["string", "integer", "float", "boolean"].includes(field.type) &&
-            !field.multiple && (
-              <label className="wf-field">
-                默认值
-                {field.enumValues ? (
-                  <select
-                    aria-label={`${field.name} 默认值`}
-                    value={field.enumValues.findIndex(
-                      (v) => v === field.defaultValue,
-                    )}
-                    onChange={(e) =>
-                      update(index, {
-                        defaultValue: field.enumValues![Number(e.target.value)],
-                      })
-                    }
-                  >
-                    <option value={-1}>不设置</option>
-                    {field.enumValues.map((value, i) => (
-                      <option key={i} value={i}>
-                        {String(value)}
+              >
+                {WORKFLOW_TYPES.map((t) => (
+                  <option key={t}>{t}</option>
+                ))}
+                <option value="enum">枚举 · string</option>
+              </select>
+              {field.enumValues && (
+                <div className="wf-field">
+                  <label>
+                    枚举来源
+                    <select
+                      aria-label={`${field.name} 枚举来源`}
+                      value={
+                        field.enumSource ? JSON.stringify(field.enumSource) : ""
+                      }
+                      onChange={(event) => {
+                        const choice = enumSources.find(
+                          (s) =>
+                            JSON.stringify(s.source) === event.target.value,
+                        );
+                        if (choice)
+                          update(index, {
+                            enumSource: choice.source,
+                            enumValues: choice.values,
+                            defaultValue: undefined,
+                          });
+                      }}
+                    >
+                      <option value="" disabled>
+                        选择已连接 AIGC、工作流或循环节点的枚举入参
                       </option>
-                    ))}
-                  </select>
-                ) : field.type === "boolean" ? (
-                  <select
-                    value={
-                      field.defaultValue === undefined
-                        ? "unset"
-                        : String(field.defaultValue)
-                    }
-                    onChange={(e) =>
-                      update(index, {
-                        defaultValue:
-                          e.target.value === "unset"
-                            ? undefined
-                            : e.target.value === "true",
-                      })
-                    }
-                  >
-                    <option value="unset">不设置</option>
-                    <option value="true">true</option>
-                    <option value="false">false</option>
-                  </select>
-                ) : (
+                      {field.enumSource &&
+                        !enumSources.some(
+                          (s) =>
+                            JSON.stringify(s.source) ===
+                            JSON.stringify(field.enumSource),
+                        ) && (
+                          <option
+                            value={JSON.stringify(field.enumSource)}
+                            disabled
+                          >
+                            枚举来源已失效，请重新选择
+                          </option>
+                        )}
+                      {enumSources.map((source) => (
+                        <option
+                          key={JSON.stringify(source.source)}
+                          value={JSON.stringify(source.source)}
+                        >
+                          {source.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <small className="wf-hint">
+                    作为字符串传递，可用于字符串参数和 AIGC 枚举参数。
+                  </small>
+                  {onRefreshEnums && (
+                    <button
+                      type="button"
+                      className="wf-button"
+                      aria-label={`${field.name} 刷新枚举来源`}
+                      disabled={refreshingEnums}
+                      onClick={onRefreshEnums}
+                    >
+                      {refreshingEnums ? "正在刷新…" : "刷新枚举来源"}
+                    </button>
+                  )}
+                  <small>
+                    {field.enumValues.length
+                      ? field.enumValues.join(" / ")
+                      : "请先连接 AIGC、工作流或循环节点，再选择其枚举入参。"}
+                  </small>
+                  {field.enumSource &&
+                    (() => {
+                      const current = enumSources.find(
+                        (s) =>
+                          JSON.stringify(s.source) ===
+                          JSON.stringify(field.enumSource),
+                      );
+                      return current &&
+                        JSON.stringify(current.values) !==
+                          JSON.stringify(field.enumValues) ? (
+                        <button
+                          type="button"
+                          className="wf-button"
+                          onClick={() =>
+                            update(index, {
+                              enumValues: current.values,
+                              defaultValue: undefined,
+                            })
+                          }
+                        >
+                          更新枚举选项
+                        </button>
+                      ) : null;
+                    })()}
+                </div>
+              )}
+              <div className="wf-row">
+                <label className="wf-check">
                   <input
-                    type={field.type === "string" ? "text" : "number"}
-                    value={
-                      field.defaultValue === undefined
-                        ? ""
-                        : String(field.defaultValue)
-                    }
-                    placeholder="不设置"
+                    type="checkbox"
+                    checked={!!field.multiple}
                     onChange={(e) =>
                       update(index, {
-                        defaultValue:
-                          e.target.value === ""
-                            ? undefined
-                            : field.type === "string"
-                              ? e.target.value
-                              : Number(e.target.value),
+                        multiple: e.target.checked,
+                        defaultValue: undefined,
                       })
                     }
                   />
+                  数组
+                </label>
+                {!system.has(index) && (
+                  <label className="wf-check">
+                    <input
+                      type="checkbox"
+                      checked={!!field.required}
+                      onChange={(e) =>
+                        update(index, { required: e.target.checked })
+                      }
+                    />
+                    必填
+                  </label>
                 )}
-              </label>
-            )}
+              </div>
+              {!system.has(index) && (
+                <input
+                  aria-label={`${field.name} 说明`}
+                  placeholder="参数说明"
+                  value={field.description ?? ""}
+                  onChange={(e) =>
+                    update(index, { description: e.target.value })
+                  }
+                />
+              )}
+              {defaults &&
+                !system.has(index) &&
+                ["image", "video", "audio", "file"].includes(field.type) && (
+                  <div className="wf-field">
+                    <span>默认文件</span>
+                    <WorkflowValue
+                      field={field}
+                      fileDirectory="constants"
+                      value={field.defaultValue}
+                      onChange={(defaultValue) =>
+                        update(index, { defaultValue })
+                      }
+                    />
+                  </div>
+                )}
+              {defaults &&
+                !system.has(index) &&
+                ["string", "integer", "float", "boolean"].includes(
+                  field.type,
+                ) &&
+                !field.multiple && (
+                  <label className="wf-field">
+                    默认值
+                    {field.enumValues ? (
+                      <select
+                        aria-label={`${field.name} 默认值`}
+                        value={field.enumValues.findIndex(
+                          (v) => v === field.defaultValue,
+                        )}
+                        onChange={(e) =>
+                          update(index, {
+                            defaultValue:
+                              field.enumValues![Number(e.target.value)],
+                          })
+                        }
+                      >
+                        <option value={-1}>不设置</option>
+                        {field.enumValues.map((value, i) => (
+                          <option key={i} value={i}>
+                            {String(value)}
+                          </option>
+                        ))}
+                      </select>
+                    ) : field.type === "boolean" ? (
+                      <select
+                        value={
+                          field.defaultValue === undefined
+                            ? "unset"
+                            : String(field.defaultValue)
+                        }
+                        onChange={(e) =>
+                          update(index, {
+                            defaultValue:
+                              e.target.value === "unset"
+                                ? undefined
+                                : e.target.value === "true",
+                          })
+                        }
+                      >
+                        <option value="unset">不设置</option>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    ) : (
+                      <input
+                        type={field.type === "string" ? "text" : "number"}
+                        value={
+                          field.defaultValue === undefined
+                            ? ""
+                            : String(field.defaultValue)
+                        }
+                        placeholder="不设置"
+                        onChange={(e) =>
+                          update(index, {
+                            defaultValue:
+                              e.target.value === ""
+                                ? undefined
+                                : field.type === "string"
+                                  ? e.target.value
+                                  : Number(e.target.value),
+                          })
+                        }
+                      />
+                    )}
+                  </label>
+                )}
+            </>
+          )}
         </section>
       ))}
       <button
         type="button"
         className="wf-button"
-        onClick={() =>
-          onChange([
-            ...fields,
-            { name: `param_${fields.length + 1}`, type: "string" },
-          ])
-        }
+        onClick={() => {
+          // 删除、改名后的序号可能已被占用，新参数始终使用未占用名称。
+          let number = fields.length + 1;
+          while (
+            fields.some((field) => field.name === `param_${number}`) ||
+            reserved.includes(`param_${number}`)
+          )
+            number++;
+          onChange([...fields, { name: `param_${number}`, type: "string" }]);
+        }}
       >
         <Plus size={15} />
         添加参数

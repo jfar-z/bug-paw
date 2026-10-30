@@ -57,6 +57,42 @@ const catalog: WorkflowCatalog = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("工作流编辑增强", () => {
+  it("嵌套循环的参数名错误在未打开属性面板时仍阻止校验、保存和运行", async () => {
+    const loop = newWorkflowNode("loop", "loop");
+    const inner = newWorkflowNode("loop", "inner");
+    inner.config.loop!.body.nodes[0].outputs.push({
+      name: "index",
+      type: "string",
+    });
+    loop.config.loop!.body.nodes.push(inner);
+    const definition = {
+      ...emptyWorkflow(),
+      id: "invalid",
+      revision: 1,
+      createdAt: "",
+      updatedAt: "",
+    };
+    definition.nodes.push(loop);
+    vi.spyOn(api, "getWorkflowCatalog").mockResolvedValue(catalog);
+    vi.spyOn(api, "getWorkflow").mockResolvedValue(definition);
+    const save = vi.spyOn(api, "saveWorkflow");
+    render(
+      <Wrapper>
+        <WorkflowsPage
+          route={{ page: "workflow-editor", workflowId: definition.id }}
+        />
+      </Wrapper>,
+    );
+    await screen.findByLabelText("工作流名称");
+    expect(screen.getByText(/参数名 index 已存在/)).toHaveTextContent("index");
+    for (const name of ["校验", "保存", "保存并运行"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+    }
+    expect(save).not.toHaveBeenCalled();
+  });
+
   it("运行详情按历史快照拓扑显示，使用快照名称而非当前定义", async () => {
     const definition = {
       ...emptyWorkflow(),

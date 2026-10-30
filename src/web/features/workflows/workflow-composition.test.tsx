@@ -73,6 +73,29 @@ function Editor({
 }
 
 describe("循环与工作流节点编辑", () => {
+  it("已有的无效映射明确列出参数名，主动清理保留有效的固定值", () => {
+    const initial = newWorkflowNode("loop", "loop"),
+      changed = vi.fn();
+    initial.config.loop!.body.nodes[0].outputs.push({
+      name: "count",
+      type: "integer",
+    });
+    initial.inputs = {
+      index: { kind: "literal", value: 0 },
+      removed: { kind: "literal", value: false },
+      count: { kind: "literal", value: 0 },
+    };
+    render(<Editor initial={initial} changed={changed} />);
+    expect(screen.getByText(/无效的循环入参映射或变量/)).toHaveTextContent("index、removed");
+    fireEvent.click(screen.getByRole("button", { name: "清理无效映射" }));
+    expect(changed.mock.lastCall?.[0].inputs).toEqual({
+      count: { kind: "literal", value: 0 },
+    });
+    expect(
+      screen.queryByRole("button", { name: "清理无效映射" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("切换数组模式声明 item，进入循环体按钮可操作", () => {
     const changed = vi.fn(),
       edit = vi.fn();

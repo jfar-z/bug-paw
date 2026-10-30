@@ -10,6 +10,7 @@ import { useApiTask } from "../../api-task-provider";
 export interface WorkflowInputToolsProps {
   clipboard?: WorkflowField[];
   reserved?: string[];
+  systemFields?: string[];
   outerInput?: WorkflowNode;
   onCopy: (fields: WorkflowField[]) => void;
   onPaste: (names: string[]) => void;

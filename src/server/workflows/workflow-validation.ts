@@ -261,16 +261,16 @@ export function validateWorkflow(
         )
           invalid(`循环 ${node.name} 的变量 ${name} 输入、更新来源或类型无效`);
       }
-      if (
-        Object.keys(node.inputs).some(
-          (name) =>
-            ["index", "item"].includes(name) ||
-            !input.outputs.some((field) => field.name === name),
-        )
-      )
-        invalid(
-          `循环 ${node.name} 的输入映射不得覆盖 index、item 或包含未声明参数`,
-        );
+      for (const name of Object.keys(node.inputs)) {
+        if (["index", "item"].includes(name))
+          invalid(
+            `循环 ${node.name} 的入参 ${name} 由循环自动提供，不能设置外部映射`,
+          );
+        if (!input.outputs.some((field) => field.name === name))
+          invalid(
+            `循环 ${node.name} 的入参映射 ${name} 未在循环体输入中声明，请删除旧映射或重新声明参数`,
+          );
+      }
       for (const [name, mapping] of Object.entries(loop.outputs)) {
         const source =
           record(mapping) &&

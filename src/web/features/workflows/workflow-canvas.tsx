@@ -1,3 +1,4 @@
+import { workflowLoopInputBindings } from "./workflow-field-guards";
 import { workflowHasPath, withWorkflowNode } from "./workflow-graph";
 export { workflowHasPath, withWorkflowNode } from "./workflow-graph";
 import { workflowClientId } from "./workflow-id";
@@ -697,10 +698,13 @@ export function WorkflowCanvas(props: {
   }>();
   let scope = props.draft;
   let outerInput: WorkflowNode | undefined;
+  let systemFields: string[] = [];
   const names = [props.draft.name];
   for (const id of path) {
     outerInput = scope.nodes.find((node) => node.kind === "input");
     const node = scope.nodes.find((item) => item.id === id)!;
+    systemFields =
+      node.config.loop!.mode === "array" ? ["index", "item"] : ["index"];
     scope = node.config.loop!.body;
     names.push(node.name);
   }
@@ -740,9 +744,16 @@ export function WorkflowCanvas(props: {
               ];
             }),
         );
-        const loop = { ...node.config.loop!, body, outputs };
+        const bindings = workflowLoopInputBindings(node, body);
+        const loop = {
+          ...node.config.loop!,
+          body,
+          outputs,
+          state: bindings.state,
+        };
         return {
           ...node,
+          inputs: bindings.inputs,
           config: { ...node.config, loop },
           outputs: workflowLoopOutputs(loop, node.outputs),
         };
@@ -774,6 +785,7 @@ export function WorkflowCanvas(props: {
         inputTools={{
           clipboard: parameterClipboard?.fields,
           reserved: path.length ? ["index", "item"] : [],
+          systemFields,
           outerInput,
           onCopy: (fields) =>
             setParameterClipboard({
@@ -791,9 +803,10 @@ export function WorkflowCanvas(props: {
             props.onChange(replace(props.draft, path, next));
           },
           onImport: path.length
-            ? (names) => props.onChange(
-                importOuterWorkflowInputs(props.draft, path, names),
-              )
+            ? (names) =>
+                props.onChange(
+                  importOuterWorkflowInputs(props.draft, path, names),
+                )
             : undefined,
         }}
         onChange={(next) => props.onChange(replace(props.draft, path, next))}

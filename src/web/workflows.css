@@ -230,6 +230,7 @@
 .wf-field .wf-error,
 .wf-error {
   color: var(--danger);
+  overflow-wrap: anywhere;
 }
 .wf-page:has(.wf-editor) {
   padding: 0;
@@ -1046,4 +1047,10 @@
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+/* 参数名错误沿用主题危险色，并在焦点状态保留红框。 */
+.wf-page input[aria-invalid="true"] {
+  border-color: var(--danger);
+  outline-color: var(--danger);
 }

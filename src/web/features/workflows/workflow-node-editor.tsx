@@ -283,6 +283,8 @@ export function WorkflowNodeEditor({
             {inputTools && <WorkflowInputTools node={node} {...inputTools} />}
             <WorkflowFieldList
               fields={node.outputs}
+              reserved={inputTools?.reserved}
+              systemFields={inputTools?.systemFields}
               enumSources={enumSources}
               {...enumRefresh}
               defaults
