@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../../api";
 import { useApiTask } from "../../api-task-provider";
-import { Plus, Trash2 } from "lucide-react";
+import { ArrowUp, ArrowDown, Plus, Trash2 } from "lucide-react";
 import {
   WORKFLOW_TYPES,
   type WorkflowBinding,
@@ -160,10 +160,16 @@ export function WorkflowFieldList({
   fields,
   onChange,
   defaults = false,
+  enumSources = [],
 }: {
   fields: WorkflowField[];
   onChange: (fields: WorkflowField[]) => void;
   defaults?: boolean;
+  enumSources?: {
+    label: string;
+    source: NonNullable<WorkflowField["enumSource"]>;
+    values: string[];
+  }[];
 }) {
   const update = (index: number, patch: Partial<WorkflowField>) =>
     onChange(fields.map((f, i) => (i === index ? { ...f, ...patch } : f)));
@@ -178,6 +184,31 @@ export function WorkflowFieldList({
               value={field.name}
               onChange={(e) => update(index, { name: e.target.value })}
             />
+            {[-1, 1].map((direction) => (
+              <button
+                key={direction}
+                type="button"
+                className="icon-button"
+                aria-label={`${direction < 0 ? "上移" : "下移"}参数 ${field.name}`}
+                disabled={
+                  index + direction < 0 || index + direction >= fields.length
+                }
+                onClick={() => {
+                  const next = [...fields];
+                  [next[index], next[index + direction]] = [
+                    next[index + direction],
+                    next[index],
+                  ];
+                  onChange(next);
+                }}
+              >
+                {direction < 0 ? (
+                  <ArrowUp size={15} />
+                ) : (
+                  <ArrowDown size={15} />
+                )}
+              </button>
+            ))}
             <button
               type="button"
               className="icon-button"
@@ -189,10 +220,15 @@ export function WorkflowFieldList({
           </div>
           <select
             aria-label={`${field.name} 类型`}
-            value={field.type}
+            value={field.enumValues ? "enum" : field.type}
             onChange={(e) =>
               update(index, {
-                type: e.target.value as WorkflowField["type"],
+                type:
+                  e.target.value === "enum"
+                    ? "string"
+                    : (e.target.value as WorkflowField["type"]),
+                enumValues: e.target.value === "enum" ? [] : undefined,
+                enumSource: undefined,
                 defaultValue: undefined,
               })
             }
@@ -200,7 +236,86 @@ export function WorkflowFieldList({
             {WORKFLOW_TYPES.map((t) => (
               <option key={t}>{t}</option>
             ))}
+            <option value="enum">枚举 · string</option>
           </select>
+          {field.enumValues && (
+            <div className="wf-field">
+              <label>
+                枚举来源
+                <select
+                  aria-label={`${field.name} 枚举来源`}
+                  value={
+                    field.enumSource ? JSON.stringify(field.enumSource) : ""
+                  }
+                  onChange={(event) => {
+                    const choice = enumSources.find(
+                      (s) => JSON.stringify(s.source) === event.target.value,
+                    );
+                    if (choice)
+                      update(index, {
+                        enumSource: choice.source,
+                        enumValues: choice.values,
+                        defaultValue: undefined,
+                      });
+                  }}
+                >
+                  <option value="" disabled>
+                    选择已连接节点的枚举入参
+                  </option>
+                  {field.enumSource &&
+                    !enumSources.some(
+                      (s) =>
+                        JSON.stringify(s.source) ===
+                        JSON.stringify(field.enumSource),
+                    ) && (
+                      <option value={JSON.stringify(field.enumSource)} disabled>
+                        枚举来源已失效，请重新选择
+                      </option>
+                    )}
+                  {enumSources.map((source) => (
+                    <option
+                      key={JSON.stringify(source.source)}
+                      value={JSON.stringify(source.source)}
+                    >
+                      {source.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <small className="wf-hint">
+                作为字符串传递，可用于字符串参数和 AIGC 枚举参数。
+              </small>
+              <small>
+                {field.enumValues.length
+                  ? field.enumValues.join(" / ")
+                  : "请先连线，再选择枚举来源。"}
+              </small>
+              {field.enumSource &&
+                (() => {
+                  const current = enumSources.find(
+                    (s) =>
+                      JSON.stringify(s.source) ===
+                      JSON.stringify(field.enumSource),
+                  );
+                  return current &&
+                    JSON.stringify(current.values) !==
+                      JSON.stringify(field.enumValues) ? (
+                    <button
+                      type="button"
+                      className="wf-button"
+                      onClick={() =>
+                        update(index, {
+                          enumValues: current.values,
+                          defaultValue: undefined,
+                        })
+                      }
+                    >
+                      更新枚举选项
+                    </button>
+                  ) : null;
+                })()}
+            </div>
+          )}
           <div className="wf-row">
             <label className="wf-check">
               <input
@@ -235,7 +350,26 @@ export function WorkflowFieldList({
             !field.multiple && (
               <label className="wf-field">
                 默认值
-                {field.type === "boolean" ? (
+                {field.enumValues ? (
+                  <select
+                    aria-label={`${field.name} 默认值`}
+                    value={field.enumValues.findIndex(
+                      (v) => v === field.defaultValue,
+                    )}
+                    onChange={(e) =>
+                      update(index, {
+                        defaultValue: field.enumValues![Number(e.target.value)],
+                      })
+                    }
+                  >
+                    <option value={-1}>不设置</option>
+                    {field.enumValues.map((value, i) => (
+                      <option key={i} value={i}>
+                        {String(value)}
+                      </option>
+                    ))}
+                  </select>
+                ) : field.type === "boolean" ? (
                   <select
                     value={
                       field.defaultValue === undefined
@@ -311,17 +445,37 @@ function WorkflowEnumValue({
 }) {
   const options = field.enumValues!;
   const selected = options.findIndex((option) => option === value);
+  const entries = field.multiple && Array.isArray(value) ? value : [];
+  const valid =
+    (value === undefined && !field.required) ||
+    (field.multiple
+      ? Array.isArray(value) &&
+        entries.every((v) => options.includes(v as string))
+      : selected >= 0);
   useEffect(() => {
-    onValidity?.(selected >= 0);
-  }, [selected, JSON.stringify(options)]);
+    onValidity?.(valid);
+  }, [valid, JSON.stringify(options)]);
   useEffect(() => () => onValidity?.(true), []);
   return (
     <>
       <select
         aria-label={field.name}
-        aria-invalid={selected < 0}
-        value={selected}
-        onChange={(event) => onChange(options[Number(event.target.value)])}
+        aria-invalid={!valid}
+        multiple={field.multiple}
+        value={
+          field.multiple
+            ? entries.map((entry) => String(options.indexOf(entry as string)))
+            : selected
+        }
+        onChange={(event) =>
+          onChange(
+            field.multiple
+              ? Array.from(event.target.selectedOptions).map(
+                  (option) => options[Number(option.value)],
+                )
+              : options[Number(event.target.value)],
+          )
+        }
       >
         <option value={-1} disabled>
           {value === undefined
@@ -339,9 +493,7 @@ function WorkflowEnumValue({
           </option>
         ))}
       </select>
-      {selected < 0 && (
-        <small className="wf-error">请选择接口允许的枚举值。</small>
-      )}
+      {!valid && <small className="wf-error">请选择接口允许的枚举值。</small>}
     </>
   );
 }
@@ -430,8 +582,8 @@ function WorkflowMediaValue({
 /** 根据完整字段定义创建固定值，优先使用接口默认值和真实枚举选项。 */
 function initialLiteral(field: WorkflowInputField): unknown {
   if (field.defaultValue !== undefined) return field.defaultValue;
-  if (field.enumValues?.length) return field.enumValues[0];
   if (field.multiple) return [];
+  if (field.enumValues?.length) return field.enumValues[0];
   if (field.type === "boolean") return false;
   if (field.type === "integer" || field.type === "float") return field.min ?? 0;
   if (
@@ -452,6 +604,7 @@ export function WorkflowBindingEditor({
   type = "string",
   field,
   onValidity,
+  referenceOnly = false,
 }: {
   label: string;
   binding?: WorkflowBinding;
@@ -460,6 +613,7 @@ export function WorkflowBindingEditor({
   onChange: (binding: WorkflowBinding | undefined) => void;
   type?: WorkflowField["type"];
   field?: WorkflowInputField;
+  referenceOnly?: boolean;
   onValidity?: (valid: boolean) => void;
 }) {
   const [constantType, setConstantType] = useState<WorkflowField["type"]>(() =>
@@ -480,9 +634,17 @@ export function WorkflowBindingEditor({
       : binding
         ? "literal"
         : "unset";
-  const available = nodes.filter(
-    (node) => node.id !== nodeId && node.kind !== "output",
-  );
+  const available = nodes
+    .filter((node) => node.id !== nodeId && node.kind !== "output")
+    .map((node) => ({
+      ...node,
+      outputs: node.outputs.filter(
+        (output) =>
+          !referenceOnly ||
+          (output.type === field?.type &&
+            !!output.multiple === !!field?.multiple),
+      ),
+    }));
   const missing =
     binding?.kind === "reference" &&
     !available.some(
@@ -521,7 +683,7 @@ export function WorkflowBindingEditor({
           <option value="unset">
             {field?.defaultValue !== undefined ? "使用接口默认值" : "不提供"}
           </option>
-          <option value="literal">固定值</option>
+          {!referenceOnly && <option value="literal">固定值</option>}
           {missing && (
             <option value={selection} disabled>
               引用已失效，请重新选择

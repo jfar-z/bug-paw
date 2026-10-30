@@ -9,7 +9,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkflowBindingEditor } from "./workflow-fields";
+import {
+  WorkflowBindingEditor,
+  WorkflowFieldList,
+  WorkflowValue,
+} from "./workflow-fields";
 import { WorkflowNodeEditor } from "./workflow-node-editor";
 import {
   WorkflowScriptAssist,
@@ -348,5 +352,192 @@ describe("工作流编辑增强", () => {
     await waitFor(() =>
       expect(screen.getAllByText(/加载或解码失败/).length).toBeGreaterThan(0),
     );
+  });
+});
+
+/** 使用真实表单验证枚举来源、双模式参考组与参数重排的编辑语义。 */
+describe("工作流参数组合", () => {
+  it("参数移动携带类型、默认值和说明，首尾移动按钮禁用", () => {
+    function Fields() {
+      const [fields, setFields] = useState([
+        {
+          name: "first",
+          type: "string" as const,
+          description: "第一个",
+          defaultValue: "a",
+        },
+        {
+          name: "second",
+          type: "string" as const,
+          description: "第二个",
+          defaultValue: "b",
+        },
+      ]);
+      return (
+        <WorkflowFieldList
+          defaults
+          fields={fields}
+          onChange={setFields as never}
+        />
+      );
+    }
+    render(<Fields />);
+    expect(screen.getByLabelText("上移参数 first")).toBeDisabled();
+    expect(screen.getByLabelText("下移参数 second")).toBeDisabled();
+    fireEvent.click(screen.getByLabelText("下移参数 first"));
+    expect(screen.getByLabelText("参数 1 名称")).toHaveValue("second");
+    expect(screen.getByLabelText("参数 2 名称")).toHaveValue("first");
+    expect(screen.getByLabelText("first 说明")).toHaveValue("第一个");
+    fireEvent.click(screen.getByLabelText("上移参数 first"));
+    expect(screen.getByLabelText("参数 1 名称")).toHaveValue("first");
+  });
+  it("开始节点选择下游枚举时保存字符串约束，运行表单选择输出字符串", () => {
+    const source = newWorkflowNode("aigc", "aigc");
+    source.config.interfaceId = "enum";
+    const change = vi.fn();
+    function Editor() {
+      const [node, setNode] = useState(newWorkflowNode("input", "input"));
+      return (
+        <WorkflowNodeEditor
+          node={node}
+          nodes={[node, source]}
+          edges={[{ id: "a", source: "input", target: "aigc" }]}
+          catalog={{
+            ...catalog,
+            interfaces: [
+              {
+                id: "enum",
+                name: "枚举测试",
+                fields: [
+                  { name: "quality", type: "float", enumValues: [0, 20] },
+                ],
+                outputs: [],
+              },
+            ],
+          }}
+          onChange={(next) => {
+            change(next);
+            setNode(next);
+          }}
+          onValidity={() => {}}
+          onClose={() => {}}
+          onCopy={() => {}}
+          onDelete={() => {}}
+        />
+      );
+    }
+    const rendered = render(
+      <Wrapper>
+        <Editor />
+      </Wrapper>,
+    );
+    fireEvent.change(screen.getByLabelText("prompt 类型"), {
+      target: { value: "enum" },
+    });
+    const select = screen.getByLabelText(
+      "prompt 枚举来源",
+    ) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: select.options[1].value } });
+    const field = change.mock.calls.at(-1)![0].outputs[0];
+    expect(field).toMatchObject({
+      type: "string",
+      enumValues: ["0", "20"],
+      enumSource: { nodeId: "aigc", field: "quality", interfaceId: "enum" },
+    });
+    rendered.unmount();
+    const value = vi.fn();
+    render(<WorkflowValue field={field} value="0" onChange={value} />);
+    fireEvent.change(screen.getByLabelText("prompt"), {
+      target: { value: "1" },
+    });
+    expect(value).toHaveBeenCalledWith("20");
+  });
+  it("参考组默认逐项输入，数组模式只列同类型数组，切回后清除数组绑定", () => {
+    const upstream = newWorkflowNode("input", "input");
+    upstream.outputs = [
+      { name: "pictures", type: "image", multiple: true },
+      { name: "single", type: "image" },
+      { name: "sounds", type: "audio", multiple: true },
+    ];
+    const initial = newWorkflowNode("aigc", "aigc");
+    initial.config.interfaceId = "group";
+    initial.inputs.first = {
+      kind: "literal",
+      value: { assetId: "old", mediaType: "image/png" },
+    };
+    const changed = vi.fn();
+    function Editor() {
+      const [node, setNode] = useState(initial);
+      return (
+        <WorkflowNodeEditor
+          node={node}
+          nodes={[upstream, node]}
+          edges={[{ id: "a", source: "input", target: "aigc" }]}
+          catalog={{
+            ...catalog,
+            interfaces: [
+              {
+                id: "group",
+                name: "参考图",
+                fields: [
+                  { name: "first", type: "image" },
+                  { name: "second", type: "image" },
+                ],
+                outputs: [],
+                referenceGroups: [
+                  {
+                    id: "refs",
+                    label: "参考图片",
+                    type: "image",
+                    fields: ["first", "second"],
+                  },
+                ],
+              },
+            ],
+          }}
+          onChange={(next) => {
+            changed(next);
+            setNode(next);
+          }}
+          onValidity={() => {}}
+          onClose={() => {}}
+          onCopy={() => {}}
+          onDelete={() => {}}
+        />
+      );
+    }
+    render(
+      <Wrapper>
+        <Editor />
+      </Wrapper>,
+    );
+    expect(screen.getByLabelText("first 值来源")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("参考图片 输入方式"), {
+      target: { value: "array" },
+    });
+    expect(screen.queryByLabelText("first 值来源")).not.toBeInTheDocument();
+    const values = screen.getByLabelText(
+      "参考图片 数组 值来源",
+    ) as HTMLSelectElement;
+    expect(Array.from(values.options).map((o) => o.value)).toEqual([
+      "unset",
+      "input:pictures",
+    ]);
+    fireEvent.change(values, { target: { value: "input:pictures" } });
+    expect(changed.mock.calls.at(-1)![0]).toMatchObject({
+      inputs: {},
+      config: {
+        referenceGroups: {
+          refs: {
+            mode: "array",
+            binding: { kind: "reference", nodeId: "input", field: "pictures" },
+          },
+        },
+      },
+    });
+    fireEvent.change(screen.getByLabelText("参考图片 输入方式"), {
+      target: { value: "split" },
+    });
+    expect(changed.mock.calls.at(-1)![0].config.referenceGroups).toEqual({});
   });
 });

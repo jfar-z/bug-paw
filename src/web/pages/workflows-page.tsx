@@ -818,6 +818,12 @@ function RunDetail({ run }: { run: WorkflowRun }) {
                   )}
                   <h4>输入</h4>
                   <WorkflowValueView value={state.inputs} />
+                  {state.referenceGroups && Object.keys(state.referenceGroups).length > 0 && (
+                    <>
+                      <h4>参考组数组</h4>
+                      <WorkflowValueView value={state.referenceGroups} />
+                    </>
+                  )}
                   <h4>输出</h4>
                   <WorkflowValueView value={state.outputs} />
                   <h4>事件</h4>

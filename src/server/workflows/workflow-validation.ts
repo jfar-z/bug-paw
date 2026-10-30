@@ -61,6 +61,27 @@ export function checkFields(fields: WorkflowField[]): void {
       (field.description !== undefined && typeof field.description !== "string")
     )
       invalid("参数必填、数组标记或说明格式错误");
+    if (
+      field.enumValues !== undefined &&
+      (field.type !== "string" ||
+        !Array.isArray(field.enumValues) ||
+        !field.enumValues.length ||
+        field.enumValues.length > 1000 ||
+        field.enumValues.some((v) => typeof v !== "string") ||
+        new Set(field.enumValues).size !== field.enumValues.length)
+    )
+      invalid(`参数 ${field.name} 的枚举必须是非空、不重复的字符串选项`);
+    if (
+      field.enumSource !== undefined &&
+      (!record(field.enumSource) ||
+        !validName(field.enumSource.nodeId) ||
+        typeof field.enumSource.field !== "string" ||
+        !field.enumSource.field ||
+        typeof field.enumSource.interfaceId !== "string" ||
+        !field.enumSource.interfaceId ||
+        !field.enumValues?.length)
+    )
+      invalid(`参数 ${field.name} 的枚举来源格式无效`);
     names.add(field.name);
     if (field.defaultValue !== undefined) checkField(field, field.defaultValue);
   }
@@ -78,6 +99,8 @@ export function checkField(field: WorkflowField, value: unknown): void {
       checkField({ ...field, multiple: false, required: true }, entry);
     return;
   }
+  if (field.enumValues && !field.enumValues.some((option) => option === value))
+    invalid(`参数 ${field.name} 不在枚举范围内`);
   let ok = false;
   switch (field.type) {
     case "string":
@@ -378,6 +401,39 @@ export function validateWorkflow(
     for (const [name, b] of Object.entries(node.inputs)) {
       if (!validName(name)) invalid("输入映射名称不合法");
       checkBinding(b, node);
+    }
+    if (config.referenceGroups !== undefined) {
+      if (
+        node.kind !== "aigc" ||
+        !record(config.referenceGroups) ||
+        Object.keys(config.referenceGroups).length > 100
+      )
+        invalid("参考组数组配置只适用于 AIGC 节点，最多 100 组");
+      for (const group of Object.values(config.referenceGroups)) {
+        if (!record(group) || group.mode !== "array")
+          invalid("参考组输入模式无效");
+        if (group.binding) checkBinding(group.binding, node);
+      }
+    }
+    for (const field of node.outputs) {
+      if (!field.enumSource) continue;
+      const source = nodes.get(field.enumSource.nodeId);
+      if (
+        !source ||
+        source.kind !== "aigc" ||
+        source.config.interfaceId !== field.enumSource.interfaceId
+      )
+        invalid(`参数 ${field.name} 的枚举来源节点或接口已变更，请重新选择`);
+      // 类型可以引用下游，但必须位于同一条连通链路；不加入执行依赖。
+      const connected = new Set([node.id]);
+      for (let i = 0; i < value.nodes.length; i++)
+        for (const edge of value.edges)
+          if (connected.has(edge.source) || connected.has(edge.target)) {
+            connected.add(edge.source);
+            connected.add(edge.target);
+          }
+      if (!connected.has(source.id))
+        invalid(`参数 ${field.name} 的枚举来源未连接当前节点`);
     }
     if (node.kind === "condition") {
       if (

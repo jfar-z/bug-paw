@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   WorkflowNodeExecutor,
   workflowModelPayload,
+  expandReferenceGroups,
+  workflowReferenceGroups,
 } from "./workflow-executor";
 import {
   emptyWorkflow,
@@ -284,6 +286,26 @@ describe("工作流 AIGC 适配", () => {
     ).rejects.toThrow("枚举");
     expect(f.createRun).not.toHaveBeenCalled();
   });
+  it("运行前发现枚举来源选项变化，不启动计费任务", async () => {
+    const f = fixture();
+    f.item.config.parameters = [
+      { name: "steps", type: "enum", enumValues: [10, 20] },
+    ] as never;
+    const draft = emptyWorkflow();
+    draft.nodes.push(f.node);
+    draft.nodes[0].outputs[0].enumValues = ["10", "20"];
+    draft.nodes[0].outputs[0].enumSource = {
+      nodeId: f.node.id,
+      field: "steps",
+      interfaceId: f.item.id,
+    };
+    await expect(f.executor.validate(draft as never)).resolves.toBeUndefined();
+    draft.nodes[0].outputs[0].enumValues = ["10", "99"];
+    await expect(f.executor.validate(draft as never)).rejects.toThrow(
+      "枚举定义已变更",
+    );
+    expect(f.createRun).not.toHaveBeenCalled();
+  });
   it("字符串化后有歧义的枚举不猜测目标类型", async () => {
     const f = fixture();
     f.item.config.parameters = [
@@ -312,4 +334,157 @@ describe("工作流 AIGC 适配", () => {
     ).rejects.toThrow();
     expect(f.cancel).toHaveBeenCalledWith("task");
   });
+});
+
+/** 参考组必须忠实遵循映射顺序，并在上传前拒绝数量和类型错误。 */
+describe("参考组数组模式", () => {
+  const group = {
+    id: "refs",
+    label: "参考图片",
+    type: "image" as const,
+    fields: ["second", "first"],
+  };
+  const image = { assetId: "one", mediaType: "image/png" };
+  it("数组按槽位顺序展开，空数组清空槽位，拆分模式保持原参数", () => {
+    const node = newWorkflowNode("aigc", "aigc");
+    const inputs = { prompt: "text", first: image, second: image };
+    expect(expandReferenceGroups(node, inputs, {}, [group])).toEqual(inputs);
+    node.config.referenceGroups = { refs: { mode: "array" } };
+    expect(
+      expandReferenceGroups(node, inputs, { refs: [image] }, [group]),
+    ).toEqual({ prompt: "text", second: image });
+    expect(expandReferenceGroups(node, inputs, { refs: [] }, [group])).toEqual({
+      prompt: "text",
+    });
+    expect(expandReferenceGroups(node, inputs, {}, [group])).toEqual({
+      prompt: "text",
+    });
+  });
+  it("超长、空元素、非数组、错误媒体类型和失效组都明确拒绝", () => {
+    const node = newWorkflowNode("aigc", "aigc");
+    node.config.referenceGroups = {
+      refs: {
+        mode: "array",
+        binding: { kind: "reference", nodeId: "input", field: "images" },
+      },
+    };
+    for (const refs of [
+      [image, image, image],
+      [null],
+      image,
+      undefined,
+      [{ assetId: "x", mediaType: "audio/wav" }],
+    ])
+      expect(() =>
+        expandReferenceGroups(node, {}, { refs }, [group]),
+      ).toThrow();
+    expect(() => expandReferenceGroups(node, {}, { refs: [] }, [])).toThrow(
+      "参考组已变更",
+    );
+  });
+  it("目录公开原始 mappingIds 的顺序，而不是参数列表排列顺序", () => {
+    expect(
+      workflowReferenceGroups({
+        inputMappings: [
+          { id: "a", name: "first", type: "image" },
+          { id: "b", name: "second", type: "image" },
+        ],
+        inputGroups: [{ ...group, mappingIds: ["b", "a"] }],
+      } as never),
+    ).toEqual([group]);
+  });
+});
+
+/** 真实执行适配器验证数组展开后仍走原始上传、参数映射与任务创建链路。 */
+it("ComfyUI 参考数组通过原始字段上传，空数组不上传，错误在计费前暴露", async () => {
+  const item = {
+    id: "group-interface",
+    enabled: true,
+    protocol: "comfyui",
+    config: { workflowId: "group-workflow" },
+  };
+  const workflow = {
+    nodes: [],
+    edges: [],
+    outputMappings: [],
+    inputMappings: ["left", "right"].map((name) => ({
+      id: name,
+      name,
+      type: "image",
+      required: false,
+      nodeId: name,
+      field: "inputs.image",
+    })),
+    inputGroups: [
+      {
+        id: "refs",
+        label: "参考图",
+        type: "image",
+        mappingIds: ["right", "left"],
+      },
+    ],
+  };
+  const task = { id: "task", status: "succeeded", assets: [] };
+  const createRun = vi.fn(async () => task);
+  const saveInput = vi.fn(async (_content, name, mediaType) => ({
+    id: name,
+    name,
+    mediaType,
+  }));
+  const executor = new WorkflowNodeExecutor({
+    interfaces: { get: async () => item },
+    aigcWorkflows: { get: async () => ({ workflow }) },
+    aigcTasks: { createRun, get: async () => task },
+    files: {
+      buffer: async (file: unknown) => ({ file, content: Buffer.from("test") }),
+    },
+    aigcAssets: { saveInput, removeInput: vi.fn() },
+  } as never);
+  const node = newWorkflowNode("aigc", "aigc");
+  node.config = {
+    interfaceId: item.id,
+    referenceGroups: {
+      refs: {
+        mode: "array",
+        binding: { kind: "reference", nodeId: "input", field: "images" },
+      },
+    },
+  };
+  const draft = emptyWorkflow();
+  draft.nodes[0].outputs.push({
+    name: "images",
+    type: "image",
+    multiple: true,
+  });
+  draft.nodes.push(node);
+  await expect(executor.validate(draft as never)).resolves.toBeUndefined();
+  draft.nodes[0].outputs[1].type = "audio";
+  await expect(executor.validate(draft as never)).rejects.toThrow(
+    "image 类型数组",
+  );
+  const image = { assetId: "one", name: "one.png", mediaType: "image/png" };
+  const ctx = {
+    node,
+    run: { id: "run" },
+    signal: new AbortController().signal,
+    progress: vi.fn(),
+    referenceGroups: { refs: [image] },
+  };
+  await executor.execute(ctx as never, {});
+  expect(createRun).toHaveBeenLastCalledWith({
+    interfaceId: item.id,
+    inputs: {
+      right: { assetId: "one.png", name: "one.png", mediaType: "image/png" },
+    },
+  });
+  ctx.referenceGroups.refs = [];
+  await executor.execute(ctx as never, {});
+  expect(createRun).toHaveBeenLastCalledWith({
+    interfaceId: item.id,
+    inputs: {},
+  });
+  expect(saveInput).toHaveBeenCalledTimes(1);
+  ctx.referenceGroups.refs = [image, image, image];
+  await expect(executor.execute(ctx as never, {})).rejects.toThrow("最多 2 项");
+  expect(createRun).toHaveBeenCalledTimes(2);
 });

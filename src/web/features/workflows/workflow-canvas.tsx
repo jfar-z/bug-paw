@@ -227,6 +227,7 @@ export function withWorkflowNode(
     } else for (const child of Object.values(value)) visit(child);
   };
   visit(node.inputs);
+  visit(node.config.referenceGroups);
   visit(node.config.conditions);
   visit(node.config.candidates);
   visit(node.config.selectCondition);
@@ -590,6 +591,7 @@ export function WorkflowCanvas({
           key={node.id}
           node={node}
           nodes={draft.nodes}
+          edges={draft.edges}
           catalog={catalog}
           onChange={changeNode}
           onClose={() => setSelected(undefined)}

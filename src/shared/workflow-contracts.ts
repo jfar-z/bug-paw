@@ -17,10 +17,13 @@ export interface WorkflowField {
   required?: boolean;
   description?: string;
   defaultValue?: unknown;
+  /** 通用参数的枚举是字符串约束，外部接口可保留原始标量选项。 */
+  enumValues?: (string | number | boolean)[];
+  /** 仅引用类型定义，不作为运行时数据依赖。 */
+  enumSource?: { nodeId: string; field: string; interfaceId: string };
 }
 /** 外部能力输入由接口固定类型，并保留枚举、数值及数量约束。 */
 export interface WorkflowInputField extends WorkflowField {
-  enumValues?: (string | number | boolean)[];
   min?: number;
   max?: number;
   maxItems?: number;
@@ -101,6 +104,11 @@ export interface WorkflowNodeConfig {
   sessionId?: string;
   archiveAfterCompletion?: boolean;
   interfaceId?: string;
+  /** 未配置的参考组沿用拆分输入；数组模式单独保存上游绑定。 */
+  referenceGroups?: Record<
+    string,
+    { mode: "array"; binding?: WorkflowBinding }
+  >;
   conditions?: WorkflowCondition[];
   conditionMode?: "all" | "any";
   candidates?: WorkflowBinding[];
@@ -160,6 +168,7 @@ export interface WorkflowNodeRun {
   nodeId: string;
   status: WorkflowStatus;
   inputs?: Record<string, unknown>;
+  referenceGroups?: Record<string, unknown>;
   outputs?: Record<string, unknown>;
   startedAt?: string;
   finishedAt?: string;
@@ -183,6 +192,13 @@ export interface WorkflowRun {
   requestKey: string;
   requestHash: string;
 }
+/** 参考组只公开类型与有序参数名，不暴露 ComfyUI 内部节点。 */
+export interface WorkflowReferenceGroup {
+  id: string;
+  label: string;
+  type: "image" | "video" | "audio";
+  fields: string[];
+}
 /** 编辑器目录仅包含安全配置摘要。 */
 export interface WorkflowCatalog {
   models: {
@@ -197,6 +213,7 @@ export interface WorkflowCatalog {
     id: string;
     name: string;
     fields: WorkflowInputField[];
+    referenceGroups?: WorkflowReferenceGroup[];
     outputs: WorkflowField[];
   }[];
 }

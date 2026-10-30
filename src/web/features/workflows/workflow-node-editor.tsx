@@ -7,6 +7,7 @@ import {
   type WorkflowBinding,
   type WorkflowCondition,
   type WorkflowInputField,
+  type WorkflowEdge,
 } from "../../../shared/workflow-contracts";
 import { WorkflowScriptAssist } from "./workflow-script-assist";
 import { api, type SessionSummary } from "../../api";
@@ -21,6 +22,7 @@ import {
 export function WorkflowNodeEditor({
   node,
   nodes,
+  edges = [],
   catalog,
   onChange,
   onClose,
@@ -30,6 +32,7 @@ export function WorkflowNodeEditor({
 }: {
   node: WorkflowNode;
   nodes: WorkflowNode[];
+  edges?: WorkflowEdge[];
   catalog: WorkflowCatalog;
   onChange: (node: WorkflowNode) => void;
   onClose: () => void;
@@ -40,6 +43,48 @@ export function WorkflowNodeEditor({
   const { runApiTask } = useApiTask();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const config = node.config;
+  const connected = new Set([node.id]);
+  // 枚举来源允许来自下游，只用于复制类型约束，不改变执行连线。
+  for (let i = 0; i < nodes.length; i++)
+    for (const edge of edges)
+      if (connected.has(edge.source) || connected.has(edge.target)) {
+        connected.add(edge.source);
+        connected.add(edge.target);
+      }
+  const enumSources = nodes
+    .filter((n) => connected.has(n.id) && n.kind === "aigc")
+    .flatMap((n) =>
+      (
+        catalog.interfaces.find((item) => item.id === n.config.interfaceId)
+          ?.fields ?? []
+      ).flatMap((field) => {
+        const values = field.enumValues?.map(String);
+        // 字符串相同的不同类型选项无法唯一回转，不作为可选枚举类型。
+        return values?.length && new Set(values).size === values.length
+          ? [
+              {
+                label: `${n.name} / ${field.name}`,
+                source: {
+                  nodeId: n.id,
+                  field: field.name,
+                  interfaceId: n.config.interfaceId!,
+                },
+                values,
+              },
+            ]
+          : [];
+      }),
+    );
+  const upstream = new Set<string>();
+  for (let i = 0; i < nodes.length; i++)
+    for (const edge of edges)
+      if (edge.target === node.id || upstream.has(edge.target))
+        upstream.add(edge.source);
+  const aigc = catalog.interfaces.find(
+    (item) => item.id === config.interfaceId,
+  );
+  const groups = aigc?.referenceGroups ?? [];
+  const groupFields = new Set(groups.flatMap((g) => g.fields));
   const patch = (value: Partial<WorkflowNode["config"]>) =>
     onChange({ ...node, config: { ...config, ...value } });
   useEffect(() => {
@@ -173,6 +218,7 @@ export function WorkflowNodeEditor({
             <h3>工作流入参</h3>
             <WorkflowFieldList
               fields={node.outputs}
+              enumSources={enumSources}
               defaults
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
@@ -183,6 +229,7 @@ export function WorkflowNodeEditor({
             <h3>工作流出参</h3>
             <WorkflowFieldList
               fields={node.outputs}
+              enumSources={enumSources}
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
             <h3>输出绑定</h3>
@@ -427,11 +474,81 @@ export function WorkflowNodeEditor({
                 ))}
               </select>
             </label>
-            {catalog.interfaces
-              .find((i) => i.id === config.interfaceId)
-              ?.fields.map((f) =>
+            {aigc?.fields
+              .filter((f) => !groupFields.has(f.name))
+              .map((f) =>
                 binding(f.name, `${f.name}${f.required ? " · 必填" : ""}`, f),
               )}
+            {groups.map((group) => {
+              const setting = config.referenceGroups?.[group.id];
+              return (
+                <section
+                  className="wf-field-item"
+                  key={group.id}
+                  aria-label={`${group.label} 参考组`}
+                >
+                  <strong>{group.label}</strong>
+                  <label className="wf-field">
+                    输入方式
+                    <select
+                      aria-label={`${group.label} 输入方式`}
+                      value={setting ? "array" : "split"}
+                      onChange={(event) => {
+                        const referenceGroups = { ...config.referenceGroups };
+                        const inputs = { ...node.inputs };
+                        if (event.target.value === "array") {
+                          referenceGroups[group.id] = { mode: "array" };
+                          group.fields.forEach((name) => delete inputs[name]);
+                        } else delete referenceGroups[group.id];
+                        onChange({
+                          ...node,
+                          inputs,
+                          config: { ...config, referenceGroups },
+                        });
+                      }}
+                    >
+                      <option value="split">逐项输入</option>
+                      <option value="array">数组输入</option>
+                    </select>
+                  </label>
+                  <p className="wf-hint">
+                    最多 {group.fields.length}{" "}
+                    项，按原槽位顺序填入。切换方式会清除本组现有绑定。
+                  </p>
+                  {setting ? (
+                    <WorkflowBindingEditor
+                      label={`${group.label} 数组`}
+                      nodeId={node.id}
+                      nodes={nodes.filter((n) => upstream.has(n.id))}
+                      referenceOnly
+                      field={{
+                        name: group.label,
+                        type: group.type,
+                        multiple: true,
+                        maxItems: group.fields.length,
+                      }}
+                      binding={setting.binding}
+                      onChange={(value) =>
+                        patch({
+                          referenceGroups: {
+                            ...config.referenceGroups,
+                            [group.id]: { mode: "array", binding: value },
+                          },
+                        })
+                      }
+                      onValidity={(valid) =>
+                        onValidity(`${node.id}:group:${group.id}`, valid)
+                      }
+                    />
+                  ) : (
+                    group.fields.map((name) => {
+                      const field = aigc?.fields.find((f) => f.name === name);
+                      return field ? binding(name, name, field) : null;
+                    })
+                  )}
+                </section>
+              );
+            })}
           </>
         )}
         {node.kind === "condition" && (
@@ -571,6 +688,7 @@ export function WorkflowNodeEditor({
             <h3>返回类型</h3>
             <WorkflowFieldList
               fields={node.outputs}
+              enumSources={enumSources}
               onChange={(outputs) =>
                 onChange({ ...node, outputs: outputs.slice(0, 1) })
               }
@@ -651,6 +769,7 @@ export function WorkflowNodeEditor({
             <h3>输出定义</h3>
             <WorkflowFieldList
               fields={node.outputs}
+              enumSources={enumSources}
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
           </>

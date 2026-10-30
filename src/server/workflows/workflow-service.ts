@@ -25,6 +25,7 @@ export interface WorkflowExecutionContext {
   run: WorkflowRun;
   node: WorkflowNode;
   signal: AbortSignal;
+  referenceGroups?: Record<string, unknown>;
   progress(message: string): Promise<void>;
 }
 export interface WorkflowExecutor {
@@ -372,6 +373,16 @@ export class WorkflowService {
                 }),
               );
               checkValueSize(inputs);
+              const referenceGroups = Object.fromEntries(
+                Object.entries(node.config.referenceGroups ?? {}).map(
+                  ([id, group]) => [
+                    id,
+                    group.binding ? resolveBinding(group.binding, states) : [],
+                  ],
+                ),
+              );
+              checkValueSize(referenceGroups);
+              state.referenceGroups = referenceGroups;
               state.inputs = inputs;
               await progress("开始执行节点");
               let output: Record<string, unknown>;
@@ -422,7 +433,7 @@ export class WorkflowService {
                   await progress(`脚本：${message}`);
               } else
                 output = await this.executor.execute(
-                  { run, node, signal, progress },
+                  { run, node, signal, progress, referenceGroups },
                   inputs,
                 );
               signal.throwIfAborted();

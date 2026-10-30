@@ -8,10 +8,13 @@ import type {
   WorkflowFile,
   WorkflowRun,
   WorkflowScriptAssistRequest,
+  WorkflowReferenceGroup,
+  WorkflowNode,
 } from "../../shared/workflow-contracts";
 import type {
   AigcRunInputValue,
   AigcTaskRecord,
+  AigcWorkflowDetail,
 } from "../../shared/aigc-contracts";
 import type { AgentStore } from "../agents/agent-store";
 import type { RuntimeSupervisor } from "../runtime/runtime-supervisor";
@@ -28,7 +31,7 @@ import {
 } from "../aigc/aigc-agent-parameters";
 import { compileAgentReferences } from "../agent-references";
 import { DomainError, toSafePublicMessage } from "../core/errors";
-import { invalid, record } from "./workflow-validation";
+import { checkField, invalid, record } from "./workflow-validation";
 import type {
   WorkflowExecutionContext,
   WorkflowExecutor,
@@ -122,7 +125,13 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
           description: o.name,
         })),
       ];
-      interfaces.push({ id: item.id, name: item.name, fields, outputs });
+      interfaces.push({
+        id: item.id,
+        name: item.name,
+        fields,
+        outputs,
+        referenceGroups: workflowReferenceGroups(workflow),
+      });
     }
     return { models, agents, interfaces };
   }
@@ -135,6 +144,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
         "FORBIDDEN",
         "工作流 Agent 节点不能再次调用工作流，避免递归执行与会话等待死锁",
       );
+    const enumFields = new Map<string, ReturnType<typeof agentFields>>();
     for (const node of definition.nodes) {
       const c = node.config;
       if (
@@ -154,12 +164,53 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
             invalid("固定会话不属于所选 Agent");
         }
       }
-      if (
-        node.kind === "aigc" &&
-        !(await this.dependencies.interfaces.get(c.interfaceId!))
-      )
-        invalid(`节点 ${node.name} 的 AIGC 接口已不存在`);
+      if (node.kind === "aigc") {
+        const item = await this.dependencies.interfaces.get(c.interfaceId!);
+        if (!item || !item.enabled)
+          invalid(`节点 ${node.name} 的 AIGC 接口已不存在或停用`);
+        const workflow =
+          item.protocol === "comfyui"
+            ? (
+                await this.dependencies.aigcWorkflows.get(
+                  (item.config as { workflowId: string }).workflowId,
+                )
+              ).workflow
+            : undefined;
+        enumFields.set(node.id, agentFields(item, workflow));
+        const groups = workflowReferenceGroups(workflow);
+        for (const [id, setting] of Object.entries(c.referenceGroups ?? {})) {
+          const group = groups.find((g) => g.id === id);
+          if (!group) invalid(`节点 ${node.name} 的参考组已变更，请重新配置`);
+          if (setting.binding?.kind === "reference") {
+            const binding = setting.binding;
+            const field = definition.nodes
+              .find((n) => n.id === binding.nodeId)
+              ?.outputs.find((f) => f.name === binding.field);
+            if (!field?.multiple || field.type !== group.type)
+              invalid(`参考组 ${group.label} 必须引用 ${group.type} 类型数组`);
+          }
+          if (setting.binding?.kind === "literal")
+            checkReferenceArray(group, setting.binding.value);
+        }
+      }
     }
+    for (const node of definition.nodes)
+      for (const field of node.outputs) {
+        if (!field.enumSource) continue;
+        const options = enumFields
+          .get(field.enumSource.nodeId)
+          ?.find((f) => f.name === field.enumSource!.field)?.enumValues;
+        const strings = options?.map(String);
+        if (
+          !strings?.length ||
+          new Set(strings).size !== strings.length ||
+          strings.length !== field.enumValues?.length ||
+          strings.some((v) => !field.enumValues!.includes(v))
+        )
+          invalid(
+            `参数 ${field.name} 引用的枚举定义已变更或存在字符串歧义，请重新选择枚举来源`,
+          );
+      }
   }
   async execute(
     context: WorkflowExecutionContext,
@@ -433,6 +484,12 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
             )
           ).workflow
         : undefined;
+    inputs = expandReferenceGroups(
+      ctx.node,
+      inputs,
+      ctx.referenceGroups ?? {},
+      workflowReferenceGroups(workflow),
+    );
     const fields = agentFields(item, workflow),
       parameters: AigcAgentParameter[] = Object.entries(inputs).map(
         ([name, original]) => {
@@ -647,4 +704,58 @@ export function workflowModelPayload(
     }
   }
   return { ...result, ...custom };
+}
+
+/** 按原始参考组的槽位顺序公开参数名，避免以列表位置代替稳定组 ID。 */
+export function workflowReferenceGroups(
+  workflow?: AigcWorkflowDetail,
+): WorkflowReferenceGroup[] {
+  return (workflow?.inputGroups ?? []).map((group) => ({
+    id: group.id,
+    label: group.label,
+    type: group.type,
+    fields: group.mappingIds.map((id) => {
+      const mapping = workflow!.inputMappings.find((m) => m.id === id);
+      if (!mapping || mapping.type !== group.type)
+        invalid(`参考组 ${group.label} 的成员已失效`);
+      return mapping.name;
+    }),
+  }));
+}
+
+/** 数组展开前检查长度及每项媒体类型，禁止截断或跳过无效元素。 */
+function checkReferenceArray(
+  group: WorkflowReferenceGroup,
+  value: unknown,
+): asserts value is unknown[] {
+  if (!Array.isArray(value) || value.length > group.fields.length)
+    invalid(
+      `参考组 ${group.label} 必须为最多 ${group.fields.length} 项的 ${group.type} 数组`,
+    );
+  for (const entry of value)
+    checkField({ name: group.label, type: group.type, required: true }, entry);
+}
+
+/** 数组模式逐项填入原始参数；空槽位不提供，继续使用既有条件分支裁剪。 */
+export function expandReferenceGroups(
+  node: WorkflowNode,
+  inputs: Record<string, unknown>,
+  values: Record<string, unknown>,
+  groups: WorkflowReferenceGroup[],
+): Record<string, unknown> {
+  const result = { ...inputs };
+  for (const [id, setting] of Object.entries(
+    node.config.referenceGroups ?? {},
+  )) {
+    const group = groups.find((g) => g.id === id);
+    if (!group) invalid(`节点 ${node.name} 的参考组已变更，请重新配置`);
+    const value = values[id] ?? (setting.binding ? undefined : []);
+    checkReferenceArray(group, value);
+    // 防止两种输入方式同时生效，旧的拆分值不能污染数组中的空槽位。
+    for (const name of group.fields) delete result[name];
+    value.forEach((entry, index) => {
+      result[group.fields[index]] = entry;
+    });
+  }
+  return result;
 }

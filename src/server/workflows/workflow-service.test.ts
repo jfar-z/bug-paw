@@ -255,3 +255,97 @@ describe("JavaScript 沙箱", () => {
     ).rejects.toThrow();
   }, 15000);
 });
+
+/** 类型来源不能成为执行边，枚举仍作为普通字符串在运行中传递。 */
+describe("工作流枚举和参考组调度", () => {
+  it("输入枚举兼容普通字符串输出，校验默认值和数组元素", async () => {
+    const { service } = await fixture();
+    const draft = emptyWorkflow();
+    draft.nodes[0].outputs[0].enumValues = ["0", "false", "high"];
+    draft.nodes[0].outputs[0].defaultValue = "false";
+    const saved = await service.save(draft);
+    const started = await service.start(saved.id, {}, "enum-default");
+    expect((await service.wait(started.id)).outputs).toEqual({
+      result: "false",
+    });
+    await expect(
+      service.start(saved.id, { prompt: false }, "bad"),
+    ).rejects.toThrow("枚举");
+    expect(() =>
+      validateValues(
+        [
+          {
+            name: "choices",
+            type: "string",
+            multiple: true,
+            enumValues: ["a"],
+          },
+        ],
+        { choices: ["a", "b"] },
+      ),
+    ).toThrow("枚举");
+  });
+  it("下游枚举类型引用不产生环，删除来源或断开连线明确拒绝", () => {
+    const draft = emptyWorkflow();
+    const aigc = newWorkflowNode("aigc", "aigc");
+    aigc.config.interfaceId = "image";
+    draft.nodes.splice(1, 0, aigc);
+    draft.edges = [
+      { id: "a", source: "input", target: "aigc" },
+      { id: "b", source: "aigc", target: "output" },
+    ];
+    draft.nodes[0].outputs[0].enumValues = ["1", "2"];
+    draft.nodes[0].outputs[0].enumSource = {
+      nodeId: "aigc",
+      field: "steps",
+      interfaceId: "image",
+    };
+    expect(() => validateWorkflow(draft, true)).not.toThrow();
+    aigc.config.interfaceId = "changed";
+    expect(() => validateWorkflow(draft)).toThrow("来源节点或接口已变更");
+    aigc.config.interfaceId = "image";
+    draft.edges = [];
+    expect(() => validateWorkflow(draft)).toThrow("未连接当前节点");
+  });
+  it("调度解析参考组上游数组并保存观测数据，非上游引用不能保存", async () => {
+    const execute = vi.fn(async (_context: unknown, _inputs: unknown) => ({
+      files: [],
+    }));
+    const { service } = await fixture({ execute });
+    const draft = emptyWorkflow();
+    draft.nodes[0].outputs.push({
+      name: "images",
+      type: "image",
+      multiple: true,
+    });
+    const aigc = newWorkflowNode("aigc", "aigc");
+    aigc.config = {
+      interfaceId: "image",
+      referenceGroups: {
+        refs: { mode: "array", binding: ref("input", "images") },
+      },
+    };
+    draft.nodes.splice(1, 0, aigc);
+    draft.edges = [
+      { id: "a", source: "input", target: "aigc" },
+      { id: "b", source: "aigc", target: "output" },
+    ];
+    const image = { assetId: "one", mediaType: "image/png" };
+    const saved = await service.save(draft);
+    const run = await service.start(
+      saved.id,
+      { prompt: "test", images: [image] },
+      "groups",
+    );
+    const done = await service.wait(run.id);
+    expect(done.status).toBe("succeeded");
+    expect(execute.mock.calls[0][0]).toMatchObject({
+      referenceGroups: { refs: [image] },
+    });
+    expect(
+      done.nodes.find((n) => n.nodeId === "aigc")?.referenceGroups,
+    ).toEqual({ refs: [image] });
+    aigc.config.referenceGroups!.refs.binding = ref("output", "result");
+    expect(() => validateWorkflow(draft)).toThrow("非上游");
+  });
+});
