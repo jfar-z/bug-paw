@@ -1,3 +1,4 @@
+import { WorkflowFileManager } from "../workflows/workflow-file-manager";
 import { streamWorkflowScriptAssist } from "./workflow-script-assist-stream";
 import { stat } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
@@ -24,6 +25,7 @@ export function registerWorkflowRoutes(
   },
 ): void {
   const { service } = deps;
+  const manager = new WorkflowFileManager(deps.files, service);
   app.register(async (router) => {
     router.addHook("preHandler", async (request, reply) => {
       await requireAuthentication(request, reply, deps.authService);
@@ -118,16 +120,24 @@ export function registerWorkflowRoutes(
     }));
     router.get<{ Params: { id: string } }>(
       "/api/workflow-runs/:id",
-      async (request) => service.getRun(request.params.id),
+      async (request) => deps.files.annotateDeleted(service.getRun(request.params.id)),
     );
     router.post<{ Params: { id: string } }>(
       "/api/workflow-runs/:id/cancel",
       async (request) => service.cancel(request.params.id),
     );
-    router.post("/api/workflow-files", async (request) => {
+    router.get<{ Querystring: Record<string, string> }>("/api/workflow-files", async (request) => manager.list(request.query));
+    router.delete<{ Body: { ids: string[] } }>("/api/workflow-files", async (request, reply) => {
+      await manager.remove(request.body?.ids);
+      return reply.code(204).send();
+    });
+    router.get<{ Params: { id: string } }>("/api/workflow-files/:id/text", async (request) => deps.files.text(request.params.id));
+    router.post<{ Querystring: { directory?: string } }>("/api/workflow-files", async (request) => {
+      const directory = request.query.directory ?? "runtime";
+      if (directory !== "constants" && directory !== "runtime") invalid("上传目录必须为运行文件或文件常量");
       const file = await request.file();
       if (!file) invalid("请选择工作流输入文件");
-      return deps.files.upload(file.file, file.filename, file.mimetype);
+      return deps.files.upload(file.file, file.filename, file.mimetype, undefined, directory);
     });
     router.get<{ Params: { id: string }; Querystring: { preview?: string } }>(
       "/api/workflow-files/:id",

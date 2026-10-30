@@ -37,6 +37,7 @@ function WorkflowMediaItem({ file }: { file: WorkflowFile }) {
       { operation: "预览工作流媒体产物" },
     );
   };
+  if (file.deleted) return <article className="wf-media-item"><strong>{file.name}</strong><p>文件已删除</p></article>;
   return (
     <article className="wf-media-item">
       {image && (

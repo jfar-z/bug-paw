@@ -22,6 +22,7 @@ import { clearAllQuestionDrafts } from "./question-draft-store";
 type PreviewPage = "setup" | "login" | "chat";
 type AppPage = "loading" | "setup" | "login" | "workbench" | "error";
 
+const WorkflowFilesPage = lazy(() => import("./pages/workflow-files-page").then(module => ({ default: module.WorkflowFilesPage })));
 const WorkflowsPage = lazy(() => import("./pages/workflows-page").then(module => ({ default: module.WorkflowsPage })));
 const ChatPage = lazy(() => import("./pages/chat-page").then((module) => ({ default: module.ChatPage })));
 const AigcWorkbenchPage = lazy(() => import("./pages/aigc-workbench-page").then((module) => ({ default: module.AigcWorkbenchPage })));
@@ -146,6 +147,7 @@ export function App() {
 
   const renderRoute = (activeRoute: AppRoute) => {
     switch (activeRoute.page) {
+      case "workflow-files": return <WorkflowFilesPage />;
       case "workflows":
       case "workflow-editor":
       case "workflow-run":

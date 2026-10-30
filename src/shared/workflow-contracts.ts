@@ -24,8 +24,9 @@ export interface WorkflowField {
   enumValues?: (string | number | boolean)[];
   /** 仅引用类型定义，不作为运行时数据依赖。 */
   enumSource?: { nodeId: string; field: string } & (
-    | { interfaceId: string; workflowId?: never }
-    | { workflowId: string; interfaceId?: never }
+    | { interfaceId: string; workflowId?: never; loop?: never }
+    | { workflowId: string; interfaceId?: never; loop?: never }
+    | { loop: true; interfaceId?: never; workflowId?: never }
   );
 }
 /** 外部能力输入由接口固定类型，并保留枚举、数值及数量约束。 */
@@ -64,10 +65,27 @@ export type WorkflowScriptAssistEvent =
 
 /** 媒体只传递受控资产引用，不能携带宿主路径。 */
 export interface WorkflowFile {
+  /** 历史记录保留引用，已清理的文件明确显示删除状态。 */
+  deleted?: boolean;
   assetId: string;
   name: string;
   mediaType: string;
   size: number;
+}
+/** 文件管理以资产 ID 去重，运行和常量目录保持独立。 */
+export interface WorkflowManagedFile extends WorkflowFile {
+  directory: "runtime" | "constants";
+  createdAt: string;
+  deletedAt?: string;
+  usages: { workflowId: string; workflowName: string; runId?: string; role: "constant" | "input" | "output" }[];
+  blockedReason?: string;
+}
+/** 文件列表只返回当前页，避免大运行历史一次性进入浏览器。 */
+export interface WorkflowFilePage {
+  files: WorkflowManagedFile[];
+  total: number;
+  page: number;
+  workflows: { id: string; name: string }[];
 }
 /** 输入来源为常量或上游节点的命名输出。 */
 export type WorkflowBinding =

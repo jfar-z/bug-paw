@@ -596,3 +596,19 @@ describe("循环与嵌套工作流", () => {
     ).toContain("2 到 100");
   });
 });
+
+it("外层枚举引用循环入参，保存和运行校验选项、作用域及来源种类", async () => {
+  const {service} = await fixture();
+  const loop = newWorkflowNode("loop","loop");
+  loop.config.loop!.body.nodes[0].outputs.push({name:"ratio",type:"string",enumValues:["16:9","9:16"]});
+  loop.inputs.ratio = ref("input","ratio");
+  const draft = graphWith(loop);
+  draft.nodes[0].outputs = [{name:"ratio",type:"string",enumValues:["16:9","9:16"],enumSource:{nodeId:"loop",field:"ratio",loop:true}}];
+  const saved = await service.save(draft);
+  const run = await service.start(saved.id,{ratio:"9:16"},"loop-enum");expect((await service.wait(run.id)).status).toBe("succeeded");
+  const stale = structuredClone(draft);stale.nodes[1].config.loop!.body.nodes[0].outputs[1].enumValues = ["1:1"];
+  expect(() => validateWorkflow(stale)).toThrow("循环枚举入参已变更");
+  const detached = structuredClone(draft);detached.edges = [];expect(() => validateWorkflow(detached)).toThrow("枚举来源未连接");
+  const mixed = structuredClone(draft);mixed.nodes[0].outputs[0].enumSource = {...mixed.nodes[0].outputs[0].enumSource!,workflowId:"target"} as never;
+  expect(() => validateWorkflow(mixed)).toThrow("枚举来源格式无效");
+});

@@ -563,7 +563,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
   const workflows = new WorkflowService(new WorkflowRepository(join(paths.appDir, "workflows"), applicationDatabase), workflowExecutor, error => {
     backgroundErrors.record("REQUEST_FAILED");
     app.log.error(error, "工作流持久化或后台执行失败");
-  });
+  }, (definition, inputs) => workflowFiles.checkReferences(definition, inputs));
   await workflows.initialize();
   workflowTools = new WorkflowToolService(workflows, workflowFiles, async agentId => (await agentStore.get(agentId))?.profile.allowedTools ?? []);
   await agentStore.removeToolPermissions(RETIRED_AGENT_TOOL_NAMES);

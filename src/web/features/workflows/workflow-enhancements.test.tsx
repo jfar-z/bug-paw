@@ -135,7 +135,9 @@ describe("工作流编辑增强", () => {
         <WorkflowsPage route={{ page: "workflow-run", workflowId: "runner" }} />
       </Wrapper>,
     );
+    // 异步定义加载后的初始化完成后，再模拟填写和回调重渲染，避免提前输入被初始值覆盖。
     await screen.findByLabelText("prompt");
+    await act(async () => {});
     fireEvent.change(screen.getByLabelText("prompt"), {
       target: { value: "应保留的运行参数" },
     });
@@ -757,4 +759,38 @@ describe("工作流参数组合", () => {
     });
     expect(changed.mock.calls.at(-1)![0].config.referenceGroups).toEqual({});
   });
+});
+
+it("外层输入可以选择已连接循环节点的枚举入参，修改循环选项后显式同步", () => {
+  const loop = newWorkflowNode("loop", "loop");loop.name = "画幅循环";
+  loop.config.loop!.body.nodes[0].outputs.push({name:"ratio",type:"string",enumValues:["16:9","9:16"]});
+  const input = newWorkflowNode("input","input");input.outputs = [{name:"ratio",type:"string"}];
+  const changed = vi.fn();
+  function Editor() {
+    const [node,setNode] = useState(input);
+    return <WorkflowNodeEditor node={node} nodes={[node,loop]} edges={[{id:"a",source:"input",target:"loop"}]} catalog={catalog} onChange={(next) => {setNode(next);changed(next);}} onValidity={() => {}} onClose={() => {}} onCopy={() => {}} onDelete={() => {}}/>;
+  }
+  const view = render(<Wrapper><Editor/></Wrapper>);
+  fireEvent.change(screen.getByLabelText("ratio 类型"),{target:{value:"enum"}});
+  const option = screen.getByRole("option",{name:"画幅循环 / ratio"}) as HTMLOptionElement;
+  fireEvent.change(screen.getByLabelText("ratio 枚举来源"),{target:{value:option.value}});
+  expect(changed.mock.lastCall?.[0].outputs[0].enumSource).toEqual({nodeId:"loop",field:"ratio",loop:true});
+  loop.config.loop!.body.nodes[0].outputs[1].enumValues = ["1:1"];
+  view.rerender(<Wrapper><Editor/></Wrapper>);
+  fireEvent.click(screen.getByRole("button",{name:"更新枚举选项"}));
+  expect(changed.mock.lastCall?.[0].outputs[0].enumValues).toEqual(["1:1"]);
+});
+
+it("编辑器固定文件上传到常量目录，也可选择已有文件，运行表单上传保持运行目录", async () => {
+  const file = {assetId:"constant",name:"reference.png",mediaType:"image/png",size:5};
+  const upload = vi.spyOn(api,"uploadWorkflowFile").mockResolvedValue(file);
+  vi.spyOn(api,"listWorkflowFiles").mockResolvedValue({files:[{...file,directory:"constants",createdAt:"",usages:[]}],total:1,page:1,workflows:[]});
+  const changed = vi.fn();
+  render(<Wrapper><WorkflowBindingEditor label="image" field={{name:"image",type:"image"}} binding={{kind:"literal",value:null}} nodes={[]} nodeId="node" onChange={changed}/></Wrapper>);
+  const data = new File(["image"],"reference.png",{type:"image/png"});
+  fireEvent.change(screen.getByLabelText("上传 image"),{target:{files:[data]}});
+  await waitFor(() => expect(upload).toHaveBeenCalledWith(data,"constants"));
+  fireEvent.click(screen.getByRole("button",{name:"选择已有文件常量"}));
+  fireEvent.click(await screen.findByRole("button",{name:"reference.png"}));
+  await waitFor(() => expect(changed).toHaveBeenLastCalledWith({kind:"literal",value:file}));
 });

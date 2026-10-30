@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { WorkflowFilePicker } from "./workflow-file-picker";
 import { api } from "../../api";
 import { useApiTask } from "../../api-task-provider";
 import { ArrowUp, ArrowDown, Plus, Trash2 } from "lucide-react";
@@ -83,6 +84,7 @@ export function WorkflowJson({
 
 /** 常量控件按声明类型保留 false、0 和空字符串；不通过字符串猜测类型。 */
 export function WorkflowValue({
+  fileDirectory = "runtime",
   field,
   value,
   onChange,
@@ -92,6 +94,7 @@ export function WorkflowValue({
   value: unknown;
   onChange: (value: unknown) => void;
   onValidity?: (valid: boolean) => void;
+  fileDirectory?: "runtime" | "constants";
 }) {
   if (field.enumValues?.length)
     return (
@@ -105,6 +108,7 @@ export function WorkflowValue({
   if (["image", "video", "audio", "file"].includes(field.type))
     return (
       <WorkflowMediaValue
+        directory={fileDirectory}
         field={field}
         value={value}
         onChange={onChange}
@@ -264,7 +268,7 @@ export function WorkflowFieldList({
                   }}
                 >
                   <option value="" disabled>
-                    选择已连接 AIGC 或工作流节点的枚举入参
+                    选择已连接 AIGC、工作流或循环节点的枚举入参
                   </option>
                   {field.enumSource &&
                     !enumSources.some(
@@ -303,7 +307,7 @@ export function WorkflowFieldList({
               <small>
                 {field.enumValues.length
                   ? field.enumValues.join(" / ")
-                  : "请先连接 AIGC 或工作流节点，再选择其枚举入参。"}
+                  : "请先连接 AIGC、工作流或循环节点，再选择其枚举入参。"}
               </small>
               {field.enumSource &&
                 (() => {
@@ -360,6 +364,7 @@ export function WorkflowFieldList({
             value={field.description ?? ""}
             onChange={(e) => update(index, { description: e.target.value })}
           />
+          {defaults && ["image", "video", "audio", "file"].includes(field.type) && <div className="wf-field"><span>默认文件</span><WorkflowValue field={field} fileDirectory="constants" value={field.defaultValue} onChange={(defaultValue) => update(index, {defaultValue})}/></div>}
           {defaults &&
             ["string", "integer", "float", "boolean"].includes(field.type) &&
             !field.multiple && (
@@ -556,6 +561,7 @@ export function WorkflowSelectedFiles({
 
 /** 媒体固定值上传到受控资产目录，输入中只保存文件引用。 */
 function WorkflowMediaValue({
+  directory,
   field,
   value,
   onChange,
@@ -565,8 +571,10 @@ function WorkflowMediaValue({
   value: unknown;
   onChange: (value: unknown) => void;
   onValidity?: (valid: boolean) => void;
+  directory: "runtime" | "constants";
 }) {
   const { runApiTask } = useApiTask();
+  const [choosing, setChoosing] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
   const latest = useRef(onChange);
@@ -614,7 +622,7 @@ function WorkflowMediaValue({
                   `参数 ${field.name} 最多上传 ${field.maxItems ?? 100} 个文件`,
                 );
               const files = await Promise.all(
-                selected.map((file) => api.uploadWorkflowFile(file)),
+                selected.map((file) => directory === "constants" ? api.uploadWorkflowFile(file, directory) : api.uploadWorkflowFile(file)),
               );
               // 上传期间切换来源或节点后不回写；同节点其他修改使用最新回调保留。
               if (mounted.current)
@@ -628,6 +636,14 @@ function WorkflowMediaValue({
           });
         }}
       />
+      {directory === "constants" && <button type="button" className="wf-button" disabled={busy} onClick={() => setChoosing(true)}>选择已有文件常量</button>}
+      {choosing && <WorkflowFilePicker type={field.type} onClose={() => setChoosing(false)} onSelect={(file) => {
+        void runApiTask(async () => {
+          if (field.multiple && entries.length + 1 > (field.maxItems ?? 100)) throw new Error(`参数 ${field.name} 最多选择 ${field.maxItems ?? 100} 个文件`);
+          onChange(field.multiple ? [...entries, file] : file);
+          setChoosing(false);
+        }, {operation: "选择文件常量"});
+      }}/>}
       <WorkflowSelectedFiles
         field={field}
         value={value}
@@ -791,6 +807,7 @@ export function WorkflowBindingEditor({
           <div className="wf-field">
             <span>参数值</span>
             <WorkflowValue
+              fileDirectory="constants"
               field={effective}
               value={binding.value}
               onChange={(value) => onChange({ kind: "literal", value })}

@@ -58,6 +58,7 @@ export class WorkflowService {
     private readonly repository: WorkflowRepository,
     private readonly executor: WorkflowExecutor,
     private readonly backgroundError: (error: Error) => void = () => undefined,
+    private readonly checkFiles?: (definition: WorkflowDraft, inputs?: unknown) => Promise<void>,
   ) {}
   /** 重启后不重复提交可能计费的节点；中断运行明确标记失败。 */
   async initialize(): Promise<void> {
@@ -155,35 +156,38 @@ export class WorkflowService {
     id?: string,
     revision?: number,
   ): Promise<WorkflowDefinition> {
-    validateWorkflow(draft, record(draft) && draft.published === true);
-    const targetId = id ?? randomUUID();
-    return this.repository.mutateDefinition(targetId, (current) => {
-      if (id && !current) throw new DomainError("NOT_FOUND", "工作流不存在");
-      if (current && current.revision !== revision)
-        throw new DomainError(
-          "VERSION_CONFLICT",
-          "工作流已被其他页面修改，请重新加载后编辑",
+    return this.withFileMutation(async () => {
+      validateWorkflow(draft, record(draft) && draft.published === true);
+      await this.checkFiles?.(draft);
+      const targetId = id ?? randomUUID();
+      return this.repository.mutateDefinition(targetId, (current) => {
+        if (id && !current) throw new DomainError("NOT_FOUND", "工作流不存在");
+        if (current && current.revision !== revision)
+          throw new DomainError(
+            "VERSION_CONFLICT",
+            "工作流已被其他页面修改，请重新加载后编辑",
+          );
+        const now = new Date().toISOString();
+        const next: WorkflowDefinition = {
+          ...structuredClone({
+            name: draft.name,
+            description: draft.description,
+            published: draft.published,
+            nodes: draft.nodes,
+            edges: draft.edges,
+          }),
+          id: targetId,
+          revision: (current?.revision ?? 0) + 1,
+          createdAt: current?.createdAt ?? now,
+          updatedAt: now,
+        };
+        snapshotWorkflowDependencies(
+          next,
+          (key) => this.repository.definition(key),
+          next.published,
         );
-      const now = new Date().toISOString();
-      const next: WorkflowDefinition = {
-        ...structuredClone({
-          name: draft.name,
-          description: draft.description,
-          published: draft.published,
-          nodes: draft.nodes,
-          edges: draft.edges,
-        }),
-        id: targetId,
-        revision: (current?.revision ?? 0) + 1,
-        createdAt: current?.createdAt ?? now,
-        updatedAt: now,
-      };
-      snapshotWorkflowDependencies(
-        next,
-        (key) => this.repository.definition(key),
-        next.published,
-      );
-      return { value: next, result: next };
+        return { value: next, result: next };
+      });
     });
   }
   async remove(id: string, revision: number): Promise<void> {
@@ -217,6 +221,14 @@ export class WorkflowService {
         return { result: undefined };
       }),
     );
+  }
+  /** 文件删除与定义保存、任务启动共用临界区，防止引用检查后出现竞争。 */
+  withFileMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.lock.run("submit", operation);
+  }
+  /** 文件索引只读快照；避免为每个文件列表深拷贝全部运行正文。 */
+  fileUsageSnapshot(): { definitions: WorkflowDefinition[]; runs: readonly WorkflowRun[] } {
+    return { definitions: this.repository.definitions().map((item) => this.repository.definition(item.id)!), runs: [...this.runs.values()] };
   }
   listRuns(origin?: WorkflowRun["origin"]): WorkflowRun[] {
     return [...this.runs.values()]
@@ -286,6 +298,9 @@ export class WorkflowService {
         };
         await validateScope(snapshot);
       }
+      for (const snapshot of [definition, ...Object.values(dependencies)])
+        await this.checkFiles?.(snapshot);
+      await this.checkFiles?.(definition, inputs);
       const values = validateValues(
         definition.nodes.find((n) => n.kind === "input")!.outputs,
         inputs,

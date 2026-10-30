@@ -241,7 +241,8 @@ describe("工作流 AIGC 适配", () => {
       interfaceId: "image",
       inputs: { prompt: "test" },
     });
-    expect(f.upload.mock.calls[0].at(-1)).toBe("a");
+    // 产物同时保留调用方归属与所属运行，文件管理据此保护执行中的新文件。
+    expect(f.upload.mock.calls[0].slice(3)).toEqual(["a", "runtime", "run"]);
   });
   it("枚举目录保留约束，引用按字符串转换真实值，非法值不创建任务", async () => {
     const f = fixture();

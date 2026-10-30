@@ -202,7 +202,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
       for (const field of node.outputs) {
         if (!field.enumSource) continue;
         // 子工作流枚举已由依赖快照校验；外部能力执行器这里只检查 AIGC 实际接口选项。
-        if (field.enumSource.workflowId !== undefined) continue;
+        if (field.enumSource.workflowId !== undefined || field.enumSource.loop) continue;
         const options = enumFields
           .get(field.enumSource.nodeId)
           ?.find((f) => f.name === field.enumSource!.field)?.enumValues;
@@ -452,6 +452,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
                 file.name,
                 file.mediaType,
                 ctx.run.origin?.agentId,
+                "runtime", ctx.run.id,
               ),
             );
           }
@@ -642,6 +643,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
         asset.name,
         asset.mediaType,
         ctx.run.origin?.agentId,
+        "runtime", ctx.run.id,
       );
       files.push(file);
       const index = outputs.findIndex((o) => o.id === asset.outputId);

@@ -85,7 +85,7 @@ export function WorkflowNodeEditor({
         connected.add(edge.target);
       }
   const enumSources = nodes
-    .filter((n) => connected.has(n.id) && ["aigc", "workflow"].includes(n.kind))
+    .filter((n) => connected.has(n.id) && ["aigc", "workflow", "loop"].includes(n.kind))
     .flatMap((n) => {
       const target = enumDirectory.workflows?.find(
         (item) => item.id === n.config.workflowId,
@@ -96,7 +96,10 @@ export function WorkflowNodeEditor({
               name: field.name,
               values: field.enumValues?.map(String),
             }))
-        : target?.unavailable ? [] : target?.enumFields ?? [];
+        : n.kind === "loop"
+          ? (n.config.loop?.body.nodes.find((item) => item.kind === "input")?.outputs ?? [])
+              .map((field) => ({ name: field.name, values: field.enumValues?.map(String) }))
+          : target?.unavailable ? [] : target?.enumFields ?? [];
       return fields.flatMap((field) => {
         const values = field.values;
         // 字符串相同的不同类型选项无法唯一回转，不作为可选枚举类型。
@@ -109,7 +112,7 @@ export function WorkflowNodeEditor({
                   field: field.name,
                   ...(n.kind === "aigc"
                     ? { interfaceId: n.config.interfaceId! }
-                    : { workflowId: n.config.workflowId! }),
+                    : n.kind === "loop" ? { loop: true as const } : { workflowId: n.config.workflowId! }),
                 },
                 values,
               },

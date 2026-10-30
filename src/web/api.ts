@@ -1,4 +1,4 @@
-import type { WorkflowSummary, WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile, WorkflowScriptAssistRequest, WorkflowScriptAssistProgress } from "../shared/workflow-contracts";
+import type { WorkflowSummary, WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile, WorkflowFilePage, WorkflowScriptAssistRequest, WorkflowScriptAssistProgress } from "../shared/workflow-contracts";
 import type { LoginResponse, SecurityProof, SecurityStatus, TotpSetup } from "../shared/security-contracts";
 import type { ConfigurationOverviewDocument, ConfigurationRestorePreview, ConfigurationPostCommitError } from "../shared/configuration-operations-contracts";
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
@@ -447,7 +447,10 @@ export const api = {
   getWorkflowRun: (id: string) => request<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(id)}`),
   cancelWorkflowRun: (id: string) => request<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
   listWorkflowRuns: () => request<{ runs: (Pick<WorkflowRun, "id" | "workflowId" | "status" | "createdAt" | "finishedAt" | "error"> & { name: string })[] }>("/api/workflow-runs"),
-  uploadWorkflowFile: (file: File) => { const data = new FormData(); data.append("file", file); return request<WorkflowFile>("/api/workflow-files", { method: "POST", body: data }); },
+  uploadWorkflowFile: (file: File, directory: "runtime" | "constants" = "runtime") => { const data = new FormData(); data.append("file", file); return request<WorkflowFile>(`/api/workflow-files${directory === "constants" ? "?directory=constants" : ""}`, { method: "POST", body: data }); },
+  listWorkflowFiles: (params: Record<string, string> = {}) => request<WorkflowFilePage>(`/api/workflow-files?${new URLSearchParams(params)}`),
+  deleteWorkflowFiles: (ids: string[]) => request<void>("/api/workflow-files", { method: "DELETE", body: JSON.stringify({ ids }) }),
+  getWorkflowFileText: (id: string) => request<WorkspaceTextPreview>(`/api/workflow-files/${encodeURIComponent(id)}/text`),
 
   getBrowserAutomation: () => request<BrowserAutomationSettingsDocument>("/api/capabilities/browser"),
   updateBrowserAutomation: (revision: string, config: BrowserAutomationConfig) => request<BrowserAutomationSettingsDocument>("/api/capabilities/browser", { method: "PATCH", body: JSON.stringify({ revision, config }) }),

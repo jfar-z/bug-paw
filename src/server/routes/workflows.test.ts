@@ -1,6 +1,8 @@
 import { createTestDatabase } from "../database/test-database";
 // @vitest-environment node
 import Fastify from "fastify";
+import multipart from "@fastify/multipart";
+import { WorkflowFiles } from "../workflows/workflow-files";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -33,7 +35,7 @@ describe("工作流 HTTP API", () => {
       executor: {
         catalog: async () => ({ models: [], agents: [], interfaces: [] }),
       } as never,
-      files: {} as never,
+      files: { annotateDeleted: async (value: unknown) => value } as never,
     });
     try {
       for (const [method, url] of [
@@ -50,6 +52,9 @@ describe("工作流 HTTP API", () => {
         ["GET", "/api/workflow-runs/unknown"],
         ["POST", "/api/workflow-runs/unknown/cancel"],
         ["POST", "/api/workflow-files"],
+        ["GET", "/api/workflow-files"],
+        ["DELETE", "/api/workflow-files"],
+        ["GET", "/api/workflow-files/unknown/text"],
         ["GET", "/api/workflow-files/unknown"],
       ] as const) {
         const r = await app.inject({ method, url });
@@ -198,4 +203,46 @@ describe("工作流 HTTP API", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+/** 真实上传、列表与删除路由共同验证目录隔离、保护冲突与响应缓存边界。 */
+it("文件管理 HTTP 支持常量上传预览，拒绝删除引用并标记已删除历史", async () => {
+  const root = await mkdtemp(join(tmpdir(), "workflow-files-http-"));
+  const files = new WorkflowFiles(join(root, "assets"), {} as never, {} as never);
+  const service = new WorkflowService(new WorkflowRepository(root, createTestDatabase()), {execute: async () => ({})}, undefined, (definition, inputs) => files.checkReferences(definition, inputs));
+  await service.initialize();
+  const app = Fastify();
+  await app.register(multipart);
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof DomainError) return reply.code(error.code === "CONFLICT" ? 409 : 400).send(error.toDocument(request.id));
+    return reply.code(500).send({message: error instanceof Error ? error.message : String(error)});
+  });
+  registerWorkflowRoutes(app, {authService: {isAuthenticated: async () => true} as never, service, files, executor: {} as never});
+  const upload = async (directory: string) => {
+    const response = await app.inject({method: "POST", url: `/api/workflow-files?directory=${directory}`, headers: {"content-type": "multipart/form-data; boundary=workflow-test"}, payload: '--workflow-test\r\nContent-Disposition: form-data; name="file"; filename="readme.txt"\r\nContent-Type: text/plain\r\n\r\nhello workflow\r\n--workflow-test--\r\n'});
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    return response.json();
+  };
+  try {
+    const constant = await upload("constants"), runtime = await upload("runtime");
+    const draft = emptyWorkflow();draft.nodes[0].outputs.push({name: "file", type: "file", defaultValue: constant});
+    const definition = await service.save(draft);
+    const page = await app.inject("/api/workflow-files?directory=constants&q=readme&pageSize=1");
+    expect(page.headers["cache-control"]).toBe("no-store");
+    expect(page.json()).toMatchObject({total: 1, files: [{assetId: constant.assetId, blockedReason: expect.stringContaining("引用")}]});
+    const text = await app.inject(`/api/workflow-files/${constant.assetId}/text`);
+    expect(text.json()).toMatchObject({content: "hello workflow", truncated: false});
+    expect(text.headers["cache-control"]).toBe("no-store");
+    const conflict = await app.inject({method: "DELETE", url: "/api/workflow-files", payload: {ids: [runtime.assetId, constant.assetId]}});
+    expect(conflict.statusCode).toBe(409);
+    expect(conflict.json().error).toMatchObject({code: "CONFLICT", requestId: expect.any(String)});
+    expect((await app.inject(`/api/workflow-files/${runtime.assetId}`)).body).toBe("hello workflow");
+    expect((await app.inject({method: "DELETE", url: "/api/workflow-files", payload: {ids: [runtime.assetId]}})).statusCode).toBe(204);
+    expect((await app.inject("/api/workflow-files?directory=runtime")).json().total).toBe(0);
+    expect((await app.inject(`/api/workflow-files/${runtime.assetId}`)).statusCode).toBe(400);
+    await service.remove(definition.id, definition.revision);
+    expect((await app.inject({method: "DELETE", url: "/api/workflow-files", payload: {ids: [constant.assetId]}})).statusCode).toBe(204);
+    expect((await app.inject("/api/workflow-files?pageSize=101")).statusCode).toBe(400);
+  } finally {await app.close();await service.close();await rm(root, {recursive: true, force: true});}
 });

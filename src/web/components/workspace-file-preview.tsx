@@ -10,13 +10,14 @@ interface WorkspaceFilePreviewProps {
   mode: "side" | "overlay";
   onClose: () => void;
   fileUrl?: (entry: WorkspaceEntry, download: boolean) => string;
+  allowHtmlPreview?: boolean;
   getText?: (path: string) => Promise<WorkspaceTextPreview>;
 }
 
 /**
  * 在资源管理页中按文件类型展示只读媒体或文本预览。
  */
-export function WorkspaceFilePreview({ agentId, entry, mode, onClose, fileUrl, getText }: WorkspaceFilePreviewProps) {
+export function WorkspaceFilePreview({ agentId, entry, mode, onClose, fileUrl, getText, allowHtmlPreview = true }: WorkspaceFilePreviewProps) {
   const { runApiTask } = useApiTask();
   const [text, setText] = useState<WorkspaceTextPreview>();
   const [error, setError] = useState("");
@@ -26,7 +27,7 @@ export function WorkspaceFilePreview({ agentId, entry, mode, onClose, fileUrl, g
   const mediaType = entry.mediaType ?? "application/octet-stream";
   const resolveFileUrl = fileUrl ?? ((item: WorkspaceEntry, download: boolean) => workspaceFileUrl(agentId, item.path, download));
   const source = resolveFileUrl(entry, false);
-  const isHtml = mediaType === "text/html" || entry.name.toLowerCase().endsWith(".html");
+  const isHtml = allowHtmlPreview && (mediaType === "text/html" || entry.name.toLowerCase().endsWith(".html"));
   const isMedia = mediaType.startsWith("image/") || mediaType.startsWith("video/") || mediaType.startsWith("audio/");
   // 预览层及其内容区均可能成为滚动边界，需要继续支持横划返回资源列表。
   const previewStyle: CSSProperties | undefined = mode === "overlay"

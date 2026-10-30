@@ -81,10 +81,11 @@ export function checkFields(fields: WorkflowField[]): void {
         !(
           (typeof field.enumSource.interfaceId === "string" &&
             !!field.enumSource.interfaceId &&
-            field.enumSource.workflowId === undefined) ||
+            field.enumSource.workflowId === undefined && field.enumSource.loop === undefined) ||
           (typeof field.enumSource.workflowId === "string" &&
             !!field.enumSource.workflowId &&
-            field.enumSource.interfaceId === undefined)
+            field.enumSource.interfaceId === undefined && field.enumSource.loop === undefined) ||
+          (field.enumSource.loop === true && field.enumSource.interfaceId === undefined && field.enumSource.workflowId === undefined)
         ) ||
         !field.enumValues?.length)
     )
@@ -596,7 +597,16 @@ export function validateWorkflow(
     for (const field of node.outputs) {
       if (!field.enumSource) continue;
       const source = nodes.get(field.enumSource.nodeId);
-      if (field.enumSource.workflowId !== undefined) {
+      if (field.enumSource.loop === true) {
+        const options = source?.kind === "loop"
+          ? source.config.loop?.body.nodes.find((item) => item.kind === "input")
+              ?.outputs.find((item) => item.name === field.enumSource!.field)?.enumValues
+          : undefined;
+        // 循环入参来自内部输入声明，保存与运行都拒绝已经变化的枚举契约。
+        if (!options?.length || options.length !== field.enumValues?.length ||
+          options.some((option) => !field.enumValues!.includes(option)))
+          invalid(`参数 ${field.name} 的循环枚举入参已变更，请重新选择枚举来源`);
+      } else if (field.enumSource.workflowId !== undefined) {
         if (
           source?.kind !== "workflow" ||
           source.config.workflowId !== field.enumSource.workflowId
@@ -615,7 +625,7 @@ export function validateWorkflow(
             connected.add(edge.source);
             connected.add(edge.target);
           }
-      if (!connected.has(source.id))
+      if (!source || !connected.has(source.id))
         invalid(`参数 ${field.name} 的枚举来源未连接当前节点`);
     }
     if (node.kind === "condition") {
