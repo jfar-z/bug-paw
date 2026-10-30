@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile, WorkflowScriptAssistRequest, WorkflowScriptAssistProgress } from "../shared/workflow-contracts";
+import type { WorkflowSummary, WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile, WorkflowScriptAssistRequest, WorkflowScriptAssistProgress } from "../shared/workflow-contracts";
 import type { LoginResponse, SecurityProof, SecurityStatus, TotpSetup } from "../shared/security-contracts";
 import type { ConfigurationOverviewDocument, ConfigurationRestorePreview, ConfigurationPostCommitError } from "../shared/configuration-operations-contracts";
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
@@ -415,7 +415,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const api = {
-  listWorkflows: () => request<{ workflows: WorkflowDefinition[] }>("/api/workflows"),
+  listWorkflows: () => request<{ workflows: WorkflowSummary[] }>("/api/workflows"),
   getWorkflow: (id: string) => request<WorkflowDefinition>(`/api/workflows/${encodeURIComponent(id)}`),
   saveWorkflow: (draft: WorkflowDraft, id?: string, revision?: number) => request<WorkflowDefinition>(id ? `/api/workflows/${encodeURIComponent(id)}` : "/api/workflows", { method: id ? "PUT" : "POST", body: JSON.stringify({ ...draft, revision }) }),
   deleteWorkflow: (id: string, revision: number) => request<void>(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),

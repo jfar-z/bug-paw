@@ -1,3 +1,4 @@
+import { createTestDatabase } from "../database/test-database";
 // @vitest-environment node
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -24,7 +25,7 @@ async function fixture(
   executor: WorkflowExecutor = { execute: async () => ({ text: "完成" }) },
 ) {
   const root = await mkdtemp(join(tmpdir(), "bugpaw-workflow-test-"));
-  const repository = new WorkflowRepository(root),
+  const repository = new WorkflowRepository(root, createTestDatabase()),
     service = new WorkflowService(repository, executor);
   await service.initialize();
   cleanup.push(async () => {

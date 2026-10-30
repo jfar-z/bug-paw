@@ -36,7 +36,8 @@ async function fixture(surface: "run" | "editor", field: WorkflowInputField) {
     updatedAt: "",
   };
   definition.nodes[0].outputs = [field];
-  vi.spyOn(api, "listWorkflows").mockResolvedValue({ workflows: [definition] });
+  vi.spyOn(api, "getWorkflow").mockResolvedValue(definition);
+  vi.spyOn(api, "listWorkflows").mockResolvedValue({ workflows: [{ id: definition.id, name: definition.name, description: definition.description, published: definition.published, revision: definition.revision, createdAt: definition.createdAt, updatedAt: definition.updatedAt, nodeCount: definition.nodes.length }] });
   function Editor() {
     const [value, setValue] = useState<unknown>(field.defaultValue);
     return (

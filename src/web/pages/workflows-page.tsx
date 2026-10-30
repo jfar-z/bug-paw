@@ -1,3 +1,4 @@
+import type { WorkflowSummary } from "../../shared/workflow-contracts";
 import { WorkflowValueView } from "../features/workflows/workflow-value-view";
 import { workflowClientId } from "../features/workflows/workflow-id";
 import { useErrorToast } from "../error-toast-provider";
@@ -86,7 +87,7 @@ function WorkflowList() {
   const confirm = useWorkflowConfirm();
   const { runApiTask } = useApiTask(),
     online = useOnlineStatus();
-  const [items, setItems] = useState<WorkflowDefinition[]>([]),
+  const [items, setItems] = useState<WorkflowSummary[]>([]),
     [query, setQuery] = useState(""),
     [loading, setLoading] = useState(true);
   const reload = useCallback(async () => {
@@ -187,7 +188,7 @@ function WorkflowList() {
                   </h2>
                   <p>{w.description || "暂无说明"}</p>
                   <small>
-                    {w.nodes.length} 个节点 · v{w.revision} ·{" "}
+                    {w.nodeCount} 个节点 · v{w.revision} ·{" "}
                     {w.published ? "已开放给 Agent" : "仅手动运行"} ·{" "}
                     {new Date(w.updatedAt).toLocaleString()}
                   </small>
@@ -459,7 +460,7 @@ function Runner({
 }) {
   const { runApiTask } = useApiTask(),
     online = useOnlineStatus();
-  const [items, setItems] = useState<WorkflowDefinition[]>([]),
+  const [items, setItems] = useState<WorkflowSummary[]>([]),
     [definition, setDefinition] = useState<WorkflowDefinition>(),
     [inputs, setInputs] = useState<Record<string, unknown>>({}),
     [run, setRun] = useState<WorkflowRun>(),
@@ -496,9 +497,15 @@ function Runner({
       .then((r) => {
         if (alive && r.status === "success") {
           setItems(r.data.workflows);
-          setDefinition(r.data.workflows.find((w) => w.id === workflowId));
         }
       });
+    // 列表只有摘要，定义单独读取并丢弃切换工作流后返回的过期响应。
+    setDefinition(undefined);
+    if (workflowId) {
+      void loadTask.current(() => api.getWorkflow(workflowId), { operation: "读取工作流定义" }).then((r) => {
+        if (alive && r.status === "success") setDefinition(r.data);
+      });
+    }
     return () => {
       alive = false;
     };

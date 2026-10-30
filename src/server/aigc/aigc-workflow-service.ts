@@ -19,7 +19,9 @@ import type {
   ComfyUiWidgetInputMetadata,
 } from "../../shared/aigc-contracts";
 import { resolveWorkflowFieldMetadata } from "../../shared/aigc-workflow-field-metadata";
-import { createVersionedJsonStore } from "../configuration/versioned-json-store";
+import type { Database } from "../database/database";
+import { DefinitionRepository } from "../workflows/definition-repository";
+import { DomainError } from "../core/errors";
 import { isComfyUiPrimitiveValueField, resolveComfyUiMappedField } from "./comfyui-mapped-field";
 import {
   projectComfyUiSubgraphMetadata,
@@ -33,13 +35,9 @@ const INPUT_TYPES = new Set<AigcWorkflowInputType>(["bool", "int", "double", "st
 const OUTPUT_MEDIA_TYPES = new Set(["image", "video", "audio", "json", "text"]);
 const workflowParser = new ComfyUiWorkflowParser();
 
-interface StoredAigcWorkflow extends AigcWorkflowDetail {
+export interface StoredAigcWorkflow extends AigcWorkflowDetail {
   /** 导入时的原始工作流，仅服务端执行使用。 */
   raw: unknown;
-}
-
-interface StoredAigcWorkflows {
-  workflows: StoredAigcWorkflow[];
 }
 
 /** 管理 ComfyUI 工作流导入、解析和字段映射。 */
@@ -47,53 +45,42 @@ export class AigcWorkflowService {
   private readonly store;
 
   /**
-   * @param filePath 工作流配置文件路径
+   * @param directory 每个工作流独立定义文件的目录
+   * @param database 应用数据库
    */
-  constructor(filePath: string) {
-    this.store = createVersionedJsonStore<StoredAigcWorkflows>(filePath);
+  constructor(directory: string, database: Database) {
+    this.store = new DefinitionRepository<StoredAigcWorkflow, AigcWorkflowSummary>(database, "comfyui", directory, toSummary);
   }
 
   /** 列出全部工作流摘要。 */
   async list(): Promise<AigcWorkflowDocument> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    return { revision: loaded.revision, workflows: settings.workflows.map(toSummary) };
+    const loaded = this.store.list();
+    return { revision: loaded.revision, workflows: loaded.items };
   }
 
   /** 读取单个工作流详情。 */
   async get(id: string): Promise<AigcWorkflowDetailDocument> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    const workflow = settings.workflows.find((candidate) => candidate.id === id);
-    if (!workflow) throw new Error("AIGC 工作流不存在");
-    return { revision: loaded.revision, workflow: toDetail(workflow) };
+    const workflow = this.readStored(id);
+    return { revision: this.store.list().revision, workflow: toDetail(workflow) };
   }
 
   /** 返回节点定义同步需要请求的真实 ComfyUI 节点类型。 */
   async metadataNodeClasses(id: string): Promise<string[]> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    const workflow = settings.workflows.find((candidate) => candidate.id === id);
-    if (!workflow) throw new Error("AIGC 工作流不存在");
+    const workflow = this.readStored(id);
     return remoteComfyUiNodeClasses(workflow.raw, workflow.nodes);
   }
 
   /** 导入并保存一个工作流。 */
   async create(input: AigcWorkflowCreateInput): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
+    const revision = this.store.list().revision;
     const workflow = await this.normalizeCreate(input, randomUUID());
-    const written = await this.store.write({ workflows: [...settings.workflows, workflow] }, loaded.revision);
-    return { revision: written.revision, workflow: toDetail(workflow) };
+    const written = this.store.save(workflow, revision);
+    return { revision: written, workflow: toDetail(workflow) };
   }
 
   /** 更新工作流名称与字段映射，原始工作流内容保持不变。 */
   async update(id: string, input: AigcWorkflowUpdateInput, revision: string): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    const index = settings.workflows.findIndex((workflow) => workflow.id === id);
-    if (index < 0) throw new Error("AIGC 工作流不存在");
-    const previous = settings.workflows[index];
+    const previous = this.readStored(id);
     const inputMappings = normalizeInputMappings(input.inputMappings, previous.nodes, previous.edges, previous.nodeMetadata);
     const next = {
       ...previous,
@@ -105,19 +92,13 @@ export class AigcWorkflowService {
       outputMappings: normalizeOutputMappings(input.outputMappings, previous.nodes),
       updatedAt: new Date().toISOString(),
     };
-    const workflows = [...settings.workflows];
-    workflows[index] = next;
-    const written = await this.store.write({ workflows }, revision);
-    return { revision: written.revision, workflow: toDetail(next) };
+    const written = this.store.save(next, revision);
+    return { revision: written, workflow: toDetail(next) };
   }
 
   /** 替换原始工作流，保留兼容映射并移除新工作流已无法承载的映射。 */
   async replace(id: string, input: AigcWorkflowReplaceInput, revision: string): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    const index = settings.workflows.findIndex((workflow) => workflow.id === id);
-    if (index < 0) throw new Error("AIGC 工作流不存在");
-    const previous = settings.workflows[index];
+    const previous = this.readStored(id);
     const fileName = normalizeFileName(input.fileName);
     const raw = input.workflowJson;
     const parsed = this.parseRawWorkflow(raw);
@@ -152,10 +133,8 @@ export class AigcWorkflowService {
       delete next.nodeMetadata;
       delete next.nodeMetadataSyncedAt;
     }
-    const workflows = [...settings.workflows];
-    workflows[index] = next;
-    const written = await this.store.write({ workflows }, revision);
-    return { revision: written.revision, workflow: toDetail(next) };
+    const written = this.store.save(next, revision);
+    return { revision: written, workflow: toDetail(next) };
   }
 
   /** 原子合并当前工作流实际引用的节点元数据。 */
@@ -165,11 +144,7 @@ export class AigcWorkflowService {
     syncedAt: string,
     revision: string,
   ): Promise<{ revision: string; workflow: AigcWorkflowDetail }> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    const index = settings.workflows.findIndex((workflow) => workflow.id === id);
-    if (index < 0) throw new Error("AIGC 工作流不存在");
-    const previous = settings.workflows[index];
+    const previous = this.readStored(id);
     const referencedTypes = referencedComfyUiNodeMetadataClasses(previous.raw, previous.nodes);
     const combinedMetadata = { ...(previous.nodeMetadata ?? {}), ...metadata };
     const projectedMetadata = projectComfyUiSubgraphMetadata(previous.raw, combinedMetadata);
@@ -184,29 +159,40 @@ export class AigcWorkflowService {
       nodeMetadataSyncedAt: syncedAt,
       updatedAt: new Date().toISOString(),
     };
-    const workflows = [...settings.workflows];
-    workflows[index] = next;
-    const written = await this.store.write({ workflows }, revision);
-    return { revision: written.revision, workflow: toDetail(next) };
+    const written = this.store.save(next, revision);
+    return { revision: written, workflow: toDetail(next) };
   }
 
   /** 删除工作流。 */
   async remove(id: string, revision: string): Promise<void> {
-    const loaded = await this.store.read();
-    const settings = normalizeSettings(loaded.value);
-    if (!settings.workflows.some((workflow) => workflow.id === id)) throw new Error("AIGC 工作流不存在");
-    await this.store.write({ workflows: settings.workflows.filter((workflow) => workflow.id !== id) }, revision);
+    if (!await this.exists(id)) throw new Error("AIGC 工作流不存在");
+    this.store.remove(id, revision);
   }
 
-  /** 检查工作流是否存在。 */
+  /** 从数据库检查引用是否存在，不读取定义正文。 */
   async exists(id: string): Promise<boolean> {
-    return (await this.list()).workflows.some((workflow) => workflow.id === id);
+    return this.store.list().items.some((workflow) => workflow.id === id);
   }
 
-  /** 获取工作流内部详情，供接口执行阶段读取。 */
+  /** 获取本次执行所需的独立快照，下一次读取可见手工编辑。 */
   async getPrivate(id: string): Promise<StoredAigcWorkflow | undefined> {
-    const loaded = await this.store.read();
-    return normalizeSettings(loaded.value).workflows.find((workflow) => workflow.id === id);
+    return await this.exists(id) ? this.readStored(id) : undefined;
+  }
+
+  /** 每次从原始 JSON 重建拓扑，防止手工编辑后沿用过期解析结果。 */
+  private readStored(id: string): StoredAigcWorkflow {
+    const value = this.store.get(id);
+    if (!value) throw new Error("AIGC 工作流不存在");
+    if (!isStoredWorkflow(value)) throw new DomainError("INTERNAL_ERROR", "ComfyUI 工作流定义结构无效");
+    const parsed = this.parseRawWorkflow(value.raw);
+    return {
+      ...value,
+      nodes: parsed.nodes,
+      edges: parsed.edges,
+      originalHash: parsed.originalHash,
+      inputGroups: value.inputGroups ?? [],
+      ...(isRecord(value.nodeMetadata) ? { nodeMetadata: normalizeNodeMetadata(value.nodeMetadata) } : {}),
+    };
   }
 
   /** 校验并解析工作流输入。 */
@@ -274,7 +260,7 @@ function compatibleReplacementInputGroups(
 }
 
 /** 将持久化记录映射成列表摘要。 */
-function toSummary(workflow: StoredAigcWorkflow): AigcWorkflowSummary {
+export function toSummary(workflow: StoredAigcWorkflow): AigcWorkflowSummary {
   return {
     id: workflow.id,
     name: workflow.name,
@@ -333,26 +319,6 @@ function detailNode(workflow: StoredAigcWorkflow, node: ComfyUiNode): ComfyUiNod
   return {
     ...node,
     fields: fields.filter((field, index) => fields.findIndex((candidate) => candidate.name === field.name) === index),
-  };
-}
-
-/** 兼容缺失或旧格式的配置文件。 */
-function normalizeSettings(value: unknown): StoredAigcWorkflows {
-  if (!isRecord(value) || !Array.isArray(value.workflows)) return { workflows: [] };
-  return {
-    workflows: value.workflows
-      .filter(isStoredWorkflow)
-      .map((workflow) => ({
-        ...workflow,
-        raw: workflow.raw,
-        nodes: workflow.nodes.map((node) => ({ ...node, fields: node.fields.map((field) => ({ ...field })) })),
-        edges: workflow.edges.map((edge) => ({ ...edge })),
-        inputMappings: workflow.inputMappings.map(cloneInputMapping),
-        inputGroups: Array.isArray(workflow.inputGroups) ? workflow.inputGroups.map(cloneInputGroup) : [],
-        outputMappings: workflow.outputMappings.map((mapping) => ({ ...mapping })),
-        ...(isRecord(workflow.nodeMetadata) ? { nodeMetadata: normalizeNodeMetadata(workflow.nodeMetadata) } : {}),
-        ...(typeof workflow.nodeMetadataSyncedAt === "string" ? { nodeMetadataSyncedAt: workflow.nodeMetadataSyncedAt } : {}),
-      })),
   };
 }
 

@@ -160,6 +160,10 @@ export interface WorkflowDefinition {
   createdAt: string;
   updatedAt: string;
 }
+/** 工作流列表只公开数据库摘要；编辑和运行按 ID 请求完整定义。 */
+export type WorkflowSummary = Omit<WorkflowDefinition, "nodes" | "edges"> & {
+  nodeCount: number;
+};
 export type WorkflowDraft = Pick<
   WorkflowDefinition,
   "name" | "description" | "published" | "nodes" | "edges"

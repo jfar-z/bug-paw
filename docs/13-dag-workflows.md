@@ -94,6 +94,6 @@ JSON 对象与数组是输入类型本身，工具 `value` 因此支持动态 JS
 
 ## 持久化、PWA 与验证
 
-定义、运行快照和受控文件位于应用数据目录 `app/workflows/`，不改写既有数据库。新页面通过懒加载进入现有 Manifest 预缓存；离线可加载页面静态资源，不能获取业务数据、保存或运行工作流。认证 API、运行参数与产物不进入 Service Worker 缓存。
+列表摘要保存在 `app/bugpaw.sqlite3` 的 `workflow_index` 表，`kind=dag`，每条记录包含工作流 ID 和独立定义文件名。完整定义保存在 `app/workflows/definitions/<工作流ID>.json`；运行快照与受控文件仍位于 `app/workflows/`。列表接口返回 `nodeCount` 而不返回 `nodes` / `edges`，编辑和运行按 ID 请求详情。ComfyUI 使用同一索引表的 `kind=comfyui` 分区，定义保存在 `app/aigc-workflows/definitions/<工作流ID>.json`。迁移、手工修改和回滚说明见 [工作流存储](14-workflow-storage.md)。新页面通过懒加载进入现有 Manifest 预缓存；离线可加载页面静态资源，不能获取业务数据、保存或运行工作流。认证 API、运行参数与产物不进入 Service Worker 缓存。
 
 新增测试覆盖 DAG、类型、分支汇合、幂等、并行失败、取消、重启、沙箱、协议参数映射、Agent 会话与 AIGC 任务适配、权限、文件归属、HTTP 认证、路由与导航。浏览器测试使用真实构建与虚构业务 API，真实 Provider 付费调用不属于自动化验收范围。

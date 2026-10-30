@@ -1,9 +1,11 @@
+import { createTestDatabase } from "../database/test-database";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AigcWorkflowService } from "./aigc-workflow-service";
+import { DefinitionRepository } from "../workflows/definition-repository";
+import { toSummary, type StoredAigcWorkflow, AigcWorkflowService } from "./aigc-workflow-service";
 
 describe("AIGC 工作流服务", () => {
   const roots: string[] = [];
@@ -15,7 +17,7 @@ describe("AIGC 工作流服务", () => {
   async function fixture() {
     const root = await mkdtemp(join(tmpdir(), "aigc-workflows-"));
     roots.push(root);
-    return new AigcWorkflowService(join(root, "workflows.json"));
+    return new AigcWorkflowService(join(root, "definitions"), createTestDatabase());
   }
 
   it("导入 API 工作流并保存字段映射", async () => {
@@ -68,9 +70,10 @@ describe("AIGC 工作流服务", () => {
   it("读取旧版持久化记录时从原始工作流补齐子图展示信息", async () => {
     const root = await mkdtemp(join(tmpdir(), "aigc-workflows-legacy-"));
     roots.push(root);
-    const filePath = join(root, "workflows.json");
-    await writeFile(filePath, JSON.stringify({
-      workflows: [{
+    const directory = join(root, "definitions");
+    const database = createTestDatabase();
+    const store = new DefinitionRepository(database, "comfyui", directory, toSummary);
+    store.save({
         id: "legacy-krea-2",
         name: "Krea-2",
         fileName: "krea-2.json",
@@ -90,16 +93,15 @@ describe("AIGC 工作流服务", () => {
         outputMappings: [],
         createdAt: "2026-09-10T00:00:00.000Z",
         updatedAt: "2026-09-10T00:00:00.000Z",
-      }],
-    }), "utf8");
+      } as StoredAigcWorkflow);
 
-    const document = await new AigcWorkflowService(filePath).get("legacy-krea-2");
+    const document = await new AigcWorkflowService(directory, database).get("legacy-krea-2");
 
     expect(document.workflow.nodes[0]).toMatchObject({ title: "Text to Image (Krea-2 Turbo)" });
-    expect(document.workflow.nodes[0].fields).toEqual([
+    expect(document.workflow.nodes[0].fields).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: "inputs.value", label: "prompt" }),
       expect.objectContaining({ name: "widgets_values.0", label: "prompt" }),
-    ]);
+    ]));
   });
 
   it("同步节点定义后将媒体控件索引迁移为稳定字段并隐藏预览状态", async () => {

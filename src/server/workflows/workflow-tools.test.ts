@@ -1,3 +1,4 @@
+import { createTestDatabase } from "../database/test-database";
 // @vitest-environment node
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -45,7 +46,7 @@ async function fixture() {
     createWorkspaceFileService({} as never, agents),
   );
   const workflows = new WorkflowService(
-    new WorkflowRepository(join(root, "workflows")),
+    new WorkflowRepository(join(root, "workflows"), createTestDatabase()),
     { execute: async () => ({}) },
   );
   await workflows.initialize();
@@ -276,8 +277,8 @@ describe("工作流 Agent 工具边界", () => {
     ).rejects.toThrow("其他页面");
     const legacy = { ...updated, description: undefined };
     await writeFile(
-      join(f.root, "workflows", "definitions.json"),
-      JSON.stringify([legacy]),
+      join(f.root, "workflows", "definitions", `${updated.id}.json`),
+      JSON.stringify(legacy),
       "utf8",
     );
     expect(await f.service.definition(context, updated.id)).toMatchObject({

@@ -353,7 +353,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     authPath: aigcAuthPath,
     transaction: new ConfigTransaction({ rootDir: paths.rootDir, transactionDir: paths.transactionDir }),
   });
-  const aigcWorkflows = new AigcWorkflowService(join(paths.appDir, "aigc-workflows.json"));
+  const aigcWorkflows = new AigcWorkflowService(join(paths.appDir, "aigc-workflows", "definitions"), applicationDatabase);
   const aigcInterfaces = new AigcInterfaceService(join(paths.appDir, "aigc-interfaces.json"), (id) => aigcWorkflows.exists(id));
   const aigcAssets = new AigcAssetService(join(paths.appDir, "aigc-assets"));
   const aigcPublicFiles = new AigcPublicFileService(join(paths.appDir, "aigc-public-files"));
@@ -560,7 +560,7 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
     sessionAgent: (sessionId) => resolveSessionAgentId(sessionId, sessionMetadataStore),
     assertSessionRunnable: (agentId, sessionId) => questionService.assertAutomationCanStart(agentId, sessionId),
   });
-  const workflows = new WorkflowService(new WorkflowRepository(join(paths.appDir, "workflows")), workflowExecutor, error => {
+  const workflows = new WorkflowService(new WorkflowRepository(join(paths.appDir, "workflows"), applicationDatabase), workflowExecutor, error => {
     backgroundErrors.record("REQUEST_FAILED");
     app.log.error(error, "工作流持久化或后台执行失败");
   });

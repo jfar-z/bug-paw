@@ -1,3 +1,4 @@
+import { createTestDatabase } from "../database/test-database";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,7 @@ describe("AIGC 任务服务", () => {
       enabled: true,
       timeoutMs: 30_000,
     }, protocol, (await connections.read()).revision);
-    const workflows = new AigcWorkflowService(join(root, "workflows.json"));
+    const workflows = new AigcWorkflowService(join(root, "definitions"), createTestDatabase());
     const interfaces = new AigcInterfaceService(join(root, "interfaces.json"), (id) => workflows.exists(id));
     const created = await interfaces.create({
       name: "文生图",

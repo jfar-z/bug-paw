@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type {
   WorkflowDefinition,
+  WorkflowSummary,
   WorkflowDraft,
   WorkflowRun,
   WorkflowNode,
@@ -78,11 +79,11 @@ export class WorkflowService {
       this.runs.set(run.id, run);
     }
   }
-  async list(): Promise<WorkflowDefinition[]> {
+  async list(): Promise<WorkflowSummary[]> {
     return this.repository.definitions();
   }
   async get(id: string): Promise<WorkflowDefinition> {
-    const item = (await this.list()).find((w) => w.id === id);
+    const item = this.repository.definition(id);
     if (!item) throw new DomainError("NOT_FOUND", "工作流不存在");
     return item;
   }
@@ -92,8 +93,8 @@ export class WorkflowService {
     revision?: number,
   ): Promise<WorkflowDefinition> {
     validateWorkflow(draft, record(draft) && draft.published === true);
-    return this.repository.mutateDefinitions((items) => {
-      const current = id ? items.find((w) => w.id === id) : undefined;
+    const targetId = id ?? randomUUID();
+    return this.repository.mutateDefinition(targetId, (current) => {
       if (id && !current) throw new DomainError("NOT_FOUND", "工作流不存在");
       if (current && current.revision !== revision)
         throw new DomainError(
@@ -109,22 +110,19 @@ export class WorkflowService {
           nodes: draft.nodes,
           edges: draft.edges,
         }),
-        id: current?.id ?? randomUUID(),
+        id: targetId,
         revision: (current?.revision ?? 0) + 1,
         createdAt: current?.createdAt ?? now,
         updatedAt: now,
       };
-      if (current) items.splice(items.indexOf(current), 1, next);
-      else items.push(next);
-      return next;
+      return { value: next, result: next };
     });
   }
   async remove(id: string, revision: number): Promise<void> {
-    await this.lock.run("submit", () =>
-      this.repository.mutateDefinitions((items) => {
-        const i = items.findIndex((w) => w.id === id);
-        if (i < 0) throw new DomainError("NOT_FOUND", "工作流不存在");
-        if (items[i].revision !== revision)
+    await this.lock.run("submit", async () =>
+      this.repository.mutateDefinition(id, (current) => {
+        if (!current) throw new DomainError("NOT_FOUND", "工作流不存在");
+        if (current.revision !== revision)
           throw new DomainError(
             "VERSION_CONFLICT",
             "工作流版本已改变，请刷新列表",
@@ -139,7 +137,7 @@ export class WorkflowService {
             "CONFLICT",
             "工作流仍有运行中任务，请先取消或等待完成",
           );
-        items.splice(i, 1);
+        return { result: undefined };
       }),
     );
   }

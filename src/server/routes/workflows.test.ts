@@ -1,3 +1,4 @@
+import { createTestDatabase } from "../database/test-database";
 // @vitest-environment node
 import Fastify from "fastify";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -13,7 +14,7 @@ import { DomainError } from "../core/errors";
 describe("工作流 HTTP API", () => {
   it("认证保护所有入口，登录后保存、运行、查询与删除保留历史", async () => {
     const root = await mkdtemp(join(tmpdir(), "workflow-http-")),
-      service = new WorkflowService(new WorkflowRepository(root), {
+      service = new WorkflowService(new WorkflowRepository(root, createTestDatabase()), {
         execute: async () => ({}),
       });
     await service.initialize();

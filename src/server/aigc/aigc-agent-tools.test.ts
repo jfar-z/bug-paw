@@ -1,3 +1,4 @@
+import { createTestDatabase } from "../database/test-database";
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -46,7 +47,7 @@ async function fixture(
   await connections.create({ name: "Test", type: "openai", baseUrl: "https://private.invalid/v1", enabled: true }, "channel", (await connections.read()).revision);
   await connections.create({ name: "Grok", type: "grok", baseUrl: "https://grok.invalid/v1", enabled: true }, "grok-channel", (await connections.read()).revision);
   await connections.create({ name: "ComfyUI", type: "comfyui", baseUrl: "https://comfy.invalid", enabled: true }, "comfy-channel", (await connections.read()).revision);
-  const workflows = new AigcWorkflowService(join(root, "workflows.json"));
+  const workflows = new AigcWorkflowService(join(root, "definitions"), createTestDatabase());
   const interfaces = new AigcInterfaceService(join(root, "interfaces.json"), (id) => workflows.exists(id));
   const { item } = await interfaces.create({
     name: "测试接口", description: "生成测试", protocol: "openai", capability: "text-to-image",

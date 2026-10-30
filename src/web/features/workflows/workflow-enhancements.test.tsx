@@ -87,8 +87,9 @@ describe("工作流编辑增强", () => {
       createdAt: "",
     };
     script.name = "当前脚本";
+    vi.spyOn(api, "getWorkflow").mockResolvedValue(definition);
     vi.spyOn(api, "listWorkflows").mockResolvedValue({
-      workflows: [definition],
+      workflows: [{ id: definition.id, name: definition.name, description: definition.description, published: definition.published, revision: definition.revision, createdAt: definition.createdAt, updatedAt: definition.updatedAt, nodeCount: definition.nodes.length }],
     });
     vi.spyOn(api, "getWorkflowRun").mockResolvedValue(run as never);
     const { container } = render(
@@ -123,10 +124,11 @@ describe("工作流编辑增强", () => {
       createdAt: "",
       updatedAt: "",
     };
+    vi.spyOn(api, "getWorkflow").mockResolvedValue(definition);
     const list = vi
       .spyOn(api, "listWorkflows")
       .mockImplementation(async () => ({
-        workflows: [structuredClone(definition)],
+        workflows: [{ id: definition.id, name: definition.name, description: definition.description, published: definition.published, revision: definition.revision, createdAt: definition.createdAt, updatedAt: definition.updatedAt, nodeCount: definition.nodes.length }],
       }));
     const { rerender } = render(
       <Wrapper>
