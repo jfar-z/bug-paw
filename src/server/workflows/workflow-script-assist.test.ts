@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   generateWorkflowScript,
   WORKFLOW_SCRIPT_SYSTEM_PROMPT,
+  scriptAssistDefaultThinking,
 } from "./workflow-script-assist";
+import { workflowThinkingLevels } from "./workflow-thinking";
 import type { WorkflowScriptAssistRequest } from "../../shared/workflow-contracts";
 
 /** 模型只使用假响应，语法验证使用实际 QuickJS 隔离环境。 */
@@ -25,15 +27,20 @@ const input: WorkflowScriptAssistRequest = {
 function fixture(
   text = "return { result: String(inputs.value).toUpperCase() };",
 ) {
-  const completeSimple = vi.fn(async () => ({
+  const completion = vi.fn(async () => ({
     stopReason: "stop",
     content: [{ type: "text", text }],
   }));
-  const runtime = {
-    getModel: vi.fn(() => ({ name: "测试模型" })),
-    completeSimple,
-  } as never;
-  return { runtime, completeSimple };
+  const streamSimple = vi.fn(() => ({
+    async *[Symbol.asyncIterator]() {
+      yield { type: "thinking_delta", delta: "先验证输入" };
+      yield { type: "text_delta", delta: text };
+    },
+    result: completion,
+  }));
+  const getModel = vi.fn(() => ({ name: "测试模型", reasoning: true, thinkingLevelMap: { off: null, xhigh: "xhigh" } }));
+  const runtime = { getModel, streamSimple } as never;
+  return { runtime, streamSimple, completion, getModel };
 }
 describe("脚本 AI 辅助", () => {
   it("提示词包含执行约束，提交出入参和现有脚本；仅编译不会执行生成代码", async () => {
@@ -46,7 +53,7 @@ describe("脚本 AI 辅助", () => {
       new AbortController().signal,
     );
     expect(result.script).toContain("不应在生成时执行");
-    const [, context, options] = f.completeSimple.mock.calls[0] as unknown as [
+    const [, context, options] = f.streamSimple.mock.calls[0] as unknown as [
       unknown,
       { systemPrompt: string; messages: { content: string }[] },
       { signal: AbortSignal },
@@ -83,7 +90,7 @@ describe("脚本 AI 辅助", () => {
         ),
       ).rejects.toMatchObject({ code: "REQUEST_FAILED" });
     }
-    f.completeSimple.mockResolvedValue({
+    f.completion.mockResolvedValue({
       stopReason: "length",
       content: [{ type: "text", text: "return {};" }],
     });
@@ -108,16 +115,16 @@ describe("脚本 AI 辅助", () => {
         ),
       ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
     }
-    expect(f.completeSimple).not.toHaveBeenCalled();
+    expect(f.streamSimple).not.toHaveBeenCalled();
     const controller = new AbortController();
-    f.completeSimple.mockImplementation(async () => {
+    f.completion.mockImplementation(async () => {
       controller.abort();
       return { stopReason: "aborted", content: [] };
     });
     await expect(
       generateWorkflowScript(f.runtime, input, controller.signal),
     ).rejects.toMatchObject({ code: "OPERATION_ABORTED" });
-    const missing = { getModel: () => undefined, completeSimple: vi.fn() };
+    const missing = { getModel: () => undefined, streamSimple: vi.fn() };
     await expect(
       generateWorkflowScript(
         missing as never,
@@ -125,6 +132,47 @@ describe("脚本 AI 辅助", () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow("所选模型不存在");
-    expect(missing.completeSimple).not.toHaveBeenCalled();
+    expect(missing.streamSimple).not.toHaveBeenCalled();
   });
+  it("流式输出超过 120 秒仍继续，完成后才检查语法，使用原始取消信号", async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    const progress = vi.fn(async (event: { type: string }) => {
+      if (event.type === "validating") vi.useRealTimers();
+    });
+    vi.useFakeTimers();
+    f.streamSimple.mockReturnValue({
+      async *[Symbol.asyncIterator]() {
+        yield { type: "thinking_delta", delta: "思考" };
+        await new Promise((resolve) => setTimeout(resolve, 121_000));
+        yield { type: "text_delta", delta: "return {};" };
+      },
+      result: f.completion,
+    });
+    try {
+      const result = generateWorkflowScript(f.runtime, { ...input, thinkingLevel: "high" }, controller.signal, progress);
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(controller.signal.aborted).toBe(false);
+      expect(progress.mock.calls.map(([e]) => e.type)).toEqual(["started", "thinking_delta"]);
+      expect(f.streamSimple.mock.calls[0]).toEqual(expect.arrayContaining([expect.objectContaining({ signal: controller.signal, reasoning: "high", maxRetries: 0 })]));
+      await vi.advanceTimersByTimeAsync(1000);
+      await result;
+      expect(progress.mock.calls.map(([e]) => e.type)).toEqual(["started", "thinking_delta", "text_delta", "validating"]);
+    } finally { vi.useRealTimers(); }
+  });
+  it("仅接受模型支持的等级，默认档不携带 SDK 强制关闭字段", async () => {
+    const f = fixture();
+    for (const thinkingLevel of ["off", "max", "bogus"]) {
+      await expect(generateWorkflowScript(f.runtime, { ...input, thinkingLevel } as WorkflowScriptAssistRequest, new AbortController().signal))
+        .rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    }
+    expect(f.streamSimple).not.toHaveBeenCalled();
+    expect(workflowThinkingLevels(f.getModel())).toEqual(["minimal", "low", "medium", "high", "xhigh"]);
+    expect(workflowThinkingLevels({ reasoning: false })).toEqual(["off"]);
+    expect(scriptAssistDefaultThinking({ messages: [], thinking: { type: "disabled" }, reasoning_effort: "none", config: { thinkingConfig: {}, temperature: 0.5 }, chat_template_kwargs: { enable_thinking: false, other: true } }))
+      .toEqual({ messages: [], config: { temperature: 0.5 }, chat_template_kwargs: { other: true } });
+    await generateWorkflowScript(f.runtime, input, new AbortController().signal);
+    expect(f.streamSimple.mock.calls[0]).toEqual(expect.arrayContaining([expect.objectContaining({ onPayload: scriptAssistDefaultThinking })]));
+  });
+
 });

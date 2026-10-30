@@ -1,4 +1,4 @@
-import type { WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile, WorkflowScriptAssistRequest } from "../shared/workflow-contracts";
+import type { WorkflowDefinition, WorkflowDraft, WorkflowRun, WorkflowCatalog, WorkflowFile, WorkflowScriptAssistRequest, WorkflowScriptAssistProgress } from "../shared/workflow-contracts";
 import type { LoginResponse, SecurityProof, SecurityStatus, TotpSetup } from "../shared/security-contracts";
 import type { ConfigurationOverviewDocument, ConfigurationRestorePreview, ConfigurationPostCommitError } from "../shared/configuration-operations-contracts";
 import type { AgentProfileDocument, CreateAgentInput, UpdateAgentInput } from "../shared/agent-contracts";
@@ -420,7 +420,28 @@ export const api = {
   saveWorkflow: (draft: WorkflowDraft, id?: string, revision?: number) => request<WorkflowDefinition>(id ? `/api/workflows/${encodeURIComponent(id)}` : "/api/workflows", { method: id ? "PUT" : "POST", body: JSON.stringify({ ...draft, revision }) }),
   deleteWorkflow: (id: string, revision: number) => request<void>(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
   validateWorkflow: (draft: WorkflowDraft) => request<{ valid: boolean }>("/api/workflows/validate", { method: "POST", body: JSON.stringify(draft) }),
-  assistWorkflowScript: (input: WorkflowScriptAssistRequest, signal?: AbortSignal) => request<{ script: string }>("/api/workflows/script-assist", { method: "POST", body: JSON.stringify(input), signal }),
+  assistWorkflowScript: async (input: WorkflowScriptAssistRequest, signal?: AbortSignal, onProgress?: (event: WorkflowScriptAssistProgress) => void) => {
+    const controller = new AbortController();
+    const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let requestId: string | undefined;
+    try {
+      const response = await fetch(apiV1Url("/api/workflows/script-assist"), {
+        method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify(input), signal: activeSignal,
+      });
+      requestId = response.headers.get("X-Request-Id") ?? undefined;
+      const { readWorkflowScriptAssistStream } = await import("./features/workflows/workflow-script-assist-api");
+      return await readWorkflowScriptAssistStream(response, activeSignal, onProgress);
+    } catch (error) {
+      if (signal?.aborted) throw new DOMException("脚本辅助生成已取消", "AbortError");
+      if (error instanceof ApiClientError) throw error;
+      const detail = error instanceof Error ? `：${sanitizeClientErrorMessage(error.message)}` : "";
+      throw new ApiClientError("API_NETWORK_ERROR", `读取脚本辅助生成流时连接中断${detail}`, 0, requestId);
+    } finally {
+      controller.abort();
+    }
+  },
   getWorkflowCatalog: () => request<WorkflowCatalog>("/api/workflows/catalog"),
   runWorkflow: (id: string, inputs: Record<string, unknown>, requestKey: string) => request<WorkflowRun>(`/api/workflows/${encodeURIComponent(id)}/run`, { method: "POST", body: JSON.stringify({ inputs, requestKey }) }),
   getWorkflowRun: (id: string) => request<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(id)}`),

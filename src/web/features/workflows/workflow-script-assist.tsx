@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { ThinkingLevel } from "../../../shared/configuration-contracts";
+import { WorkflowThinkingControl } from "./workflow-thinking-control";
 import { Sparkles } from "lucide-react";
 import type {
   WorkflowCatalog,
@@ -65,16 +67,22 @@ export function WorkflowScriptAssist({
   const [model, setModel] = useState("");
   const [requirement, setRequirement] = useState("");
   const [busy, setBusy] = useState(false);
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>();
+  const [thinking, setThinking] = useState("");
+  const [text, setText] = useState("");
+  const [phase, setPhase] = useState("");
   const [candidate, setCandidate] = useState<{
     script: string;
     snapshot: string;
   }>();
   const controller = useRef<AbortController | undefined>(undefined);
   const [provider, modelId] = model.split("\t");
+  const selectedModel = catalog.models.find((item) => item.provider === provider && item.id === modelId);
   const request: WorkflowScriptAssistRequest = {
     provider,
     modelId,
     requirement,
+    ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
     script: node.config.script ?? "",
     inputs: scriptInputDefinitions(node, nodes),
     outputs: node.outputs,
@@ -84,10 +92,14 @@ export function WorkflowScriptAssist({
   const current = useRef(snapshot);
   current.current = snapshot;
   const stale = candidate && candidate.snapshot !== snapshot;
-  const close = () => {
+  const cancel = () => {
     controller.current?.abort();
     controller.current = undefined;
     setBusy(false);
+    setPhase("已取消生成，已接收内容仅供预览。");
+  };
+  const close = () => {
+    if (controller.current) cancel();
     setOpen(false);
   };
   useEffect(() => () => controller.current?.abort(), []);
@@ -96,14 +108,31 @@ export function WorkflowScriptAssist({
     const active = new AbortController();
     controller.current = active;
     setCandidate(undefined);
+    setThinking("");
+    setText("");
+    setPhase("正在等待模型响应…");
     setBusy(true);
     const result = await runApiTask(
-      () => api.assistWorkflowScript(request, active.signal),
+      () => api.assistWorkflowScript(request, active.signal, (event) => {
+        // 取消或新一轮生成后丢弃旧流，不能覆盖当前预览。
+        if (controller.current !== active || active.signal.aborted) return;
+        if (event.type === "thinking_delta") {
+          setThinking((current) => current + event.delta);
+          setPhase("正在思考…");
+        } else if (event.type === "text_delta") {
+          setText((current) => current + event.delta);
+          setPhase("正在生成正文…");
+        } else if (event.type === "validating") setPhase("正在检查脚本语法…");
+      }),
       { operation: "AI 辅助生成工作流脚本" },
     );
     if (controller.current !== active || active.signal.aborted) return;
-    if (result.status === "success")
+    controller.current = undefined;
+    if (result.status === "success") {
       setCandidate({ script: result.data.script, snapshot });
+      setText(result.data.script);
+      setPhase("生成完成，脚本语法检查通过。");
+    } else setPhase(result.status === "cancelled" ? "已取消生成。" : "生成未完成，请查看错误提示；已接收内容仅供预览。");
     setBusy(false);
   };
   return (
@@ -126,6 +155,7 @@ export function WorkflowScriptAssist({
               <button type="button" className="wf-button" onClick={close}>
                 {busy ? "取消生成并关闭" : "关闭"}
               </button>
+              {busy && <button type="button" className="wf-button" onClick={cancel}>取消生成</button>}
               <button
                 type="button"
                 className="wf-button"
@@ -159,25 +189,23 @@ export function WorkflowScriptAssist({
           }
         >
           <div className="wf-page wf-assist-form" aria-busy={busy}>
-            <label className="wf-field">
-              生成模型
-              <select
-                aria-label="脚本辅助模型"
-                value={model}
-                disabled={busy}
-                onChange={(event) => setModel(event.target.value)}
-              >
-                <option value="">选择已配置模型</option>
-                {catalog.models.map((item) => (
-                  <option
-                    key={`${item.provider}:${item.id}`}
-                    value={`${item.provider}\t${item.id}`}
-                  >
+            <div className="wf-assist-model-row">
+              <label className="wf-field">
+                生成模型
+                <select aria-label="脚本辅助模型" value={model} disabled={busy} onChange={(event) => {
+                  setModel(event.target.value);
+                  setThinkingLevel(undefined);
+                }}>
+                  <option value="">选择已配置模型</option>
+                  {catalog.models.map((item) => <option key={`${item.provider}:${item.id}`} value={`${item.provider}\t${item.id}`}>
                     {item.name} · {item.provider}
-                  </option>
-                ))}
-              </select>
-            </label>
+                  </option>)}
+                </select>
+              </label>
+              <WorkflowThinkingControl levels={selectedModel?.thinkingLevels ?? []} value={thinkingLevel}
+                disabled={busy || !selectedModel?.reasoning || !selectedModel.thinkingLevels?.length}
+                onChange={setThinkingLevel} />
+            </div>
             {!catalog.models.length && (
               <p className="wf-hint">请先在配置中心添加可用模型。</p>
             )}
@@ -211,21 +239,15 @@ export function WorkflowScriptAssist({
             {!node.outputs.length && (
               <p className="wf-error">请先定义脚本输出参数。</p>
             )}
-            {busy && (
-              <p role="status">正在生成候选脚本，可取消；最长等待 120 秒。</p>
-            )}
-            {candidate && (
-              <label className="wf-field">
-                候选脚本
-                <textarea
-                  aria-label="候选脚本"
-                  className="wf-code wf-script"
-                  value={candidate.script}
-                  readOnly
-                  spellCheck={false}
-                />
-              </label>
-            )}
+            {phase && <p role="status">{phase}</p>}
+            {thinking && <details open>
+              <summary>思考内容</summary>
+              <StreamingPreview label="思考内容" value={thinking} />
+            </details>}
+            {(busy || text) && <label className="wf-field">
+              {candidate ? "候选脚本" : "正文输出"}
+              <StreamingPreview label={candidate ? "候选脚本" : "正文输出"} value={text} />
+            </label>}
             {candidate && (
               <p className="wf-hint">
                 已检查语法；实际数据和输出类型将在工作流运行时校验。
@@ -241,4 +263,18 @@ export function WorkflowScriptAssist({
       )}
     </>
   );
+}
+
+/** 仅在用户停留底部时跟随新输出，向上查看历史时保持阅读位置。 */
+function StreamingPreview({ label, value }: { label: string; value: string }) {
+  const element = useRef<HTMLTextAreaElement>(null);
+  const follow = useRef(true);
+  useEffect(() => {
+    if (follow.current && element.current) element.current.scrollTop = element.current.scrollHeight;
+  }, [value]);
+  return <textarea ref={element} aria-label={label} className="wf-code wf-script" rows={8} value={value} readOnly spellCheck={false}
+    onScroll={(event) => {
+      const target = event.currentTarget;
+      follow.current = target.scrollHeight - target.scrollTop - target.clientHeight < 32;
+    }} />;
 }

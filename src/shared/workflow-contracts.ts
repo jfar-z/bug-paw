@@ -1,3 +1,6 @@
+import type { ThinkingLevel } from "./configuration-contracts";
+import type { ApiErrorDocument } from "./api/common";
+
 /** 跨服务传递的工作流参数类型；数组通过 multiple 声明，不混入枚举。 */
 export type WorkflowValueType =
   | "string"
@@ -32,6 +35,8 @@ export interface WorkflowInputField extends WorkflowField {
 export interface WorkflowScriptAssistRequest {
   provider: string;
   modelId: string;
+  /** 未指定时采用模型默认思考行为。 */
+  thinkingLevel?: ThinkingLevel;
   requirement: string;
   script: string;
   inputs: {
@@ -44,6 +49,15 @@ export interface WorkflowScriptAssistRequest {
   outputs: WorkflowField[];
   timeoutMs: number;
 }
+/** 生成过程只公开文字增量，不传递 SDK 的签名、凭据或完整消息。 */
+export type WorkflowScriptAssistProgress =
+  | { type: "started" | "validating" }
+  | { type: "thinking_delta" | "text_delta"; delta: string };
+/** 完成事件中的脚本已通过语法检查，增量内容不能直接应用。 */
+export type WorkflowScriptAssistEvent = WorkflowScriptAssistProgress
+  | { type: "completed"; script: string }
+  | { type: "error"; error: ApiErrorDocument["error"] };
+
 /** 媒体只传递受控资产引用，不能携带宿主路径。 */
 export interface WorkflowFile {
   assetId: string;
@@ -206,6 +220,7 @@ export interface WorkflowCatalog {
     id: string;
     name: string;
     reasoning: boolean;
+    thinkingLevels?: ThinkingLevel[];
     images: boolean;
   }[];
   agents: { id: string; name: string }[];

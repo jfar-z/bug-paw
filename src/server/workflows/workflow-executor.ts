@@ -1,3 +1,4 @@
+import { workflowThinkingLevels } from "./workflow-thinking";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
@@ -8,6 +9,7 @@ import type {
   WorkflowFile,
   WorkflowRun,
   WorkflowScriptAssistRequest,
+  WorkflowScriptAssistProgress,
   WorkflowReferenceGroup,
   WorkflowNode,
 } from "../../shared/workflow-contracts";
@@ -62,7 +64,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
   private scriptGenerations = 0;
   constructor(private readonly dependencies: Dependencies) {}
   /** 生成候选脚本，不创建工作流运行，也不自动应用到持久化定义。 */
-  async assistScript(input: WorkflowScriptAssistRequest, signal: AbortSignal) {
+  async assistScript(input: WorkflowScriptAssistRequest, signal: AbortSignal, onProgress?: (event: WorkflowScriptAssistProgress) => void | Promise<void>) {
     if (this.scriptGenerations >= 2)
       invalid("已有两个脚本辅助请求正在生成，请完成或取消后再试");
     this.scriptGenerations++;
@@ -71,6 +73,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
         this.dependencies.modelRuntime(),
         input,
         signal,
+        onProgress,
       );
     } finally {
       this.scriptGenerations--;
@@ -83,6 +86,7 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
         id: m.id,
         name: m.name,
         reasoning: m.reasoning,
+        thinkingLevels: workflowThinkingLevels(m),
         images: m.input.includes("image"),
       }),
     );

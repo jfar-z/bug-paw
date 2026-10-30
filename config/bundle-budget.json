@@ -107,7 +107,7 @@
       },
       "src/web/pages/workflows-page.tsx": {
         "label": "工作流编排与运行",
-        "gzipBytes": 6656
+        "gzipBytes": 6912
       }
     }
   }

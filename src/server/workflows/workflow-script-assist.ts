@@ -2,6 +2,7 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   WORKFLOW_TYPES,
   type WorkflowScriptAssistRequest,
+  type WorkflowScriptAssistProgress,
 } from "../../shared/workflow-contracts";
 import { DomainError, toSafePublicMessage } from "../core/errors";
 import {
@@ -11,6 +12,8 @@ import {
   record,
   validName,
 } from "./workflow-validation";
+import { THINKING_LEVELS } from "../../shared/configuration-contracts";
+import { workflowThinkingLevels } from "./workflow-thinking";
 import { runWorkflowScript } from "./workflow-script";
 
 /** 生成协议明确区分需求、代码素材和不可覆盖的沙箱契约。 */
@@ -54,6 +57,8 @@ export function validateScriptAssistRequest(
     value.timeoutMs > 5000
   )
     invalid("脚本执行超时必须为 100–5000 毫秒");
+  if (value.thinkingLevel !== undefined && !THINKING_LEVELS.includes(value.thinkingLevel))
+    invalid("脚本辅助思考强度不合法");
   checkFields(value.outputs);
   if (!value.outputs.length) invalid("请先定义脚本输出参数");
   if (!Array.isArray(value.inputs) || value.inputs.length > 100)
@@ -81,20 +86,22 @@ export function validateScriptAssistRequest(
   }
 }
 
-/** 每次生成复用当前模型运行时，使用明确截止时间且不会自动重试付费请求。 */
+/** 逐步转发模型文字，生成不设总截止时间，取消信号贯穿生成和语法检查。 */
 export async function generateWorkflowScript(
   runtime: ModelRuntime,
   input: WorkflowScriptAssistRequest,
   signal: AbortSignal,
+  onProgress?: (event: WorkflowScriptAssistProgress) => void | Promise<void>,
 ) {
   validateScriptAssistRequest(input);
   signal.throwIfAborted();
   const model = runtime.getModel(input.provider, input.modelId);
   if (!model) invalid("脚本辅助所选模型不存在或已停用，请重新选择");
-  const deadline = AbortSignal.timeout(120_000);
-  const combined = AbortSignal.any([signal, deadline]);
+  if (input.thinkingLevel !== undefined && !workflowThinkingLevels(model).includes(input.thinkingLevel))
+    invalid("脚本辅助所选模型不支持该思考强度，请重新选择");
   try {
-    const response = await runtime.completeSimple(
+    await onProgress?.({ type: "started" });
+    const stream = runtime.streamSimple(
       model,
       {
         systemPrompt: WORKFLOW_SCRIPT_SYSTEM_PROMPT,
@@ -112,9 +119,22 @@ export async function generateWorkflowScript(
           },
         ],
       },
-      { maxTokens: 8192, signal: combined },
+      {
+        maxTokens: 8192,
+        maxRetries: 0,
+        signal,
+        ...(input.thinkingLevel !== undefined
+          ? { reasoning: input.thinkingLevel === "off" ? undefined : input.thinkingLevel }
+          : { onPayload: scriptAssistDefaultThinking }),
+      },
     );
-    combined.throwIfAborted();
+    for await (const event of stream) {
+      signal.throwIfAborted();
+      if (event.type === "thinking_delta" || event.type === "text_delta")
+        await onProgress?.({ type: event.type, delta: event.delta });
+    }
+    const response = await stream.result();
+    signal.throwIfAborted();
     if (response.stopReason === "error" || response.stopReason === "aborted")
       throw new Error(
         toSafePublicMessage(response.errorMessage, "上游未提供生成错误详情"),
@@ -141,19 +161,32 @@ export async function generateWorkflowScript(
       if (record(result) && typeof result.error === "string")
         throw new Error(`无法按当前节点定义生成：${result.error}`);
     }
-    await runWorkflowScript(script, {}, 1000, combined, true);
+    await onProgress?.({ type: "validating" });
+    await runWorkflowScript(script, {}, 1000, signal, true);
     return { script };
   } catch (error) {
     if (signal.aborted)
       throw new DomainError("OPERATION_ABORTED", "脚本辅助生成已取消");
-    if (deadline.aborted)
-      throw new DomainError(
-        "REQUEST_FAILED",
-        "脚本辅助生成超过 120 秒截止时间",
-      );
     throw new DomainError(
       "REQUEST_FAILED",
       `脚本辅助模型 ${model.name} 生成或语法检查失败：${toSafePublicMessage(error, "生成阶段没有返回有效结果")}`,
     );
   }
+}
+
+/** 模型默认档移除 SDK 自动附加的思考覆盖，保留其他请求参数。 */
+export function scriptAssistDefaultThinking(payload: unknown): unknown {
+  if (!record(payload)) return payload;
+  const result = { ...payload };
+  for (const key of ["reasoning", "reasoning_effort", "thinking", "enable_thinking", "thinkingConfig"])
+    delete result[key];
+  for (const key of ["chat_template_kwargs", "chat_template_args", "config", "output_config"]) {
+    if (!record(result[key])) continue;
+    const nested = { ...result[key] };
+    for (const field of ["enable_thinking", "thinking", "preserve_thinking", "thinkingConfig", "effort"])
+      delete nested[field];
+    if (Object.keys(nested).length) result[key] = nested;
+    else delete result[key];
+  }
+  return result;
 }

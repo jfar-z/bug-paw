@@ -402,6 +402,64 @@ describe("工作流编辑增强", () => {
     );
     expect(screen.getByRole("button", { name: "应用到脚本" })).toBeDisabled();
   });
+  it("模型右侧选择支持的思考强度，生成期间预览思考和正文，取消后保留内容", async () => {
+    let progress: Parameters<typeof api.assistWorkflowScript>[2];
+    const assist = vi.spyOn(api, "assistWorkflowScript").mockImplementation((_input, _signal, onProgress) => {
+      progress = onProgress;
+      return new Promise(() => {});
+    });
+    const reasoningCatalog: WorkflowCatalog = { ...catalog, models: [
+      { ...catalog.models[0], reasoning: true, thinkingLevels: ["low", "high"] },
+      { ...catalog.models[0], id: "plain", name: "普通模型" },
+    ] };
+    render(<Wrapper><WorkflowScriptAssist node={newWorkflowNode("javascript", "js")} nodes={[]} catalog={reasoningCatalog} onApply={() => {}} /></Wrapper>);
+    fireEvent.click(screen.getByRole("button", { name: "AI 辅助" }));
+    fireEvent.change(screen.getByLabelText("脚本辅助模型"), { target: { value: "test\tscript" } });
+    fireEvent.click(screen.getByRole("button", { name: "思考强度：模型默认" }));
+    expect(screen.queryByRole("menuitemradio", { name: "最大" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemradio", { name: "关闭" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "高" }));
+    fireEvent.change(screen.getByLabelText("脚本生成需求"), { target: { value: "生成脚本" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成脚本" }));
+    expect(assist.mock.calls[0][0]).toMatchObject({ thinkingLevel: "high" });
+    act(() => {
+      progress?.({ type: "thinking_delta", delta: "分析输入类型" });
+      progress?.({ type: "text_delta", delta: "return {" });
+    });
+    expect(screen.getByLabelText("思考内容")).toHaveValue("分析输入类型");
+    expect(screen.getByLabelText("正文输出")).toHaveValue("return {");
+    expect(screen.getByRole("button", { name: "应用到脚本" })).toBeDisabled();
+    const oldProgress = progress;
+    fireEvent.click(screen.getByRole("button", { name: "取消生成" }));
+    expect(assist.mock.calls[0][1]?.aborted).toBe(true);
+    act(() => oldProgress?.({ type: "text_delta", delta: "旧流残留" }));
+    expect(screen.getByLabelText("正文输出")).toHaveValue("return {");
+    expect(screen.getByRole("status")).toHaveTextContent("已取消");
+    fireEvent.change(screen.getByLabelText("脚本辅助模型"), { target: { value: "test\tplain" } });
+    expect(screen.getByRole("button", { name: /思考强度：模型默认/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "生成脚本" }));
+    expect(assist.mock.calls[1][0]).not.toHaveProperty("thinkingLevel");
+    expect(screen.queryByLabelText("思考内容")).not.toBeInTheDocument();
+    act(() => oldProgress?.({ type: "text_delta", delta: "旧输出" }));
+    expect(screen.getByLabelText("正文输出")).toHaveValue("");
+  });
+  it("流内失败后保留预览且错误消息和请求标识进入全局弹窗", async () => {
+    vi.spyOn(api, "assistWorkflowScript").mockImplementation(async (_input, _signal, progress) => {
+      progress?.({ type: "thinking_delta", delta: "已检查输入" });
+      progress?.({ type: "text_delta", delta: "残缺代码" });
+      throw new ApiClientError("REQUEST_FAILED", "模型连接在正文生成期间中断", 200, "stream-failure-trace");
+    });
+    render(<Wrapper><WorkflowScriptAssist node={newWorkflowNode("javascript", "js")} nodes={[]} catalog={catalog} onApply={() => {}} /></Wrapper>);
+    fireEvent.click(screen.getByRole("button", { name: "AI 辅助" }));
+    fireEvent.change(screen.getByLabelText("脚本辅助模型"), { target: { value: "test\tscript" } });
+    fireEvent.change(screen.getByLabelText("脚本生成需求"), { target: { value: "需求" } });
+    fireEvent.click(screen.getByRole("button", { name: "生成脚本" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("生成未完成"));
+    expect(screen.getByLabelText("正文输出")).toHaveValue("残缺代码");
+    expect(screen.getByLabelText("思考内容")).toHaveValue("已检查输入");
+    expect(screen.getAllByText(/模型连接在正文生成期间中断/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "应用到脚本" })).toBeDisabled();
+  });
   it("嵌套产物去重展示图片、音视频和下载，并显示加载异常", async () => {
     const image = {
       assetId: "image",

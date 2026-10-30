@@ -1,3 +1,4 @@
+import { streamWorkflowScriptAssist } from "./workflow-script-assist-stream";
 import { stat } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import type {
@@ -45,6 +46,10 @@ export function registerWorkflowRoutes(
         };
         reply.raw.on("close", disconnected);
         try {
+          if (request.headers.accept?.includes("text/event-stream")) {
+            await streamWorkflowScriptAssist(request, reply, deps.executor, controller);
+            return reply;
+          }
           return await deps.executor.assistScript(
             request.body,
             controller.signal,
