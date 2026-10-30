@@ -607,6 +607,68 @@ describe("工作流参数组合", () => {
     });
     expect(value).toHaveBeenCalledWith("20");
   });
+  it("循环输入可从已连接工作流的枚举入参复制选项，隔离未连接和不可用目标", () => {
+    const changed = vi.fn();
+    const input = newWorkflowNode("input", "input");
+    input.outputs = [{ name: "index", type: "integer", required: true }, { name: "ratio", type: "string" }];
+    const call = newWorkflowNode("workflow", "call");
+    call.name = "MiniMax-H3-Ref2VA";
+    call.config.workflowId = "target";
+    const disconnected = { ...call, id: "disconnected", name: "未连接节点" };
+    const unavailable = { ...call, id: "unavailable", config: { workflowId: "unavailable" } };
+    function Editor() {
+      const [node, setNode] = useState(input);
+      return <WorkflowNodeEditor
+        node={node}
+        nodes={[node, call, disconnected, unavailable]}
+        edges={[{ id: "linked", source: "input", target: "call" }, { id: "disabled", source: "call", target: "unavailable" }]}
+        catalog={{ ...catalog, workflows: [
+          { id: "target", name: call.name, dependencies: [], enumFields: [{ name: "ratio", values: ["16:9", "9:16"] }] },
+          { id: "unavailable", name: "不可用目标", dependencies: [], unavailable: "定义失效", enumFields: [{ name: "bad", values: ["x"] }] },
+        ] }}
+        onChange={(next) => { setNode(next); changed(next); }}
+        onValidity={() => {}} onClose={() => {}} onCopy={() => {}} onDelete={() => {}}
+      />;
+    }
+    render(<Wrapper><Editor /></Wrapper>);
+    fireEvent.change(screen.getByLabelText("ratio 类型"), { target: { value: "enum" } });
+    const select = screen.getByLabelText("ratio 枚举来源") as HTMLSelectElement;
+    const option = screen.getByRole("option", { name: "MiniMax-H3-Ref2VA / ratio" }) as HTMLOptionElement;
+    expect(select.options).toHaveLength(2);
+    expect(screen.queryByRole("option", { name: /未连接节点|bad/ })).not.toBeInTheDocument();
+    fireEvent.change(select, { target: { value: option.value } });
+    expect(changed.mock.lastCall?.[0].outputs[1]).toEqual({
+      name: "ratio", type: "string", enumValues: ["16:9", "9:16"],
+      enumSource: { nodeId: "call", field: "ratio", workflowId: "target" }, defaultValue: undefined,
+    });
+    expect(screen.getByText("16:9 / 9:16")).toBeInTheDocument();
+  });
+
+  it("刷新子工作流枚举不丢当前草稿，读取失败显示原因，成功后显式更新选项", async () => {
+    const directory: WorkflowCatalog = { ...catalog, workflows: [{ id: "target", name: "目标", dependencies: [], enumFields: [{ name: "ratio", values: ["16:9", "9:16"] }] }] };
+    const read = vi.spyOn(api, "getWorkflowCatalog")
+      .mockRejectedValueOnce(new ApiClientError("REQUEST_FAILED", "读取枚举目录时存储不可用", 503, "enum-refresh"))
+      .mockResolvedValue({ ...directory, workflows: [{ id: "target", name: "目标", dependencies: [], enumFields: [{ name: "ratio", values: ["1:1", "3:2"] }] }] });
+    const changed = vi.fn();
+    function Editor() {
+      const [node, setNode] = useState({ ...newWorkflowNode("input", "input"), outputs: [{ name: "ratio", type: "string" as const, enumValues: ["16:9", "9:16"], enumSource: { nodeId: "call", field: "ratio", workflowId: "target" } }] });
+      const call = newWorkflowNode("workflow", "call");
+      call.config.workflowId = "target";
+      return <WorkflowNodeEditor node={node} nodes={[node, call]} edges={[{ id: "a", source: "input", target: "call" }]} catalog={directory}
+        onChange={(next) => { setNode(next as typeof node); changed(next); }} onValidity={() => {}} onClose={() => {}} onCopy={() => {}} onDelete={() => {}} />;
+    }
+    render(<Wrapper><Editor /></Wrapper>);
+    fireEvent.click(screen.getByRole("button", { name: "ratio 刷新枚举来源" }));
+    await screen.findAllByText(/读取枚举目录时存储不可用/);
+    expect(changed).not.toHaveBeenCalled();
+    expect(screen.getByText("16:9 / 9:16")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "ratio 刷新枚举来源" }));
+    fireEvent.click(await screen.findByRole("button", { name: "更新枚举选项" }));
+    expect(changed.mock.lastCall?.[0].outputs[0].enumValues).toEqual(["1:1", "3:2"]);
+    expect(changed.mock.lastCall?.[0].outputs[0].enumSource.workflowId).toBe("target");
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("参考组默认逐项输入，数组模式只列同类型数组，切回后清除数组绑定", () => {
     const upstream = newWorkflowNode("input", "input");
     upstream.outputs = [

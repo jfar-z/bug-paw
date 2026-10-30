@@ -161,10 +161,14 @@ export function WorkflowFieldList({
   onChange,
   defaults = false,
   enumSources = [],
+  onRefreshEnums,
+  refreshingEnums = false,
 }: {
   fields: WorkflowField[];
   onChange: (fields: WorkflowField[]) => void;
   defaults?: boolean;
+  onRefreshEnums?: () => void;
+  refreshingEnums?: boolean;
   enumSources?: {
     label: string;
     source: NonNullable<WorkflowField["enumSource"]>;
@@ -260,7 +264,7 @@ export function WorkflowFieldList({
                   }}
                 >
                   <option value="" disabled>
-                    选择已连接节点的枚举入参
+                    选择已连接 AIGC 或工作流节点的枚举入参
                   </option>
                   {field.enumSource &&
                     !enumSources.some(
@@ -285,10 +289,21 @@ export function WorkflowFieldList({
               <small className="wf-hint">
                 作为字符串传递，可用于字符串参数和 AIGC 枚举参数。
               </small>
+              {onRefreshEnums && (
+                <button
+                  type="button"
+                  className="wf-button"
+                  aria-label={`${field.name} 刷新枚举来源`}
+                  disabled={refreshingEnums}
+                  onClick={onRefreshEnums}
+                >
+                  {refreshingEnums ? "正在刷新…" : "刷新枚举来源"}
+                </button>
+              )}
               <small>
                 {field.enumValues.length
                   ? field.enumValues.join(" / ")
-                  : "请先连线，再选择枚举来源。"}
+                  : "请先连接 AIGC 或工作流节点，再选择其枚举入参。"}
               </small>
               {field.enumSource &&
                 (() => {

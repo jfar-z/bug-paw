@@ -201,6 +201,8 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
     for (const node of definition.nodes)
       for (const field of node.outputs) {
         if (!field.enumSource) continue;
+        // 子工作流枚举已由依赖快照校验；外部能力执行器这里只检查 AIGC 实际接口选项。
+        if (field.enumSource.workflowId !== undefined) continue;
         const options = enumFields
           .get(field.enumSource.nodeId)
           ?.find((f) => f.name === field.enumSource!.field)?.enumValues;

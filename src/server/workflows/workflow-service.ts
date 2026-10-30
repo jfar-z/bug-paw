@@ -108,6 +108,13 @@ export class WorkflowService {
           id: summary.id,
           name: summary.name,
           dependencies: Object.keys(snapshots),
+          enumFields: definition.nodes
+            .find((node) => node.kind === "input")!
+            .outputs.filter((field) => field.enumValues?.length)
+            .map((field) => ({
+              name: field.name,
+              values: field.enumValues!.map(String),
+            })),
         };
       } catch (error) {
         return {

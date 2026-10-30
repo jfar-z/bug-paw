@@ -50,6 +50,21 @@ export function snapshotWorkflowDependencies(
     // 每个作用域单独检查绑定，防止同名内部节点污染外层参数类型判断。
     const checkGraph = (graph: WorkflowDraft) => {
       for (const node of graph.nodes) {
+        for (const field of node.outputs) {
+          const source = field.enumSource;
+          if (source?.workflowId === undefined) continue;
+          const target = result[source.workflowId];
+          const options = target?.nodes
+            .find((item) => item.kind === "input")!
+            .outputs.find((item) => item.name === source.field)?.enumValues;
+          // 枚举元数据不产生执行边，按已锁定依赖快照校验选项，防止目标更新后继续使用旧值。
+          if (
+            !options?.length ||
+            options.length !== field.enumValues?.length ||
+            options.some((option) => !field.enumValues!.includes(option))
+          )
+            invalid(`参数 ${field.name} 引用的工作流枚举入参 ${source.field} 已变更，请重新选择枚举来源`);
+        }
         if (node.kind === "workflow" && node.config.workflowId)
           checkWorkflowInvocation(
             node,

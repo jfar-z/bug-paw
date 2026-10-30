@@ -23,7 +23,10 @@ export interface WorkflowField {
   /** 通用参数的枚举是字符串约束，外部接口可保留原始标量选项。 */
   enumValues?: (string | number | boolean)[];
   /** 仅引用类型定义，不作为运行时数据依赖。 */
-  enumSource?: { nodeId: string; field: string; interfaceId: string };
+  enumSource?: { nodeId: string; field: string } & (
+    | { interfaceId: string; workflowId?: never }
+    | { workflowId: string; interfaceId?: never }
+  );
 }
 /** 外部能力输入由接口固定类型，并保留枚举、数值及数量约束。 */
 export interface WorkflowInputField extends WorkflowField {
@@ -237,6 +240,8 @@ export interface WorkflowCatalog {
   workflows?: (Pick<WorkflowSummary, "id" | "name"> & {
     dependencies: string[];
     unavailable?: string;
+    /** 仅公开输入枚举的选项，不携带默认值、输入映射或内部节点配置。 */
+    enumFields?: { name: string; values: string[] }[];
   })[];
   models: {
     provider: string;

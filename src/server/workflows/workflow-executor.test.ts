@@ -306,6 +306,17 @@ describe("工作流 AIGC 适配", () => {
     );
     expect(f.createRun).not.toHaveBeenCalled();
   });
+  it("依赖快照已检查的工作流枚举不会再按 AIGC 来源拒绝", async () => {
+    const f = fixture();
+    const draft = emptyWorkflow();
+    const call = newWorkflowNode("workflow", "call");
+    call.config.workflowId = "target";
+    draft.nodes.push(call);
+    draft.nodes[0].outputs[0].enumValues = ["16:9", "9:16"];
+    draft.nodes[0].outputs[0].enumSource = { nodeId: "call", field: "ratio", workflowId: "target" };
+    await expect(f.executor.validate(draft as never)).resolves.toBeUndefined();
+    expect(f.createRun).not.toHaveBeenCalled();
+  });
   it("字符串化后有歧义的枚举不猜测目标类型", async () => {
     const f = fixture();
     f.item.config.parameters = [

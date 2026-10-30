@@ -78,8 +78,14 @@ export function checkFields(fields: WorkflowField[]): void {
         !validName(field.enumSource.nodeId) ||
         typeof field.enumSource.field !== "string" ||
         !field.enumSource.field ||
-        typeof field.enumSource.interfaceId !== "string" ||
-        !field.enumSource.interfaceId ||
+        !(
+          (typeof field.enumSource.interfaceId === "string" &&
+            !!field.enumSource.interfaceId &&
+            field.enumSource.workflowId === undefined) ||
+          (typeof field.enumSource.workflowId === "string" &&
+            !!field.enumSource.workflowId &&
+            field.enumSource.interfaceId === undefined)
+        ) ||
         !field.enumValues?.length)
     )
       invalid(`参数 ${field.name} 的枚举来源格式无效`);
@@ -590,9 +596,14 @@ export function validateWorkflow(
     for (const field of node.outputs) {
       if (!field.enumSource) continue;
       const source = nodes.get(field.enumSource.nodeId);
-      if (
-        !source ||
-        source.kind !== "aigc" ||
+      if (field.enumSource.workflowId !== undefined) {
+        if (
+          source?.kind !== "workflow" ||
+          source.config.workflowId !== field.enumSource.workflowId
+        )
+          invalid(`参数 ${field.name} 的枚举来源工作流节点或调用目标已变更，请重新选择`);
+      } else if (
+        source?.kind !== "aigc" ||
         source.config.interfaceId !== field.enumSource.interfaceId
       )
         invalid(`参数 ${field.name} 的枚举来源节点或接口已变更，请重新选择`);

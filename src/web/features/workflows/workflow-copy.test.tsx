@@ -87,6 +87,17 @@ function definition(): WorkflowDefinition {
 }
 
 describe("工作流复制数据契约", () => {
+  it("复制子工作流枚举只重映射当前画布节点标识，保留真实目标工作流 ID", () => {
+    const draft = emptyWorkflow(), call = newWorkflowNode("workflow", "call");
+    call.config.workflowId = "target";
+    draft.nodes.push(call);
+    draft.nodes[0].outputs[0].enumValues = ["16:9", "9:16"];
+    draft.nodes[0].outputs[0].enumSource = { nodeId: "call", field: "ratio", workflowId: "target" };
+    const copied = duplicateWorkflow(draft, "副本");
+    expect(copied.nodes[0].outputs[0].enumSource).toEqual({ nodeId: copied.nodes[2].id, field: "ratio", workflowId: "target" });
+    expect(copied.nodes[2].config.workflowId).toBe("target");
+    expect(draft.nodes[0].outputs[0].enumSource?.nodeId).toBe("call");
+  });
   it("整份复制重建全部标识并保留配置，剔除版本和时间等元数据", () => {
     const original = definition();
     const before = structuredClone(original);

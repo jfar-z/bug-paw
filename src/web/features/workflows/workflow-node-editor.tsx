@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, X, Trash2, Copy } from "lucide-react";
 import {
   WORKFLOW_NODE_NAMES,
@@ -56,6 +56,25 @@ export function WorkflowNodeEditor({
 }) {
   const { runApiTask } = useApiTask();
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [enumDirectory, setEnumDirectory] = useState(catalog);
+  const [refreshingEnums, setRefreshingEnums] = useState(false);
+  const enumRefreshPending = useRef(false);
+  useEffect(() => setEnumDirectory(catalog), [catalog]);
+  const refreshEnumSources = async () => {
+    if (enumRefreshPending.current) return;
+    enumRefreshPending.current = true;
+    setRefreshingEnums(true);
+    const result = await runApiTask(() => api.getWorkflowCatalog(), {
+      operation: "刷新工作流枚举来源",
+    });
+    enumRefreshPending.current = false;
+    setRefreshingEnums(false);
+    if (result.status === "success") setEnumDirectory(result.data);
+  };
+  const enumRefresh = {
+    refreshingEnums,
+    onRefreshEnums: () => void refreshEnumSources(),
+  };
   const config = node.config;
   const connected = new Set([node.id]);
   // 枚举来源允许来自下游，只用于复制类型约束，不改变执行连线。
@@ -66,13 +85,20 @@ export function WorkflowNodeEditor({
         connected.add(edge.target);
       }
   const enumSources = nodes
-    .filter((n) => connected.has(n.id) && n.kind === "aigc")
-    .flatMap((n) =>
-      (
-        catalog.interfaces.find((item) => item.id === n.config.interfaceId)
-          ?.fields ?? []
-      ).flatMap((field) => {
-        const values = field.enumValues?.map(String);
+    .filter((n) => connected.has(n.id) && ["aigc", "workflow"].includes(n.kind))
+    .flatMap((n) => {
+      const target = enumDirectory.workflows?.find(
+        (item) => item.id === n.config.workflowId,
+      );
+      const fields = n.kind === "aigc"
+        ? (enumDirectory.interfaces.find((item) => item.id === n.config.interfaceId)
+            ?.fields ?? []).map((field) => ({
+              name: field.name,
+              values: field.enumValues?.map(String),
+            }))
+        : target?.unavailable ? [] : target?.enumFields ?? [];
+      return fields.flatMap((field) => {
+        const values = field.values;
         // 字符串相同的不同类型选项无法唯一回转，不作为可选枚举类型。
         return values?.length && new Set(values).size === values.length
           ? [
@@ -81,14 +107,16 @@ export function WorkflowNodeEditor({
                 source: {
                   nodeId: n.id,
                   field: field.name,
-                  interfaceId: n.config.interfaceId!,
+                  ...(n.kind === "aigc"
+                    ? { interfaceId: n.config.interfaceId! }
+                    : { workflowId: n.config.workflowId! }),
                 },
                 values,
               },
             ]
           : [];
-      }),
-    );
+      });
+    });
   const upstream = new Set<string>();
   for (let i = 0; i < nodes.length; i++)
     for (const edge of edges)
@@ -253,6 +281,7 @@ export function WorkflowNodeEditor({
             <WorkflowFieldList
               fields={node.outputs}
               enumSources={enumSources}
+              {...enumRefresh}
               defaults
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
@@ -264,6 +293,7 @@ export function WorkflowNodeEditor({
             <WorkflowFieldList
               fields={node.outputs}
               enumSources={enumSources}
+              {...enumRefresh}
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
             <h3>输出绑定</h3>
@@ -722,6 +752,7 @@ export function WorkflowNodeEditor({
             <WorkflowFieldList
               fields={node.outputs}
               enumSources={enumSources}
+              {...enumRefresh}
               onChange={(outputs) =>
                 onChange({ ...node, outputs: outputs.slice(0, 1) })
               }
@@ -803,6 +834,7 @@ export function WorkflowNodeEditor({
             <WorkflowFieldList
               fields={node.outputs}
               enumSources={enumSources}
+              {...enumRefresh}
               onChange={(outputs) => onChange({ ...node, outputs })}
             />
           </>

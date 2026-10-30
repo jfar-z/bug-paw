@@ -272,6 +272,73 @@ describe("循环与嵌套工作流", () => {
       service.catalogWorkflows().find((item) => item.id === b.id)?.dependencies,
     ).toContain(a.id);
   });
+  it("循环内工作流枚举通过保存和真实嵌套执行，目录只公开选项元数据", async () => {
+    const execute = vi.fn();
+    const { service } = await fixture({ execute });
+    const draft = emptyWorkflow();
+    draft.nodes[0].outputs = [{ name: "ratio", type: "string", required: true, enumValues: ["16:9", "9:16"], defaultValue: "16:9", description: "画幅" }];
+    draft.nodes[1].inputs.result = ref("input", "ratio");
+    const target = await service.save(draft);
+    expect(service.catalogWorkflows().find((item) => item.id === target.id)?.enumFields).toEqual([{ name: "ratio", values: ["16:9", "9:16"] }]);
+    const child = call(target);
+    child.inputs = { ratio: ref("input", "ratio") };
+    const loop = newWorkflowNode("loop", "loop");
+    loop.inputs.ratio = literal("9:16");
+    loop.config.loop!.body = graphWith(child);
+    loop.config.loop!.body.nodes[0].outputs = [
+      { name: "index", type: "integer", required: true },
+      { name: "ratio", type: "string", required: true, enumValues: ["16:9", "9:16"], enumSource: { nodeId: "call", field: "ratio", workflowId: target.id } },
+    ];
+    loop.outputs = workflowLoopOutputs(loop.config.loop!);
+    const done = await run(service, graphWith(loop));
+    expect(done.status).toBe("succeeded");
+    expect(done.outputs).toEqual({ result: ["9:16", "9:16", "9:16"] });
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it("子工作流枚举修改、移除或退回字符串后，保存和启动均拒绝过期选项", async () => {
+    const execute = vi.fn(), validate = vi.fn();
+    const { service } = await fixture({ execute, validate });
+    const targetDraft = emptyWorkflow();
+    targetDraft.nodes[0].outputs[0].enumValues = ["16:9", "9:16"];
+    let target = await service.save(targetDraft);
+    const caller = call(target), parentDraft = graphWith(caller);
+    caller.inputs.prompt = ref("input", "prompt");
+    parentDraft.nodes[0].outputs = [{ name: "prompt", type: "string", enumValues: ["16:9", "9:16"], enumSource: { nodeId: "call", field: "prompt", workflowId: target.id } }];
+    const parent = await service.save(parentDraft);
+    for (const options of [["1:1"], undefined]) {
+      const next = structuredClone(target);
+      next.nodes[0].outputs[0].enumValues = options;
+      target = await service.save(next, target.id, target.revision);
+      await expect(service.save(parentDraft, parent.id, parent.revision)).rejects.toThrow("工作流枚举入参 prompt 已变更");
+      await expect(service.start(parent.id, { prompt: "16:9" }, "stale-enum")).rejects.toThrow("工作流枚举入参 prompt 已变更");
+    }
+    expect(execute).not.toHaveBeenCalled();
+    expect(validate).not.toHaveBeenCalled();
+    expect(service.listRuns()).toHaveLength(0);
+    const next = structuredClone(target);
+    next.nodes[0].outputs = [];
+    next.nodes[1].inputs.result = literal("fixed");
+    await service.save(next, target.id, target.revision);
+    await expect(service.start(parent.id, {}, "removed-enum")).rejects.toThrow("工作流枚举入参 prompt 已变更");
+  });
+  it("工作流枚举来源必须属于同一连通作用域，不能换目标或同时声明接口来源", async () => {
+    const { service } = await fixture();
+    const targetDraft = emptyWorkflow();
+    targetDraft.nodes[0].outputs[0].enumValues = ["16:9", "9:16"];
+    const target = await service.save(targetDraft);
+    const draft = graphWith(call(target));
+    const source = { nodeId: "call", field: "prompt", workflowId: target.id };
+    draft.nodes[0].outputs = [{ name: "prompt", type: "string", enumValues: ["16:9", "9:16"], enumSource: source }];
+    const changed = structuredClone(draft);
+    changed.nodes[1].config.workflowId = "another";
+    expect(() => validateWorkflow(changed)).toThrow("调用目标已变更");
+    const detached = structuredClone(draft);
+    detached.edges = [];
+    expect(() => validateWorkflow(detached)).toThrow("枚举来源未连接");
+    const invalid = structuredClone(draft);
+    invalid.nodes[0].outputs[0].enumSource = { ...source, interfaceId: "fake" } as never;
+    expect(() => validateWorkflow(invalid)).toThrow("枚举来源格式无效");
+  });
   it("保存时检查循环体里的工作流依赖", async () => {
     const { service } = await fixture();
     const target = await service.save(emptyWorkflow());
