@@ -1,5 +1,7 @@
+import { WorkflowsPage } from "../../pages/workflows-page";
 import { useState } from "react";
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -34,6 +36,8 @@ function Wrapper({ children }: { children: React.ReactNode }) {
     </ErrorToastProvider>
   );
 }
+vi.mock("./workflow-canvas", () => ({ WorkflowCanvas: () => null }));
+
 const catalog: WorkflowCatalog = {
   models: [
     {
@@ -49,6 +53,47 @@ const catalog: WorkflowCatalog = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe("工作流编辑增强", () => {
+  it("应用层回调变化不重新加载编辑器并覆盖未保存的名称说明", async () => {
+    const definition = {
+      ...emptyWorkflow(),
+      id: "test",
+      name: "原名称",
+      revision: 1,
+      createdAt: "",
+      updatedAt: "",
+    };
+    vi.spyOn(api, "getWorkflowCatalog").mockResolvedValue(catalog);
+    const get = vi.spyOn(api, "getWorkflow").mockResolvedValue(definition);
+    const { rerender } = render(
+      <Wrapper>
+        <WorkflowsPage
+          route={{ page: "workflow-editor", workflowId: "test" }}
+        />
+      </Wrapper>,
+    );
+    await screen.findByLabelText("工作流名称");
+    fireEvent.change(screen.getByLabelText("工作流名称"), {
+      target: { value: "新名称" },
+    });
+    fireEvent.change(screen.getByLabelText("工作流说明"), {
+      target: { value: "新说明" },
+    });
+    await act(async () =>
+      rerender(
+        <Wrapper>
+          <WorkflowsPage
+            route={{ page: "workflow-editor", workflowId: "test" }}
+          />
+        </Wrapper>,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText("工作流名称")).toHaveValue("新名称"),
+    );
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("工作流名称")).toHaveValue("新名称");
+    expect(screen.getByLabelText("工作流说明")).toHaveValue("新说明");
+  });
   it("枚举固定值保留数字和布尔类型，失效选项明确标错，引用不显示类型选择", () => {
     const change = vi.fn();
     const validity = vi.fn();

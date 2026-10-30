@@ -253,32 +253,37 @@ function Editor({ id }: { id: string }) {
     [busy, setBusy] = useState(false),
     [invalid, setInvalid] = useState<Record<string, boolean>>({}),
     [notice, setNotice] = useState("");
+  // 应用主题或移动入口会更换任务回调，不能因此重新读取并覆盖当前草稿。
+  const loadTask = useRef(runApiTask);
+  loadTask.current = runApiTask;
   const skipGuard = useRef(false);
   const dirty = JSON.stringify(draft) !== baseline;
   useEffect(() => {
     let alive = true;
-    void runApiTask(
-      async () => ({
-        catalog: await api.getWorkflowCatalog(),
-        definition: id === "new" ? undefined : await api.getWorkflow(id),
-      }),
-      { operation: "读取工作流编辑器" },
-    ).then((r) => {
-      if (!alive) return;
-      if (r.status === "success") {
-        setCatalog(r.data.catalog);
-        if (r.data.definition) {
-          setDraft(r.data.definition);
-          setSaved(r.data.definition);
-          setBaseline(JSON.stringify(r.data.definition));
+    void loadTask
+      .current(
+        async () => ({
+          catalog: await api.getWorkflowCatalog(),
+          definition: id === "new" ? undefined : await api.getWorkflow(id),
+        }),
+        { operation: "读取工作流编辑器" },
+      )
+      .then((r) => {
+        if (!alive) return;
+        if (r.status === "success") {
+          setCatalog(r.data.catalog);
+          if (r.data.definition) {
+            setDraft(r.data.definition);
+            setSaved(r.data.definition);
+            setBaseline(JSON.stringify(r.data.definition));
+          }
+          setReady(true);
         }
-        setReady(true);
-      }
-    });
+      });
     return () => {
       alive = false;
     };
-  }, [id, runApiTask]);
+  }, [id]);
   useEffect(() => {
     const guard = (event: Event) => {
       if (dirty && !skipGuard.current) {
