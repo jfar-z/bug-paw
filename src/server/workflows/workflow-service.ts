@@ -9,6 +9,7 @@ import type {
   WorkflowBinding,
   WorkflowCondition,
   WorkflowNodeRun,
+  WorkflowCatalog,
 } from "../../shared/workflow-contracts";
 import { DomainError, toSafePublicMessage } from "../core/errors";
 import { KeyedMutex } from "../core/keyed-mutex";
@@ -20,6 +21,11 @@ import {
   validateValues,
   validateWorkflow,
 } from "./workflow-validation";
+import {
+  snapshotWorkflowDependencies,
+  workflowDependencies,
+} from "./workflow-dependencies";
+import { WorkflowExecutionBudget } from "./workflow-execution-budget";
 import { runWorkflowScript } from "./workflow-script";
 
 export interface WorkflowExecutionContext {
@@ -65,15 +71,23 @@ export class WorkflowService {
             "服务重启导致工作流中断；未自动重试，请检查上游任务后重新运行",
           requestId: run.id,
         };
-        for (const n of run.nodes)
-          if (n.status === "queued") {
-            n.status = "skipped";
-            n.finishedAt = run.finishedAt;
-          } else if (n.status === "running") {
-            n.status = "failed";
-            n.error = run.error;
-            n.finishedAt = run.finishedAt;
+        const interrupt = (scope: WorkflowRun) => {
+          if (scope !== run && ["queued", "running"].includes(scope.status)) {
+            scope.status = "failed";
+            scope.error = run.error;
+            scope.finishedAt = run.finishedAt;
           }
+          for (const n of scope.nodes) {
+            if (n.status === "queued") n.status = "skipped";
+            else if (n.status === "running") {
+              n.status = "failed";
+              n.error = run.error;
+            }
+            if (!n.finishedAt) n.finishedAt = run.finishedAt;
+            for (const child of n.children ?? []) interrupt(child);
+          }
+        };
+        interrupt(run);
         await this.repository.saveRun(run);
       }
       this.runs.set(run.id, run);
@@ -81,6 +95,48 @@ export class WorkflowService {
   }
   async list(): Promise<WorkflowSummary[]> {
     return this.repository.definitions();
+  }
+  /** 目录单项损坏以明确禁用原因呈现，不阻止其他工作流继续选择。 */
+  catalogWorkflows(): NonNullable<WorkflowCatalog["workflows"]> {
+    return this.repository.definitions().map((summary) => {
+      try {
+        const definition = this.repository.definition(summary.id)!;
+        const snapshots = snapshotWorkflowDependencies(definition, (id) =>
+          this.repository.definition(id),
+        );
+        return {
+          id: summary.id,
+          name: summary.name,
+          dependencies: Object.keys(snapshots),
+        };
+      } catch (error) {
+        return {
+          id: summary.id,
+          name: summary.name,
+          dependencies: [],
+          unavailable: toSafePublicMessage(
+            error,
+            `读取工作流 ${summary.name} 的调用依赖时未返回可读异常`,
+          ),
+        };
+      }
+    });
+  }
+  /** 校验未保存草稿时仍使用当前真实 ID，避免遗漏指向自身的间接环路。 */
+  validate(draft: WorkflowDraft, id?: string): void {
+    validateWorkflow(draft, true);
+    const now = new Date().toISOString();
+    snapshotWorkflowDependencies(
+      {
+        ...draft,
+        id: id ?? randomUUID(),
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      (key) => this.repository.definition(key),
+      true,
+    );
   }
   async get(id: string): Promise<WorkflowDefinition> {
     const item = this.repository.definition(id);
@@ -115,6 +171,11 @@ export class WorkflowService {
         createdAt: current?.createdAt ?? now,
         updatedAt: now,
       };
+      snapshotWorkflowDependencies(
+        next,
+        (key) => this.repository.definition(key),
+        next.published,
+      );
       return { value: next, result: next };
     });
   }
@@ -137,6 +198,15 @@ export class WorkflowService {
             "CONFLICT",
             "工作流仍有运行中任务，请先取消或等待完成",
           );
+        for (const other of this.repository.definitions()) {
+          if (other.id === id) continue;
+          const definition = this.repository.definition(other.id)!;
+          if (workflowDependencies(definition).includes(id))
+            throw new DomainError(
+              "CONFLICT",
+              `工作流仍被“${other.name}”引用，请先移除调用节点`,
+            );
+        }
         return { result: undefined };
       }),
     );
@@ -193,7 +263,22 @@ export class WorkflowService {
       if (origin && !definition.published)
         throw new DomainError("FORBIDDEN", "工作流未发布为 Agent 工具");
       validateWorkflow(definition, true);
-      await this.executor.validate?.(definition, origin);
+      const dependencies = snapshotWorkflowDependencies(
+        definition,
+        (key) => this.repository.definition(key),
+        true,
+      );
+      for (const snapshot of [definition, ...Object.values(dependencies)]) {
+        const validateScope = async (
+          scope: WorkflowDefinition,
+        ): Promise<void> => {
+          await this.executor.validate?.(scope, origin);
+          for (const node of scope.nodes)
+            if (node.kind === "loop" && node.config.loop)
+              await validateScope({ ...scope, ...node.config.loop.body });
+        };
+        await validateScope(snapshot);
+      }
       const values = validateValues(
         definition.nodes.find((n) => n.kind === "input")!.outputs,
         inputs,
@@ -225,6 +310,7 @@ export class WorkflowService {
         id: randomUUID(),
         workflowId,
         definition,
+        dependencies,
         status: "queued",
         inputs: values,
         outputs: {},
@@ -238,6 +324,7 @@ export class WorkflowService {
         requestKey,
         requestHash: hash,
       };
+      new WorkflowExecutionBudget(run);
       await this.repository.saveRun(run);
       this.runs.set(run.id, run);
       const controller = new AbortController();
@@ -301,18 +388,25 @@ export class WorkflowService {
   private async execute(
     run: WorkflowRun,
     controller: AbortController,
+    budget = new WorkflowExecutionBudget(run),
+    depth = 0,
   ): Promise<void> {
-    const timer = setTimeout(
-      () => controller.abort(new Error("工作流超过 30 分钟执行上限")),
-      30 * 60_000,
-    );
+    if (depth > 16) invalid("工作流执行嵌套超过 16 层");
+    const persist = () => this.persist(budget.root);
+    const timer =
+      depth === 0
+        ? setTimeout(
+            () => controller.abort(new Error("工作流超过 30 分钟执行上限")),
+            30 * 60_000,
+          )
+        : undefined;
     const signal = controller.signal;
     let primaryFailure: WorkflowNodeRun | undefined;
     const states = new Map(run.nodes.map((n) => [n.nodeId, n]));
     const activeEdges = new Set<string>();
     try {
       run.status = "running";
-      await this.persist(run);
+      await persist();
       while (run.nodes.some((n) => n.status === "queued")) {
         signal.throwIfAborted();
         const ready = run.definition.nodes.filter(
@@ -347,22 +441,24 @@ export class WorkflowService {
                 at: new Date().toISOString(),
                 message: "前驱分支未激活，跳过节点",
               });
-              await this.persist(run);
+              await persist();
               return;
             }
             state.status = "running";
             state.startedAt = new Date().toISOString();
             const progress = async (message: string) => {
               signal.throwIfAborted();
+              budget.account(message.slice(0, 1000));
               state.progress = message.slice(0, 1000);
               if (state.events.length < 200)
                 state.events.push({
                   at: new Date().toISOString(),
                   message: state.progress,
                 });
-              await this.persist(run);
+              await persist();
             };
             try {
+              budget.step();
               const bindings = Object.entries(node.inputs);
               const inputs = Object.fromEntries(
                 bindings.flatMap(([k, b]) => {
@@ -383,6 +479,7 @@ export class WorkflowService {
                 ),
               );
               checkValueSize(referenceGroups);
+              budget.account({ inputs, referenceGroups });
               state.referenceGroups = referenceGroups;
               state.inputs = inputs;
               await progress("开始执行节点");
@@ -423,23 +520,62 @@ export class WorkflowService {
                   invalid(`选择节点 ${node.name} 没有已执行的候选输入`);
                 output = { [node.outputs[0]?.name ?? "result"]: selected };
               } else if (node.kind === "javascript") {
-                const result = await runWorkflowScript(
-                  node.config.script!,
-                  inputs,
-                  node.config.timeoutMs!,
-                  signal,
+                const result = await budget.leaf(signal, () =>
+                  runWorkflowScript(
+                    node.config.script!,
+                    inputs,
+                    node.config.timeoutMs!,
+                    signal,
+                  ),
                 );
                 output = result.output;
                 for (const message of result.logs)
                   await progress(`脚本：${message}`);
-              } else
-                output = await this.executor.execute(
-                  { run, node, signal, progress, referenceGroups },
+              } else if (node.kind === "loop") {
+                output = await this.executeLoop(
+                  run,
+                  node,
                   inputs,
+                  states,
+                  signal,
+                  budget,
+                  depth,
+                  progress,
+                );
+              } else if (node.kind === "workflow") {
+                const target =
+                  budget.root.dependencies?.[node.config.workflowId!];
+                if (!target) invalid(`节点 ${node.name} 缺少目标工作流快照`);
+                output = await this.executeChild(
+                  run,
+                  node,
+                  target,
+                  inputs,
+                  signal,
+                  budget,
+                  depth,
+                  `调用 ${target.name}`,
+                );
+              } else
+                output = await budget.leaf(signal, () =>
+                  this.executor.execute(
+                    { run, node, signal, progress, referenceGroups },
+                    inputs,
+                  ),
                 );
               signal.throwIfAborted();
               checkValueSize(output);
-              state.outputs = validateValues(node.outputs, output);
+              // 循环的默认值只用于零轮结果，实际执行时不得掩盖最后一轮缺失的产出。
+              const fields =
+                node.kind === "loop"
+                  ? node.outputs.map((field) => ({
+                      ...field,
+                      defaultValue: undefined,
+                    }))
+                  : node.outputs;
+              const checked = validateValues(fields, output);
+              budget.account(checked);
+              state.outputs = checked;
               state.status = "succeeded";
               state.finishedAt = new Date().toISOString();
               if (node.kind === "output") run.outputs = state.outputs;
@@ -465,14 +601,14 @@ export class WorkflowService {
                   error,
                   `节点 ${node.name} 执行器未返回可读异常`,
                 ),
-                requestId: run.id,
+                requestId: budget.root.id,
                 nodeId: node.id,
               };
               if (!signal.aborted) {
                 primaryFailure = state;
                 controller.abort(error);
               }
-              await this.persist(run);
+              await persist();
               throw error;
             }
           }),
@@ -499,7 +635,7 @@ export class WorkflowService {
           ? "OPERATION_ABORTED"
           : "WORKFLOW_EXECUTION_FAILED",
         message: toSafePublicMessage(error, "工作流调度器未返回可读异常"),
-        requestId: run.id,
+        requestId: budget.root.id,
       };
       for (const n of run.nodes)
         if (["queued", "running"].includes(n.status)) {
@@ -512,8 +648,206 @@ export class WorkflowService {
     } finally {
       clearTimeout(timer);
       run.finishedAt = new Date().toISOString();
-      await this.persist(run);
+      await persist();
     }
+  }
+  /** 子调用留在根任务的轨迹树中，不创建独立限流任务或丢失文件归属。 */
+  private async executeChild(
+    parent: WorkflowRun,
+    node: WorkflowNode,
+    definition: WorkflowDefinition,
+    inputs: Record<string, unknown>,
+    signal: AbortSignal,
+    budget: WorkflowExecutionBudget,
+    depth: number,
+    label: string,
+  ): Promise<Record<string, unknown>> {
+    signal.throwIfAborted();
+    if (depth >= 16) invalid("工作流执行嵌套超过 16 层");
+    const child: WorkflowRun = {
+      id: randomUUID(),
+      workflowId: definition.id,
+      definition,
+      status: "queued",
+      inputs: validateValues(
+        definition.nodes.find((n) => n.kind === "input")!.outputs,
+        inputs,
+      ),
+      outputs: {},
+      nodes: definition.nodes.map((n) => ({
+        nodeId: n.id,
+        status: "queued",
+        events: [],
+      })),
+      createdAt: new Date().toISOString(),
+      origin: parent.origin,
+      requestKey: parent.requestKey,
+      requestHash: parent.requestHash,
+    };
+    budget.account(child);
+    const state = parent.nodes.find((item) => item.nodeId === node.id)!;
+    (state.children ??= []).push(child);
+    state.progress = label;
+    const controller = new AbortController();
+    const abort = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    try {
+      await this.execute(child, controller, budget, depth + 1);
+      if (child.status !== "succeeded")
+        throw new DomainError(
+          (child.error?.code ?? "REQUEST_FAILED") as ConstructorParameters<
+            typeof DomainError
+          >[0],
+          `${label}：${child.error?.message ?? "子流程未成功完成"}`,
+        );
+      return child.outputs;
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
+  /** 每轮上下文隔离，成功后才更新状态、提交聚合值，并在下一轮前判断 while。 */
+  private async executeLoop(
+    run: WorkflowRun,
+    node: WorkflowNode,
+    inputs: Record<string, unknown>,
+    states: Map<string, WorkflowNodeRun>,
+    signal: AbortSignal,
+    budget: WorkflowExecutionBudget,
+    depth: number,
+    progress: (message: string) => Promise<void>,
+  ): Promise<Record<string, unknown>> {
+    const loop = node.config.loop!;
+    const bodyInput = loop.body.nodes.find((n) => n.kind === "input")!;
+    const variables = Object.fromEntries(
+      Object.entries(loop.state).map(([name, value]) => [
+        name,
+        resolveBinding(value.initial, states),
+      ]),
+    );
+    const items =
+      loop.mode === "array" ? resolveBinding(loop.items, states) : [];
+    const count =
+      loop.mode === "count" ? resolveBinding(loop.count, states) : undefined;
+    if (
+      loop.mode === "count" &&
+      (!Number.isInteger(count) ||
+        Number(count) < 0 ||
+        Number(count) > loop.maxIterations)
+    )
+      invalid(`循环 ${node.name} 次数必须为 0 到 ${loop.maxIterations} 的整数`);
+    if (
+      loop.mode === "array" &&
+      (!Array.isArray(items) || items.length > loop.maxIterations)
+    )
+      invalid(
+        `循环 ${node.name} 的迭代输入必须为最多 ${loop.maxIterations} 项的数组`,
+      );
+    const output: Record<string, unknown> = {};
+    for (const [name, mapping] of Object.entries(loop.outputs))
+      if (mapping.mode !== "last") output[name] = [];
+    let index = 0;
+    while (true) {
+      signal.throwIfAborted();
+      const rawContext = {
+        ...inputs,
+        ...variables,
+        index,
+        ...(loop.mode === "array" ? { item: (items as unknown[])[index] } : {}),
+      };
+      if (loop.mode === "count" && index >= Number(count)) break;
+      if (loop.mode === "array" && index >= (items as unknown[]).length) break;
+      const context = validateValues(bodyInput.outputs, rawContext);
+      if (
+        loop.mode === "while" &&
+        !evaluateCondition(
+          loop.condition,
+          new Map([
+            [
+              bodyInput.id,
+              {
+                nodeId: bodyInput.id,
+                status: "succeeded",
+                outputs: context,
+                events: [],
+              },
+            ],
+          ]),
+        )
+      )
+        break;
+      if (index >= loop.maxIterations)
+        invalid(
+          `循环 ${node.name} 达到 ${loop.maxIterations} 次上限，while 条件仍为真`,
+        );
+      await progress(
+        `第 ${index + 1} 轮 · ${loop.mode === "while" ? `最多 ${loop.maxIterations} 轮` : `共 ${loop.mode === "array" ? (items as unknown[]).length : count} 轮`}`,
+      );
+      const definition: WorkflowDefinition = {
+        ...loop.body,
+        id: `${run.workflowId}/${node.id}`,
+        revision: run.definition.revision,
+        createdAt: run.createdAt,
+        updatedAt: run.createdAt,
+      };
+      const values = await this.executeChild(
+        run,
+        node,
+        definition,
+        context,
+        signal,
+        budget,
+        depth,
+        `循环 ${node.name} 第 ${index + 1} 轮`,
+      );
+      for (const [name, variable] of Object.entries(loop.state)) {
+        const value = values[variable.output];
+        const field = bodyInput.outputs.find((f) => f.name === name)!;
+        validateValues([{ ...field, required: true }], { [name]: value });
+        variables[name] = value;
+      }
+      for (const [name, mapping] of Object.entries(loop.outputs)) {
+        const value = values[mapping.field];
+        if (mapping.mode === "last") {
+          if (value === undefined) delete output[name];
+          else output[name] = value;
+        } else {
+          if (value === undefined || value === null)
+            invalid(
+              `循环 ${node.name} 第 ${index + 1} 轮未提供聚合输出 ${mapping.field}`,
+            );
+          const list = output[name] as unknown[];
+          if (mapping.mode === "flatten") {
+            if (!Array.isArray(value))
+              invalid(
+                `循环 ${node.name} 的合并输出 ${mapping.field} 必须为数组`,
+              );
+            list.push(...value);
+          } else list.push(value);
+          if (list.length > 100)
+            invalid(`循环 ${node.name} 聚合输出 ${name} 超过 100 项`);
+        }
+      }
+      checkValueSize(output);
+      index++;
+    }
+    if (index === 0) {
+      for (const [name, mapping] of Object.entries(loop.outputs)) {
+        if (mapping.mode !== "last") continue;
+        const variable = Object.entries(loop.state).find(
+          ([, state]) => state.output === mapping.field,
+        );
+        if (variable) output[name] = variables[variable[0]];
+        else {
+          const fallback = node.outputs.find(
+            (field) => field.name === name,
+          )?.defaultValue;
+          if (fallback !== undefined) output[name] = fallback;
+        }
+      }
+    }
+    await progress(`循环完成 · 已执行 ${index} 轮`);
+    return output;
   }
 }
 /** 安全读取上游命名输出；分支未执行时返回 undefined，保留 null/false/0。 */

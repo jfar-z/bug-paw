@@ -9,6 +9,10 @@ import {
   type WorkflowInputField,
   type WorkflowEdge,
 } from "../../../shared/workflow-contracts";
+import {
+  WorkflowCallEditor,
+  WorkflowLoopEditor,
+} from "./workflow-composition-editor";
 import { WorkflowScriptAssist } from "./workflow-script-assist";
 import { api, type SessionSummary } from "../../api";
 import { useApiTask } from "../../api-task-provider";
@@ -29,7 +33,11 @@ export function WorkflowNodeEditor({
   onDelete,
   onCopy,
   onValidity,
+  onEditLoop,
+  workflowId,
 }: {
+  onEditLoop?: () => void;
+  workflowId?: string;
   node: WorkflowNode;
   nodes: WorkflowNode[];
   edges?: WorkflowEdge[];
@@ -213,6 +221,25 @@ export function WorkflowNodeEditor({
             onChange={(e) => onChange({ ...node, name: e.target.value })}
           />
         </label>
+        {node.kind === "loop" && (
+          <WorkflowLoopEditor
+            node={node}
+            nodes={nodes}
+            onChange={onChange}
+            onValidity={onValidity}
+            onEditLoop={onEditLoop}
+          />
+        )}
+        {node.kind === "workflow" && (
+          <WorkflowCallEditor
+            node={node}
+            nodes={nodes}
+            catalog={catalog}
+            workflowId={workflowId}
+            onChange={onChange}
+            onValidity={onValidity}
+          />
+        )}
         {node.kind === "input" && (
           <>
             <h3>工作流入参</h3>
@@ -618,8 +645,7 @@ export function WorkflowNodeEditor({
                 onChange={(e) =>
                   patch({
                     selectMode: e.target.value as
-                      | "first_available"
-                      | "condition",
+                      "first_available" | "condition",
                     selectCondition: {
                       left: { kind: "literal", value: true },
                       operator: "eq",

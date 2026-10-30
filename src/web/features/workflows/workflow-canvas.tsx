@@ -24,6 +24,7 @@ import {
 } from "@xyflow/react";
 import {
   Plus,
+  Repeat,
   Copy,
   ClipboardPaste,
   Workflow,
@@ -38,6 +39,7 @@ import {
 import {
   WORKFLOW_NODE_NAMES,
   newWorkflowNode,
+  workflowLoopOutputs,
   type WorkflowDraft,
   type WorkflowNode,
   type WorkflowNodeKind,
@@ -56,6 +58,8 @@ const icons = {
   condition: GitBranch,
   select: ArrowRightLeft,
   javascript: Code,
+  loop: Repeat,
+  workflow: Workflow,
 };
 export type CanvasNode = Node<{ node: WorkflowNode }, "workflow">;
 type PendingConnection = {
@@ -190,12 +194,16 @@ const NodeCard = memo(function NodeCard({
 });
 const nodeTypes = { workflow: NodeCard };
 /** 可拖动、连线和键盘操作的 DAG 编辑画布。 */
-export function WorkflowCanvas({
+function WorkflowCanvasScope({
   draft,
   catalog,
   onChange,
   onValidity,
+  onEditLoop,
+  workflowId,
 }: {
+  onEditLoop: (nodeId: string) => void;
+  workflowId?: string;
   draft: WorkflowDraft;
   catalog: WorkflowCatalog;
   onChange: (draft: WorkflowDraft) => void;
@@ -643,6 +651,8 @@ export function WorkflowCanvas({
       {node && (
         <WorkflowNodeEditor
           key={node.id}
+          workflowId={workflowId}
+          onEditLoop={() => onEditLoop(node.id)}
           node={node}
           nodes={draft.nodes}
           edges={draft.edges}
@@ -661,5 +671,98 @@ export function WorkflowCanvas({
         />
       )}
     </div>
+  );
+}
+
+/** 同页切换隔离作用域，整个草稿保留在父编辑器，保存和离开保护覆盖全部循环体。 */
+export function WorkflowCanvas(props: {
+  draft: WorkflowDraft;
+  catalog: WorkflowCatalog;
+  workflowId?: string;
+  onChange: (draft: WorkflowDraft) => void;
+  onValidity: (key: string, valid: boolean) => void;
+}) {
+  const [path, setPath] = useState<string[]>([]);
+  let scope = props.draft;
+  const names = [props.draft.name];
+  for (const id of path) {
+    const node = scope.nodes.find((item) => item.id === id)!;
+    scope = node.config.loop!.body;
+    names.push(node.name);
+  }
+  const replace = (
+    graph: WorkflowDraft,
+    ids: string[],
+    next: WorkflowDraft,
+  ): WorkflowDraft => {
+    if (!ids.length) return next;
+    return {
+      ...graph,
+      nodes: graph.nodes.map((node) => {
+        if (node.id !== ids[0]) return node;
+        const body = replace(node.config.loop!.body, ids.slice(1), next);
+        const outputs = Object.fromEntries(
+          Object.entries(node.config.loop!.outputs)
+            .filter(([, mapping]) =>
+              body.nodes
+                .find((n) => n.kind === "output")!
+                .outputs.some((field) => field.name === mapping.field),
+            )
+            .map(([name, mapping]) => {
+              const field = body.nodes
+                .find((n) => n.kind === "output")!
+                .outputs.find((f) => f.name === mapping.field)!;
+              return [
+                name,
+                {
+                  ...mapping,
+                  mode:
+                    mapping.mode === "last"
+                      ? ("last" as const)
+                      : field.multiple
+                        ? ("flatten" as const)
+                        : ("collect" as const),
+                },
+              ];
+            }),
+        );
+        const loop = { ...node.config.loop!, body, outputs };
+        return {
+          ...node,
+          config: { ...node.config, loop },
+          outputs: workflowLoopOutputs(loop, node.outputs),
+        };
+      }),
+    };
+  };
+  return (
+    <>
+      {path.length > 0 && (
+        <nav className="wf-scope-path" aria-label="循环体路径">
+          {names.map((name, index) => (
+            <button
+              key={index}
+              type="button"
+              className="wf-button"
+              disabled={index === path.length}
+              onClick={() => setPath(path.slice(0, index))}
+            >
+              {index > 0 ? "› " : ""}
+              {name}
+            </button>
+          ))}
+        </nav>
+      )}
+      <WorkflowCanvasScope
+        key={path.join("/")}
+        {...props}
+        draft={scope}
+        onChange={(next) => props.onChange(replace(props.draft, path, next))}
+        onValidity={(key, valid) =>
+          props.onValidity(`${path.join("/")}:${key}`, valid)
+        }
+        onEditLoop={(nodeId) => setPath([...path, nodeId])}
+      />
+    </>
   );
 }

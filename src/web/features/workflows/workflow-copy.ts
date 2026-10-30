@@ -30,6 +30,21 @@ function remapNode(node: WorkflowNode, resolve: (id: string) => string): void {
     binding(condition.right);
   }
   node.config.candidates?.forEach(binding);
+  if (node.kind === "loop" && node.config.loop) {
+    const loop = node.config.loop;
+    binding(loop.count);
+    binding(loop.items);
+    for (const state of Object.values(loop.state)) binding(state.initial);
+    const original = loop.body;
+    const body = duplicateWorkflow(original, original.name);
+    const ids = new Map(
+      original.nodes.map((child, index) => [child.id, body.nodes[index].id]),
+    );
+    for (const value of [loop.condition.left, loop.condition.right])
+      if (value.kind === "reference")
+        value.nodeId = ids.get(value.nodeId) ?? value.nodeId;
+    loop.body = body;
+  }
   for (const field of node.outputs) {
     if (field.enumSource)
       field.enumSource.nodeId = resolve(field.enumSource.nodeId);

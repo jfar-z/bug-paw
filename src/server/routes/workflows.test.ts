@@ -56,6 +56,12 @@ describe("工作流 HTTP API", () => {
         expect(r.statusCode, `${method} ${url}`).toBe(401);
       }
       authenticated = true;
+      const invalidBody = await app.inject({
+        method: "POST", url: "/api/workflows/validate",
+        headers: { "content-type": "application/json" }, payload: "null",
+      });
+      expect(invalidBody.statusCode).toBe(400);
+      expect(invalidBody.json().error).toMatchObject({ code: "VALIDATION_FAILED", requestId: expect.any(String) });
       const saved = await app.inject({
         method: "POST",
         url: "/api/workflows",

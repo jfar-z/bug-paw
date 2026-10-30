@@ -419,7 +419,7 @@ export const api = {
   getWorkflow: (id: string) => request<WorkflowDefinition>(`/api/workflows/${encodeURIComponent(id)}`),
   saveWorkflow: (draft: WorkflowDraft, id?: string, revision?: number) => request<WorkflowDefinition>(id ? `/api/workflows/${encodeURIComponent(id)}` : "/api/workflows", { method: id ? "PUT" : "POST", body: JSON.stringify({ ...draft, revision }) }),
   deleteWorkflow: (id: string, revision: number) => request<void>(`/api/workflows/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ revision }) }),
-  validateWorkflow: (draft: WorkflowDraft) => request<{ valid: boolean }>("/api/workflows/validate", { method: "POST", body: JSON.stringify(draft) }),
+  validateWorkflow: (draft: WorkflowDraft, id?: string) => request<{ valid: boolean }>("/api/workflows/validate", { method: "POST", body: JSON.stringify({ ...draft, id }) }),
   assistWorkflowScript: async (input: WorkflowScriptAssistRequest, signal?: AbortSignal, onProgress?: (event: WorkflowScriptAssistProgress) => void) => {
     const controller = new AbortController();
     const activeSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;

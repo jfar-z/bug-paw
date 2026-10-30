@@ -54,7 +54,8 @@ export type WorkflowScriptAssistProgress =
   | { type: "started" | "validating" }
   | { type: "thinking_delta" | "text_delta"; delta: string };
 /** 完成事件中的脚本已通过语法检查，增量内容不能直接应用。 */
-export type WorkflowScriptAssistEvent = WorkflowScriptAssistProgress
+export type WorkflowScriptAssistEvent =
+  | WorkflowScriptAssistProgress
   | { type: "completed"; script: string }
   | { type: "error"; error: ApiErrorDocument["error"] };
 
@@ -69,7 +70,7 @@ export interface WorkflowFile {
 export type WorkflowBinding =
   | { kind: "literal"; value: unknown }
   | { kind: "reference"; nodeId: string; field: string };
-/** 第一版支持的节点集合。 */
+/** 支持的节点集合；循环内部仍遵循 DAG 约束。 */
 export type WorkflowNodeKind =
   | "input"
   | "output"
@@ -78,6 +79,8 @@ export type WorkflowNodeKind =
   | "aigc"
   | "condition"
   | "select"
+  | "loop"
+  | "workflow"
   | "javascript";
 /** 条件使用有限运算符，不对用户字符串执行代码。 */
 export interface WorkflowCondition {
@@ -96,17 +99,15 @@ export interface WorkflowCondition {
 }
 /** 节点的专属设置，未使用的设置不参与当前节点执行。 */
 export interface WorkflowNodeConfig {
+  /** 子工作流按稳定 ID 调用，执行时使用根任务预先固定的快照。 */
+  workflowId?: string;
+  /** 循环体是隔离的 DAG，内外只能通过输入和输出映射传值。 */
+  loop?: WorkflowLoop;
   provider?: string;
   modelId?: string;
   systemPrompt?: string;
   thinking?:
-    | "inherit"
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh";
+    "inherit" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   temperature?: number;
   topP?: number;
   maxTokens?: number;
@@ -130,6 +131,20 @@ export interface WorkflowNodeConfig {
   selectCondition?: WorkflowCondition;
   script?: string;
   timeoutMs?: number;
+}
+/** 循环变量在整轮成功后更新，条件只能读取本轮输入上下文。 */
+export interface WorkflowLoop {
+  mode: "count" | "array" | "while";
+  maxIterations: number;
+  count: WorkflowBinding;
+  items: WorkflowBinding;
+  condition: WorkflowCondition;
+  state: Record<string, { initial: WorkflowBinding; output: string }>;
+  outputs: Record<
+    string,
+    { field: string; mode: "collect" | "flatten" | "last" }
+  >;
+  body: WorkflowDraft;
 }
 /** 节点输入映射与输出类型是运行时校验的依据。 */
 export interface WorkflowNode {
@@ -169,12 +184,7 @@ export type WorkflowDraft = Pick<
   "name" | "description" | "published" | "nodes" | "edges"
 >;
 export type WorkflowStatus =
-  | "queued"
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "skipped";
+  "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
 /** 节点错误保留安全消息、稳定代码和运行追踪标识。 */
 export interface WorkflowError {
   code: string;
@@ -183,6 +193,8 @@ export interface WorkflowError {
   nodeId?: string;
 }
 export interface WorkflowNodeRun {
+  /** 子工作流或每一轮的独立轨迹，均随根任务保存。 */
+  children?: WorkflowRun[];
   nodeId: string;
   status: WorkflowStatus;
   inputs?: Record<string, unknown>;
@@ -196,6 +208,8 @@ export interface WorkflowNodeRun {
 }
 /** 一次运行持有不可变定义快照，避免编辑影响正在执行的任务。 */
 export interface WorkflowRun {
+  /** 整棵调用树在启动时固定定义，运行期间不再读取最新文件。 */
+  dependencies?: Record<string, WorkflowDefinition>;
   id: string;
   workflowId: string;
   definition: WorkflowDefinition;
@@ -219,6 +233,11 @@ export interface WorkflowReferenceGroup {
 }
 /** 编辑器目录仅包含安全配置摘要。 */
 export interface WorkflowCatalog {
+  /** 仅供管理员选择的安全摘要；参数定义在选择时单独读取。 */
+  workflows?: (Pick<WorkflowSummary, "id" | "name"> & {
+    dependencies: string[];
+    unavailable?: string;
+  })[];
   models: {
     provider: string;
     id: string;
@@ -255,6 +274,8 @@ export const WORKFLOW_NODE_NAMES: Record<WorkflowNodeKind, string> = {
   aigc: "AIGC",
   condition: "判断",
   select: "选择",
+  loop: "循环",
+  workflow: "工作流",
   javascript: "JS 脚本",
 };
 
@@ -333,7 +354,82 @@ export function newWorkflowNode(
     node.inputs = { value: { kind: "literal", value: "" } };
     node.outputs = [{ name: "result", type: "string", required: true }];
   }
+  if (kind === "loop") {
+    const body = emptyWorkflow();
+    body.name = "循环体";
+    body.nodes[0].outputs = [
+      { name: "index", type: "integer", required: true },
+    ];
+    body.nodes[1].outputs = [
+      { name: "result", type: "integer", required: true },
+    ];
+    body.nodes[1].inputs.result = {
+      kind: "reference",
+      nodeId: "input",
+      field: "index",
+    };
+    node.config.loop = {
+      mode: "count",
+      maxIterations: 100,
+      count: { kind: "literal", value: 3 },
+      items: { kind: "literal", value: [] },
+      condition: {
+        left: { kind: "reference", nodeId: "input", field: "index" },
+        operator: "lt",
+        right: { kind: "literal", value: 3 },
+      },
+      state: {},
+      outputs: { result: { field: "result", mode: "collect" } },
+      body,
+    };
+    node.outputs = [
+      { name: "result", type: "integer", multiple: true, required: true },
+    ];
+  }
   return node;
+}
+
+/** 显式遍历循环作用域，不把常量 JSON 中的相似字段当成节点或引用。 */
+export function workflowNodesDeep(
+  graph: Pick<WorkflowDraft, "nodes">,
+): WorkflowNode[] {
+  return graph.nodes.flatMap((node) => [
+    node,
+    ...(node.kind === "loop" && node.config.loop
+      ? workflowNodesDeep(node.config.loop.body)
+      : []),
+  ]);
+}
+
+/** 循环输出从内部出参派生，数组采用合并模式，避免制造不受支持的二维类型。 */
+export function workflowLoopOutputs(
+  loop: WorkflowLoop,
+  previous: WorkflowField[] = [],
+): WorkflowField[] {
+  const fields =
+    loop.body.nodes.find((node) => node.kind === "output")?.outputs ?? [];
+  return Object.entries(loop.outputs).flatMap(([name, mapping]) => {
+    const source = fields.find((field) => field.name === mapping.field);
+    return source
+      ? [
+          {
+            ...source,
+            name,
+            enumSource: undefined,
+            multiple: mapping.mode === "last" ? source.multiple : true,
+            defaultValue:
+              mapping.mode === "last"
+                ? (previous.find(
+                    (field) =>
+                      field.name === name &&
+                      field.type === source.type &&
+                      !!field.multiple === !!source.multiple,
+                  )?.defaultValue ?? source.defaultValue)
+                : undefined,
+          },
+        ]
+      : [];
+  });
 }
 
 /** 默认流程可直接运行，以输入到输出验证完整链路。 */

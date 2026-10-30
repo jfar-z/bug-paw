@@ -1,6 +1,7 @@
 import {
   WORKFLOW_NODE_NAMES,
   WORKFLOW_TYPES,
+  workflowLoopOutputs,
   type WorkflowBinding,
   type WorkflowDraft,
   type WorkflowField,
@@ -165,7 +166,9 @@ export function checkCustomParameters(
 export function validateWorkflow(
   value: WorkflowDraft,
   runnable = false,
+  depth = 0,
 ): WorkflowNode[] {
+  if (depth > 6) invalid("循环体嵌套不能超过 6 层");
   if (
     !record(value) ||
     typeof value.name !== "string" ||
@@ -204,6 +207,96 @@ export function validateWorkflow(
     nodes.set(node.id, node);
     checkFields(node.outputs);
     const config = node.config as WorkflowNodeConfig;
+    if (node.kind === "workflow" && runnable && !config.workflowId)
+      invalid(`节点 ${node.name} 尚未选择工作流`);
+    if (node.kind === "loop") {
+      const loop = config.loop;
+      if (
+        !record(loop) ||
+        !record(loop.count) ||
+        !record(loop.items) ||
+        !record(loop.condition) ||
+        !record(loop.condition.left) ||
+        !record(loop.condition.right) ||
+        !["count", "array", "while"].includes(loop.mode) ||
+        !Number.isInteger(loop.maxIterations) ||
+        loop.maxIterations < 1 ||
+        loop.maxIterations > 100 ||
+        !record(loop.state) ||
+        !record(loop.outputs)
+      )
+        invalid(`循环 ${node.name} 配置无效，最大迭代次数必须为 1 到 100`);
+      validateWorkflow(loop.body, runnable, depth + 1);
+      const input = loop.body.nodes.find((n) => n.kind === "input")!;
+      const output = loop.body.nodes.find((n) => n.kind === "output")!;
+      if (
+        !input.outputs.some(
+          (f) => f.name === "index" && f.type === "integer" && !f.multiple,
+        )
+      )
+        invalid(`循环 ${node.name} 的输入必须声明 integer 类型的 index`);
+      if (
+        loop.mode === "array" &&
+        !input.outputs.some((f) => f.name === "item")
+      )
+        invalid(`数组循环 ${node.name} 的输入必须声明 item 类型`);
+      for (const [name, state] of Object.entries(loop.state)) {
+        const field = input.outputs.find((f) => f.name === name);
+        const source =
+          record(state) && output.outputs.find((f) => f.name === state.output);
+        if (
+          !validName(name) ||
+          ["index", "item"].includes(name) ||
+          !field ||
+          !source ||
+          !workflowFieldsCompatible(source, field) ||
+          Object.hasOwn(node.inputs, name)
+        )
+          invalid(`循环 ${node.name} 的变量 ${name} 输入、更新来源或类型无效`);
+      }
+      if (
+        Object.keys(node.inputs).some(
+          (name) =>
+            ["index", "item"].includes(name) ||
+            !input.outputs.some((field) => field.name === name),
+        )
+      )
+        invalid(
+          `循环 ${node.name} 的输入映射不得覆盖 index、item 或包含未声明参数`,
+        );
+      for (const [name, mapping] of Object.entries(loop.outputs)) {
+        const source =
+          record(mapping) &&
+          output.outputs.find((f) => f.name === mapping.field);
+        if (
+          !validName(name) ||
+          !source ||
+          !["collect", "flatten", "last"].includes(mapping.mode) ||
+          (mapping.mode === "collect" && source.multiple) ||
+          (mapping.mode === "flatten" && !source.multiple)
+        )
+          invalid(
+            `循环 ${node.name} 输出 ${name} 的来源或汇总方式与类型不兼容`,
+          );
+      }
+      const expected = workflowLoopOutputs(loop);
+      if (
+        expected.length !== node.outputs.length ||
+        expected.some(
+          (field) =>
+            !node.outputs.some(
+              (f) =>
+                f.name === field.name &&
+                workflowFieldsCompatible(f, field) &&
+                workflowFieldsCompatible(field, f) &&
+                !!f.required === !!field.required &&
+                JSON.stringify(f.enumValues ?? []) ===
+                  JSON.stringify(field.enumValues ?? []),
+            ),
+        )
+      )
+        invalid(`循环 ${node.name} 输出定义与映射不一致，请同步循环输出`);
+    }
     for (const key of [
       "provider",
       "modelId",
@@ -211,6 +304,7 @@ export function validateWorkflow(
       "agentId",
       "sessionId",
       "interfaceId",
+      "workflowId",
     ] as const)
       if (config[key] !== undefined && typeof config[key] !== "string")
         invalid(`节点配置 ${key} 必须为字符串`);
@@ -415,6 +509,84 @@ export function validateWorkflow(
         if (group.binding) checkBinding(group.binding, node);
       }
     }
+    if (node.kind === "loop") {
+      const loop = config.loop!;
+      if (loop.mode === "count") {
+        checkBinding(loop.count, node);
+        if (
+          loop.count.kind === "literal" &&
+          (!Number.isInteger(loop.count.value) ||
+            Number(loop.count.value) < 0 ||
+            Number(loop.count.value) > loop.maxIterations)
+        )
+          invalid(`循环 ${node.name} 次数必须为不超过最大迭代次数的非负整数`);
+      }
+      const input = loop.body.nodes.find((n) => n.kind === "input")!;
+      const typedBinding = (
+        binding: WorkflowBinding,
+        field: import("../../shared/workflow-contracts").WorkflowField,
+      ) => {
+        checkBinding(binding, node);
+        if (binding.kind === "literal") checkField(field, binding.value);
+        else {
+          const source = nodes
+            .get(binding.nodeId)!
+            .outputs.find((f) => f.name === binding.field)!;
+          if (!workflowFieldsCompatible(source, field))
+            invalid(`循环 ${node.name} 参数 ${field.name} 与上游类型不兼容`);
+        }
+      };
+      if (loop.mode === "count")
+        typedBinding(loop.count, {
+          name: "count",
+          type: "integer",
+          required: true,
+        });
+      if (loop.mode === "array") {
+        const item = input.outputs.find((field) => field.name === "item")!;
+        if (item.multiple) invalid(`循环 ${node.name} 的 item 必须为单值类型`);
+        typedBinding(loop.items, { ...item, multiple: true, required: true });
+      }
+      for (const [name, state] of Object.entries(loop.state))
+        typedBinding(
+          state.initial,
+          input.outputs.find((field) => field.name === name)!,
+        );
+      for (const [name, binding] of Object.entries(node.inputs))
+        typedBinding(
+          binding,
+          input.outputs.find((field) => field.name === name)!,
+        );
+      if (loop.mode === "while") {
+        const condition = loop.condition;
+        if (
+          !record(condition) ||
+          ![
+            "eq",
+            "ne",
+            "gt",
+            "gte",
+            "lt",
+            "lte",
+            "contains",
+            "empty",
+            "not_empty",
+          ].includes(condition.operator)
+        )
+          invalid(`循环 ${node.name} 的 while 条件运算符无效`);
+        for (const binding of [condition.left, condition.right]) {
+          if (
+            !record(binding) ||
+            (binding.kind !== "literal" &&
+              (binding.kind !== "reference" ||
+                binding.nodeId !== input.id ||
+                !input.outputs.some((field) => field.name === binding.field)))
+          )
+            invalid(`循环 ${node.name} 的 while 条件只能引用循环输入或变量`);
+          if (binding.kind === "literal") checkValueSize(binding.value);
+        }
+      }
+    }
     for (const field of node.outputs) {
       if (!field.enumSource) continue;
       const source = nodes.get(field.enumSource.nodeId);
@@ -495,4 +667,18 @@ export function validateWorkflow(
     }
   }
   return sorted;
+}
+
+/** 输入允许整数提升为浮点数，以及受控媒体引用提升为通用文件。 */
+export function workflowFieldsCompatible(
+  source: import("../../shared/workflow-contracts").WorkflowField,
+  target: import("../../shared/workflow-contracts").WorkflowField,
+): boolean {
+  return (
+    !!source.multiple === !!target.multiple &&
+    (source.type === target.type ||
+      (source.type === "integer" && target.type === "float") ||
+      (target.type === "file" &&
+        ["image", "video", "audio"].includes(source.type)))
+  );
 }

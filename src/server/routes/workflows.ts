@@ -11,11 +11,7 @@ import { requireAuthentication } from "./protected";
 import type { WorkflowService } from "../workflows/workflow-service";
 import type { WorkflowNodeExecutor } from "../workflows/workflow-executor";
 import type { WorkflowFiles } from "../workflows/workflow-files";
-import {
-  invalid,
-  record,
-  validateWorkflow,
-} from "../workflows/workflow-validation";
+import { invalid, record } from "../workflows/workflow-validation";
 
 /** 工作流管理入口全部受现有登录、Origin 与版本化 API 保护。 */
 export function registerWorkflowRoutes(
@@ -36,7 +32,10 @@ export function registerWorkflowRoutes(
     router.get("/api/workflows", async () => ({
       workflows: await service.list(),
     }));
-    router.get("/api/workflows/catalog", async () => deps.executor.catalog());
+    router.get("/api/workflows/catalog", async () => ({
+      ...await deps.executor.catalog(),
+      workflows: service.catalogWorkflows(),
+    }));
     router.post<{ Body: WorkflowScriptAssistRequest }>(
       "/api/workflows/script-assist",
       async (request, reply) => {
@@ -81,10 +80,10 @@ export function registerWorkflowRoutes(
         return reply.code(204).send();
       },
     );
-    router.post<{ Body: WorkflowDraft }>(
+    router.post<{ Body: WorkflowDraft & { id?: string } }>(
       "/api/workflows/validate",
       async (request) => {
-        validateWorkflow(request.body, true);
+        service.validate(request.body, request.body?.id);
         return { valid: true };
       },
     );

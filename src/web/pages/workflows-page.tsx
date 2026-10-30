@@ -406,7 +406,7 @@ function Editor({ id }: { id: string }) {
             disabled={busy || !online || Object.values(invalid).some(Boolean)}
             onClick={() => {
               setBusy(true);
-              void runApiTask(() => api.validateWorkflow(draft), {
+              void runApiTask(() => api.validateWorkflow(draft, saved?.id), {
                 operation: "校验工作流",
               }).then((r) => {
                 if (r.status === "success") setNotice("校验通过");
@@ -464,6 +464,7 @@ function Editor({ id }: { id: string }) {
         </span>
       </div>
       <WorkflowCanvas
+        workflowId={saved?.id}
         draft={draft}
         catalog={catalog}
         onChange={(value) => {
@@ -873,11 +874,32 @@ function RunDetail({ run }: { run: WorkflowRun }) {
                     Object.keys(state.referenceGroups).length > 0 && (
                       <>
                         <h4>参考组数组</h4>
-                        <WorkflowValueView value={state.referenceGroups} label="参考组" />
+                        <WorkflowValueView
+                          value={state.referenceGroups}
+                          label="参考组"
+                        />
                       </>
                     )}
                   <h4>输出</h4>
                   <WorkflowValueView value={state.outputs} />
+                  {state.children?.map((child, childIndex) => (
+                    <details
+                      key={child.id}
+                      open={
+                        child.status === "failed" || child.status === "running"
+                          ? true
+                          : undefined
+                      }
+                    >
+                      <summary>
+                        {node.kind === "loop"
+                          ? `第 ${childIndex + 1} 轮`
+                          : `子工作流：${child.definition.name}`}{" "}
+                        · {statusNames[child.status]}
+                      </summary>
+                      <RunDetail run={child} />
+                    </details>
+                  ))}
                   <h4>事件</h4>
                   <ul className="wf-events">
                     {state.events.map((event, i) => (

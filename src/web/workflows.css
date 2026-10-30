@@ -985,9 +985,17 @@
   align-items: end;
   gap: 8px;
 }
-.wf-thinking-control { position: relative; }
-.wf-thinking-control > .wf-button { min-height: 44px; }
-.wf-assist-form details { margin: 0; padding: 0; border: 0; }
+.wf-thinking-control {
+  position: relative;
+}
+.wf-thinking-control > .wf-button {
+  min-height: 44px;
+}
+.wf-assist-form details {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .wf-thinking-menu {
   position: absolute;
   z-index: 5;
@@ -1012,4 +1020,21 @@
   border-radius: 6px;
 }
 .wf-thinking-menu button:hover,
-.wf-thinking-menu button[aria-checked="true"] { background: var(--surface-hover); }
+.wf-thinking-menu button[aria-checked="true"] {
+  background: var(--surface-hover);
+}
+
+/* 循环体面包屑在窄屏换行，不挤占画布的横向尺寸。 */
+.wf-scope-path {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.wf-scope-path .wf-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

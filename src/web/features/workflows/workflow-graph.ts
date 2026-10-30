@@ -52,6 +52,12 @@ export function withWorkflowNode(
       for (const child of Object.values(value)) visit(child);
   };
   visit(node.inputs);
+  if (node.kind === "loop" && node.config.loop) {
+    if (node.config.loop.mode === "count") visit(node.config.loop.count);
+    if (node.config.loop.mode === "array") visit(node.config.loop.items);
+    for (const state of Object.values(node.config.loop.state))
+      visit(state.initial);
+  }
   visit(node.config.referenceGroups);
   visit(node.config.conditions);
   visit(node.config.candidates);
