@@ -360,6 +360,33 @@ describe("参考组数组模式", () => {
       prompt: "text",
     });
   });
+  it.each(["image", "audio", "video"] as const)(
+    "%s 参考组绑定可选参数时，缺省和 null 都按空数组清空旧槽位",
+    (type) => {
+      const node = newWorkflowNode("aigc", "aigc");
+      node.config.referenceGroups = {
+        refs: {
+          mode: "array",
+          binding: { kind: "reference", nodeId: "input", field: "media" },
+        },
+      };
+      for (const values of [
+        {},
+        { refs: undefined },
+        { refs: null },
+        { refs: [] },
+      ]) {
+        expect(
+          expandReferenceGroups(
+            node,
+            { first: image, second: image, prompt: "text" },
+            values,
+            [{ ...group, type }],
+          ),
+        ).toEqual({ prompt: "text" });
+      }
+    },
+  );
   it("超长、空元素、非数组、错误媒体类型和失效组都明确拒绝", () => {
     const node = newWorkflowNode("aigc", "aigc");
     node.config.referenceGroups = {
@@ -372,7 +399,9 @@ describe("参考组数组模式", () => {
       [image, image, image],
       [null],
       image,
-      undefined,
+      "",
+      false,
+      0,
       [{ assetId: "x", mediaType: "audio/wav" }],
     ])
       expect(() =>
@@ -468,7 +497,7 @@ it("ComfyUI 参考数组通过原始字段上传，空数组不上传，错误�
     run: { id: "run" },
     signal: new AbortController().signal,
     progress: vi.fn(),
-    referenceGroups: { refs: [image] },
+    referenceGroups: { refs: [image] } as Record<string, unknown>,
   };
   await executor.execute(ctx as never, {});
   expect(createRun).toHaveBeenLastCalledWith({
@@ -477,14 +506,21 @@ it("ComfyUI 参考数组通过原始字段上传，空数组不上传，错误�
       right: { assetId: "one.png", name: "one.png", mediaType: "image/png" },
     },
   });
-  ctx.referenceGroups.refs = [];
-  await executor.execute(ctx as never, {});
-  expect(createRun).toHaveBeenLastCalledWith({
-    interfaceId: item.id,
-    inputs: {},
-  });
+  for (const values of [
+    { refs: [] },
+    {},
+    { refs: undefined },
+    { refs: null },
+  ]) {
+    ctx.referenceGroups = values;
+    await executor.execute(ctx as never, { left: image, right: image });
+    expect(createRun).toHaveBeenLastCalledWith({
+      interfaceId: item.id,
+      inputs: {},
+    });
+  }
   expect(saveInput).toHaveBeenCalledTimes(1);
   ctx.referenceGroups.refs = [image, image, image];
   await expect(executor.execute(ctx as never, {})).rejects.toThrow("最多 2 项");
-  expect(createRun).toHaveBeenCalledTimes(2);
+  expect(createRun).toHaveBeenCalledTimes(5);
 });

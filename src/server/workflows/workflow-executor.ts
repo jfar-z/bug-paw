@@ -744,12 +744,11 @@ export function expandReferenceGroups(
   groups: WorkflowReferenceGroup[],
 ): Record<string, unknown> {
   const result = { ...inputs };
-  for (const [id, setting] of Object.entries(
-    node.config.referenceGroups ?? {},
-  )) {
+  for (const id of Object.keys(node.config.referenceGroups ?? {})) {
     const group = groups.find((g) => g.id === id);
     if (!group) invalid(`节点 ${node.name} 的参考组已变更，请重新配置`);
-    const value = values[id] ?? (setting.binding ? undefined : []);
+    // 可选媒体未提供时与空数组等价；非空的非法值仍交给严格校验。
+    const value = values[id] ?? [];
     checkReferenceArray(group, value);
     // 防止两种输入方式同时生效，旧的拆分值不能污染数组中的空槽位。
     for (const name of group.fields) delete result[name];

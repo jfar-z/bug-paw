@@ -373,11 +373,14 @@ export class WorkflowService {
                 }),
               );
               checkValueSize(inputs);
+              // 可选参考组未提供时记录为空数组，使运行详情与实际执行输入一致。
               const referenceGroups = Object.fromEntries(
                 Object.entries(node.config.referenceGroups ?? {}).map(
                   ([id, group]) => [
                     id,
-                    group.binding ? resolveBinding(group.binding, states) : [],
+                    group.binding
+                      ? (resolveBinding(group.binding, states) ?? [])
+                      : [],
                   ],
                 ),
               );

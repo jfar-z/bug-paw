@@ -307,6 +307,65 @@ describe("工作流枚举和参考组调度", () => {
     draft.edges = [];
     expect(() => validateWorkflow(draft)).toThrow("未连接当前节点");
   });
+  it.each(["image", "audio", "video"] as const)(
+    "%s 可选参考数组缺省、null 和空数组调度及持久化一致，必填参数仍校验",
+    async (type) => {
+      const execute = vi.fn(async (_context: unknown, _inputs: unknown) => ({
+        files: [],
+      }));
+      const { service, repository } = await fixture({ execute });
+      const draft = emptyWorkflow();
+      const field = { name: "media", type, multiple: true, required: false };
+      draft.nodes[0].outputs.push(field);
+      const aigc = newWorkflowNode("aigc", "aigc");
+      aigc.config = {
+        interfaceId: "media-interface",
+        referenceGroups: {
+          refs: { mode: "array", binding: ref("input", "media") },
+        },
+      };
+      draft.nodes.splice(1, 0, aigc);
+      draft.edges = [
+        { id: "a", source: "input", target: "aigc" },
+        { id: "b", source: "aigc", target: "output" },
+      ];
+      const saved = await service.save(draft);
+      for (const [index, inputs] of [
+        {},
+        { media: null },
+        { media: [] },
+      ].entries()) {
+        const run = await service.start(
+          saved.id,
+          { prompt: "test", ...inputs },
+          `empty-${index}`,
+        );
+        const done = await service.wait(run.id);
+        expect(done.status).toBe("succeeded");
+        expect(execute.mock.lastCall?.[0]).toMatchObject({
+          referenceGroups: { refs: [] },
+        });
+        const stored = (await repository.runs()).find(
+          (item) => item.id === run.id,
+        )!;
+        expect(
+          stored.nodes.find((node) => node.nodeId === "aigc")?.referenceGroups,
+        ).toEqual({ refs: [] });
+      }
+      field.required = true;
+      const required = await service.save(draft);
+      for (const [index, inputs] of [{}, { media: null }].entries()) {
+        await expect(
+          service.start(
+            required.id,
+            { prompt: "test", ...inputs },
+            `required-${index}`,
+          ),
+        ).rejects.toThrow("必填参数 media 未提供");
+      }
+      expect(execute).toHaveBeenCalledTimes(3);
+    },
+  );
   it("调度解析参考组上游数组并保存观测数据，非上游引用不能保存", async () => {
     const execute = vi.fn(async (_context: unknown, _inputs: unknown) => ({
       files: [],
