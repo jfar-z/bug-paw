@@ -1,3 +1,4 @@
+import type { TaskPreparation } from "./task-preparation-contracts";
 import type { ThinkingLevel } from "./configuration-contracts";
 import type { ApiErrorDocument } from "./api/common";
 
@@ -205,7 +206,7 @@ export type WorkflowDraft = Pick<
   "name" | "description" | "published" | "nodes" | "edges"
 >;
 export type WorkflowStatus =
-  "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
+  "prepared" | "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
 /** 节点错误保留安全消息、稳定代码和运行追踪标识。 */
 export interface WorkflowError {
   code: string;
@@ -229,6 +230,10 @@ export interface WorkflowNodeRun {
 }
 /** 一次运行持有不可变定义快照，避免编辑影响正在执行的任务。 */
 export interface WorkflowRun {
+  /** 待运行参数与输入文件指纹，只有显式运行后才导入媒体。 */
+  preparation?: TaskPreparation;
+  /** 首次提交运行时间，不以创建时间计算运行配额。 */
+  submittedAt?: string;
   /** 整棵调用树在启动时固定定义，运行期间不再读取最新文件。 */
   dependencies?: Record<string, WorkflowDefinition>;
   id: string;

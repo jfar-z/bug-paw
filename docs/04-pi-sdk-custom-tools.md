@@ -81,7 +81,7 @@ const tool = defineTool({
 
 ## AIGC 工具
 
-`aigc_list_interfaces`、`aigc_run`、`aigc_run_and_wait`、`aigc_get_task`、`aigc_cancel_task` 通过会话工具工厂注册，必须分别授权。阻塞工具使用自身授权复用提交及交付逻辑，不隐式授予异步工具权限。接口发布开关不能替代 Agent 工具权限，历史手动任务不自动授权给任何 Agent。完整调用约定、限额及取消语义见 [AIGC 接口发布规范](11-aigc-agent-tools.md)。
+`aigc_list_interfaces`、`aigc_create_task`、`aigc_run`、`aigc_run_and_wait`、`aigc_get_task`、`aigc_cancel_task` 通过会话工具工厂注册，必须分别授权。创建工具只校验并保存；运行工具只接受 taskIds，整批提交后异步返回或统一等待。阻塞工具使用自身授权复用提交及交付逻辑，不隐式授予异步工具权限。接口发布开关不能替代 Agent 工具权限，历史手动任务不自动授权给任何 Agent。完整调用约定、限额及取消语义见 [AIGC 接口发布规范](11-aigc-agent-tools.md)。
 
 ## 定时任务示例
 
@@ -107,4 +107,4 @@ const tool = defineTool({
 
 ## DAG 工作流工具
 
-工作流通过会话 `customTools` 注册 `workflow_list`、`workflow_get_parameters`、`workflow_get_definition`、`workflow_run`、`workflow_run_and_wait`、`workflow_get_task`、`workflow_cancel_task`，每项独立授权，默认不启用。调用前优先使用 `workflow_get_parameters` 仅查询出入参；只有需要内部实现时才查询完整定义。发布工作流将其中已配置的子节点能力作为整体授予获调用权限的 Agent，避免将子工具白名单误认为二次授权边界。详见 [DAG 工作流](13-dag-workflows.md)，包含类型、JSON Schema、幂等、工作区文件归属、取消和脚本隔离限制。
+工作流通过会话 `customTools` 注册 `workflow_list`、`workflow_get_parameters`、`workflow_get_definition`、`workflow_create_task`、`workflow_run`、`workflow_run_and_wait`、`workflow_get_task`、`workflow_cancel_task`，每项独立授权，默认不启用。调用前优先使用 `workflow_get_parameters` 仅查询出入参；只有需要内部实现时才查询完整定义。发布工作流将其中已配置的子节点能力作为整体授予获调用权限的 Agent，避免将子工具白名单误认为二次授权边界。详见 [DAG 工作流](13-dag-workflows.md)，包含类型、JSON Schema、幂等、工作区文件归属、取消和脚本隔离限制。

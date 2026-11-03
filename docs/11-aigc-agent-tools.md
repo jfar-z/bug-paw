@@ -13,8 +13,9 @@
 | 工具 | 用途 | 权限 |
 | --- | --- | --- |
 | `aigc_list_interfaces` | 通过必填 `action` 分页查询接口或按真实 ID 获取参数定义 | 单独授权 |
-| `aigc_run` | 校验参数、异步提交并返回 `taskId` | 高风险，可能计费 |
-| `aigc_run_and_wait` | 提交并等待终态，成功后直接交付文件 | 高风险，单独授权 |
+| `aigc_create_task` | 校验参数并保存待运行任务，返回 `taskId` 和生效参数；不上传或运行 | 单独授权 |
+| `aigc_run` | 传入 `taskIds`，整批异步启动 | 高风险，可能计费 |
+| `aigc_run_and_wait` | 传入 `taskIds`，整批启动后等待全部终态，逐项交付文件 | 高风险，单独授权 |
 | `aigc_get_task` | 查询所属任务，完成时交付工作区文件 | 单独授权 |
 | `aigc_cancel_task` | 取消所属任务，返回上游确认状态 | 高风险，单独授权 |
 
@@ -24,7 +25,7 @@
 
 The interface editor stores an Agent-specific usage description. With `interfaceId`, the detail response includes `instructions`, `fields`, and `outputs`; each output defines `id`, `name`, `mediaType`, `description`, and `multiple`.
 
-`aigc_run` 示例：
+`aigc_create_task` 示例：
 
 ```json
 {
@@ -39,25 +40,37 @@ The interface editor stores an Agent-specific usage description. With `interface
 
 每个参数项必须且只能提供 `name` 和 `value`。`value` 按接口字段类型使用原生 JSON 字符串、数字或布尔值；媒体字段使用工作区相对路径字符串。先读取接口定义，不猜测字段。可选字段缺失时使用已配置默认值；可选媒体字段也可显式传 `value: null`，等同于未提供。非媒体字段传 `null`、必填字段缺失或没有默认值时拒绝提交。枚举保留真实标量类型，数字枚举不能强制转为字符串。OpenAI“图片生成与编辑”接口省略参考图时调用文生图端点，提供参考图时调用图片编辑端点。OpenAI/Grok 图片编辑的 `image` 也接受有序路径数组，例如 `{ "name": "image", "value": ["attachments/first.png", "attachments/second.png"] }`；单张路径继续有效。OpenAI 最多 16 张，Grok 最多 5 张；其他媒体字段仍只接受单个路径。
 
-所有接口的本地媒体均通过参数项的 `value` 指定当前 Agent 工作区相对路径，不接受任意资产 ID、宿主机路径、其他 Agent 文件或 ComfyUI input 文件名。服务端复用工作区路径、符号链接、大小和媒体类型校验，并按协议处理：OpenAI 保存到私有输入区后以 multipart 上传，ComfyUI 保存到私有输入区后上传到 ComfyUI input，Grok 自动复制到公开目录并提交稳定 URL。
+创建只读校验工作区文件并保存内容指纹；运行时复核，文件变化必须重新创建任务。创建不复制到资产区或公开目录，不联系上游。所有接口的本地媒体均通过参数项的 `value` 指定当前 Agent 工作区相对路径，不接受任意资产 ID、宿主机路径、其他 Agent 文件或 ComfyUI input 文件名。服务端复用工作区路径、符号链接、大小和媒体类型校验，并按协议处理：OpenAI 保存到私有输入区后以 multipart 上传，ComfyUI 保存到私有输入区后上传到 ComfyUI input，Grok 自动复制到公开目录并提交稳定 URL。
 
-Grok 本地媒体要求配置 `BUG_PAW_PUBLIC_ORIGIN`。该值必须是无需认证即可被上游访问的 HTTP(S) Origin，不得包含路径、凭据、查询参数或片段。未配置时，只有进程能读取到明确的 `BUG_PAW_BIND_ADDRESS` 才会回退到监听地址；通配地址不会被当作可访问地址。自动公开发生在计费任务创建前，创建失败会删除本次公开副本；任务创建成功后文件保留在公开目录，可由用户统一管理。
+Grok 本地媒体要求配置 `BUG_PAW_PUBLIC_ORIGIN`。该值必须是无需认证即可被上游访问的 HTTP(S) Origin，不得包含路径、凭据、查询参数或片段。未配置时，只有进程能读取到明确的 `BUG_PAW_BIND_ADDRESS` 才会回退到监听地址；通配地址不会被当作可访问地址。自动公开发生在显式运行的整批校验之后、提交执行之前；整批提交失败会清理本次副本，提交成功后保留在公开目录，可由用户统一管理。
 
 ## 任务归属与幂等
 
 ### 阻塞工具
 
-`aigc_run_and_wait` 使用与 `aigc_run` 相同的参数和幂等作用域，默认不授权。只授予它自身的权限即可执行提交、内部状态查询和文件交付；发现接口仍使用单独授权的 `aigc_list_interfaces`。
+创建工具返回 `status=prepared`，不会占用执行额度。核对生效参数后，将创建工具返回的真实任务 ID 传入运行工具：
 
-工具通过 Pi 的 `onUpdate` 回调报告任务 ID、排队和执行进度，每 5 秒读取一次最新状态，不占用外部 `aigc_get_task` 的查询限频窗口。内部读取仍检查任务归属、当前工具权限及接口发布状态。
+```json
+{"taskIds":["<任务 A 的 ID>","<任务 B 的 ID>"]}
+```
 
-返回值包含实际任务 `status`、`taskId`、`files` 和等待状态 `waitStatus`：
+单次要求 1～2 个不重复的 ID。服务端先校验整批归属、当前发布状态、配置版本、文件指纹和运行额度；任一不通过都不会新启动任务。配置或文件变化必须重新创建。额度不足时明确拒绝，不暗中排成串行。
 
-- `completed`：任务进入成功、失败或取消终态；不等于生成成功，必须检查 `status`。
-- `timed_out`：达到 30 分钟等待上限，返回最近读取的任务状态，不取消或重新提交任务。
-- `interrupted`：任务提交后用户中止聊天，只停止等待，后台任务仍继续；SDK 中止时可能不会展示最终工具结果，先前进度事件包含任务 ID。
+`aigc_run` 立即返回 `tasks`；`aigc_run_and_wait` 先提交全部任务，再等待整批终态。各任务独立执行，某个失败不取消其他任务，不自动重试。运行工具只要求自身授权；创建工具、发现、外部查询和取消仍单独授权。
 
-需要继续等待时，在原会话使用同一个 `requestKey` 和相同参数再次调用，不生成重复任务。取消生成仍需 `aigc_cancel_task`。底层 Agent 任务现有的 30 分钟执行上限保持不变，与等待期限独立计算；等待工具不会延长任务执行上限。
+等待工具使用 Pi `onUpdate` 报告每个任务的 ID 和进度，每 5 秒读取状态，不占外部查询限频窗口。返回 `tasks:[{taskId,status,files,error?}]`，顺序与输入 ID 一致，并包含整批 `waitStatus`：
+
+- `completed`：所有任务均已结束，需逐项检查是否成功。失败进入工具错误事件，同时保留成功任务产物。
+- `timed_out`：达到 30 分钟等待上限，保留已完成结果及活动状态，不取消后台任务。
+- `interrupted`：中止聊天只结束等待；SDK 可能不展示最终返回，进度事件已包含任务 ID。
+
+再次使用相同 `taskIds` 继续等待或返回已有结果；不再携带业务参数或 requestKey。重复运行任何已提交或终态 ID 都不会重新生成，失败和取消任务也不隐式重试。修改参数或明确重新生成时使用新 requestKey 创建新任务。Agent 两阶段任务不能从工作台直接重试。底层 30 分钟执行上限与等待期限独立。
+
+### 状态与持久化
+
+`prepared → queued → running → succeeded / failed / cancelled`。待运行也可直接取消，无上游调用。创建时固定最终生效参数和业务定义指纹，运行前再次核对完整 ComfyUI 原始定义、接口与渠道；运行中使用已核验快照。
+
+待运行任务跨重启保留，绝不自动启动。进行中的任务重启后明确标记中断失败，不自动恢复可能计费的调用。整批状态一次原子持久化成功后，才启动任何上游请求；上游执行不保证事务性，部分失败保留其他结果。
 
 ### 归属规则
 
@@ -71,9 +84,10 @@ Grok 本地媒体要求配置 `BUG_PAW_PUBLIC_ORIGIN`。该值必须是无需认
 
 ## 限额与交付
 
-- 每个 Agent 最多 2 个活动任务，整个服务最多 8 个 Agent 活动任务；手动工作台任务不计入该限额。
-- 每个 Agent 每小时最多提交 20 个任务，同键重试不增加计数。
-- 查询硬限制间隔 2 秒，正常返回建议间隔 `pollAfterMs=5000`。
+- 每个 Agent 默认最多 5 个活动任务，整个服务默认最多 20 个 Agent/MCP 活动任务；手动工作台任务不计入该限额。
+- 每个 Agent 默认每小时最多运行 200 个任务，按首次提交执行时间计数，重复运行 ID 不增加计数；保留现有环境变量覆盖。
+- 查询默认最小间隔 1 秒，正常返回建议间隔 `pollAfterMs=5000`。
+- 待运行任务不占执行配额；全局最多 1000 个，每个 Agent 最多 100 个。
 - 参数最多 100 项、128 KiB；单个工作区输入文件最多 100 MiB，单任务媒体输入合计最多 200 MiB。
 - Agent 任务本地执行上限 30 分钟。超时不表示上游已经停止。
 - 一次交付最多 20 个产物、合计 200 MiB；超过时在 AIGC 工作台查看，不把大文件塞入模型上下文。

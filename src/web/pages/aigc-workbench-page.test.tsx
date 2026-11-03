@@ -18,6 +18,27 @@ function renderAigcPage(route: Parameters<typeof AigcWorkbenchPage>[0]["route"] 
 }
 
 describe("AigcWorkbenchPage 创作台", () => {
+  it("待运行任务显示真实状态并进入需处理筛选，取消后不出现隐式重试", async () => {
+    let status = "prepared";
+    const task = () => ({ id: "prepared-task", interfaceId: "interface", interfaceName: "待运行创作", channelId: "channel", status,
+      assetCount: 0, requiresNewTask: true, createdAt: "2026-11-03T00:00:00Z", updatedAt: "2026-11-03T00:00:00Z" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/cancel") && init?.method === "POST") { status = "cancelled"; return new Response(JSON.stringify(task())); }
+      if (url.endsWith("/aigc/tasks")) return new Response(JSON.stringify({ tasks: [task()] }));
+      return new Response("{}");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderAigcPage({ page: "aigc-tasks" });
+    expect(await screen.findByText("待运行")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "需处理" }));
+    expect(screen.getByText("待运行创作")).toBeInTheDocument();
+    expect(screen.getByText("参数已校验，等待 Agent 显式运行")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByText("已取消")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "重试" })).not.toBeInTheDocument();
+  });
+
   it("配置映射按子图名称和字段别名展示", async () => {
     const workflow = {
       id: "workflow-subgraph", name: "Krea-2", fileName: "krea-2.json", originalHash: "hash",

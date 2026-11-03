@@ -5,6 +5,7 @@ import mime from "mime";
 import type { AigcRunInputValue, AigcSingleRunInputValue, AigcTaskRecord } from "../../shared/aigc-contracts";
 import type { WorkspaceFileService } from "../attachments";
 import type { WorkspaceFileManager } from "../workspace-files";
+import { taskFingerprint, taskFileFingerprint, validateTaskIds } from "../core/task-preparation";
 import { KeyedMutex } from "../core/keyed-mutex";
 import type { AigcAssetService } from "./aigc-asset-service";
 import type { AigcConnectionService } from "./aigc-connection-service";
@@ -80,134 +81,164 @@ export class AigcAgentService {
     };
   }
 
-  /** 在任何副作用之前校验字段、去重并检查配额，只允许受控媒体输入。 */
-  async run(context: AigcAgentContext, input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] }, signal?: AbortSignal) {
-    return this.submit(context, input, "aigc_run", signal);
+  /** 创建阶段只读取并校验，不上传媒体、不触发上游计算。 */
+  async create(context: AigcAgentContext, input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] }, signal?: AbortSignal) {
+    return this.locks.run("submissions", async () => {
+      await this.authorize(context, "aigc_create_task");
+      signal?.throwIfAborted();
+      if (!/^[A-Za-z0-9_-]{1,80}$/.test(input.requestKey)) throw new TypeError("requestKey 必须为 1 到 80 位字母、数字、下划线或连字符");
+      const definition = await this.published(input.interfaceId);
+      const values = validateAgentParameters(definition.fields, input.parameters);
+      if (definition.item.protocol === "grok" && values.size !== undefined && !/^\d{2,5}x\d{2,5}$/.test(String(values.size))) throw new TypeError("size 必须使用 WIDTHxHEIGHT 格式");
+      const requestHash = taskFingerprint([input.interfaceId, Object.fromEntries(input.parameters.map((parameter) => [parameter.name, parameter.value]))]);
+      const records = await this.dependencies.tasks.listRecords();
+      const previous = records.find((task) => task.agentOrigin?.agentId === context.agentId
+        && task.agentOrigin.sessionId === context.sessionId && task.agentOrigin.requestKey === input.requestKey);
+      if (previous) {
+        if (previous.agentOrigin?.requestHash !== requestHash) throw new AigcAgentError("AIGC_IDEMPOTENCY_CONFLICT", "相同 requestKey 的参数已改变，不能重复创建");
+        return { ...this.summary(previous), parameters: previous.preparation?.values ?? previous.inputs };
+      }
+      const pending = records.filter((task) => task.status === "prepared");
+      if (pending.length >= 1000 || pending.filter((task) => task.agentOrigin?.agentId === context.agentId).length >= 100)
+        throw new AigcAgentError("AIGC_PREPARED_LIMIT", "待运行任务过多，请先运行或取消已有任务；全局最多 1000 个，每个 Agent 最多 100 个");
+      const media = await this.readMedia(context, definition.fields, values);
+      const files = Object.fromEntries([...media.values()].flat().map(({ path, file }) => [path, taskFileFingerprint(file)]));
+      if (definition.item.protocol === "grok" && media.size && !normalizePublicOrigin(this.dependencies.publicOrigin))
+        throw new AigcAgentError("AIGC_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 本地媒体需要配置 BUG_PAW_PUBLIC_ORIGIN，或使用明确的 BUG_PAW_BIND_ADDRESS");
+      await this.authorize(context, "aigc_create_task");
+      if (taskFingerprint(await this.published(input.interfaceId)) !== taskFingerprint(definition))
+        throw new AigcAgentError("AIGC_INTERFACE_CHANGED", "校验期间接口定义发生变化，请重新创建任务");
+      signal?.throwIfAborted();
+      const now = new Date().toISOString();
+      const task = await this.dependencies.tasks.createPrepared({
+        id: randomUUID(), interfaceId: definition.item.id, interfaceName: definition.item.name, channelId: definition.item.channelId,
+        status: "prepared", inputs: values, assets: [], createdAt: now, updatedAt: now,
+        agentOrigin: { ...context, requestKey: input.requestKey, requestHash },
+        preparation: { values, files, definitionHash: taskFingerprint(definition) },
+      });
+      return { ...this.summary(task), parameters: values };
+    });
   }
 
-  /** 提交并等待终态；等待中止或到期不会中止后台生成，也不会重新提交。 */
-  async runAndWait(
-    context: AigcAgentContext,
-    input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] },
-    signal?: AbortSignal,
-    onProgress?: (state: Awaited<ReturnType<AigcAgentService["get"]>>) => void,
-  ) {
+  /** 异步批量运行，仅接受创建工具返回的真实 ID。 */
+  async run(context: AigcAgentContext, input: { taskIds: string[] }, signal?: AbortSignal) {
+    return this.submit(context, input.taskIds, "aigc_run", signal);
+  }
+
+  /** 先提交整批再等待；聊天中止只结束等待，后台执行继续。 */
+  async runAndWait(context: AigcAgentContext, input: { taskIds: string[] }, signal?: AbortSignal,
+    onProgress?: (state: { tasks: Awaited<ReturnType<AigcAgentService["get"]>>[] }) => void) {
     const deadline = Date.now() + 30 * 60_000;
-    const submitted = await this.submit(context, input, "aigc_run_and_wait", signal);
-    let state: Awaited<ReturnType<AigcAgentService["get"]>> = { ...submitted, files: [] };
+    const submitted = await this.submit(context, input.taskIds, "aigc_run_and_wait", signal);
+    let state = { tasks: submitted.tasks.map((task) => ({ ...task, files: [] as Awaited<ReturnType<AigcAgentService["get"]>>["files"] })) };
     onProgress?.(state);
     try {
       while (true) {
         signal?.throwIfAborted();
-        state = await this.readTask(context, submitted.taskId, "aigc_run_and_wait", false, signal);
-        if (!["queued", "running"].includes(state.status)) return { ...state, waitStatus: "completed" as const };
+        state = { tasks: await Promise.all(input.taskIds.map((id) => this.readTask(context, id, "aigc_run_and_wait", false, signal))) };
         onProgress?.(state);
+        if (state.tasks.every((task) => !["queued", "running"].includes(task.status))) return { ...state, waitStatus: "completed" as const };
         const remaining = deadline - Date.now();
         if (remaining <= 0) return { ...state, waitStatus: "timed_out" as const };
         await delay(Math.min(5_000, remaining), undefined, { signal });
       }
     } catch (error) {
-      // 工具取消信号只控制等待生命周期，后台任务持有独立 AbortController。
       if (signal?.aborted) return { ...state, waitStatus: "interrupted" as const };
       throw error;
     }
   }
 
-  /** 两种提交工具共享幂等与配额，但只校验调用入口自身的权限。 */
-  private async submit(
-    context: AigcAgentContext,
-    input: { interfaceId: string; requestKey: string; parameters: AigcAgentParameter[] },
-    tool: "aigc_run" | "aigc_run_and_wait",
-    signal?: AbortSignal,
-  ) {
+  /** 整批校验及配额检查完成后，原子提交全部状态并启动各自后台任务。 */
+  private async submit(context: AigcAgentContext, ids: string[], tool: string, signal?: AbortSignal) {
     return this.locks.run("submissions", async () => {
       await this.authorize(context, tool);
+      validateTaskIds(ids);
       signal?.throwIfAborted();
-      if (!/^[A-Za-z0-9_-]{1,80}$/.test(input.requestKey)) throw new TypeError("requestKey 必须为 1 到 80 位字母、数字、下划线或连字符");
-      const { item, fields } = await this.published(input.interfaceId);
-      const values = validateAgentParameters(fields, input.parameters);
-      if (item.protocol === "grok" && values.size !== undefined && !/^\d{2,5}x\d{2,5}$/.test(String(values.size))) throw new TypeError("size 必须使用 WIDTHxHEIGHT 格式");
-      const requestHash = createHash("sha256").update(JSON.stringify([item.id, Object.entries(values).sort(([a], [b]) => a.localeCompare(b))])).digest("hex");
+      const tasks = await Promise.all(ids.map((id) => this.owned(context, id)));
+      const candidates = [];
+      for (const task of tasks) {
+        const definition = await this.published(task.interfaceId);
+        if (task.status !== "prepared") continue;
+        if (!task.preparation || task.preparation.definitionHash !== taskFingerprint(definition))
+          throw new AigcAgentError("AIGC_INTERFACE_CHANGED", `任务 ${task.id} 的接口或工作流定义已变化，请重新创建任务`);
+        const values = validateAgentParameters(definition.fields, Object.entries(task.preparation.values).map(([name, value]) => ({ name, value })) as AigcAgentParameter[]);
+        const media = await this.readMedia(context, definition.fields, values);
+        const files = Object.fromEntries([...media.values()].flat().map(({ path, file }) => [path, taskFileFingerprint(file)]));
+        if (taskFingerprint(files) !== taskFingerprint(task.preparation.files))
+          throw new AigcAgentError("AIGC_INPUT_CHANGED", `任务 ${task.id} 的输入文件已变化，请重新创建任务`);
+        candidates.push({ task, definition, values, media });
+      }
       const records = await this.dependencies.tasks.listRecords();
-      const previous = records.find((task) => task.agentOrigin?.agentId === context.agentId
-        && task.agentOrigin.sessionId === context.sessionId && task.agentOrigin.requestKey === input.requestKey);
-      if (previous) {
-        if (previous.agentOrigin?.requestHash !== requestHash) throw new AigcAgentError("AIGC_IDEMPOTENCY_CONFLICT", "相同 requestKey 的参数已改变，不能重复提交");
-        return this.summary(previous);
-      }
       const active = records.filter((task) => (task.agentOrigin || task.mcpOrigin) && ["queued", "running"].includes(task.status));
-      if (active.length >= this.limits.maxActiveTasks
-        || active.filter((task) => task.agentOrigin?.agentId === context.agentId).length >= this.limits.maxActiveTasksPerAgent) {
-        throw new AigcAgentError(
-          "AIGC_QUOTA_EXCEEDED",
-          `最多同时运行 ${this.limits.maxActiveTasks} 个 Agent 任务，每个 Agent 最多 ${this.limits.maxActiveTasksPerAgent} 个`,
-        );
-      }
-      const recent = records.filter((task) => task.agentOrigin?.agentId === context.agentId && Date.now() - Date.parse(task.createdAt) < 60 * 60_000);
-      if (recent.length >= this.limits.maxHourlyTasksPerAgent) {
-        throw new AigcAgentError("AIGC_RATE_LIMIT", `每个 Agent 每小时最多提交 ${this.limits.maxHourlyTasksPerAgent} 个任务`);
-      }
-      const prepared: Record<string, AigcRunInputValue> = Object.create(null);
-      const uploads: string[] = [];
-      const publicUploads: string[] = [];
+      if (candidates.length && (active.length + candidates.length > this.limits.maxActiveTasks
+        || active.filter((task) => task.agentOrigin?.agentId === context.agentId).length + candidates.length > this.limits.maxActiveTasksPerAgent))
+        throw new AigcAgentError("AIGC_QUOTA_EXCEEDED", `整批运行超过并发额度：全局最多 ${this.limits.maxActiveTasks} 个，每个 Agent 最多 ${this.limits.maxActiveTasksPerAgent} 个；本次未启动任务`);
+      const recent = records.filter((task) => task.agentOrigin?.agentId === context.agentId && task.status !== "prepared"
+        && (task.submittedAt || !task.preparation) && Date.now() - Date.parse(task.submittedAt ?? task.createdAt) < 3600_000);
+      if (candidates.length && recent.length + candidates.length > this.limits.maxHourlyTasksPerAgent)
+        throw new AigcAgentError("AIGC_RATE_LIMIT", `每个 Agent 每小时最多运行 ${this.limits.maxHourlyTasksPerAgent} 个任务；本次未启动任务`);
+      const uploads: string[] = [], publicUploads: string[] = [];
+      let committed = false;
       try {
-        // 先读取并校验全部媒体，再保存临时输入，避免错误参数启动上游计算。
-        const media = new Map<string, Awaited<ReturnType<WorkspaceFileManager["readFile"]>>[]>();
-        let totalBytes = 0;
-        for (const field of fields) {
-          if (values[field.name] === undefined) continue;
-          if (field.source === "workspace") {
-            const references = Array.isArray(values[field.name]) ? values[field.name] as string[] : [values[field.name] as string];
-            const files = [];
-            for (const reference of references) {
-              const file = await this.dependencies.workspace.readFile(context.agentId, reference, 100 * 1024 * 1024);
-              if (!file.mediaType.startsWith(`${field.type}/`)) throw new TypeError(`参数 ${field.name} 媒体类型不匹配`);
-              totalBytes += file.content.length;
-              if (totalBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参总量不能超过 200 MiB");
-              files.push(file);
-            }
-            media.set(field.name, files);
-          } else prepared[field.name] = values[field.name] as AigcSingleRunInputValue;
-        }
-        for (const [name, files] of media) {
-          signal?.throwIfAborted();
-          const references: AigcSingleRunInputValue[] = [];
-          for (const file of files) {
-            if (item.protocol === "grok") {
-              const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
-              if (!publicOrigin) {
-                throw new AigcAgentError("AIGC_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 本地媒体需要配置 BUG_PAW_PUBLIC_ORIGIN，或使用明确的 BUG_PAW_BIND_ADDRESS");
+        const entries = [];
+        for (const candidate of candidates) {
+          const inputs: Record<string, AigcRunInputValue> = { ...candidate.values } as Record<string, AigcRunInputValue>;
+          for (const [name, media] of candidate.media) {
+            const references: AigcSingleRunInputValue[] = [];
+            for (const { file } of media) {
+              signal?.throwIfAborted();
+              if (candidate.definition.item.protocol === "grok") {
+                const publicOrigin = normalizePublicOrigin(this.dependencies.publicOrigin);
+                if (!publicOrigin) throw new AigcAgentError("AIGC_PUBLIC_ORIGIN_UNAVAILABLE", "Grok 媒体公开地址不可用，请检查 BUG_PAW_PUBLIC_ORIGIN");
+                const saved = await this.dependencies.publicFiles.save(Readable.from(file.content), `agent-${randomUUID()}-${file.name}`, file.mediaType);
+                publicUploads.push(saved.id);
+                references.push(`${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`);
+              } else {
+                const saved = await this.dependencies.assets.saveInput(Readable.from(file.content), file.name, file.mediaType);
+                uploads.push(saved.id);
+                references.push({ assetId: saved.id, name: saved.name, mediaType: saved.mediaType });
               }
-              const saved = await this.dependencies.publicFiles.save(
-                Readable.from(file.content), `agent-${randomUUID()}-${file.name}`, file.mediaType,
-              );
-              publicUploads.push(saved.id);
-              references.push(`${publicOrigin}/aigc-public/files/${encodeURIComponent(saved.id)}`);
-            } else {
-              const saved = await this.dependencies.assets.saveInput(Readable.from(file.content), file.name, file.mediaType);
-              uploads.push(saved.id);
-              references.push({ assetId: saved.id, name: saved.name, mediaType: saved.mediaType });
             }
+            inputs[name] = Array.isArray(candidate.values[name]) ? references : references[0];
           }
-          prepared[name] = Array.isArray(values[name]) ? references : references[0];
+          entries.push({ id: candidate.task.id, inputs });
         }
-        // 文件准备可能耗时，提交前再次核对授权与发布状态。
         await this.authorize(context, tool);
-        const latest = await this.published(item.id);
-        if (JSON.stringify(latest.item) !== JSON.stringify(item)) throw new AigcAgentError("AIGC_INTERFACE_CHANGED", "准备文件期间接口配置发生变化，请重新读取参数定义");
+        for (const candidate of candidates)
+          if (taskFingerprint(await this.published(candidate.task.interfaceId)) !== candidate.task.preparation!.definitionHash)
+            throw new AigcAgentError("AIGC_INTERFACE_CHANGED", `任务 ${candidate.task.id} 的配置在准备期间变化，请重新创建任务`);
         signal?.throwIfAborted();
-        const task = await this.dependencies.tasks.createRun({ interfaceId: item.id, inputs: prepared }, {
-          ...context, requestKey: input.requestKey, requestHash,
-        });
-        return this.summary(task);
-      } catch (error) {
-        await Promise.all([
+        const started = entries.length ? await this.dependencies.tasks.submitPrepared(entries) : [];
+        committed = true;
+        const byId = new Map(started.map((task) => [task.id, task]));
+        return { tasks: tasks.map((task) => this.summary(byId.get(task.id) ?? task)) };
+      } finally {
+        if (!committed) await Promise.all([
           ...uploads.map((id) => this.dependencies.assets.removeInput(id)),
           ...publicUploads.map((id) => this.dependencies.publicFiles.remove(id)),
         ]);
-        throw error;
       }
     });
+  }
+
+  /** 文件只读校验供创建和运行复用；保留读入内容以避免上传前再次读取产生竞争。 */
+  private async readMedia(context: AigcAgentContext, fields: ReturnType<typeof agentFields>, values: Record<string, unknown>) {
+    const media = new Map<string, { path: string; file: Awaited<ReturnType<WorkspaceFileManager["readFile"]>> }[]>();
+    let totalBytes = 0;
+    for (const field of fields) {
+      if (field.source !== "workspace" || values[field.name] === undefined) continue;
+      const references = (Array.isArray(values[field.name]) ? values[field.name] : [values[field.name]]) as string[];
+      const entries = [];
+      for (const path of references) {
+        const file = await this.dependencies.workspace.readFile(context.agentId, path, 100 * 1024 * 1024);
+        if (!file.mediaType.startsWith(`${field.type}/`)) throw new TypeError(`参数 ${field.name} 媒体类型不匹配`);
+        totalBytes += file.content.length;
+        if (totalBytes > 200 * 1024 * 1024) throw new TypeError("单任务媒体入参总量不能超过 200 MiB");
+        entries.push({ path, file });
+      }
+      media.set(field.name, entries);
+    }
+    return media;
   }
 
   /** 按归属查询任务，完成时把产物交付到所属 Agent 的附件目录。 */
@@ -279,7 +310,7 @@ export class AigcAgentService {
     await this.authorize(context, "aigc_cancel_task");
     const task = await this.owned(context, taskId);
     if (task.status === "cancelled") return this.summary(task);
-    if (!["queued", "running"].includes(task.status)) throw new AigcAgentError("AIGC_NOT_CANCELLABLE", "任务已结束，不能取消");
+    if (!["prepared", "queued", "running"].includes(task.status)) throw new AigcAgentError("AIGC_NOT_CANCELLABLE", "任务已结束，不能取消");
     const cancelled = await this.dependencies.tasks.cancel(task.id);
     return this.summary(cancelled!);
   }
@@ -291,8 +322,8 @@ export class AigcAgentService {
     if (!item?.enabled || !item.toolPublishEnabled || !channel?.enabled || channel.type !== item.protocol) {
       throw new AigcAgentError("AIGC_INTERFACE_UNAVAILABLE", "接口不存在、未发布或渠道已停用，请在 AIGC 工作台检查");
     }
-    const workflow = item.protocol === "comfyui" ? (await this.dependencies.workflows.get((item.config as { workflowId: string }).workflowId)).workflow : undefined;
-    return { item, fields: agentFields(item, workflow), outputs: agentOutputs(item, workflow) };
+    const workflow = item.protocol === "comfyui" ? await this.dependencies.workflows.getPrivate((item.config as { workflowId: string }).workflowId) : undefined;
+    return { item, channel, workflow, fields: agentFields(item, workflow), outputs: agentOutputs(item, workflow) };
   }
 
   /** 无归属的手动任务和其他 Agent 任务统一表现为不可访问。 */
@@ -310,10 +341,10 @@ export class AigcAgentService {
         phase: task.execution.phase, queueAhead: task.execution.queueAhead,
         value: task.execution.progressValue, max: task.execution.progressMax,
       } } : {}),
-      ...(task.error ? { error: { code: task.error.code, message: "任务失败，请在 AIGC 工作台查看；不要自动重新提交" } } : {}),
+      ...(task.error ? { error: { code: task.error.code, message: task.error.message } } : {}),
       ...(task.status === "cancelled" ? {
-        upstreamCancellation: task.upstreamCancellation ?? "unknown",
-        message: task.upstreamCancellation === "confirmed" ? "已确认移除上游排队任务" : "本地任务已取消，上游可能仍在计算或计费",
+        upstreamCancellation: task.upstreamCancellation ?? (task.submittedAt || !task.preparation ? "unknown" : "confirmed"),
+        message: task.preparation && !task.submittedAt ? "待运行任务已取消，未提交上游" : task.upstreamCancellation === "confirmed" ? "已确认移除上游排队任务" : "本地任务已取消，上游可能仍在计算或计费",
       } : {}),
       pollAfterMs: 5_000,
     };

@@ -41,7 +41,7 @@ export class ComfyUiAigcAdapter implements AigcProtocolAdapter {
   /** 执行 ComfyUI 工作流接口。 */
   async execute(input: AigcExecutionInput): Promise<AigcExecutionResult> {
     const config = input.item.config as AigcComfyUiInterfaceConfig;
-    const workflow = await input.workflows?.getPrivate(config.workflowId);
+    const workflow = input.workflowSnapshot ?? await input.workflows?.getPrivate(config.workflowId);
     if (!workflow) throw new Error("所选 ComfyUI 工作流不存在");
     const progress = createProgressReporter(input, workflow);
     if (workflow.inputMappings.some((mapping) => ["image", "video", "audio"].includes(mapping.type))) {

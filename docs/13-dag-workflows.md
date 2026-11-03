@@ -133,8 +133,9 @@ return { result: String(inputs.value).toUpperCase() };
 | `workflow_list`           | `action="list"`、`workflowId=null`、`offset=0` 分页；`action="get"`、真实 ID、`offset=null` 查询出入参。 |
 | `workflow_get_parameters` | `workflowId`；只查询名称、说明、版本和出入参，不返回节点、连线、脚本、绑定或枚举来源。 |
 | `workflow_get_definition` | `workflowId`；查询完整节点、配置、连线和绑定。                                                           |
-| `workflow_run`            | `workflowId`、稳定的 `requestKey`、`parameters:[{name,value}]`；异步调用。                               |
-| `workflow_run_and_wait`   | 同调用参数；等待并报告进度，聊天中止只结束等待。只需自身工具权限。                                       |
+| `workflow_create_task` | `workflowId`、稳定的 `requestKey`、`parameters:[{name,value}]`；只校验并保存，不运行。 |
+| `workflow_run` | `taskIds`：1～2 个真实任务 ID；整批异步启动。 |
+| `workflow_run_and_wait` | `taskIds`：整批启动后等待全部结束；聊天中止只结束等待。只需自身工具权限。 |
 | `workflow_get_task`       | `taskId`；查询所属 Agent 的任务，成功后将媒体交付到工作区。                                              |
 | `workflow_cancel_task`    | `taskId`；取消所属 Agent 的任务及活动节点。                                                              |
 
@@ -146,7 +147,11 @@ return { result: String(inputs.value).toUpperCase() };
 
 JSON 对象与数组是输入类型本身，工具 `value` 因此支持动态 JSON 内容，服务端按工作流定义再次验证；工具根节点仍是固定 `Type.Object`，无根级组合 Schema。媒体参数传当前 Agent 工作区相对路径，数组传路径数组；禁止任意宿主路径。查询和交付检查任务归属、当前权限及发布状态。取消仍可用于已撤销发布的自有任务，避免任务无法停止。
 
-相同调用方会话的同一 `requestKey` 只创建一次任务；更改工作流或参数后复用该键会冲突。媒体路径参与幂等计算，重试不会因内部上传 ID 改变而重复执行。全局最多 8 个活动工作流，每调用方最多 2 个、每小时 60 次；每个工作流最多 100 个节点、400 条边，同一批最多并发 3 个节点，运行上限 30 分钟。单节点 JSON 最多 1 MiB；工具结果最多 128 KiB，超出时需在页面查看。
+创建返回 `prepared` 和生效参数，不导入媒体或运行节点。根定义、子依赖和外部能力配置参与指纹；工作区输入只读校验并保存内容指纹。运行前整批复核权限、发布状态、完整依赖定义、文件和额度，任一失败都不启动。单次最多 2 个 ID，先全部启动再统一等待，各任务失败独立保留，重复 ID 不重跑终态任务。等待返回有序 `tasks` 与 `waitStatus=completed/timed_out/interrupted`；部分失败进入错误事件并保留成功结果。继续等待复用原 ID，不再传参数或 requestKey。
+
+待运行不占并发与每小时运行次数，全局最多 1000 个、每 Agent 最多 100 个；可直接取消。重启保留待运行状态，已执行任务沿用中断失败策略。批次使用临时原子提交凭据，全部独立运行文件写入后清理；重启可据凭据识别已提交任务，不重复执行。
+
+相同调用方会话的同一 `requestKey` 只创建一次任务；更改工作流或参数后复用该键会冲突。媒体路径参与幂等计算，重试不会因内部上传 ID 改变而重复执行。全局最多 8 个活动工作流，每调用方最多 2 个、按首次提交时间每小时 60 次；每个工作流最多 100 个节点、400 条边，同一批最多并发 3 个节点，运行上限 30 分钟。单节点 JSON 最多 1 MiB；工具结果最多 128 KiB，超出时需在页面查看。
 
 ## 持久化、PWA 与验证
 

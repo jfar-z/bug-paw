@@ -1,3 +1,4 @@
+import type { TaskPreparation } from "./task-preparation-contracts";
 import type { CredentialStatus } from "./configuration-contracts";
 
 /** 当前支持的 AIGC 渠道协议。 */
@@ -419,7 +420,7 @@ export interface AigcMcpClient {
 }
 
 /** AIGC 任务状态。 */
-export type AigcTaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+export type AigcTaskStatus = "prepared" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
 
 /** 单次批量删除任务接口允许提交的最大任务数。 */
 export const AIGC_TASK_BULK_DELETE_LIMIT = 500;
@@ -462,6 +463,10 @@ export interface AigcTaskExecutionState {
 
 /** 任务详情。 */
 export interface AigcTaskRecord {
+  /** Agent 创建时只校验参数，运行时复核后再准备媒体。 */
+  preparation?: TaskPreparation;
+  /** 首次提交执行的时间，用于执行配额，与创建时间分开。 */
+  submittedAt?: string;
   /** 仅服务端写入；缺失表示历史或手动任务，不对 Agent 开放。 */
   agentOrigin?: {
     agentId: string;
@@ -496,6 +501,8 @@ export interface AigcTaskRecord {
 
 /** 任务列表项。 */
 export interface AigcTaskSummary {
+  /** Agent 两阶段任务不允许通过工作台隐式重试。 */
+  requiresNewTask?: boolean;
   /** 上游是否确认取消。 */
   upstreamCancellation?: "confirmed" | "unknown";
   id: string;

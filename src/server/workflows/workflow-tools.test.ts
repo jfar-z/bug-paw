@@ -1,13 +1,13 @@
 import { createTestDatabase } from "../database/test-database";
 // @vitest-environment node
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { Check } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorkflowTools, WorkflowToolService } from "./workflow-tools";
-import { WorkflowService } from "./workflow-service";
+import { WorkflowService, type WorkflowExecutor } from "./workflow-service";
 import { WorkflowRepository } from "./workflow-repository";
 import { WorkflowFiles } from "./workflow-files";
 import { createWorkspaceFileManager } from "../workspace-files";
@@ -25,6 +25,7 @@ const names = [
   "workflow_list",
   "workflow_get_parameters",
   "workflow_get_definition",
+  "workflow_create_task",
   "workflow_run",
   "workflow_run_and_wait",
   "workflow_get_task",
@@ -34,7 +35,7 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
 });
-async function fixture() {
+async function fixture(execute: WorkflowExecutor["execute"] = vi.fn(async () => ({}))) {
   const root = await mkdtemp(join(tmpdir(), "bugpaw-workflow-tools-"));
   await mkdir(join(root, "agents", context.agentId), { recursive: true });
   const agents = {
@@ -45,10 +46,8 @@ async function fixture() {
     createWorkspaceFileManager(agents),
     createWorkspaceFileService({} as never, agents),
   );
-  const workflows = new WorkflowService(
-    new WorkflowRepository(join(root, "workflows"), createTestDatabase()),
-    { execute: async () => ({}) },
-  );
+  const repository = new WorkflowRepository(join(root, "workflows"), createTestDatabase());
+  const workflows = new WorkflowService(repository, { execute });
   await workflows.initialize();
   let allowed = [...names];
   const service = new WorkflowToolService(
@@ -65,8 +64,17 @@ async function fixture() {
     await workflows.close();
     await rm(root, { recursive: true, force: true });
   });
+  /** 回归调用显式经过创建与运行，不在生产服务保留旧参数入口。 */
+  const start = async (ctx: typeof context, tool: string, input: Parameters<WorkflowToolService["create"]>[1]) => {
+    const created = await service.create(ctx, input);
+    await service.run(ctx, [created.taskId], tool);
+    return workflows.getRun(created.taskId, ctx);
+  };
   return {
     root,
+    execute,
+    repository,
+    start,
     files,
     workflows,
     service,
@@ -78,9 +86,130 @@ async function fixture() {
   };
 }
 describe("工作流 Agent 工具边界", () => {
-  it("七个工具使用根对象必填协议，默认权限不自动扩张", async () => {
+  it("创建回显默认值但不执行，重启保留任务且可以取消待运行任务", async () => {
+    const f = await fixture();
+    const args = { workflowId: f.definition.id, requestKey: "prepared", parameters: [{ name: "prompt", value: "hello" }] };
+    const a = await f.service.create(context, args);
+    expect(a).toMatchObject({ status: "prepared", parameters: { prompt: "hello" } });
+    expect((await f.service.create(context, args)).taskId).toBe(a.taskId);
+    expect(f.execute).not.toHaveBeenCalled();
+    const restarted = new WorkflowService(f.repository, { execute: f.execute });
+    await restarted.initialize();
+    expect(restarted.getRun(a.taskId).status).toBe("prepared");
+    await restarted.close();
+    expect(await f.service.cancel(context, a.taskId)).toMatchObject({ status: "cancelled" });
+    await f.service.run(context, [a.taskId]);
+    expect(f.execute).not.toHaveBeenCalled();
+  });
+
+  it("两个任务一起执行后才统一等待，保留部分成功且不会重复执行终态任务", async () => {
+    const entered: string[] = [];
+    const execute = vi.fn(async (_ctx: unknown, inputs: Record<string, unknown>) => {
+      entered.push(inputs.prompt as string);
+      await vi.waitFor(() => expect(entered).toHaveLength(2));
+      if (inputs.prompt === "bad") throw new Error("测试节点执行失败");
+      return { text: "done" };
+    });
+    const f = await fixture(execute);
+    const draft = emptyWorkflow();
+    draft.published = true;
+    const node = newWorkflowNode("llm", "model");
+    node.config.provider = "test"; node.config.modelId = "test";
+    node.inputs.prompt = { kind: "reference", nodeId: "input", field: "prompt" };
+    draft.nodes.splice(1, 0, node);
+    draft.nodes[2].inputs.result = { kind: "reference", nodeId: "model", field: "text" };
+    draft.edges = [{ id: "a", source: "input", target: "model" }, { id: "b", source: "model", target: "output" }];
+    const definition = await f.workflows.save(draft);
+    const a = await f.service.create(context, { workflowId: definition.id, requestKey: "a", parameters: [{ name: "prompt", value: "ok" }] });
+    const b = await f.service.create(context, { workflowId: definition.id, requestKey: "b", parameters: [{ name: "prompt", value: "bad" }] });
+    const result = await f.service.runAndWait(context, [a.taskId, b.taskId]);
+    expect(result.waitStatus).toBe("completed");
+    expect(result.tasks.map((task) => task.status)).toEqual(["succeeded", "failed"]);
+    expect(result.tasks[0].outputs).toEqual({ result: "done" });
+    await f.service.run(context, [a.taskId, b.taskId]);
+    expect(execute).toHaveBeenCalledTimes(2);
+    const tool = f.tools.find((tool) => tool.name === "workflow_run_and_wait")!;
+    await expect(tool.execute("partial", { taskIds: [a.taskId, b.taskId] } as never, undefined, undefined, {} as never))
+      .rejects.toThrow(/WORKFLOW_TASK_FAILED.*done/);
+  }, 10000);
+
+  it("整批 ID 错误、定义变化或持久化失败都不启动任何任务", async () => {
+    const f = await fixture();
+    const args = { workflowId: f.definition.id, requestKey: "a", parameters: [{ name: "prompt", value: "hello" }] };
+    const a = await f.service.create(context, args), b = await f.service.create(context, { ...args, requestKey: "b" });
+    for (const ids of [[a.taskId, "missing"], [a.taskId, a.taskId], []]) await expect(f.service.run(context, ids)).rejects.toThrow();
+    vi.spyOn(f.repository, "saveBatch").mockRejectedValueOnce(new Error("模拟整批持久化失败"));
+    await expect(f.service.run(context, [a.taskId, b.taskId])).rejects.toThrow("持久化失败");
+    expect(f.workflows.listRuns().map((run) => run.status)).toEqual(["prepared", "prepared"]);
+    await f.workflows.save({ ...f.definition, name: "changed" }, f.definition.id, f.definition.revision);
+    await expect(f.service.run(context, [a.taskId, b.taskId])).rejects.toThrow("定义已变化");
+    expect(f.execute).not.toHaveBeenCalled();
+  });
+
+  it("批次提交凭据在崩溃后识别全部已提交任务，不自动重跑，恢复后清理凭据", async () => {
+    const f = await fixture();
+    const args = { workflowId: f.definition.id, requestKey: "a", parameters: [{ name: "prompt", value: "hello" }] };
+    const a = await f.service.create(context, args), b = await f.service.create(context, { ...args, requestKey: "b" });
+    const batch = [a, b].map((task) => ({ ...f.workflows.getRun(task.taskId), status: "queued" as const, submittedAt: new Date().toISOString() }));
+    await f.repository.saveBatch(batch);
+    // 模拟提交成功后、成员运行文件尚未写入时进程中断。
+    const restarted = new WorkflowService(f.repository, { execute: f.execute });
+    await restarted.initialize();
+    expect(restarted.listRuns().map((run) => run.status)).toEqual(["failed", "failed"]);
+    expect(restarted.listRuns().every((run) => run.error?.code === "WORKFLOW_INTERRUPTED")).toBe(true);
+    expect((await readdir(join(f.root, "workflows", "runs"))).some((name) => name.startsWith("batch-"))).toBe(false);
+    expect(f.execute).not.toHaveBeenCalled();
+    await restarted.close();
+  });
+
+  it("中止整批等待保留两个后台任务，活动额度不足整批拒绝", async () => {
+    const f = await fixture(async ({ signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+    const draft = emptyWorkflow(); draft.published = true;
+    const node = newWorkflowNode("llm", "model"); node.config.provider = "test"; node.config.modelId = "test";
+    node.inputs.prompt = { kind: "reference", nodeId: "input", field: "prompt" };
+    draft.nodes.splice(1, 0, node);
+    draft.edges = [{ id: "a", source: "input", target: "model" }, { id: "b", source: "model", target: "output" }];
+    const definition = await f.workflows.save(draft);
+    const ids = [];
+    for (const requestKey of ["a", "b", "c"]) ids.push((await f.service.create(context, { workflowId: definition.id, requestKey, parameters: [{ name: "prompt", value: "hello" }] })).taskId);
+    const controller = new AbortController();
+    const result = await f.service.runAndWait(context, ids.slice(0, 2), controller.signal, () => controller.abort());
+    expect(result.waitStatus).toBe("interrupted");
+    expect(ids.slice(0, 2).map((id) => f.workflows.getRun(id).status).every((status) => ["queued", "running"].includes(status))).toBe(true);
+    await expect(f.service.run(context, [ids[2]])).rejects.toThrow("并发额度");
+    expect(f.workflows.getRun(ids[2]).status).toBe("prepared");
+    for (const id of ids.slice(0, 2)) await f.service.cancel(context, id);
+  });
+
+  it("创建媒体任务不导入文件，文件变化时整批拒绝并清理临时导入", async () => {
+    const f = await fixture();
+    const draft = emptyWorkflow(); draft.published = true;
+    draft.nodes[0].outputs = [{ name: "image", type: "image", required: true }];
+    draft.nodes[1].outputs = [{ name: "result", type: "image", required: true }];
+    draft.nodes[1].inputs.result = { kind: "reference", nodeId: "input", field: "image" };
+    const definition = await f.workflows.save(draft);
+    await writeFile(join(f.root, "agents", context.agentId, "source.png"), "old");
+    const a = await f.service.create(context, { workflowId: definition.id, requestKey: "a", parameters: [{ name: "image", value: "source.png" }] });
+    expect(await f.files.inventory()).toEqual([]);
+    await rm(join(f.root, "agents", context.agentId, "source.png"));
+    expect((await f.service.create(context, { workflowId: definition.id, requestKey: "a", parameters: [{ name: "image", value: "source.png" }] })).taskId).toBe(a.taskId);
+    await writeFile(join(f.root, "agents", context.agentId, "source.png"), "new");
+    await expect(f.service.run(context, [a.taskId])).rejects.toThrow("输入文件已变化");
+    expect(f.workflows.getRun(a.taskId).status).toBe("prepared");
+    expect(await f.files.inventory()).toEqual([]);
+  });
+
+  it("八个工具使用根对象必填协议，默认权限不自动扩张", async () => {
     const f = await fixture();
     expect(f.tools.map((t) => t.name)).toEqual(names);
+    for (const name of ["workflow_run", "workflow_run_and_wait"]) {
+      const schema = f.tools.find((tool) => tool.name === name)!.parameters;
+      expect(schema.required).toEqual(["taskIds"]);
+      expect(Object.keys(schema.properties!)).toEqual(["taskIds"]);
+      expect(Check(schema, { workflowId: f.definition.id, requestKey: "old", parameters: [] })).toBe(false);
+    }
     for (const tool of f.tools) {
       expect(tool.parameters.type).toBe("object");
       expect(tool.parameters.required?.length).toBeGreaterThan(0);
@@ -337,14 +466,13 @@ describe("工作流 Agent 工具边界", () => {
         requestKey: "run",
         parameters: [{ name: "prompt", value: "hello" }],
       };
-    f.allow(["workflow_run_and_wait"]);
-    const run = await f.service.start(context, "workflow_run_and_wait", input);
-    expect(await f.service.wait(context, run.id)).toMatchObject({
-      status: "succeeded",
-      outputs: { result: "hello" },
+    f.allow(["workflow_create_task", "workflow_run_and_wait"]);
+    const run = await f.start(context, "workflow_run_and_wait", input);
+    expect(await f.service.runAndWait(context, [run.id])).toMatchObject({
+      tasks: [{ status: "succeeded", outputs: { result: "hello" } }],
     });
     await expect(
-      f.service.start(context, "workflow_run", {
+      f.start(context, "workflow_run", {
         ...input,
         requestKey: "forbidden",
       }),
@@ -363,13 +491,13 @@ describe("工作流 Agent 工具边界", () => {
     ])
       await expect(method()).rejects.toThrow("不存在");
     await expect(
-      f.service.start(context, "workflow_run", {
+      f.start(context, "workflow_run", {
         ...input,
         parameters: [{ name: "invalid", value: 0 }],
       }),
     ).rejects.toThrow("参数名称");
     await expect(
-      f.service.start(context, "workflow_run", {
+      f.start(context, "workflow_run", {
         ...input,
         requestKey: "missing-parameter",
         parameters: [],
@@ -420,8 +548,8 @@ describe("工作流 Agent 工具边界", () => {
       requestKey: "media",
       parameters: [{ name: "picture", value: "input.png" }],
     };
-    const a = await f.service.start(context, "workflow_run", args),
-      b = await f.service.start(context, "workflow_run", args);
+    const a = await f.start(context, "workflow_run", args),
+      b = await f.start(context, "workflow_run", args);
     expect(a.id).toBe(b.id);
     await f.workflows.wait(a.id);
     expect(await f.service.get(context, a.id)).toMatchObject({
@@ -440,7 +568,7 @@ describe("工作流 Agent 工具边界", () => {
       "不合法",
     );
     await expect(
-      f.service.start(context, "workflow_run", {
+      f.start(context, "workflow_run", {
         ...args,
         requestKey: "outside",
         parameters: [{ name: "picture", value: "../agent-b/private.png" }],

@@ -25,7 +25,7 @@ export class WorkflowFileManager {
     for (const definition of definitions) add(definition.nodes, {workflowId: definition.id, workflowName: definition.name, role: "constant"});
     const visit = (run: WorkflowRun, root: WorkflowRun) => {
       const usage = {workflowId: run.workflowId, workflowName: run.definition.name, runId: root.id};
-      const active = ["queued", "running"].includes(root.status);
+      const active = ["prepared", "queued", "running"].includes(root.status);
       add(run.definition.nodes, {...usage, role: "constant"});
       for (const definition of Object.values(run.dependencies ?? {})) add(definition.nodes, {workflowId: definition.id, workflowName: definition.name, runId: root.id, role: "constant"});
       add(run.inputs, {...usage, role: "input"}, active);
@@ -40,7 +40,7 @@ export class WorkflowFileManager {
     // 刚生成的文件可能尚未写入节点结果，上传时记录的运行 ID 也必须参与保护。
     for (const file of inventory) if (file.runId) {
       const run = runs.find((item) => item.id === file.runId || hasRun(item, file.runId!));
-      if (run && ["queued", "running"].includes(run.status)) file.blockedReason = "正在被运行中的任务使用";
+      if (run && ["prepared", "queued", "running"].includes(run.status)) file.blockedReason = "正在被运行中的任务使用";
     }
     return inventory.map(({runId: _, ...file}) => file);
   }

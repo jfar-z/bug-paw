@@ -60,6 +60,10 @@ export class WorkflowFiles {
     );
     return this.public(file);
   }
+  /** 创建任务只读校验工作区文件，不写入运行资产目录。 */
+  async inspectPath(agentId: string, path: string) {
+    return this.workspace.readFile(agentId, path, 100 * 1024 * 1024);
+  }
   async importPath(agentId: string, path: string): Promise<WorkflowFile> {
     const file = await this.workspace.readFile(
       agentId,

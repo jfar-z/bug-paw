@@ -63,6 +63,24 @@ export class AigcTaskRepository {
     });
   }
 
+  /** 在同一次原子写入中提交整批状态，禁止部分任务提前执行。 */
+  async submitPrepared(entries: { id: string; inputs: Record<string, unknown> }[]): Promise<AigcTaskRecord[]> {
+    await this.ready;
+    return this.mutations.run("tasks", async () => {
+      const previous = entries.map(({ id }) => this.tasks.get(id));
+      if (previous.some((task) => task?.status !== "prepared")) throw new TypeError("待运行任务已被取消或删除，请重新查询");
+      const now = new Date().toISOString();
+      const next = entries.map((entry, index) => copyTask({ ...previous[index]!, inputs: entry.inputs, status: "queued", submittedAt: now, updatedAt: now }));
+      for (const task of next) this.tasks.set(task.id, task);
+      try { await this.persist(); }
+      catch (error) {
+        for (const task of previous) this.tasks.set(task!.id, task!);
+        throw error;
+      }
+      return next.map(copyTask);
+    });
+  }
+
   /** 删除任务并在持久化失败时恢复内存记录。 */
   async remove(id: string): Promise<AigcTaskRecord | undefined> {
     await this.ready;

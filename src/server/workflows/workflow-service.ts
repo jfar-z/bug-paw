@@ -12,6 +12,8 @@ import type {
   WorkflowCatalog,
 } from "../../shared/workflow-contracts";
 import { DomainError, toSafePublicMessage } from "../core/errors";
+import type { TaskPreparation } from "../../shared/task-preparation-contracts";
+import { taskFingerprint, validateTaskIds } from "../core/task-preparation";
 import { KeyedMutex } from "../core/keyed-mutex";
 import { WorkflowRepository } from "./workflow-repository";
 import {
@@ -36,6 +38,8 @@ export interface WorkflowExecutionContext {
   progress(message: string): Promise<void>;
 }
 export interface WorkflowExecutor {
+  /** 创建与运行复核外部能力配置，返回内容只参与指纹，不进入工具结果。 */
+  preparationFingerprint?(definition: WorkflowDefinition): Promise<unknown>;
   execute(
     context: WorkflowExecutionContext,
     inputs: Record<string, unknown>,
@@ -202,7 +206,7 @@ export class WorkflowService {
         if (
           [...this.runs.values()].some(
             (r) =>
-              r.workflowId === id && ["running", "queued"].includes(r.status),
+              r.workflowId === id && ["prepared", "running", "queued"].includes(r.status),
           )
         )
           throw new DomainError(
@@ -245,13 +249,38 @@ export class WorkflowService {
       );
     return structuredClone(run);
   }
+  /** 创建幂等先于文件读取；已存在任务不会因原输入文件被移除而重复导入。 */
+  existingRequest(workflowId: string, inputs: Record<string, unknown>, requestKey: string, origin?: WorkflowRun["origin"]): WorkflowRun | undefined {
+    if (typeof requestKey !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(requestKey))
+      invalid("requestKey 必须为 1 到 80 位字母、数字、下划线或连字符");
+    const run = [...this.runs.values()].find((item) => item.origin?.agentId === origin?.agentId && item.origin?.sessionId === origin?.sessionId && item.requestKey === requestKey);
+    if (!run) return undefined;
+    const hash = createHash("sha256").update(stableJson({ workflowId, inputs })!).digest("hex");
+    if (hash !== run.requestHash) throw new DomainError("CONFLICT", "同一 requestKey 的工作流或参数已变化");
+    return this.getRun(run.id, origin);
+  }
+
+  /** 手动入口仍支持立即运行，Agent 必须先使用 createPrepared 创建。 */
+  async start(workflowId: string, inputs: Record<string, unknown>, requestKey: string,
+    origin?: WorkflowRun["origin"], idempotencyInputs: Record<string, unknown> = inputs): Promise<WorkflowRun> {
+    return this.create(workflowId, inputs, requestKey, origin, idempotencyInputs);
+  }
+
+  /** 保存已校验任务，不占运行额度，也不执行任何节点。 */
+  async createPrepared(workflowId: string, inputs: Record<string, unknown>, requestKey: string,
+    origin: NonNullable<WorkflowRun["origin"]>, raw: Record<string, unknown>, files: Record<string, string>, expectedDefinition?: string): Promise<WorkflowRun> {
+    return this.create(workflowId, inputs, requestKey, origin, raw, { values: raw, files, definitionHash: "" }, expectedDefinition);
+  }
+
   /** 同一会话的 requestKey 保持稳定，参数变更时拒绝重用。 */
-  async start(
+  private async create(
     workflowId: string,
     inputs: Record<string, unknown>,
     requestKey: string,
     origin?: WorkflowRun["origin"],
     idempotencyInputs: Record<string, unknown> = inputs,
+    preparation?: TaskPreparation,
+    expectedDefinition?: string,
   ): Promise<WorkflowRun> {
     return this.lock.run("submit", async () => {
       if (this.closing) throw new DomainError("CONFLICT", "工作流服务正在关闭");
@@ -264,21 +293,11 @@ export class WorkflowService {
       const hash = createHash("sha256")
         .update(stableJson({ workflowId, inputs: idempotencyInputs })!)
         .digest("hex");
-      const existing = [...this.runs.values()].find(
-        (r) =>
-          r.origin?.agentId === origin?.agentId &&
-          r.origin?.sessionId === origin?.sessionId &&
-          r.requestKey === requestKey,
-      );
-      if (existing) {
-        if (existing.requestHash !== hash)
-          throw new DomainError(
-            "CONFLICT",
-            "同一 requestKey 的工作流或参数已变化",
-          );
-        return this.getRun(existing.id, origin);
-      }
+      const existing = this.existingRequest(workflowId, idempotencyInputs, requestKey, origin);
+      if (existing) return existing;
       const definition = await this.get(workflowId);
+      if (expectedDefinition && taskFingerprint(definition) !== expectedDefinition)
+        throw new DomainError("CONFLICT", "创建期间工作流定义变化，请重新查询参数并创建任务");
       if (origin && !definition.published)
         throw new DomainError("FORBIDDEN", "工作流未发布为 Agent 工具");
       validateWorkflow(definition, true);
@@ -300,41 +319,48 @@ export class WorkflowService {
       }
       for (const snapshot of [definition, ...Object.values(dependencies)])
         await this.checkFiles?.(snapshot);
-      await this.checkFiles?.(definition, inputs);
+      if (!preparation) await this.checkFiles?.(definition, inputs);
       const values = validateValues(
         definition.nodes.find((n) => n.kind === "input")!.outputs,
         inputs,
       );
-      if (
+      if (!preparation && (
         this.executions.size >= 8 ||
         [...this.runs.values()].filter(
           (r) =>
             r.origin?.agentId === origin?.agentId &&
             ["running", "queued"].includes(r.status),
         ).length >= 2
-      )
+      ))
         throw new DomainError(
           "CONFLICT",
           "工作流并发上限：全局 8 个，同一调用方 2 个",
         );
-      if (
+      if (!preparation && (
         [...this.runs.values()].filter(
           (r) =>
             r.origin?.agentId === origin?.agentId &&
-            Date.parse(r.createdAt) > Date.now() - 3600_000,
+            r.status !== "prepared" && (r.submittedAt || !r.preparation) && Date.parse(r.submittedAt ?? r.createdAt) > Date.now() - 3600_000,
         ).length >= 60
-      )
+      ))
         throw new DomainError(
           "CONFLICT",
           "同一调用方每小时最多启动 60 次工作流",
         );
+      if (preparation) {
+        const pending = [...this.runs.values()].filter((run) => run.status === "prepared");
+        if (pending.length >= 1000 || pending.filter((run) => run.origin?.agentId === origin?.agentId).length >= 100)
+          throw new DomainError("CONFLICT", "待运行工作流过多，请先运行或取消已有任务；全局最多 1000 个，每个 Agent 最多 100 个");
+        preparation = { ...preparation, values: { ...values, ...preparation.values }, definitionHash: await this.preparationFingerprint(definition, dependencies) };
+      }
       const run: WorkflowRun = {
         id: randomUUID(),
         workflowId,
         definition,
         dependencies,
-        status: "queued",
-        inputs: values,
+        status: preparation ? "prepared" : "queued",
+        inputs: preparation?.values ?? values,
+        ...(preparation ? { preparation } : { submittedAt: new Date().toISOString() }),
         outputs: {},
         nodes: definition.nodes.map((n) => ({
           nodeId: n.id,
@@ -349,24 +375,103 @@ export class WorkflowService {
       new WorkflowExecutionBudget(run);
       await this.repository.saveRun(run);
       this.runs.set(run.id, run);
-      const controller = new AbortController();
-      const promise = Promise.resolve()
-        .then(() => this.execute(run, controller))
-        .catch((error) =>
-          this.backgroundError(
-            error instanceof Error ? error : new Error("工作流终态持久化失败"),
-          ),
-        )
-        .finally(() => this.executions.delete(run.id));
-      this.executions.set(run.id, { controller, promise });
+      if (!preparation) this.launch(run);
       return structuredClone(run);
     });
   }
+  /** 整批重新验证定义、输入和配额，提交凭据落盘后才启动所有任务。 */
+  async startBatch(ids: string[], origin: NonNullable<WorkflowRun["origin"]>,
+    prepareInputs: (run: WorkflowRun) => Promise<Record<string, unknown>>,
+    authorize: () => Promise<void>): Promise<WorkflowRun[]> {
+    return this.lock.run("submit", async () => {
+      await authorize();
+      validateTaskIds(ids);
+      if (this.closing) throw new DomainError("CONFLICT", "工作流服务正在关闭");
+      const runs = ids.map((id) => this.getRun(id, origin));
+      const pending = runs.filter((run) => run.status === "prepared");
+      for (const run of runs) {
+        const definition = await this.get(run.workflowId);
+        if (!definition.published) throw new DomainError("FORBIDDEN", "工作流未发布或已撤销发布");
+        if (run.status !== "prepared") continue;
+        const dependencies = snapshotWorkflowDependencies(definition, (id) => this.repository.definition(id), true);
+        if (!run.preparation || run.preparation.definitionHash !== await this.preparationFingerprint(definition, dependencies))
+          throw new DomainError("CONFLICT", `任务 ${run.id} 的工作流定义已变化，请重新创建任务`);
+        for (const snapshot of [definition, ...Object.values(dependencies)]) {
+          const validate = async (scope: WorkflowDefinition): Promise<void> => {
+            await this.executor.validate?.(scope, origin);
+            for (const node of scope.nodes) if (node.kind === "loop" && node.config.loop) await validate({ ...scope, ...node.config.loop.body });
+          };
+          await validate(snapshot);
+          await this.checkFiles?.(snapshot);
+        }
+      }
+      const active = [...this.runs.values()].filter((run) => ["queued", "running"].includes(run.status));
+      if (pending.length && (active.length + pending.length > 8 || active.filter((run) => run.origin?.agentId === origin.agentId).length + pending.length > 2))
+        throw new DomainError("CONFLICT", "整批运行超过工作流并发额度：全局 8 个，同一调用方 2 个；本次未启动任务");
+      const recent = [...this.runs.values()].filter((run) => run.origin?.agentId === origin.agentId && run.status !== "prepared"
+        && (run.submittedAt || !run.preparation) && Date.parse(run.submittedAt ?? run.createdAt) > Date.now() - 3600_000);
+      if (pending.length && recent.length + pending.length > 60) throw new DomainError("CONFLICT", "同一调用方每小时最多启动 60 次工作流；本次未启动任务");
+      const now = new Date().toISOString();
+      for (const run of pending) {
+        run.inputs = validateValues(run.definition.nodes.find((node) => node.kind === "input")!.outputs, await prepareInputs(run));
+        await this.checkFiles?.(run.definition, run.inputs);
+        run.status = "queued";
+        run.submittedAt = now;
+      }
+      await authorize();
+      if (this.closing) throw new DomainError("CONFLICT", "工作流服务正在关闭");
+      // 文件准备期间仍可能被外部编辑，持久化前再次检查完整定义树。
+      for (const run of pending) {
+        const definition = await this.get(run.workflowId);
+        const dependencies = snapshotWorkflowDependencies(definition, (id) => this.repository.definition(id), true);
+        if (!definition.published || await this.preparationFingerprint(definition, dependencies) !== run.preparation!.definitionHash)
+          throw new DomainError("CONFLICT", `任务 ${run.id} 的工作流定义在准备期间变化，请重新创建任务`);
+      }
+      if (pending.length) await this.repository.saveBatch(pending);
+      for (const run of pending) this.runs.set(run.id, run);
+      for (const run of pending) this.launch(run);
+      return structuredClone(runs);
+    });
+  }
+
+  /** 完整依赖树与各层外部能力共同参与创建时的配置指纹。 */
+  private async preparationFingerprint(definition: WorkflowDefinition, dependencies: Record<string, WorkflowDefinition>): Promise<string> {
+    const inspect = async (scope: WorkflowDefinition): Promise<unknown[]> => {
+      const values = [await this.executor.preparationFingerprint?.(scope)];
+      for (const node of scope.nodes) if (node.kind === "loop" && node.config.loop) values.push(await inspect({ ...scope, ...node.config.loop.body }));
+      return values;
+    };
+    return taskFingerprint([definition, dependencies, await Promise.all([definition, ...Object.values(dependencies)].map(inspect))]);
+  }
+
+  /** 每个任务持有独立后台执行，不等待前一个任务结束。 */
+  private launch(run: WorkflowRun): void {
+    const controller = new AbortController();
+    const promise = Promise.resolve()
+      .then(() => this.execute(run, controller))
+      .catch((error) =>
+        this.backgroundError(
+          error instanceof Error ? error : new Error("工作流终态持久化失败"),
+        ),
+      )
+      .finally(() => this.executions.delete(run.id));
+    this.executions.set(run.id, { controller, promise });
+  }
+
   async cancel(
     id: string,
     origin?: WorkflowRun["origin"],
   ): Promise<WorkflowRun> {
-    this.getRun(id, origin);
+    await this.lock.run("submit", async () => {
+      const run = this.getRun(id, origin);
+      if (run.status === "prepared") {
+        run.status = "cancelled";
+        run.finishedAt = new Date().toISOString();
+        for (const node of run.nodes) node.status = "skipped";
+        await this.repository.saveRun(run);
+        this.runs.set(id, run);
+      }
+    });
     const job = this.executions.get(id);
     if (job) {
       job.controller.abort(new Error("用户取消工作流"));

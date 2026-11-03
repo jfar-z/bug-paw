@@ -139,6 +139,22 @@ export class WorkflowNodeExecutor implements WorkflowExecutor {
     }
     return { models, agents, interfaces };
   }
+  /** 外部接口和 ComfyUI 原始定义变化时，拒绝运行此前创建的任务。 */
+  async preparationFingerprint(definition: WorkflowDefinition): Promise<unknown> {
+    const values: unknown[] = [];
+    for (const node of definition.nodes) {
+      if (node.kind === "aigc") {
+        const item = await this.dependencies.interfaces.get(node.config.interfaceId!);
+        const workflow = item?.protocol === "comfyui" ? await this.dependencies.aigcWorkflows.getPrivate((item.config as { workflowId: string }).workflowId) : undefined;
+        values.push([node.id, item, workflow]);
+      }
+      if (node.kind === "llm") {
+        const model = this.dependencies.modelRuntime().getModel(node.config.provider!, node.config.modelId!);
+        values.push([node.id, model?.id, model?.provider, model?.api, model?.baseUrl, model?.input, model?.reasoning]);
+      }
+    }
+    return values;
+  }
   async validate(
     definition: WorkflowDefinition,
     origin?: WorkflowRun["origin"],

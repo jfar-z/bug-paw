@@ -57,6 +57,7 @@ type WorkflowRoute = Extract<
   }
 >;
 const statusNames: Record<WorkflowStatus, string> = {
+  prepared: "待运行",
   queued: "等待中",
   running: "运行中",
   succeeded: "已完成",
@@ -781,7 +782,7 @@ function Runner({
                   v{run.definition.revision} ·{" "}
                   {new Date(run.createdAt).toLocaleString()}
                 </span>
-                {active(run) && (
+                {(run.status === "prepared" || active(run)) && (
                   <button
                     className="wf-button"
                     disabled={busy || !online}

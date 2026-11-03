@@ -1,5 +1,6 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { hasFailedTasks } from "../core/task-preparation";
 import { toSafePublicMessage } from "../core/errors";
 import { AigcAgentError, type AigcAgentContext, type AigcAgentService } from "./aigc-agent-service";
 
@@ -30,6 +31,7 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
       Type.Null(),
     ], { description: "按接口字段类型提供原生 JSON 值；图片编辑 image 可传有序工作区路径数组，其他媒体传单个路径，可选媒体未提供时传 JSON null" }),
   }, { additionalProperties: false }), { maxItems: 100, description: "每项只提供 name 和 value，禁止添加其他值字段" });
+  const runParameters = Type.Object({ taskIds: Type.Array(Type.String({ minLength: 1, maxLength: 120 }), { minItems: 1, maxItems: 2, uniqueItems: true }) }, { additionalProperties: false });
   return [
     defineTool({
       name: "aigc_list_interfaces", label: "查询 AIGC 接口",
@@ -39,14 +41,19 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
       execute: async (_id, params) => result(() => service.list(context, normalizeInterfaceDiscoveryInput(params))),
     }),
     defineTool({
-      name: "aigc_run", label: "提交 AIGC 任务",
-      description: "调用已发布接口异步生成媒体。先查询接口字段；同一次生成的重试必须复用 requestKey，改变 key 表示明确创建新任务。",
-      promptSnippet: "提交后使用 aigc_get_task 查询进度，绝不通过重复提交查询状态；生成任务可能计费。",
+      name: "aigc_create_task", label: "创建 AIGC 任务",
+      description: "先查询接口字段，再创建任务。只校验并保存，返回 taskId 和生效参数，不上传上游、不运行、不计费。创建重试复用 requestKey。",
       parameters: Type.Object({
         interfaceId: Type.String({ minLength: 1, maxLength: 120 }),
         requestKey: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9_-]+$" }),
         parameters: parameterEntries,
       }, { additionalProperties: false }),
+      execute: async (_id, params, signal) => result(() => service.create(context, params, signal)),
+    }),
+    defineTool({
+      name: "aigc_run", label: "运行 AIGC 任务",
+      description: "传入创建工具返回的 taskIds 数组（1～2 个），整批校验后一起提交后台运行并立即返回。可能计费；重复 ID 不重新生成。",
+      parameters: runParameters,
       execute: async (_id, params, signal) => result(() => service.run(context, params, signal)),
     }),
     defineTool({
@@ -63,13 +70,9 @@ export function createAigcAgentTools(context: AigcAgentContext, service: AigcAge
     }),
     defineTool({
       name: "aigc_run_and_wait", label: "生成并等待 AIGC 产物",
-      description: "提交生成任务并阻塞等待结果，成功后直接交付文件。参数与 aigc_run 相同，同一次生成必须复用 requestKey。最多等待 30 分钟；超时或中止聊天只结束等待，不取消后台任务。",
-      promptSnippet: "需要本次对话直接获得产物时使用 aigc_run_and_wait；等待超时后保留任务 ID，不重复创建任务。",
-      parameters: Type.Object({
-        interfaceId: Type.String({ minLength: 1, maxLength: 120 }),
-        requestKey: Type.String({ minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9_-]+$" }),
-        parameters: parameterEntries,
-      }, { additionalProperties: false }),
+      description: "传入创建工具返回的 taskIds 数组（1～2 个），先一起提交后台再等待全部终态，分别返回产物或错误。最多等待 30 分钟；超时或中止聊天只结束等待。再次传原 ID 继续等待，不重新生成。",
+      promptSnippet: "需要本次对话获得产物时，先创建所有任务，再一次传入全部 taskIds 调用 aigc_run_and_wait。",
+      parameters: runParameters,
       execute: async (_id, params, signal, onUpdate) => result(() => service.runAndWait(context, params, signal, (state) => {
         onUpdate?.({ content: [{ type: "text", text: JSON.stringify({ status: "waiting", data: state }) }], details: {} });
       })),
@@ -100,13 +103,16 @@ function normalizeInterfaceDiscoveryInput(input: unknown): { interfaceId?: strin
 
 /** 工具输出限制大小，失败抛出脱敏错误以让 Pi 正确标记 isError。 */
 async function result(operation: () => Promise<unknown>) {
+  let data: unknown;
   try {
-    const text = JSON.stringify({ status: "ok", data: await operation() });
+    data = await operation();
+    const text = JSON.stringify({ status: "ok", data });
     if (Buffer.byteLength(text, "utf8") > 64 * 1024) throw new AigcAgentError("AIGC_RESULT_TOO_LARGE", "接口字段过多，请在 AIGC 工作台精简发布参数");
-    return { content: [{ type: "text" as const, text }], details: {} };
   } catch (error) {
     const code = error instanceof AigcAgentError ? error.code : error instanceof TypeError ? "AIGC_INPUT_INVALID" : "AIGC_OPERATION_FAILED";
     const message = toSafePublicMessage(error, "AIGC Agent 工具捕获到非 Error 异常");
     throw new Error(JSON.stringify({ code, message }));
   }
+  if (hasFailedTasks(data)) throw new Error(JSON.stringify({ code: "AIGC_TASK_FAILED", message: "AIGC 任务执行失败，请检查各任务错误；同批成功产物已保留", data }));
+  return { content: [{ type: "text" as const, text: JSON.stringify({ status: "ok", data }) }], details: {} };
 }

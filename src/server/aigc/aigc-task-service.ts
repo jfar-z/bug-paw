@@ -1,3 +1,6 @@
+import { KeyedMutex } from "../core/keyed-mutex";
+import { taskFingerprint } from "../core/task-preparation";
+import { agentFields, agentOutputs } from "./aigc-agent-parameters";
 import { randomUUID } from "node:crypto";
 
 import type {
@@ -33,6 +36,8 @@ interface AigcTaskServiceDependencies {
 
 /** 协调 AIGC 手动试运行、状态流转和任务历史。 */
 export class AigcTaskService {
+  /** 批量启动与取消互斥，防止取消与提交交错后错误确认上游已停止。 */
+  private readonly lifecycle = new KeyedMutex();
   private readonly controllers = new Map<string, AbortController>();
   private readonly executionStates = new Map<string, AigcTaskExecutionState>();
   private readonly executions = new Map<string, Promise<void>>();
@@ -87,11 +92,29 @@ export class AigcTaskService {
     return task;
   }
 
+  /** 只保存已校验的 Agent 任务，绝不启动适配器。 */
+  async createPrepared(task: AigcTaskRecord): Promise<AigcTaskRecord> {
+    if (this.closing) throw new Error("AIGC 服务正在停止");
+    return this.dependencies.repository.create(task);
+  }
+
+  /** 全批持久化成功后才启动任何上游调用。 */
+  async submitPrepared(entries: { id: string; inputs: Record<string, unknown> }[]): Promise<AigcTaskRecord[]> {
+    return this.lifecycle.run("tasks", async () => {
+      if (this.closing) throw new Error("AIGC 服务正在停止");
+      const tasks = await this.dependencies.repository.submitPrepared(entries);
+      for (const task of tasks) this.startExecution(task.id);
+      return tasks;
+    });
+  }
+
   /** 取消排队中或执行中的任务。 */
   async cancel(id: string): Promise<AigcTaskRecord | undefined> {
+    return this.lifecycle.run("tasks", async () => {
     const task = await this.dependencies.repository.get(id);
     if (!task) throw new Error("AIGC 任务不存在");
-    if (task.status !== "queued" && task.status !== "running") throw new Error("仅排队中或执行中的任务可以取消");
+    if (!["prepared", "queued", "running"].includes(task.status)) throw new Error("仅待运行、排队中或执行中的任务可以取消");
+    const notSubmitted = task.status === "prepared";
     this.controllers.get(id)?.abort();
     // 等待保存链收敛，避免取消后被迟到的成功响应覆盖。
     await this.executions.get(id)?.catch(() => undefined);
@@ -99,8 +122,9 @@ export class AigcTaskService {
     const latest = await this.get(id);
     return this.updateTask(id, {
       status: "cancelled",
-      upstreamCancellation: latest?.upstreamCancellation ?? "unknown",
+      upstreamCancellation: notSubmitted ? "confirmed" : latest?.upstreamCancellation ?? "unknown",
       updatedAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    });
     });
   }
 
@@ -134,6 +158,7 @@ export class AigcTaskService {
     const task = await this.dependencies.repository.get(id);
     if (!task) throw new Error("AIGC 任务不存在");
     if (task.status !== "failed" && task.status !== "cancelled") throw new Error("仅失败或已取消的任务可以重试");
+    if (task.preparation) throw new Error("Agent 任务不能隐式重试，请通过创建工具使用新 requestKey 创建任务");
     this.executionStates.delete(id);
     const next = await this.updateTask(id, {
       status: "queued",
@@ -230,6 +255,15 @@ export class AigcTaskService {
     const channel = (await this.dependencies.connections.read()).channels.find((candidate) => candidate.id === item.channelId);
     if (!channel) return this.failTask(id, { code: "AIGC_CHANNEL_MISSING", message: "AIGC 渠道不存在" });
     if (!channel.enabled) return this.failTask(id, { code: "AIGC_CHANNEL_DISABLED", message: "AIGC 渠道未启用" });
+    let workflow;
+    try {
+      workflow = task.preparation && item.protocol === "comfyui"
+        ? await this.dependencies.workflows?.getPrivate((item.config as { workflowId: string }).workflowId) : undefined;
+      if (task.preparation && task.preparation.definitionHash !== taskFingerprint({ item, channel, workflow, fields: agentFields(item, workflow), outputs: agentOutputs(item, workflow) }))
+        return this.failTask(id, { code: "AIGC_INTERFACE_CHANGED", message: "任务执行前接口、渠道或工作流发生变化，请重新创建任务" });
+    } catch (error) {
+      return this.failTask(id, sanitizeError(error));
+    }
     const adapter = this.dependencies.adapters[item.protocol];
     if (!adapter) return this.failTask(id, { code: "AIGC_PROTOCOL_UNSUPPORTED", message: "AIGC 协议暂不支持" });
     const signal = task.agentOrigin || task.mcpOrigin
@@ -248,6 +282,7 @@ export class AigcTaskService {
         assets: this.dependencies.assets,
         publicFiles: this.dependencies.publicFiles,
         workflows: this.dependencies.workflows,
+        ...(workflow ? { workflowSnapshot: workflow } : {}),
         signal,
         onCancellation: (status) => { upstreamCancellation = status; },
         onProgress: (state) => {
@@ -323,6 +358,7 @@ function toSummary(task: AigcTaskRecord, execution?: AigcTaskExecutionState): Ai
     interfaceName: task.interfaceName,
     channelId: task.channelId,
     status: task.status,
+    ...(task.preparation ? { requiresNewTask: true } : {}),
     assetCount: task.assets.length,
     ...(execution ? { execution: { ...execution } } : {}),
     ...(task.error ? { error: task.error } : {}),

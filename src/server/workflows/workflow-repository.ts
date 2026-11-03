@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   WorkflowDefinition,
@@ -14,6 +14,8 @@ import { KeyedMutex } from "../core/keyed-mutex";
 /** DAG 列表保存在数据库，定义与运行快照分别按 ID 保存。 */
 export class WorkflowRepository {
   private readonly lock = new KeyedMutex();
+  /** 提交凭据在全部成员落入独立运行文件后立即清理。 */
+  private readonly batches = new Map<string, Set<string>>();
   private readonly store;
   constructor(private readonly directory: string, database: Database) {
     this.store = new DefinitionRepository<WorkflowDefinition, WorkflowSummary>(database, "dag", join(directory, "definitions"), workflowSummary);
@@ -47,6 +49,13 @@ export class WorkflowRepository {
         structuredClone(run),
       ),
     );
+    await this.settleBatch(run.id);
+  }
+  /** 一次原子写入提交整批任务；各运行后续状态仍按原文件独立保存。 */
+  async saveBatch(runs: WorkflowRun[]): Promise<void> {
+    const name = `batch-${runs[0].id}.json`;
+    await writeJsonAtomic(join(this.directory, "runs", name), structuredClone(runs));
+    this.batches.set(name, new Set(runs.map((run) => run.id)));
   }
   async runs(): Promise<WorkflowRun[]> {
     let names: string[];
@@ -63,8 +72,34 @@ export class WorkflowRepository {
       );
       if (run) result.push(run);
     }
+    // 批次记录是提交凭据；重启时只覆盖未提交的 prepared 快照，不覆盖后续执行结果。
+    for (const name of names.filter((n) => /^batch-[a-f0-9-]{36}\.json$/.test(n))) {
+      const batch = await readJson<WorkflowRun[]>(join(this.directory, "runs", name));
+      if (!Array.isArray(batch)) throw new DomainError("INTERNAL_ERROR", "工作流批量提交记录结构无效");
+      const pending = new Set<string>();
+      for (const run of batch) {
+        const index = result.findIndex((current) => current.id === run.id);
+        if (index < 0) { result.push(run); pending.add(run.id); }
+        else if (result[index].status === "prepared") { result[index] = run; pending.add(run.id); }
+      }
+      if (pending.size) this.batches.set(name, pending);
+      else await rm(join(this.directory, "runs", name));
+    }
     return result;
   }
+  /** 串行清理已完成写入的批次凭据；失败直接传播，不静默遗漏。 */
+  private async settleBatch(id: string): Promise<void> {
+    await this.lock.run("batches", async () => {
+      for (const [name, pending] of this.batches) {
+        pending.delete(id);
+        if (!pending.size) {
+          await rm(join(this.directory, "runs", name));
+          this.batches.delete(name);
+        }
+      }
+    });
+  }
+
 }
 
 /** 明确投影列表字段，节点、脚本和连线不得进入数据库。 */

@@ -1495,7 +1495,7 @@ function AigcTasksPage() {
 
   const visibleTasks = (document?.tasks ?? []).filter((task) => {
     if (filter === "active") return task.status === "queued" || task.status === "running";
-    if (filter === "failed") return task.status === "failed" || task.status === "cancelled";
+    if (filter === "failed") return task.status === "prepared" || task.status === "failed" || task.status === "cancelled";
     if (filter === "succeeded") return task.status === "succeeded";
     return true;
   }).sort((left, right) => {
@@ -1529,10 +1529,10 @@ function AigcTasksPage() {
         {visibleTasks.map((task) => (
           <section key={task.id} className="aigc-task-row">
             <div><input type="checkbox" aria-label={`选择任务 ${task.id}`} checked={selectedSet.has(task.id)} onChange={(event) => toggleSelection(task.id, event.target.checked)} /><strong>{task.interfaceName}</strong><span className={`aigc-status-badge is-${task.status}`}>{taskStatusLabel(task.status)}</span><small>{formatAigcTime(task.createdAt)}</small></div>
-            <p>{task.error ? task.error.message : task.status === "succeeded" ? `${task.assetCount} 个产物可预览` : task.status === "running" ? "正在生成，请保持页面打开或稍后回来查看" : "等待执行"}</p>
+            <p>{task.error ? task.error.message : task.status === "succeeded" ? `${task.assetCount} 个产物可预览` : task.status === "running" ? "正在生成，请保持页面打开或稍后回来查看" : task.status === "prepared" ? "参数已校验，等待 Agent 显式运行" : "等待执行"}</p>
             <div className="aigc-task-actions">
-              {(task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
-              {(task.status === "failed" || task.status === "cancelled") ? <button type="button" onClick={() => void retry(task.id)}><RefreshCw size={14} />重试</button> : null}
+              {(task.status === "prepared" || task.status === "queued" || task.status === "running") ? <button type="button" onClick={() => void cancel(task.id)}>取消</button> : null}
+              {(task.status === "failed" || task.status === "cancelled") && !task.requiresNewTask ? <button type="button" onClick={() => void retry(task.id)}><RefreshCw size={14} />重试</button> : null}
               <a href={`/aigc/tasks/${encodeURIComponent(task.id)}`} onClick={(event) => { event.preventDefault(); navigateTo({ page: "aigc-task-detail", taskId: task.id }); }}>查看</a>
               <button type="button" aria-label={`删除任务 ${task.id}`} title="删除任务" onClick={() => setDeleteTarget(task)}><Trash2 size={14} /></button>
             </div>
@@ -1621,8 +1621,8 @@ function AigcTaskDetail({ taskId }: { taskId: string }) {
             );
           })}
         </div>
-        {!task.assets.length ? <p className="configuration-help">{task.status === "succeeded" ? "任务已完成，但没有提取到产物，请检查接口或工作流输出映射。" : "生成完成后，图片、视频和音频会直接显示在这里。"}</p> : null}
-        {(task.status === "failed" || task.status === "cancelled") ? <button type="button" className="configuration-secondary-action" onClick={() => void retry()}><RefreshCw size={15} />重试</button> : null}
+        {!task.assets.length ? <p className="configuration-help">{task.status === "prepared" ? "参数已校验，等待 Agent 显式运行。" : task.status === "succeeded" ? "任务已完成，但没有提取到产物，请检查接口或工作流输出映射。" : "生成完成后，图片、视频和音频会直接显示在这里。"}</p> : null}
+        {(task.status === "failed" || task.status === "cancelled") && !task.preparation ? <button type="button" className="configuration-secondary-action" onClick={() => void retry()}><RefreshCw size={15} />重试</button> : null}
       </section>
       {previewAsset ? <div className="media-lightbox" role="dialog" aria-modal="true" aria-label={`${previewAsset.name} 大图预览`}><button type="button" className="media-lightbox__close" aria-label="关闭产物预览" onClick={() => setPreviewAsset(undefined)}><X size={20} /></button><div className="media-lightbox__stage"><img src={aigcTaskAssetUrl(task.id, previewAsset.id)} alt={previewAsset.name} /></div></div> : null}
       {deleteOpen ? <ConfirmationDialog title="删除任务？" description={`任务 ${task.id} 及其 ${task.assets.length} 个 AIGC 产物将被永久删除；已交付至 Agent 工作目录的附件会保留。`} confirmLabel="删除任务和产物" onCancel={() => setDeleteOpen(false)} onConfirm={() => void remove()} /> : null}
@@ -1938,6 +1938,7 @@ export function capabilityOptions(protocol: AigcInterfaceProtocol): Array<{ valu
 
 /** 将内部任务状态转换为面向创作者的中文状态。 */
 function taskStatusLabel(status: AigcTaskStatus): string {
+  if (status === "prepared") return "待运行";
   if (status === "queued") return "等待中";
   if (status === "running") return "生成中";
   if (status === "succeeded") return "已完成";

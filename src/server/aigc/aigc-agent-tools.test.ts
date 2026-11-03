@@ -23,7 +23,7 @@ import type { AigcExecutionInput, AigcExecutionResult } from "./aigc-protocol-ad
 import type { AigcWorkflowDetail } from "../../shared/aigc-contracts";
 
 const context = { agentId: "agent-a", sessionId: "session-a" };
-const toolNames = ["aigc_list_interfaces", "aigc_run", "aigc_get_task", "aigc_cancel_task", "aigc_run_and_wait"];
+const toolNames = ["aigc_list_interfaces", "aigc_create_task", "aigc_run", "aigc_get_task", "aigc_cancel_task", "aigc_run_and_wait"];
 const pending = (input: AigcExecutionInput): Promise<AigcExecutionResult> => new Promise((_resolve, reject) => {
   input.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
 });
@@ -76,7 +76,18 @@ async function fixture(
     await rm(root, { recursive: true, force: true });
   };
   cleanup.push(close);
-  return { root, workspaces, service, tools, tasks, repository, interfaces, connections, workflows, assets, publicFiles, adapter, item, submit,
+  // 旧回归场景显式经过新建和运行两步，生产工具不保留旧协议。
+  const run = async (ctx: typeof context, input: Parameters<AigcAgentService["create"]>[1], signal?: AbortSignal) => {
+    const created = await service.create(ctx, input, signal);
+    return (await service.run(ctx, { taskIds: [created.taskId] }, signal)).tasks[0];
+  };
+  const wait = async (ctx: typeof context, input: Parameters<AigcAgentService["create"]>[1], signal?: AbortSignal,
+    progress?: (state: Awaited<ReturnType<AigcAgentService["get"]>>) => void) => {
+    const created = await service.create(ctx, input, signal);
+    const state = await service.runAndWait(ctx, { taskIds: [created.taskId] }, signal, (batch) => progress?.(batch.tasks[0]));
+    return { ...state.tasks[0], waitStatus: state.waitStatus };
+  };
+  return { root, workspaces, service, tools, tasks, repository, run, wait, interfaces, connections, workflows, assets, publicFiles, adapter, item, submit,
     revoke: () => { allowed = []; },
     setAllowed: (names: string[]) => { allowed = names; },
     unpublish: async () => interfaces.update(item.id, { ...item, toolPublishEnabled: false }, (await interfaces.list()).revision),
@@ -90,36 +101,113 @@ afterEach(async () => {
 });
 
 describe("AIGC Agent 工具", () => {
+  it("创建只校验并持久化，默认值回显且不占执行额度，重启保留待运行状态", async () => {
+    const f = await fixture(pending, { maxActiveTasks: 1, maxActiveTasksPerAgent: 1, maxHourlyTasksPerAgent: 1, queryIntervalMs: 1000 });
+    const save = vi.spyOn(f.assets, "saveInput"), publish = vi.spyOn(f.publicFiles, "save");
+    const a = await f.service.create(context, f.submit("a"));
+    const b = await f.service.create(context, f.submit("b"));
+    expect(a).toMatchObject({ status: "prepared", parameters: { prompt: "test", steps: 8 } });
+    expect(b.status).toBe("prepared");
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(await new AigcTaskRepository(join(f.root, "tasks.json")).get(a.taskId)).toMatchObject({ status: "prepared" });
+    await expect(f.service.run(context, { taskIds: [a.taskId, b.taskId] })).rejects.toMatchObject({ code: "AIGC_QUOTA_EXCEEDED" });
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect((await f.tasks.get(a.taskId))?.status).toBe("prepared");
+  });
+
+  it("批量先启动全部任务再等待，失败任务不阻断其他成功产物，重复运行不重新生成", async () => {
+    const entered: string[] = [];
+    const f = await fixture(async (input) => {
+      entered.push(input.inputs.prompt as string);
+      await vi.waitFor(() => expect(entered).toHaveLength(2));
+      if (input.inputs.prompt === "bad") throw new Error("上游测试拒绝生成");
+      return { assets: [{ name: "ok.png", mediaType: "image/png", content: Buffer.from("ok") }] };
+    });
+    const a = await f.service.create(context, f.submit("a"));
+    const b = await f.service.create(context, { ...f.submit("b"), parameters: [{ name: "prompt", value: "bad" }] });
+    const result = await f.service.runAndWait(context, { taskIds: [a.taskId, b.taskId] });
+    expect(result.waitStatus).toBe("completed");
+    expect(result.tasks.map((task) => task.taskId)).toEqual([a.taskId, b.taskId]);
+    expect(result.tasks.map((task) => task.status)).toEqual(["succeeded", "failed"]);
+    expect(result.tasks[0].files).toHaveLength(1);
+    expect(result.tasks[1].error?.message).toContain("上游测试拒绝生成");
+    await f.service.run(context, { taskIds: [a.taskId, b.taskId] });
+    expect(f.adapter.execute).toHaveBeenCalledTimes(2);
+    const tool = f.tools.find((entry) => entry.name === "aigc_run_and_wait")!;
+    await expect(tool.execute("partial", { taskIds: [a.taskId, b.taskId] } as never, undefined, undefined, {} as never))
+      .rejects.toThrow(/AIGC_TASK_FAILED.*attachments/);
+  }, 15000);
+
+  it("整批包含无权访问的 ID 或重复 ID 时不启动任何任务", async () => {
+    const f = await fixture(pending);
+    const a = await f.service.create(context, f.submit("a"));
+    for (const taskIds of [[a.taskId, "missing"], [a.taskId, a.taskId], [], [a.taskId, "b", "c"]])
+      await expect(f.service.run(context, { taskIds })).rejects.toThrow();
+    await expect(f.service.run({ ...context, agentId: "agent-b" }, { taskIds: [a.taskId] })).rejects.toMatchObject({ code: "AIGC_TASK_NOT_FOUND" });
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect((await f.tasks.get(a.taskId))?.status).toBe("prepared");
+  });
+
+  it("文件或定义变化拒绝整批，待运行取消不访问上游", async () => {
+    const f = await fixture(pending);
+    await f.interfaces.update(f.item.id, { ...f.item, capability: "image-edit" }, (await f.interfaces.list()).revision);
+    await writeFile(join(f.workspaces, "agent-a", "source.png"), "original");
+    const a = await f.service.create(context, f.submit("a"));
+    const b = await f.service.create(context, { ...f.submit("b"), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }] });
+    expect(await f.publicFiles.list()).toHaveLength(0);
+    await writeFile(join(f.workspaces, "agent-a", "source.png"), "changed");
+    await expect(f.service.run(context, { taskIds: [a.taskId, b.taskId] })).rejects.toMatchObject({ code: "AIGC_INPUT_CHANGED" });
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect((await f.tasks.get(a.taskId))?.status).toBe("prepared");
+    await f.interfaces.update(f.item.id, { ...f.item, name: "changed" }, (await f.interfaces.list()).revision);
+    await expect(f.service.run(context, { taskIds: [a.taskId] })).rejects.toMatchObject({ code: "AIGC_INTERFACE_CHANGED" });
+    expect(await f.service.cancel(context, a.taskId)).toMatchObject({ status: "cancelled", upstreamCancellation: "confirmed" });
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+  });
+
+  it("批量持久化失败时整批保持待运行且不调用上游", async () => {
+    const f = await fixture(pending);
+    const a = await f.service.create(context, f.submit("a"));
+    const b = await f.service.create(context, f.submit("b"));
+    vi.spyOn(f.repository, "submitPrepared").mockRejectedValueOnce(new Error("模拟持久化中断"));
+    await expect(f.service.run(context, { taskIds: [a.taskId, b.taskId] })).rejects.toThrow("持久化中断");
+    expect(f.adapter.execute).not.toHaveBeenCalled();
+    expect((await f.tasks.listRecords()).map((task) => task.status)).toEqual(["prepared", "prepared"]);
+  });
+
   it("阻塞工具仅需自身授权，等待真实完成并通过回调报告进度与交付产物", async () => {
     const f = await fixture(async (input) => {
       input.onProgress?.({ phase: "running", progressValue: 1, progressMax: 2, updatedAt: new Date().toISOString() });
       return { assets: [{ name: "result.png", mediaType: "image/png", content: Buffer.from("result") }] };
     });
+    const created = await f.service.create(context, f.submit());
     f.setAllowed(["aigc_run_and_wait"]);
     const updates = vi.fn();
     const tool = f.tools.find((entry) => entry.name === "aigc_run_and_wait")!;
-    const output = await tool.execute("wait-call", f.submit(), undefined, updates, {} as never);
+    const output = await tool.execute("wait-call", { taskIds: [created.taskId] }, undefined, updates, {} as never);
     const block = output.content[0];
     if (block.type !== "text") throw new Error("工具必须返回文本结果");
     const payload = JSON.parse(block.text);
-    expect(payload.data).toMatchObject({ status: "succeeded", waitStatus: "completed" });
-    expect(payload.data.files).toHaveLength(1);
+    expect(payload.data).toMatchObject({ tasks: [{ status: "succeeded" }], waitStatus: "completed" });
+    expect(payload.data.tasks[0].files).toHaveLength(1);
     expect(updates).toHaveBeenCalled();
-    expect(JSON.parse(updates.mock.calls[0][0].content[0].text).data.taskId).toBe(payload.data.taskId);
+    expect(JSON.parse(updates.mock.calls[0][0].content[0].text).data.tasks[0].taskId).toBe(payload.data.tasks[0].taskId);
     expect(f.adapter.execute).toHaveBeenCalledOnce();
-    await expect(f.service.run(context, f.submit("denied"))).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
-    await expect(f.service.get(context, payload.data.taskId)).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+    await expect(f.run(context, f.submit("denied"))).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+    await expect(f.service.get(context, payload.data.tasks[0].taskId)).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
   }, 15_000);
 
   it("中止阻塞等待保留后台任务，未取消上游且同键再次等待不重复提交", async () => {
     const f = await fixture(pending);
     const controller = new AbortController();
-    const state = await f.service.runAndWait(context, f.submit(), controller.signal, () => controller.abort());
+    const state = await f.wait(context, f.submit(), controller.signal, () => controller.abort());
     expect(state.waitStatus).toBe("interrupted");
     await vi.waitFor(() => expect(f.adapter.execute).toHaveBeenCalledOnce());
     expect(f.adapter.execute.mock.calls[0][0].signal.aborted).toBe(false);
     const again = new AbortController();
-    const resumed = await f.service.runAndWait(context, f.submit(), again.signal, () => again.abort());
+    const resumed = await f.wait(context, f.submit(), again.signal, () => again.abort());
     expect(resumed.taskId).toBe(state.taskId);
     expect(f.adapter.execute).toHaveBeenCalledOnce();
     expect((await f.tasks.get(state.taskId))?.status).toBe("running");
@@ -128,8 +216,8 @@ describe("AIGC Agent 工具", () => {
   it("等待上限到达返回当前任务而不取消或重提", async () => {
     const f = await fixture(pending);
     const now = Date.now();
-    const state = await f.service.runAndWait(context, f.submit(), undefined, () => {
-      vi.spyOn(Date, "now").mockReturnValue(now + 30 * 60_000 + 1);
+    const state = await f.wait(context, f.submit(), undefined, () => {
+      vi.spyOn(Date, "now").mockReturnValue(now + 31 * 60_000);
     });
     expect(state).toMatchObject({ waitStatus: "timed_out" });
     expect(["queued", "running"]).toContain(state.status);
@@ -139,28 +227,33 @@ describe("AIGC Agent 工具", () => {
 
   it("两种工具共享幂等，已失败或取消的任务直接返回终态", async () => {
     const f = await fixture(async () => { throw new Error("upstream failure"); });
-    const submitted = await f.service.run(context, f.submit());
+    const submitted = await f.run(context, f.submit());
     await vi.waitFor(async () => expect((await f.tasks.get(submitted.taskId))?.status).toBe("failed"));
-    const state = await f.service.runAndWait(context, f.submit());
+    const state = await f.wait(context, f.submit());
     expect(state).toMatchObject({ taskId: submitted.taskId, status: "failed", waitStatus: "completed", files: [] });
     expect(f.adapter.execute).toHaveBeenCalledOnce();
     await f.repository.update(submitted.taskId, { status: "cancelled" });
-    expect(await f.service.runAndWait(context, f.submit())).toMatchObject({ status: "cancelled", waitStatus: "completed" });
+    expect(await f.wait(context, f.submit())).toMatchObject({ status: "cancelled", waitStatus: "completed" });
   });
 
   it("等待期间撤销授权或发布会阻止继续读取，参数错误不产生任务", async () => {
     const f = await fixture(pending);
-    await expect(f.service.runAndWait(context, { ...f.submit(), parameters: [] })).rejects.toBeInstanceOf(TypeError);
+    await expect(f.wait(context, { ...f.submit(), parameters: [] })).rejects.toBeInstanceOf(TypeError);
     expect(await f.tasks.listRecords()).toHaveLength(0);
-    await expect(f.service.runAndWait(context, f.submit(), undefined, () => f.revoke())).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+    await expect(f.wait(context, f.submit(), undefined, () => f.revoke())).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
     f.setAllowed(toolNames);
     await f.unpublish();
-    await expect(f.service.runAndWait(context, f.submit())).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
+    await expect(f.wait(context, f.submit())).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
   });
 
   it("工具根 Schema 为对象且默认不授权，列表不泄露渠道地址", async () => {
     const f = await fixture();
     expect(f.tools.map((tool) => tool.name)).toEqual(toolNames);
+    for (const name of ["aigc_run", "aigc_run_and_wait"]) {
+      const schema = f.tools.find((tool) => tool.name === name)!.parameters;
+      expect(schema.required).toEqual(["taskIds"]);
+      expect(Object.keys(schema.properties!)).toEqual(["taskIds"]);
+    }
     for (const tool of f.tools) {
       expect(tool.parameters.type).toBe("object");
       for (const key of ["anyOf", "oneOf", "allOf"]) expect(tool.parameters).not.toHaveProperty(key);
@@ -169,7 +262,7 @@ describe("AIGC Agent 工具", () => {
     const discoveryTool = f.tools.find((tool) => tool.name === "aigc_list_interfaces")!;
     expect(discoveryTool.parameters.required).toEqual(["action", "interfaceId", "offset"]);
     expect(JSON.stringify(discoveryTool.parameters)).not.toContain('"optional"');
-    const runParameters = f.tools.find((tool) => tool.name === "aigc_run")?.parameters;
+    const runParameters = f.tools.find((tool) => tool.name === "aigc_create_task")?.parameters;
     expect(JSON.stringify(runParameters)).not.toContain('"url"');
     const parameterSchema = (runParameters as {
       properties: { parameters: { items: { required: string[]; properties: Record<string, unknown> } } };
@@ -250,19 +343,19 @@ describe("AIGC Agent 工具", () => {
 
   it("并发重试只生成一次，记录身份且跨重启保持幂等凭据", async () => {
     const f = await fixture();
-    const [a, b] = await Promise.all([f.service.run(context, f.submit()), f.service.run(context, f.submit())]);
+    const [a, b] = await Promise.all([f.run(context, f.submit()), f.run(context, f.submit())]);
     expect(a.taskId).toBe(b.taskId);
     await vi.waitFor(async () => expect((await f.tasks.get(a.taskId))?.status).toBe("succeeded"));
     expect(f.adapter.execute).toHaveBeenCalledTimes(1);
     const stored = await new AigcTaskRepository(join(f.root, "tasks.json")).get(a.taskId);
     expect(stored?.agentOrigin).toMatchObject({ ...context, requestKey: "one" });
     expect(f.adapter.execute.mock.calls[0][0].inputs.steps).toBe(8);
-    await expect(f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "changed" }] })).rejects.toMatchObject({ code: "AIGC_IDEMPOTENCY_CONFLICT" });
+    await expect(f.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "changed" }] })).rejects.toMatchObject({ code: "AIGC_IDEMPOTENCY_CONFLICT" });
   });
 
   it("归属校验拒绝其他 Agent 和历史手动任务", async () => {
     const f = await fixture();
-    const own = await f.service.run(context, f.submit());
+    const own = await f.run(context, f.submit());
     const manual = await f.tasks.createRun({ interfaceId: f.item.id, inputs: { prompt: "manual" } });
     for (const taskId of [own.taskId, manual.id, "missing"]) {
       await expect(f.service.get({ agentId: "agent-b", sessionId: "other" }, taskId)).rejects.toMatchObject({ code: "AIGC_TASK_NOT_FOUND" });
@@ -273,17 +366,17 @@ describe("AIGC Agent 工具", () => {
 
   it("撤销授权和发布立即生效，但撤销发布后仍可取消自己的任务", async () => {
     const f = await fixture(pending);
-    const task = await f.service.run(context, f.submit());
+    const task = await f.run(context, f.submit());
     await vi.waitFor(() => expect(f.adapter.execute).toHaveBeenCalledOnce());
     await f.unpublish();
-    await expect(f.service.run(context, f.submit("two"))).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
+    await expect(f.run(context, f.submit("two"))).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
     await expect(f.service.get(context, task.taskId)).rejects.toMatchObject({ code: "AIGC_INTERFACE_UNAVAILABLE" });
     expect(await f.service.cancel(context, task.taskId)).toMatchObject({ status: "cancelled", upstreamCancellation: "unknown" });
     f.revoke();
     await expect(f.service.list(context, {})).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
     await expect(f.service.get(context, task.taskId)).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
     await expect(f.service.cancel(context, task.taskId)).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
-    await expect(f.service.run(context, f.submit("three"))).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
+    await expect(f.run(context, f.submit("three"))).rejects.toMatchObject({ code: "AIGC_TOOL_DENIED" });
   });
 
   it("校验参数失败时不创建任务或调用上游", async () => {
@@ -291,7 +384,7 @@ describe("AIGC Agent 工具", () => {
     const gptFilledLegacyParameters = [{
       name: "prompt", text: "x", number: 0, boolean: false, path: null,
     }];
-    await expect(f.service.run(context, {
+    await expect(f.run(context, {
       ...f.submit(), parameters: gptFilledLegacyParameters as never,
     })).rejects.toThrow("每个参数必须且只能提供 name 和 value");
     for (const parameters of [
@@ -300,7 +393,7 @@ describe("AIGC Agent 工具", () => {
       [{ name: "prompt", value: "x" }, { name: "steps", value: 1.5 }],
       [{ name: "prompt", value: null }],
       [{ name: "agentId", value: "agent-b" }],
-    ]) await expect(f.service.run(context, { ...f.submit(), parameters })).rejects.toBeInstanceOf(TypeError);
+    ]) await expect(f.run(context, { ...f.submit(), parameters })).rejects.toBeInstanceOf(TypeError);
     expect(await f.tasks.listRecords()).toHaveLength(0);
     expect(f.adapter.execute).not.toHaveBeenCalled();
   });
@@ -312,16 +405,16 @@ describe("AIGC Agent 工具", () => {
       maxHourlyTasksPerAgent: 20,
       queryIntervalMs: 2_000,
     });
-    const task = await f.service.run(context, f.submit());
-    await f.service.run(context, f.submit("two"));
-    await expect(f.service.run(context, f.submit("three"))).rejects.toMatchObject({ code: "AIGC_QUOTA_EXCEEDED" });
+    const task = await f.run(context, f.submit());
+    await f.run(context, f.submit("two"));
+    await expect(f.run(context, f.submit("three"))).rejects.toMatchObject({ code: "AIGC_QUOTA_EXCEEDED" });
     await f.service.get(context, task.taskId);
     await expect(f.service.get(context, task.taskId)).rejects.toMatchObject({ code: "AIGC_QUERY_TOO_FREQUENT" });
   });
 
   it("生成产物同时保留于工作台并仅交付一次到所属工作区", async () => {
     const f = await fixture();
-    const task = await f.service.run(context, f.submit());
+    const task = await f.run(context, f.submit());
     await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
     const first = await f.service.get(context, task.taskId);
     expect(first.files).toHaveLength(1);
@@ -343,7 +436,7 @@ describe("AIGC Agent 工具", () => {
         { name: "final.png", mediaType: "image/png", content: Buffer.from("final"), outputId: "final", outputName: "" },
       ],
     }));
-    const task = await f.service.run(context, f.submit());
+    const task = await f.run(context, f.submit());
     await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
     const result = await f.service.get(context, task.taskId);
     expect(result.files).toEqual([
@@ -359,10 +452,10 @@ describe("AIGC Agent 工具", () => {
     await writeFile(join(f.workspaces, "agent-a", "source.txt"), "text");
     await symlink(join(f.workspaces, "agent-a", "source.png"), join(f.workspaces, "agent-a", "link.png"));
     for (const path of ["../agent-b/secret.png", "/etc/passwd", "link.png", "source.txt", "missing.png"]) {
-      await expect(f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: path }] })).rejects.toThrow();
+      await expect(f.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: path }] })).rejects.toThrow();
     }
     expect(await f.tasks.listRecords()).toHaveLength(0);
-    const task = await f.service.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }] });
+    const task = await f.run(context, { ...f.submit(), parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }] });
     await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
     const asset = f.adapter.execute.mock.calls[0][0].inputs.image as { assetId: string };
     expect(asset.assetId).toBeTruthy();
@@ -379,11 +472,11 @@ describe("AIGC Agent 工具", () => {
     ]));
     const saveInput = vi.spyOn(f.assets, "saveInput");
 
-    const withoutImage = await f.service.run(context, {
+    const withoutImage = await f.run(context, {
       ...f.submit("without-image"),
       parameters: [{ name: "prompt", value: "x" }],
     });
-    const nullImage = await f.service.run(context, {
+    const nullImage = await f.run(context, {
       ...f.submit("null-image"),
       parameters: [{ name: "prompt", value: "x" }, { name: "image", value: null }],
     });
@@ -406,18 +499,18 @@ describe("AIGC Agent 工具", () => {
     expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
       expect.objectContaining({ name: "image", multiple: true, maxItems: 16 }),
     ]));
-    const task = await f.service.run(context, { ...f.submit("multi-openai"), parameters: [
+    const task = await f.run(context, { ...f.submit("multi-openai"), parameters: [
       { name: "prompt", value: "组合" }, { name: "image", value: ["first.png", "second.png"] },
     ] });
     await vi.waitFor(async () => expect((await f.tasks.get(task.taskId))?.status).toBe("succeeded"));
     expect((f.adapter.execute.mock.calls[0][0].inputs.image as { name: string }[]).map((asset) => asset.name))
       .toEqual(["first.png", "second.png"]);
-    await expect(f.service.run(context, { ...f.submit("invalid-image"), parameters: [
+    await expect(f.run(context, { ...f.submit("invalid-image"), parameters: [
       { name: "prompt", value: "组合" }, { name: "image", value: ["first.png", "missing.png"] },
     ] })).rejects.toThrow();
     await f.interfaces.update(f.item.id, { ...f.item, protocol: "grok", capability: "image-edit",
       channelId: "grok-channel", config: { model: "grok-imagine" } }, (await f.interfaces.list()).revision);
-    await expect(f.service.run(context, { ...f.submit("too-many"), parameters: [
+    await expect(f.run(context, { ...f.submit("too-many"), parameters: [
       { name: "prompt", value: "组合" }, { name: "image", value: Array(6).fill("first.png") },
     ] })).rejects.toThrow("媒体引用无效");
   });
@@ -432,7 +525,7 @@ describe("AIGC Agent 工具", () => {
       config: { model: "grok-imagine" },
     }, (await f.interfaces.list()).revision);
     await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
-    await expect(f.service.run(context, {
+    await expect(f.run(context, {
       ...f.submit("grok-null-image"),
       parameters: [{ name: "prompt", value: "x" }, { name: "image", value: null }],
     })).rejects.toThrow("缺少必填参数 image");
@@ -440,7 +533,7 @@ describe("AIGC Agent 工具", () => {
     expect(detail.interfaces[0]).toHaveProperty("fields", expect.arrayContaining([
       expect.objectContaining({ name: "image", source: "workspace" }),
     ]));
-    const task = await f.service.run(context, {
+    const task = await f.run(context, {
       ...f.submit(),
       parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }],
     });
@@ -450,7 +543,7 @@ describe("AIGC Agent 工具", () => {
     expect(f.adapter.execute.mock.calls[0][0].inputs.image).toBe(`https://bugpaw.example/aigc-public/files/${publicFiles[0].id}`);
     expect(await f.publicFiles.resolvePath(publicFiles[0].id)).toBeTruthy();
     await writeFile(join(f.workspaces, "agent-a", "second.png"), "second");
-    const multi = await f.service.run(context, { ...f.submit("grok-multi"), parameters: [
+    const multi = await f.run(context, { ...f.submit("grok-multi"), parameters: [
       { name: "prompt", value: "组合" }, { name: "image", value: ["source.png", "second.png"] },
     ] });
     await vi.waitFor(async () => expect((await f.tasks.get(multi.taskId))?.status).toBe("succeeded"));
@@ -470,7 +563,7 @@ describe("AIGC Agent 工具", () => {
       config: { model: "grok-imagine" },
     }, (await f.interfaces.list()).revision);
     await writeFile(join(f.workspaces, "agent-a", "source.png"), "png");
-    await expect(f.service.run(context, {
+    await expect(f.run(context, {
       ...f.submit(),
       parameters: [{ name: "prompt", value: "x" }, { name: "image", value: "source.png" }],
     })).rejects.toMatchObject({ code: "AIGC_PUBLIC_ORIGIN_UNAVAILABLE" });
@@ -491,7 +584,7 @@ describe("AIGC Agent 工具", () => {
 
   it("重启中断任务不自动重试，历史手动任务不被归入 Agent", async () => {
     const f = await fixture(pending);
-    const task = await f.service.run(context, f.submit());
+    const task = await f.run(context, f.submit());
     await vi.waitFor(() => expect(f.adapter.execute).toHaveBeenCalledOnce());
     const restarted = new AigcTaskRepository(join(f.root, "tasks.json"));
     expect(await restarted.get(task.taskId)).toMatchObject({ status: "failed", error: { code: "AIGC_INTERRUPTED" } });
@@ -501,7 +594,7 @@ describe("AIGC Agent 工具", () => {
   it("取消后迟到的成功响应不能覆盖取消状态或写出产物", async () => {
     let finish: (result: AigcExecutionResult) => void = () => undefined;
     const f = await fixture(async () => new Promise((resolve) => { finish = resolve; }));
-    const task = await f.service.run(context, f.submit());
+    const task = await f.run(context, f.submit());
     await vi.waitFor(() => expect(f.adapter.execute).toHaveBeenCalledOnce());
     const cancellation = f.service.cancel(context, task.taskId);
     await vi.waitFor(() => expect(f.adapter.execute.mock.calls[0][0].signal.aborted).toBe(true));
@@ -521,7 +614,7 @@ describe("AIGC Agent 工具", () => {
     } as unknown as AigcWorkflowDetail;
     const fields = agentFields({ ...f.item, protocol: "comfyui" }, workflow);
     expect(validateAgentParameters(fields, [{ name: "mode", value: 0 }, { name: "enabled", value: false }])).toEqual({ seed: 10, mode: 0, enabled: false });
-    await expect(f.service.run(context, f.submit(), AbortSignal.abort())).rejects.toThrow();
+    await expect(f.run(context, f.submit(), AbortSignal.abort())).rejects.toThrow();
     expect(f.adapter.execute).not.toHaveBeenCalled();
   });
 });
