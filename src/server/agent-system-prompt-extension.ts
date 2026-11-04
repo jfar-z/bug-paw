@@ -1,7 +1,7 @@
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import { AgentSystemPromptConfiguration } from "./agent-system-prompt-configuration";
-import type { AgentSystemPromptContext } from "./agent-system-prompt-configuration";
+import type { AgentSessionContext, AgentSystemPromptContext } from "./agent-system-prompt-configuration";
 import type { EffectiveRetrievalCapabilities } from "./agent-retrieval-capabilities";
 import type { AgentPromptContextSnapshot } from "./agents/agent-prompt-store";
 
@@ -19,6 +19,7 @@ export interface AgentSystemPromptInjectionExtension {
 export function createAgentSystemPromptInjectionExtension(
   capabilities: EffectiveRetrievalCapabilities,
   resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>,
+  resolveSessionContext?: () => AgentSessionContext,
 ): AgentSystemPromptInjectionExtension {
   return {
     name: "bug-paw-system-prompt-injection",
@@ -34,6 +35,8 @@ export function createAgentSystemPromptInjectionExtension(
             context = { agentPromptsUnavailable: true };
           }
         }
+        // 每轮独立读取会话身份，文件快照不可用也不能丢失运行时身份。
+        context.session = resolveSessionContext?.();
         return {
           systemPrompt: AgentSystemPromptConfiguration.replaceIdentity(
             event.systemPrompt,

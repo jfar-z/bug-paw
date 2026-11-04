@@ -1,6 +1,6 @@
 import { isDeletedSessionTarget, type CreateScheduledTaskInput, type ScheduledTaskRun, type ScheduledTaskTarget, type ScheduledTaskTrigger, type UpdateScheduledTaskInput } from "../../shared/scheduled-task-contracts";
 import { nextRunAt, validateSchedule } from "./schedule";
-import type { ScheduledTaskRepository } from "./scheduled-task-repository";
+import { isTaskInScope, type ScheduledTaskAccess, type ScheduledTaskRepository } from "./scheduled-task-repository";
 import { DomainError, toSafePublicMessage } from "../core/errors";
 
 interface TaskRuntime {
@@ -199,9 +199,39 @@ export function createScheduledTaskService(options: ScheduledTaskServiceOptions)
   }
 
   return {
-    async create(task: CreateScheduledTaskInput) { if (closing) throw new DomainError("OPERATION_ABORTED", "服务正在关闭"); validateSchedule(task.schedule); await validatePersistentTarget(task.agentId, task.target); const created = await options.store.createTask({ ...task, nextRunAt: nextRunAt(task.schedule, new Date()) } as CreateScheduledTaskInput); await schedule(); return created; },
-    async update(id: string, input: UpdateScheduledTaskInput) { if (closing) throw new DomainError("OPERATION_ABORTED", "服务正在关闭"); if (input.schedule) validateSchedule(input.schedule); const current = await options.store.getTask(id); if (!current) return undefined; await validatePersistentTarget(current.agentId, input.target ?? current.target); const updated = await options.store.updateTask(id, { ...input, ...(input.schedule ? { nextRunAt: nextRunAt(input.schedule, new Date()) } : {}) }); await schedule(); return updated; },
-    async remove(id: string) { if (closing) throw new DomainError("OPERATION_ABORTED", "服务正在关闭"); await options.store.removeTask(id); await schedule(); },
+    /** 创建前校验调度与持久目标，写入时复核工具的访问范围。 */
+    async create(task: CreateScheduledTaskInput, access?: ScheduledTaskAccess) {
+      if (closing) throw new DomainError("OPERATION_ABORTED", "服务正在关闭");
+      validateSchedule(task.schedule);
+      if (access && !isTaskInScope(task, access)) throw new DomainError("FORBIDDEN", "定时任务目标不在本次操作范围内");
+      await validatePersistentTarget(task.agentId, task.target);
+      const created = await options.store.createTask({ ...task, nextRunAt: nextRunAt(task.schedule, new Date()) } as CreateScheduledTaskInput, access);
+      await schedule();
+      return created;
+    },
+    /** 预检与事务内检查共同保护当前任务和修改后的目标。 */
+    async update(id: string, input: UpdateScheduledTaskInput, access?: ScheduledTaskAccess) {
+      if (closing) throw new DomainError("OPERATION_ABORTED", "服务正在关闭");
+      if (input.schedule) validateSchedule(input.schedule);
+      const current = await options.store.getTask(id);
+      if (!current) return undefined;
+      if (access && (!isTaskInScope(current, access) || !isTaskInScope({ ...current, target: input.target ?? current.target }, access))) {
+        throw new DomainError("FORBIDDEN", "定时任务或修改后的目标不在本次操作范围内");
+      }
+      await validatePersistentTarget(current.agentId, input.target ?? current.target);
+      const updated = await options.store.updateTask(id, {
+        ...input,
+        ...(input.schedule ? { nextRunAt: nextRunAt(input.schedule, new Date()) } : {}),
+      }, access);
+      await schedule();
+      return updated;
+    },
+    /** 删除范围由数据库事务内的最新任务状态决定。 */
+    async remove(id: string, access?: ScheduledTaskAccess) {
+      if (closing) throw new DomainError("OPERATION_ABORTED", "服务正在关闭");
+      await options.store.removeTask(id, access);
+      await schedule();
+    },
     runNow,
     list: options.store.listTasks,
     listRuns: options.store.listRuns,

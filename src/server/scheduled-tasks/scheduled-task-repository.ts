@@ -22,15 +22,36 @@ interface RunRow extends Record<string, unknown> {
   run_json: string;
 }
 
+/** 仅由服务端会话工具构造的访问范围；省略 sessionId 表示当前 Agent 全部任务。 */
+export interface ScheduledTaskAccess {
+  /** 当前运行时所属 Agent。 */
+  agentId: string;
+  /** 需要限制的执行目标会话。 */
+  sessionId?: string;
+}
+
+/** 判断任务是否处于本次访问范围，创建来源不参与目标会话判断。 */
+export function isTaskInScope(task: Pick<ScheduledTask, "agentId" | "target">, access: ScheduledTaskAccess): boolean {
+  return task.agentId === access.agentId && (access.sessionId === undefined
+    || (task.target.type === "existing_session" && task.target.sessionId === access.sessionId));
+}
+
+/** 在写事务中复核范围，阻止校验后任务被重新绑定造成跨会话写入。 */
+function assertTaskAccess(task: Pick<ScheduledTask, "agentId" | "target">, access?: ScheduledTaskAccess): void {
+  if (access && !isTaskInScope(task, access)) {
+    throw new DomainError("FORBIDDEN", "定时任务不在本次操作范围内；当前会话范围仅允许操作绑定到当前会话的任务");
+  }
+}
+
 /** 以 SQLite 为单一事实来源的定时任务仓库。 */
 export interface ScheduledTaskRepository {
   listAllTasks(): Promise<ScheduledTask[]>;
   listTasks(agentId: string): Promise<ScheduledTask[]>;
   getTask(id: string): Promise<ScheduledTask | undefined>;
-  createTask(input: CreateScheduledTaskInput): Promise<ScheduledTask>;
-  updateTask(id: string, input: ScheduledTaskUpdate): Promise<ScheduledTask | undefined>;
+  createTask(input: CreateScheduledTaskInput, access?: ScheduledTaskAccess): Promise<ScheduledTask>;
+  updateTask(id: string, input: ScheduledTaskUpdate, access?: ScheduledTaskAccess): Promise<ScheduledTask | undefined>;
   claimDueTask(id: string, now: Date): Promise<ScheduledTask | undefined>;
-  removeTask(id: string): Promise<void>;
+  removeTask(id: string, access?: ScheduledTaskAccess): Promise<void>;
   listBoundTasks(sessionId: string): Promise<ScheduledTask[]>;
   removeTasksForSession(sessionId: string): Promise<void>;
   appendRun(input: Omit<ScheduledTaskRun, "id">): Promise<ScheduledTaskRun>;
@@ -54,7 +75,7 @@ export function createScheduledTaskRepository(database: Database): ScheduledTask
       const row = database.readOne<TaskRow>("SELECT id, task_json FROM scheduled_tasks WHERE id = ?", [id]);
       return row ? toTask(row) : undefined;
     },
-    async createTask(input) {
+    async createTask(input, access) {
       const now = new Date().toISOString();
       const task: ScheduledTask = {
         ...input,
@@ -66,6 +87,7 @@ export function createScheduledTaskRepository(database: Database): ScheduledTask
       };
       const sessionId = targetSessionId(task);
       database.transaction(() => {
+        assertTaskAccess(task, access);
         validateTargetSession(database, task.agentId, sessionId);
         database.write(
           "INSERT INTO scheduled_tasks(id, agent_id, session_id, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -74,12 +96,13 @@ export function createScheduledTaskRepository(database: Database): ScheduledTask
       });
       return task;
     },
-    async updateTask(id, input) {
+    async updateTask(id, input, access) {
       // 同步事务内完成读-合并-写，避免调度器状态更新与用户 PATCH 互相覆盖。
       return database.transaction(() => {
         const row = database.readOne<TaskRow>("SELECT id, task_json FROM scheduled_tasks WHERE id = ?", [id]);
         if (!row) return undefined;
         const current = toTask(row);
+        assertTaskAccess(current, access);
         const updated: ScheduledTask = {
           ...current,
           ...(input.name !== undefined ? { name: input.name } : {}),
@@ -91,6 +114,7 @@ export function createScheduledTaskRepository(database: Database): ScheduledTask
           ...(input.lastRunAt !== undefined ? { lastRunAt: input.lastRunAt } : {}),
           updatedAt: new Date().toISOString(),
         };
+        assertTaskAccess(updated, access);
         if (updated.enabled && isDeletedSessionTarget(updated.target)) {
           throw new DomainError("SCHEDULED_TASK_TARGET_MISSING", "原目标会话已删除，请重新选择任务目标");
         }
@@ -105,8 +129,16 @@ export function createScheduledTaskRepository(database: Database): ScheduledTask
         return updated;
       });
     },
-    async removeTask(id) {
-      database.write("DELETE FROM scheduled_tasks WHERE id = ?", [id]);
+    async removeTask(id, access) {
+      database.transaction(() => {
+        const row = database.readOne<TaskRow>("SELECT id, task_json FROM scheduled_tasks WHERE id = ?", [id]);
+        if (!row) {
+          if (access) throw new DomainError("SCHEDULED_TASK_NOT_FOUND", "定时任务不存在或已删除");
+          return;
+        }
+        assertTaskAccess(toTask(row), access);
+        database.write("DELETE FROM scheduled_tasks WHERE id = ?", [id]);
+      });
     },
     async claimDueTask(id, now) {
       return database.transaction(() => {

@@ -445,10 +445,11 @@ export async function buildServer(options: BuildServerOptions = {}): Promise<Fas
             ...(profile.profile.allowedTools.includes("knowledge_manage")
               ? [createKnowledgeManageTool(agentId, knowledgeBases, workspaceFileManager)]
               : []),
-            ...(scheduledTasks ? [createScheduledTasksTool(agentId, scheduledTasks)] : []),
           ],
           createRuntimeTools: ({ sessionText }) => createSessionTextTools(sessionText),
           createSessionTools: ({ searchRunState, sessionId, branchAnchorId }) => [
+            ...(scheduledTasks && profile.profile.allowedTools.includes("scheduled_tasks")
+              ? [createScheduledTasksTool({ agentId, sessionId }, scheduledTasks)] : []),
             ...(workflowTools ? createWorkflowTools({ agentId, sessionId }, workflowTools).filter(tool => profile.profile.allowedTools.includes(tool.name)) : []),
             ...createAigcAgentTools({ agentId, sessionId }, aigcAgentService)
               .filter((tool) => profile.profile.allowedTools.includes(tool.name)),

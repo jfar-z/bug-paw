@@ -21,6 +21,7 @@ import { SessionRegistry } from "./runtime/session-registry";
 import { CheckpointWriter } from "./runtime/checkpoint-writer";
 import { DomainError, toSafePublicMessage } from "./core/errors";
 import { KeyedMutex } from "./core/keyed-mutex";
+import type { AgentSessionContext } from "./agent-system-prompt-configuration";
 import { createAgentSystemPromptInjectionExtension } from "./agent-system-prompt-extension";
 import { createSearchRunCircuitExtension } from "./web-research/search-run-circuit-extension";
 import { SearchRunState } from "./web-research/search-run-state";
@@ -77,12 +78,13 @@ export function createWorkspaceResourceLoader(
   searchRunState = new SearchRunState(),
   resolveAgentPromptContext?: () => Promise<AgentPromptContextSnapshot>,
   extensionFactories: InlineExtension[] = [],
+  resolveSessionContext?: () => AgentSessionContext,
 ): DefaultResourceLoader {
   return new DefaultResourceLoader({
     cwd,
     agentDir,
     extensionFactories: [
-      createAgentSystemPromptInjectionExtension(retrievalCapabilities, resolveAgentPromptContext),
+      createAgentSystemPromptInjectionExtension(retrievalCapabilities, resolveAgentPromptContext, resolveSessionContext),
       ...((retrievalCapabilities.webSearch || retrievalCapabilities.webRead || retrievalCapabilities.pdfRead || retrievalCapabilities.webResearch) ? [createSearchRunCircuitExtension(searchRunState)] : []),
       ...extensionFactories,
     ],
@@ -1410,6 +1412,7 @@ export async function createSdkPiRuntimeGateway(options: SdkPiRuntimeOptions): P
       options.allowedTools?.includes("ask_user")
         ? [createAskUserMessageGuardExtension(askUserRunState)]
         : [],
+      () => ({ agentId: options.agentId, sessionId: sessionManager.getSessionId() }),
     );
     await resourceLoader.reload();
     const finalCustomTools = [

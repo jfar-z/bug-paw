@@ -85,7 +85,11 @@ const tool = defineTool({
 
 ## 定时任务示例
 
-`scheduled_tasks` 由 `createScheduledTasksTool(agentId, service)` 创建，运行时只注入当前 Agent 的服务作用域。它的全局 Skill 说明 Cron、时区、目标会话及执行行为；真实字段校验仍在 TypeBox Schema 与服务层完成。
+`scheduled_tasks` 由会话工厂通过 `createScheduledTasksTool({ agentId, sessionId }, service)` 创建，并遵守 Agent 工具白名单。每轮系统提示词从当前 SessionManager 注入 `agent_id` 和 `session_id`，恢复和压缩后仍重新提供，不增加身份查询工具，不依赖环境变量或历史摘要。
+
+模型必须显式提交 `action`、`scope` 及全部 nullable 条件字段，无关或不修改的字段传 `null`。通常选择 `scope=current_session`，仅包含绑定到当前会话执行的任务；用户明确要求其他目标或全 Agent 查询时选择 `scope=agent`，仍不能越过 Agent 边界。`target.type=current_session` 由服务端解析，持久化仍使用 `existing_session`。新会话执行的任务属于 Agent 范围，不能将创建来源当作执行目标。
+
+列表返回 `scope`、`currentSessionId` 和 `tasks`，每项通过 `targetsCurrentSession` 标明目标关系。工具检查条件参数及范围，服务与数据库写事务复核任务和新目标的归属，防止并发改绑后误修改或删除。参数错误与范围拒绝抛出领域异常，进入 Pi 工具错误事件。全局 Skill 说明 Cron、时区及执行行为，不替代服务端校验。
 
 ## 浏览器原子工具
 
