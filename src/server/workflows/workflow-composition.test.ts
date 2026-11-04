@@ -94,6 +94,30 @@ function whileLoop() {
 }
 
 describe("循环与嵌套工作流", () => {
+  it("循环体输出直接汇合互斥分支并保留逐轮结果", async () => {
+    const { service } = await fixture();
+    const node = newWorkflowNode("loop", "loop");
+    const loop = node.config.loop!;
+    loop.count = literal(2);
+    const condition = newWorkflowNode("condition", "condition");
+    condition.config.conditions = [{ left: ref("input", "index"), operator: "eq", right: literal(0) }];
+    const step = newWorkflowNode("javascript", "step");
+    step.inputs = { value: ref("input", "index") };
+    step.config.script = "return {result: inputs.value}";
+    step.outputs = [{ name: "result", type: "integer", required: true }];
+    const body = loop.body;
+    body.nodes = [body.nodes[0], condition, step, body.nodes[1]];
+    body.edges = [
+      { id: "condition-in", source: "input", target: "condition" },
+      { id: "yes", source: "condition", target: "step", branch: "true" },
+      { id: "no", source: "condition", target: "output", branch: "false" },
+      { id: "step-out", source: "step", target: "output" },
+    ];
+    const done = await run(service, graphWith(node));
+    expect(done.status).toBe("succeeded");
+    expect(done.outputs).toEqual({ result: [0, 1] });
+  });
+
   it("次数引用上游整数并在保存时拒绝错误类型", async () => {
     const { service } = await fixture();
     const node = newWorkflowNode("loop", "loop");

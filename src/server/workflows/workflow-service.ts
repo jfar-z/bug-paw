@@ -511,7 +511,7 @@ export class WorkflowService {
   private async persist(run: WorkflowRun): Promise<void> {
     await this.repository.saveRun(run);
   }
-  /** 所有前驱终态后才调度；普通节点要求全部激活，选择节点允许互斥分支汇合。 */
+  /** 所有前驱终态后才调度；输出和选择节点允许任一入边激活以汇合互斥分支。 */
   private async execute(
     run: WorkflowRun,
     controller: AbortController,
@@ -558,7 +558,7 @@ export class WorkflowService {
             );
             const enabled =
               node.kind === "input" ||
-              (node.kind === "select"
+              (node.kind === "select" || node.kind === "output"
                 ? incoming.some((e) => activeEdges.has(e.id))
                 : incoming.length > 0 &&
                   incoming.every((e) => activeEdges.has(e.id)));
@@ -748,7 +748,7 @@ export class WorkflowService {
           .filter((n) => n.kind === "output")
           .every((n) => states.get(n.id)!.status === "succeeded")
       )
-        invalid("输出节点未被执行，请通过选择节点汇合互斥分支");
+        invalid("输出节点未被执行：没有已激活的入边，请检查分支到输出节点的连线");
       run.status = "succeeded";
     } catch (error) {
       const failed = primaryFailure ?? run.nodes.find((n) => n.error);

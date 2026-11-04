@@ -68,7 +68,149 @@ function branched(): WorkflowDraft {
   ];
   return d;
 }
+/** 两条互斥路径直接进入输出，分别绑定可选字段，不经过选择节点。 */
+function outputBranched(): WorkflowDraft {
+  const draft = branched();
+  draft.nodes = draft.nodes.filter((node) => node.id !== "select");
+  draft.nodes.find((node) => node.id === "no")!.config.script = 'return {result:"NO"}';
+  const output = draft.nodes.at(-1)!;
+  output.inputs = { result: ref("yes"), return_payload: ref("no") };
+  output.outputs = [
+    { name: "result", type: "string" },
+    { name: "return_payload", type: "string" },
+  ];
+  draft.edges = draft.edges.filter((edge) => edge.source !== "select").map((edge) =>
+    edge.target === "select" ? { ...edge, target: "output" } : edge,
+  );
+  return draft;
+}
 describe("工作流调度与持久化", () => {
+  it.each(["yes", "no"])("输出直接汇合互斥分支并省略未执行来源（%s）", async (prompt) => {
+    const { service } = await fixture();
+    const saved = await service.save(outputBranched());
+    const started = await service.start(saved.id, { prompt }, "direct-merge");
+    const done = await service.wait(started.id);
+    expect(done.status).toBe("succeeded");
+    expect(done.outputs).toEqual(prompt === "yes" ? { result: "YES" } : { return_payload: "NO" });
+    expect(done.nodes.find((node) => node.nodeId === "output")?.status).toBe("succeeded");
+    expect(done.nodes.find((node) => node.nodeId === (prompt === "yes" ? "no" : "yes"))?.status).toBe("skipped");
+  });
+
+  it.each(["yes", "no"])("视频产出与判断 ELSE 直接汇合到输出（%s）", async (prompt) => {
+    const video = { assetId: "test-video", name: "result.mp4", mediaType: "video/mp4", size: 10 };
+    const execute = vi.fn(async () => ({ result: [video] }));
+    const { service } = await fixture({ execute });
+    const draft = outputBranched();
+    draft.nodes = draft.nodes.filter((node) => node.id !== "no");
+    const generator = draft.nodes.find((node) => node.id === "yes")!;
+    generator.kind = "aigc";
+    generator.inputs = {};
+    generator.config = { interfaceId: "test-interface" };
+    generator.outputs = [{ name: "result", type: "video", multiple: true }];
+    const output = draft.nodes.at(-1)!;
+    output.outputs[0] = { name: "result", type: "video", multiple: true };
+    output.inputs.return_payload = ref("input", "prompt");
+    draft.edges = draft.edges.filter((edge) => edge.source !== "no").map((edge) =>
+      edge.target === "no" ? { ...edge, target: "output" } : edge,
+    );
+    const saved = await service.save(draft);
+    const started = await service.start(saved.id, { prompt }, "video-merge");
+    const done = await service.wait(started.id);
+    expect(done.status).toBe("succeeded");
+    expect(done.outputs).toEqual(prompt === "yes" ? { result: [video], return_payload: prompt } : { return_payload: prompt });
+    expect(execute).toHaveBeenCalledTimes(prompt === "yes" ? 1 : 0);
+  });
+
+  it("输出汇合保留显式默认值，必填来源被跳过仍带节点与追踪信息报错", async () => {
+    const { service } = await fixture();
+    const draft = outputBranched();
+    draft.nodes.at(-1)!.outputs[0].defaultValue = "";
+    const saved = await service.save(draft);
+    const started = await service.start(saved.id, { prompt: "no" }, "default");
+    expect((await service.wait(started.id)).outputs).toEqual({ result: "", return_payload: "NO" });
+    delete draft.nodes.at(-1)!.outputs[0].defaultValue;
+    draft.nodes.at(-1)!.outputs[0].required = true;
+    const required = await service.save(draft);
+    const missing = await service.start(required.id, { prompt: "no" }, "required");
+    const done = await service.wait(missing.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatchObject({ code: "VALIDATION_FAILED", message: "必填参数 result 未提供", nodeId: "output", requestId: missing.id });
+  });
+
+  it.each([false, true])("输出等待全部并行前驱且不吞掉迟到失败（失败=%s）", async (fail) => {
+    let resolve!: (value: Record<string, unknown>) => void;
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<Record<string, unknown>>((onResolve, onReject) => {
+      resolve = onResolve;
+      reject = onReject;
+    });
+    const { service } = await fixture({ execute: () => pending });
+    const draft = outputBranched();
+    const slow = newWorkflowNode("llm", "slow");
+    slow.config.provider = "test";
+    slow.config.modelId = "test";
+    slow.inputs.prompt = ref("input", "prompt");
+    draft.nodes.splice(-1, 0, slow);
+    draft.nodes.at(-1)!.outputs.push({ name: "slow", type: "string", required: true });
+    draft.nodes.at(-1)!.inputs.slow = ref("slow", "text");
+    draft.edges.push({ id: "slow-in", source: "condition", target: "slow", branch: "true" }, { id: "slow-out", source: "slow", target: "output" });
+    const saved = await service.save(draft);
+    const started = await service.start(saved.id, { prompt: "yes" }, "parallel-merge");
+    try {
+      await vi.waitFor(() => {
+        const run = service.getRun(started.id);
+        expect(run.nodes.find((node) => node.nodeId === "slow")?.status).toBe("running");
+        expect(run.nodes.find((node) => node.nodeId === "yes")?.status).toBe("succeeded");
+        expect(run.nodes.find((node) => node.nodeId === "output")?.status).toBe("queued");
+        expect(run.outputs).toEqual({});
+      });
+    } finally {
+      if (fail) reject(new Error("并行模型生成失败"));
+      else resolve({ text: "慢分支完成" });
+    }
+    const done = await service.wait(started.id);
+    if (fail) {
+      expect(done.status).toBe("failed");
+      expect(done.error).toMatchObject({ message: "并行模型生成失败", nodeId: "slow", requestId: started.id });
+      expect(done.nodes.find((node) => node.nodeId === "output")?.status).toBe("cancelled");
+    } else {
+      expect(done.status).toBe("succeeded");
+      expect(done.outputs).toEqual({ result: "YES", slow: "慢分支完成" });
+    }
+  });
+
+  it("输出所有入边未激活时明确报错，不返回空成功", async () => {
+    const { service } = await fixture();
+    const draft = outputBranched();
+    draft.nodes = draft.nodes.filter((node) => node.id !== "no");
+    draft.edges = draft.edges.filter((edge) => edge.source !== "no" && edge.target !== "no");
+    delete draft.nodes.at(-1)!.inputs.return_payload;
+    const saved = await service.save(draft);
+    const started = await service.start(saved.id, { prompt: "no" }, "inactive");
+    const done = await service.wait(started.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatchObject({ code: "WORKFLOW_EXECUTION_FAILED", message: "输出节点未被执行：没有已激活的入边，请检查分支到输出节点的连线", requestId: started.id });
+  });
+
+  it("被调用工作流同样直接汇合互斥分支", async () => {
+    const { service } = await fixture();
+    const child = await service.save(outputBranched());
+    const draft = emptyWorkflow();
+    const call = newWorkflowNode("workflow", "call");
+    call.config.workflowId = child.id;
+    call.inputs.prompt = ref("input", "prompt");
+    call.outputs = structuredClone(child.nodes.at(-1)!.outputs);
+    draft.nodes[1].outputs = structuredClone(call.outputs);
+    draft.nodes[1].inputs = { result: ref("call"), return_payload: ref("call", "return_payload") };
+    draft.nodes.splice(1, 0, call);
+    draft.edges = [{ id: "in", source: "input", target: "call" }, { id: "out", source: "call", target: "output" }];
+    const saved = await service.save(draft);
+    const started = await service.start(saved.id, { prompt: "no" }, "nested");
+    const done = await service.wait(started.id);
+    expect(done.status).toBe("succeeded");
+    expect(done.outputs).toEqual({ return_payload: "NO" });
+  });
+
   it("保存和启动旧定义时拒绝未声明的输出绑定，修正后正常输出且不调用外部能力", async () => {
     const execute = vi.fn();
     const { service, repository } = await fixture({ execute });
