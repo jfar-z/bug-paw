@@ -4,6 +4,88 @@
 
 This project follows [Semantic Versioning](https://semver.org/).
 
+## 0.2.0 - 2026-11-05
+
+### 新增 / Added
+
+- 增加 DAG 工作流编排、校验、执行与运行观测，支持模型、脚本、AIGC、条件分支、选择与输出节点，以及独立授权的 Agent 工作流工具。
+- 增加次数、数组和条件循环及子工作流调用，支持嵌套作用域、循环状态与输出收集、定义快照、并发控制、取消传播和重启中断处理。
+- 支持整份工作流复制、节点批量复制粘贴、拖线创建节点、参数排序、枚举复用，以及输入参数复制、粘贴和导入循环；增加仅查询工作流出入参的轻量工具。
+- 增加脚本 AI 辅助，支持流式预览与思考强度选择；完善参数编辑、媒体输入与产物预览。
+- 增加工作流文件管理，统一查看运行文件与可复用常量，支持关联筛选、上传、预览、引用追踪及活动任务删除保护。
+- 将 ComfyUI 与 DAG 工作流改为数据库摘要索引和按 ID 保存的独立定义文件，提供离线预检、备份、迁移及回滚说明。
+- 拆分 Agent AIGC/工作流任务创建与运行，支持一次提交 1～2 个任务并异步返回或统一等待；增加整批校验、幂等提交、配置与文件指纹复核、逐项进度、部分成功产物和持久化中断恢复。
+- 为 AIGC 工作台提供外部 MCP 接口，支持接口发现、媒体上传、异步运行、任务查询、产物下载和取消；提供独立接口开放开关、令牌签发与撤销、客户端隔离及已签发令牌授权编辑。
+- 支持 OpenAI/Grok 图片编辑的有序多图输入，并支持 Impact 图片批次节点创建参考输入组。
+- 增强联网取证，增加网页正文定位与分段读取、有限并发研究及按物理页检查、读取、查找和渲染 PDF 的工具，配合证据复用、来源边界和运行内重试阻止。
+- 增加 TOTP 双因素认证与恢复码登录，并提供配置中心安全设置入口。
+- 每轮主动向 Agent 注入当前 Agent 与会话身份；定时任务工具支持服务端解析当前会话、显式选择操作范围和事务内归属复核，无需身份查询工具或主动读取环境变量。
+- 支持在对话工具详情中查看 read 工具读取的文件内容。
+
+- Added DAG workflow authoring, validation, execution and run inspection, with model, script, AIGC, condition, selection and output nodes, plus separately authorized Agent workflow tools.
+- Added count, array and conditional loops and nested workflow calls, including scoped state and output collection, definition snapshots, concurrency limits, cancellation propagation and restart interruption handling.
+- Added whole-workflow duplication, multi-node copy/paste, node creation from connection dragging, parameter ordering, reusable enums and input-parameter copy/paste/import into loops, plus a lightweight tool for discovering workflow inputs and outputs.
+- Added AI-assisted script editing with streamed previews and thinking-level selection, alongside improved parameter editing, media inputs and output previews.
+- Added workflow file management for run artifacts and reusable constants, with relationship filters, uploads, previews, reference tracking and deletion protection for active tasks.
+- Split ComfyUI and DAG storage into database summary indexes and individual definition files keyed by ID, with offline preflight, backup, migration and rollback documentation.
+- Separated Agent AIGC/workflow task creation from execution, supporting batches of one or two tasks with asynchronous submission or shared waiting, whole-batch validation, idempotency, configuration/file fingerprints, per-task progress, partial-success artifacts and persisted interruption handling.
+- Added an external AIGC MCP interface for discovery, media uploads, asynchronous execution, task queries, output downloads and cancellation, with independent publication settings, token issuance/revocation, client isolation and editable grants for existing tokens.
+- Added ordered multi-image editing inputs for OpenAI/Grok and reference-input groups derived from Impact image-batch nodes.
+- Expanded web evidence gathering with body search and paragraph reads, bounded concurrent research and physical-page PDF inspection, reading, search and rendering, with evidence reuse, source boundaries and per-run retry blocking.
+- Added TOTP two-factor authentication and recovery-code login through security settings.
+- Added server-provided Agent/session identity to every run and server-resolved current-session targets for scheduled tasks, with explicit scopes and transactional ownership checks, without an identity lookup tool or environment-variable discovery.
+- Added file-content inspection for read-tool activity in conversations.
+
+### 改进 / Changed
+
+- 统一配置中心编辑状态、未保存离开保护、保存并发冲突处理和生效提示，避免迟到响应或重渲染覆盖草稿。
+- 重构 AIGC 接口配置、MCP 授权、渠道、语音、模型和凭证管理，采用列表与编辑抽屉、分区保存和明确的删除确认；完善 Pi 运行设置分区、继承与覆盖交互。
+- 优化资源目录和扩展包、浏览器执行、语义检索、联网搜索、配置导入变更与概览交互，统一配置中心标题、英文眉题和响应式表单布局。
+- 完善页面懒加载、样式归属、逐页面 Bundle 预算与 PWA 预缓存规范及回归检查。
+- 工作流输出节点支持直接汇合互斥分支，等待全部直接前驱终态后处理已激活路径；保留可选字段省略、显式默认值、必填校验及失败传播，无需为所有分支额外配置选择节点。
+- 替换 ComfyUI 工作流前展示输入、输出及参考组映射损失，要求二次确认并复核配置版本，避免无意丢失映射。
+
+- Unified configuration editing state, unsaved-change navigation guards, save-conflict handling and effective-state feedback so late responses and rerenders cannot overwrite drafts.
+- Reworked AIGC interfaces, MCP grants, channels, speech, models and credentials around lists, editing drawers, section-level saves and explicit deletion confirmation; improved Pi settings sections and inheritance/override controls.
+- Improved resource catalogs and extension packages, browser execution, semantic retrieval, web search, configuration imports and overview interactions, with consistent headings, English eyebrows and responsive forms.
+- Expanded page-level lazy-loading, stylesheet ownership, bundle-budget and PWA precaching rules and regression checks.
+- Allowed output nodes to directly merge mutually exclusive workflow branches after all immediate predecessors settle, preserving optional-field omission, explicit defaults, required-field validation and failure propagation without mandatory selection nodes.
+- Added mapping-loss previews and confirmation before ComfyUI workflow replacement, covering inputs, outputs and reference groups with configuration-version checks.
+
+### 修复 / Fixed
+
+- 修复会话恢复时连接错误误解析、息屏后实时连接和状态无法恢复、删除当前会话误报断线，以及聊天发送、模型切换、会话导航与异步响应竞态；恢复回车发送并优化会话列表查询性能。
+- 统一活动区工具调用、完成与中止状态的显示，防止状态样式和实际执行结果不一致。
+- 修复 ComfyUI 外部子图执行、子图名称与参数别名、节点定义同步、端口错位、控件值误写媒体输入、原始节点参数映射及替换未生效问题。
+- 修复 AIGC 工具冗余参数、图片编辑多图输入与任务全选批量删除；限制重复进度日志，避免工作流活动记录刷屏。
+- 修复工作流画布删除闪烁、名称和说明草稿被重渲染覆盖、运行表单输入丢失及布尔文字溢出；运行节点按拓扑顺序展示。
+- 修复工作流参考组可选数组、媒体数组连续上传覆盖、已上传文件无法移除和参数展示不完整问题。
+- 修复循环内子工作流枚举来源与作用域校验，保护循环系统参数，并即时检查参数名称和嵌套草稿。
+- 修复工作流出参删除或改名后残留旧绑定的问题，支持显式清理，并在保存、校验和执行前检查输出契约。
+- 修复长参数导入列表遮挡确认按钮、窄屏嵌套滚动和检查区域占屏，以及图片预览双轴适配与长图裁剪问题。
+- 修复同一 Agent 下将其他会话定时任务误认为本会话任务的问题；列表显式标记目标关系，修改和删除在事务内重新校验范围，防止并发改绑后的误操作。
+
+- Fixed misparsed connection errors during session restoration, realtime recovery after screen-off, false disconnect reports when deleting the current session, and races in sending, model changes, navigation and asynchronous responses; restored Enter-to-send and improved session-list performance.
+- Aligned activity-area tool, completion and cancellation indicators with actual execution states.
+- Fixed ComfyUI external-subgraph execution, names and parameter aliases, node-definition synchronization, port alignment, widget values overwriting media inputs, raw-node parameter mappings and ineffective workflow replacement.
+- Fixed redundant AIGC tool parameters, multi-image editing inputs and select-all bulk deletion; suppressed duplicate workflow progress entries.
+- Fixed workflow canvas deletion flicker, rerenders overwriting name/description drafts, lost run-form inputs and overflowing boolean labels; displayed run nodes in topological order.
+- Fixed optional reference-group arrays, successive media uploads replacing existing items, removal of uploaded files and incomplete parameter displays.
+- Fixed enum sources and scope validation for nested workflows inside loops, protected system loop parameters and added immediate parameter-name and nested-draft validation.
+- Fixed stale output bindings after parameter deletion or renaming, with explicit cleanup and output-contract validation before saving, validation and execution.
+- Fixed confirmation controls hidden by long parameter-import lists, nested scrolling and oversized inspection panels on narrow screens, and two-axis image-preview fitting and tall-image cropping.
+- Fixed scheduled tasks from other sessions being mistaken for current-session tasks under the same Agent; results now identify target relationships and transactional mutation checks prevent mistakes after concurrent target changes.
+
+### 升级说明 / Upgrade notes
+
+- 从旧聚合文件存储升级时，须先停服并按 [工作流存储迁移说明](docs/14-workflow-storage.md) 执行离线预检和迁移；应用及部署脚本不会自动导入旧工作流数据。
+- Agent AIGC/工作流运行工具改为接收已创建的任务 ID；需分别授予创建工具权限并更新调用流程。外部 MCP 与手动工作台运行保留各自协议，详见 [AIGC Agent 工具](docs/11-aigc-agent-tools.md)和 [DAG 工作流](docs/13-dag-workflows.md)。
+- 定时任务工具需显式提交 `scope`，无关或不修改的条件字段传 `null`；`current_session` 表示绑定到当前会话执行的任务，每次新建会话执行的任务使用 Agent 范围，详见 [自定义工具规范](docs/04-pi-sdk-custom-tools.md)。
+
+- When upgrading from aggregate workflow files, stop the service and follow the [offline workflow-storage preflight and migration](docs/14-workflow-storage.md); neither application startup nor deployment scripts automatically import legacy workflow data.
+- Agent AIGC/workflow execution tools now accept IDs of previously created tasks. Grant creation-tool permissions separately and update callers; external MCP and manual workbench execution retain their own protocols. See [AIGC Agent tools](docs/11-aigc-agent-tools.md) and [DAG workflows](docs/13-dag-workflows.md).
+- Scheduled-task calls must specify `scope` and use `null` for irrelevant or unchanged conditional fields. `current_session` selects tasks bound to execute in the current conversation; tasks that create a new conversation each time use Agent scope. See the [custom-tool contract](docs/04-pi-sdk-custom-tools.md).
+
 ## 0.1.10 - 2026-09-09
 
 ### 新增 / Added
